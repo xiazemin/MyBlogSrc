@@ -1,6 +1,6 @@
 ---
-layout: post
-title:  "Welcome to Jekyll!"
+layout: home
+title:  "Welcome to xiazemin's blog!"
 date:   2017-09-05 17:23:48 +0800
 categories: jekyll update
 ---
