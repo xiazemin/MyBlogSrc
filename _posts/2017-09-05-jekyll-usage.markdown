@@ -1,3 +1,13 @@
+---
+layout: post
+title:  "jekyll macdown使用"
+date:   2017-08-05
+category: jekyll
+tags: [octopress, jekyll]
+
+# Author.
+author: 夏泽民
+---
 Jekyll中一篇文章就是一个文件，所有需要发布的文章都要放在_posts文件夹内。Jekyll对于文章的文件名也是有要求的，系统会根据文件名来生成每篇文章的链接地址。具体的格式为：YYYY-MM-DD-文章标题.markdown 其中YYYY为4位年份，MM是两位的月份，DD是两位的日期。
 
 在使用Markdown撰写文章之前我们需要先设置头信息。头信息需要根据YAML的格式写在两行三虚线之间。在头信息可以设置预定义的全局变量的值，Jekyll会根据变量的值来生成文章页面。
