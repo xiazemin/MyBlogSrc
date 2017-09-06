@@ -28,3 +28,17 @@ paginate_path: "page:num"
 5，$ bundle install
 $ bundle exec jekyll serve
 
+问题上传github 访问404
+
+$vi _config.yml
+
+baseurl: "/MyBlog" # the subpath of your site, e.g. /blog
+
+url: "https://xiazemin.github.io" # the base hostname & protocol for your site, e.g. http://ex
+
+
+问题
+ Pagination: Pagination is enabled, but I couldn't find an index.html page to use as the pagination template. Skipping pagination.
+ 
+ $vi index.html
+ 
