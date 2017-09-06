@@ -1,3 +1,13 @@
+---
+layout: post
+title:  "jekyll mac 安装"
+date:   2017-08-05
+category: jekyll
+tags: [octopress, jekyll]
+
+# Author.
+author: 夏泽民
+---
 #  升级mac自带的rubby
  
  $ curl -L get.rvm.io | bash -s stable
