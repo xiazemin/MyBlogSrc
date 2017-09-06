@@ -131,7 +131,7 @@ times - 乘，如 {{ 5 | times:4 }} #=> 20
 
 divided_by - 除，如 {{ 10 | divided_by:2 }} #=> 5
 
-split - 将一串字符串根据匹配模式分割成数组，如 {{ "a~b" | split\:~ }} #=> \['a','b'\]
+split - 将一串字符串根据匹配模式分割成数组
 
 modulo - 余数，如 {{ 3 | modulo:2 }} #=> 1
 tag标签：
