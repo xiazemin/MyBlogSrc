@@ -1,6 +1,6 @@
 ---
 layout: post
-title:  "jekyll mac 安装"
+title:  "jekyll dir"
 date:   2017-08-05
 category: jekyll
 tags: [octopress, jekyll]
