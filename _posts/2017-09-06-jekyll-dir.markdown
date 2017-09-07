@@ -1,3 +1,13 @@
+---
+layout: post
+title:  "jekyll mac 安装"
+date:   2017-08-05
+category: jekyll
+tags: [octopress, jekyll]
+
+# Author.
+author: 夏泽民
+---
 Jekyll 的核心是一个文本转换引擎。它的核心是把你零散的文件、文本组合起来，形成一个个网页，最终呈现在浏览器上展现出来。
 
 一个最基础的 Jekyll 博客，会拥有下面的目录结构：
