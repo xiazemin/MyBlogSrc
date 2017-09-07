@@ -1,5 +1,5 @@
 ---
-layout: post
+layout:  post
 title:  "jekyll dir"
 date:   2017-08-05
 category: jekyll

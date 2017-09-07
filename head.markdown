@@ -1,6 +1,6 @@
 ---
 title: jekyll config
-layout: default
+layout: post
 category: jekyll
 author: 夏泽民
 ---
