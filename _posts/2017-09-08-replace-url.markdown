@@ -4,7 +4,7 @@ layout: post
 category: jekyll
 author: 夏泽民
 ---
-{% highlight html linenos %}#!/bin/bash
+{% highlight bash linenos %}#!/bin/bash
 clear
 function replace(){
 urlT=${1//\//\\\/}
