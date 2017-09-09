@@ -13,8 +13,8 @@ curl -d "json_data={
         client_secret: 'a52260ef92de69011ccd1cf355b973ef11d6da0e',
 }"  https://github.com/xiazemin/MyBlogComment/issues/33 
 直接curl 授权成功
-curl -u xiazemin:352e7308a2aa563f6ee6d6a94cc6f58708d2a7e1  https://api.github.com/repos/xiazemin/MyBlogComment/issues/33/comments
-curl -H "Authorization: token 352e7308a2aa563f6ee6d6a94cc6f58708d2a7e1"  https://api.github.com/repos/xiazemin/MyBlogComment/issues/33/comments
+curl -u xiazemin:xxxxxxxxxxx  https://api.github.com/repos/xiazemin/MyBlogComment/issues/33/comments
+curl -H "Authorization: token xxxxxxxxxxx"  https://api.github.com/repos/xiazemin/MyBlogComment/issues/33/comments
 自己请求不成功
 <script type="text/javascript">
  $.ajax({
@@ -36,10 +36,10 @@ curl -H "Authorization: token 352e7308a2aa563f6ee6d6a94cc6f58708d2a7e1"  https:/
 					async: false,
 					beforeSend: function(request) {
             request.setRequestHeader(
-            	"Authorization","token 352e7308a2aa563f6ee6d6a94cc6f58708d2a7e1");},
+            	"Authorization","token xxxxxxxxxxx");},
 //"Authorization","Basic " + btoa("xiazemin:xxx"));},
 					//headers: {
-               // "Authorization": "Basic " + btoa("xiazemin :352e7308a2aa563f6ee6d6a94cc6f58708d2a7e1")
+               // "Authorization": "Basic " + btoa("xiazemin :xxxxxxxxxxx")
            // },
 					data:{"body": "Me too"},
 					success: function(json) {
