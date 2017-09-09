@@ -17,42 +17,60 @@ curl -u xiazemin:xxxxxxxxxxx  https://api.github.com/repos/xiazemin/MyBlogCommen
 curl -H "Authorization: token xxxxxxxxxxx"  https://api.github.com/repos/xiazemin/MyBlogComment/issues/33/comments
 自己请求不成功
 <script type="text/javascript">
- $.ajax({
-        type: "GET",
-        url:"https://api.github.com/repos/xiazemin/MyBlogComment/issues/33/comments",
-        dataType: 'json',
-        async: false,
-        success: function(json) {
-           console.log(json);
-           console.log(json[json.length-1].body);
-
-			if(json.length>0){
-			   json[json.length-1].body+=1;
-
-			   $.ajax({
-					type: "post",
-					url:"https://api.github.com/repos/xiazemin/MyBlogComment/issues/33/comments",
-					dataType: 'json',
-					async: false,
-					beforeSend: function(request) {
-            request.setRequestHeader(
-            	"Authorization","token xxxxxxxxxxx");},
-//"Authorization","Basic " + btoa("xiazemin:xxx"));},
-					//headers: {
-               // "Authorization": "Basic " + btoa("xiazemin :xxxxxxxxxxx")
-           // },
-					data:{"body": "Me too"},
-					success: function(json) {
-					console.log(json);
-					console.log(json[json.length-1].body);
-                   },
-                   error: function () {
-                }
-				});
-			}
+//get access code 
+$.ajax({
+type: "GET",
+url: "https://github.com/login/oauth/authorize?client_id=981ba8c916c262631ea0",
+//'"+encodeURIComponent("{{site.url}}{{site.baseurl}}/token.html")+"'",
+dataType: 'jsonp',
+    async: false,
+    xhrFields:{
+        withCredentials:true
+    },
+    crossDomain:true,
+    success: function(json) {
+    console.log(json);
+    }
+});
 
 
-        }
-    });
+//  $.ajax({
+//         type: "GET",
+//         url:"https://api.github.com/repos/xiazemin/MyBlogComment/issues/33/comments",
+//         dataType: 'json',
+//         async: false,
+//         success: function(json) {
+//            console.log(json);
+//            console.log(json[json.length-1].body);
+
+// 			if(json.length>0){
+// 			   json[json.length-1].body+=1;
+
+// 			   $.ajax({
+// 					type: "post",
+// 					url:"https://api.github.com/repos/xiazemin/MyBlogComment/issues/33/comments",
+// 					dataType: 'json',
+// 					async: false,
+// 					beforeSend: function(request) {
+//             request.setRequestHeader(
+//             	"Authorization","token xxxxxxxxxxx");},
+// //"Authorization","Basic " + btoa("xiazemin:xxx"));},
+// 					//headers: {
+//                // "Authorization": "Basic " + btoa("xiazemin :xxxxxxxxxxx")
+//            // },
+// 					data:{"body": "Me too"},
+// 					success: function(json) {
+// 					console.log(json);
+// 					console.log(json[json.length-1].body);
+//                    },
+//                    error: function () {
+//                 }
+// 				});
+// 			}
+
+
+//         }
+//     });
+
 
  </script>

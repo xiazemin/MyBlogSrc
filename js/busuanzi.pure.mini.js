@@ -44,4 +44,6 @@ if (!visits)
 else
         visits = parseInt(visits) + 1
 setCookie("counter", visits, now)
+if(document.getElementById('statics')){
 document.getElementById('statics').innerHTML="您是到访的第" + visits + "位用户<br/>"+"这是您的第" + visits + "次访问！";
+}
