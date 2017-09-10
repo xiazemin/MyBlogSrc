@@ -3396,7 +3396,7 @@ var Gitment = function () {
       currentPage: 1
     });
     var query = _utils.Query.parse();
-    console.log(query.code);
+    console.log(query);
     alert(query.code);
     if (query.code) {
       var _oauth = this.oauth,
@@ -3461,8 +3461,9 @@ var Gitment = function () {
     key: 'update',
     value: function update() {
       var _this4 = this;
-alert("update");
+
 console.log(Promise.all([this.loadMeta(), this.loadUserInfo()]));
+alert("update");
       return Promise.all([this.loadMeta(), this.loadUserInfo()]).then(function () {
         return Promise.all([_this4.loadComments().then(function () {
           return _this4.loadCommentReactions();
