@@ -62,6 +62,9 @@ dataType: 'jsonp',
     xhrFields:{
         withCredentials:true
     },
+     beforeSend: function(request) {
+                        request.setRequestHeader("Content-Type", "application/json");
+                    },
     crossDomain:true,
     success: function(json) {
         alert(json);
