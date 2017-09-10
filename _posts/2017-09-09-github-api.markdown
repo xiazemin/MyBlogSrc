@@ -16,7 +16,11 @@ curl -d "json_data={
 curl -u xiazemin:xxxxxxxxxxx  https://api.github.com/repos/xiazemin/MyBlogComment/issues/33/comments
 curl -H "Authorization: token xxxxxxxxxxx"  https://api.github.com/repos/xiazemin/MyBlogComment/issues/33/comments
 自己请求不成功
+
 <script type="text/javascript" src="{{site.baseurl}}/js/utils.js"></script>
+ alert(Query.parse());
+console.log(Query.parse());
+<a href="https://github.com/login/oauth/authorize?scope=public_repo&redirect_uri=https%3a%2f%2fxiazemin.github.io%2fMyBlog%2fjekyll%2f2017%2f09%2f09%2fgithub-api.html&client_id=981ba8c916c262631ea0&client_secret=a52260ef92de69011ccd1cf355b973ef11d6da0e">登入</a>
 <script src="https://imsun.github.io/gitment/dist/gitment.browser.js"></script>
 <!--script type="text/javascript">
 //postRequest();
