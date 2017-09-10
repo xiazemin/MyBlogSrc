@@ -49,6 +49,9 @@ https://api.github.com/user?access_token=7xxxxx
 https://api.github.com/repos/xiazemin/MyBlogComment/issues/33/comments?access_token=xxxxxxx
 返回评论信息json
 
+loginlink:
+https://github.com/login/oauth/authorize?scope=public_repo&redirect_uri=https%3A%2F%2Fxiazemin.github.io%2FMyBlog%2Fjekyll%2F2017%2F09%2F09%2Fstatics.html&client_id=981ba8c916c262631ea0&client_secret=a52260ef92de69011ccd1cf355b973ef11d6da0e"
+
 
 
 
