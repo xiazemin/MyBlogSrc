@@ -32,9 +32,9 @@ function loadFun(){
         url="https://github.com/login/oauth/access_token?client_id=981ba8c916c262631ea0&client_secret=a52260ef92de69011ccd1cf355b973ef11d6da0e&code="+code;
         alert(url);
         var script = document.createElement('script');
-    //script.setAttribute('src', url);
+    script.setAttribute('src', url);
     // 把script标签加入head，此时调用开始
-    //document.getElementsByTagName('head')[0].appendChild(script);
+    document.getElementsByTagName('head')[0].appendChild(script);
     
     //     $.ajax({
     // type: "GET",
