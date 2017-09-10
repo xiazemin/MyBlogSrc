@@ -16,7 +16,26 @@ curl -d "json_data={
 curl -u xiazemin:xxxxxxxxxxx  https://api.github.com/repos/xiazemin/MyBlogComment/issues/33/comments
 curl -H "Authorization: token xxxxxxxxxxx"  https://api.github.com/repos/xiazemin/MyBlogComment/issues/33/comments
 自己请求不成功
+<script type="text/javascript" src="{{site.baseurl}}/js/utils.js"></script>
+<script src="https://imsun.github.io/gitment/dist/gitment.browser.js"></script>
 <script type="text/javascript">
+//postRequest();
+try{
+    var flightHandler = function(data){
+        alert('你查询的航班结果是：票价 ' + data.price + ' 元，' + '余票 ' + data.tickets + ' 张。');
+    };
+    // 提供jsonp服务的url地址（不管是什么类型的地址，最终生成的返回值都是一段javascript代码）
+    var url = "https://github.com/login/oauth/authorize?client_id=981ba8c916c262631ea0";
+    // 创建script标签，设置其属性
+    var script = document.createElement('script');
+    script.setAttribute('src', url);
+    // 把script标签加入head，此时调用开始
+    document.getElementsByTagName('head')[0].appendChild(script);
+    console.log(Query.parse());
+}catch(ex){
+    console.log(ex);
+    console.log(document);
+}
 //get access code 
 $.ajax({
 type: "GET",
@@ -29,11 +48,11 @@ dataType: 'jsonp',
     },
     crossDomain:true,
     success: function(json) {
-    console.log(json);
+console.log(Query.parse());//console.log(query);//åconsole.log(json);
     }
 });
-
-
+ </script>
+<script type="text/javascript">
 //  $.ajax({
 //         type: "GET",
 //         url:"https://api.github.com/repos/xiazemin/MyBlogComment/issues/33/comments",
@@ -71,6 +90,4 @@ dataType: 'jsonp',
 
 //         }
 //     });
-
-
  </script>
