@@ -3170,8 +3170,10 @@ function getTargetContainer(container) {
 
 var Query = exports.Query = {
   parse: function parse() {
+    console.log(window.location.search);
     var search = arguments.length > 0 && arguments[0] !== undefined ? arguments[0] : window.location.search;
-
+console.trace();
+alert(search);
     if (!search) return {};
     var queryString = search[0] === '?' ? search.substring(1) : search;
     var query = {};
