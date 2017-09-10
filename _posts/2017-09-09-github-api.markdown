@@ -20,7 +20,7 @@ curl -H "Authorization: token xxxxxxxxxxx"  https://api.github.com/repos/xiazemi
 <script type="text/javascript" src="{{site.baseurl}}/js/utils.js">
 </script>
 <script type="text/javascript">
-alert(window.location.search);
+//alert(window.location.search);
 var search=window.location.search;
 
 function parseQueryString(url)
@@ -69,9 +69,13 @@ dataType: 'json',
                     },
     crossDomain:true,
     success: function(json) {
-        alert(json);
-console.log(json);//console.log(query);//åconsole.log(json);
-    }
+    console.log(json);//console.log(query);//åconsole.log(json);
+    alert(json);
+    },
+    error: function(e) { 
+        console.log(e);
+alert(e); 
+}
 });
     //     $.ajax({
     // type: "GET",
