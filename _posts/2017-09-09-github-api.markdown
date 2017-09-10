@@ -18,6 +18,8 @@ curl -H "Authorization: token xxxxxxxxxxx"  https://api.github.com/repos/xiazemi
 自己请求不成功
 
 <script type="text/javascript" src="{{site.baseurl}}/js/utils.js">
+</script>
+<script type="text/javascript">
 alert(window.location.search);
 function loadFun(){
      alert(window.location.search);
