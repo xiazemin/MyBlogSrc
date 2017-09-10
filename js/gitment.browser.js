@@ -3461,7 +3461,8 @@ alert('code');
     key: 'update',
     value: function update() {
       var _this4 = this;
-
+alert("update");
+console.log(Promise);
       return Promise.all([this.loadMeta(), this.loadUserInfo()]).then(function () {
         return Promise.all([_this4.loadComments().then(function () {
           return _this4.loadCommentReactions();
