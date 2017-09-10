@@ -3376,6 +3376,7 @@ var Gitment = function () {
     var user = {};
     try {
       var userInfo = localStorage.getItem(_constants.LS_USER_KEY);
+      console.log(userInfo);
       if (this.accessToken && userInfo) {
         Object.assign(user, JSON.parse(userInfo), {
           fromCache: true
@@ -3394,8 +3395,9 @@ var Gitment = function () {
       commentReactions: {},
       currentPage: 1
     });
-
+alert('code');
     var query = _utils.Query.parse();
+    console.log(_utils.Query.parse());
     if (query.code) {
       var _oauth = this.oauth,
           client_id = _oauth.client_id,
