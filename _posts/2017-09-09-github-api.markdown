@@ -63,7 +63,8 @@ dataType: 'jsonp',
         withCredentials:true
     },
      beforeSend: function(request) {
-                        request.setRequestHeader("Content-Type", "application/json");
+                       // request.setRequestHeader("Content-Type", "application/json");
+                        request.setRequestHeader("Accept","application/json");
                     },
     crossDomain:true,
     success: function(json) {
