@@ -63,3 +63,10 @@ Vary: Accept-Encoding
 {"error":"bad_verification_code","error_description":"The code passed is incorrect or expired.","error_uri":"https://developer.github.com/v3/oauth/#bad-verification-code"}
 
 
+XMLHttpRequest cannot load https://gh-oauth.imsun.net/?client_id=981ba8c916c262631ea0&client_secret=a52260ef92de69011ccd1cf355b973ef11d6da0e&code=212ab8ead2246b853e75&code=e06fe81abe307693bd63. The value of the 'Access-Control-Allow-Origin' header in the response must not be the wildcard '*' when the request's credentials mode is 'include'. Origin 'https://xiazemin.github.io' is therefore not allowed access. The credentials mode of requests initiated by the XMLHttpRequest is controlled by the withCredentials attribute.
+
+
+ xhrFields:{
+        withCredentials:true
+    },
+改为false
