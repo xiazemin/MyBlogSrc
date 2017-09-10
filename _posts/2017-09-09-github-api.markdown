@@ -55,7 +55,7 @@ function loadFun(){
     // document.getElementsByTagName('head')[0].appendChild(script);
     
     $.ajax({
-type: "GET",
+type: "POST",
 url: url,
 dataType: 'jsonp',
     async: false,
