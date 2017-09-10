@@ -52,6 +52,12 @@ https://api.github.com/repos/xiazemin/MyBlogComment/issues/33/comments?access_to
 loginlink:
 https://github.com/login/oauth/authorize?scope=public_repo&redirect_uri=https%3A%2F%2Fxiazemin.github.io%2FMyBlog%2Fjekyll%2F2017%2F09%2F09%2Fstatics.html&client_id=981ba8c916c262631ea0&client_secret=a52260ef92de69011ccd1cf355b973ef11d6da0e"
 
+返回json
+$     curl  -i -X POST -H "Accept: application/json" 'https://github.com/login/oauth/access_token?client_id=981ba8c916c262631ea0&client_secret=a52260ef92de69011ccd1cf355b973ef11d6da0e&callback=parseQueryString&code=39b990e457b27245464e&callback=jQuery112004444319529793137_1505049039697&_=1505049039698'
+
+{"error":"bad_verification_code","error_description":"The code passed is incorrect or expired.","error_uri":"https://developer.github.com/v3/oauth/#bad-verification-code"}
+
+
 
 
 
