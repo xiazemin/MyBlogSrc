@@ -18,20 +18,22 @@ curl -H "Authorization: token xxxxxxxxxxx"  https://api.github.com/repos/xiazemi
 自己请求不成功
 
 <script type="text/javascript" src="{{site.baseurl}}/js/utils.js">
- alert(Query.parse());
- document.getElementById("code").innerHTML="code:"+Query.parse().code;
-console.log(Query.parse());
-if(Query.parse().code){
-    $.ajax({
-type: "GET",
-url: "https://github.com/login/oauth/access_token?client_id=981ba8c916c262631ea0&client_secret=a52260ef92de69011ccd1cf355b973ef11d6da0e&code="+Query.parse().code,
-success: function(json) {
-        console.log(json);
-         document.getElementById("token").innerHTML="token:"+json.access_token;
-        alert(json.access_token);
-        }
-});
-unset(Query.parse().code);
+onload=function(){
+     alert(Query.parse());
+     document.getElementById("code").innerHTML="code:"+Query.parse().code;
+    console.log(Query.parse());
+    if(Query.parse().code){
+        $.ajax({
+    type: "GET",
+    url: "https://github.com/login/oauth/access_token?client_id=981ba8c916c262631ea0&client_secret=a52260ef92de69011ccd1cf355b973ef11d6da0e&code="+Query.parse().code,
+    success: function(json) {
+            console.log(json);
+             document.getElementById("token").innerHTML="token:"+json.access_token;
+            alert(json.access_token);
+            }
+    });
+    unset(Query.parse().code);
+    }
 }
 </script>
 <span id="code"></span>
