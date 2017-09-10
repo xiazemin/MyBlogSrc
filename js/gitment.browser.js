@@ -3397,7 +3397,7 @@ var Gitment = function () {
     });
 alert('code');
     var query = _utils.Query.parse();
-    console.log(query);
+    console.log(query.code);
     if (query.code) {
       var _oauth = this.oauth,
           client_id = _oauth.client_id,
