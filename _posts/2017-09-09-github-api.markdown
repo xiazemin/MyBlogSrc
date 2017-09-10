@@ -21,15 +21,17 @@ curl -H "Authorization: token xxxxxxxxxxx"  https://api.github.com/repos/xiazemi
 </script>
 <script type="text/javascript">
 alert(window.location.search);
+var search=window.location.search;
 function loadFun(){
-     alert(window.location.search);
-     alert(Query.parse());
-     document.getElementById("code").innerHTML="code:"+Query.parse().code;
-    console.log(Query.parse());
-    if(0 && Query.parse().code){
+     alert(search);
+     alert(Query.parse(search));
+     code=Query.parse(search).code;
+     document.getElementById("code").innerHTML="code:"+code;
+    console.log(Query.parse(search));
+    if(code){
         $.ajax({
     type: "GET",
-    url: "https://github.com/login/oauth/access_token?client_id=981ba8c916c262631ea0&client_secret=a52260ef92de69011ccd1cf355b973ef11d6da0e&code="+Query.parse().code,
+    url: "https://github.com/login/oauth/access_token?client_id=981ba8c916c262631ea0&client_secret=a52260ef92de69011ccd1cf355b973ef11d6da0e&code="+code,
     success: function(json) {
             console.log(json);
              document.getElementById("token").innerHTML="token:"+json.access_token;
@@ -70,7 +72,7 @@ try{
 }
 //get access code 
 </script-->
-<script type="text/javascript">
+<!--script type="text/javascript">
 $.ajax({
 type: "GET",
 url: "https://github.com/login/oauth/authorize?scope=public_repo&redirect_uri=https%3a%2f%2fxiazemin.github.io%2fMyBlog%2fjekyll%2f2017%2f09%2f09%2fgithub-api.html&client_id=981ba8c916c262631ea0&client_secret=a52260ef92de69011ccd1cf355b973ef11d6da0e",
@@ -86,7 +88,7 @@ dataType: 'json',
 console.log(Query.parse());//console.log(query);//åconsole.log(json);
     }
 });
- </script>
+ </script-->
 <script type="text/javascript">
 //  $.ajax({
 //         type: "GET",
