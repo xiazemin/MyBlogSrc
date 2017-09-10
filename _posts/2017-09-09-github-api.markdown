@@ -18,7 +18,9 @@ curl -H "Authorization: token xxxxxxxxxxx"  https://api.github.com/repos/xiazemi
 自己请求不成功
 
 <script type="text/javascript" src="{{site.baseurl}}/js/utils.js">
-onload=function(){
+alert(window.location.search);
+function loadFun(){
+     alert(window.location.search);
      alert(Query.parse());
      document.getElementById("code").innerHTML="code:"+Query.parse().code;
     console.log(Query.parse());
@@ -36,6 +38,7 @@ onload=function(){
     }
 }
 </script>
+<body onload="loadFun()">
 <span id="code"></span>
 <br/>
 <hr/>
@@ -43,6 +46,7 @@ onload=function(){
 <br/>
 <hr/>
 <a href="https://github.com/login/oauth/authorize?scope=public_repo&redirect_uri=https%3a%2f%2fxiazemin.github.io%2fMyBlog%2fjekyll%2f2017%2f09%2f09%2fgithub-api.html&client_id=981ba8c916c262631ea0&client_secret=a52260ef92de69011ccd1cf355b973ef11d6da0e">登入</a>
+</body>
 <script src="https://imsun.github.io/gitment/dist/gitment.browser.js"></script>
 <!--script type="text/javascript">
 //postRequest();
