@@ -3170,10 +3170,8 @@ function getTargetContainer(container) {
 
 var Query = exports.Query = {
   parse: function parse() {
-    console.log(window.location.search);
     var search = arguments.length > 0 && arguments[0] !== undefined ? arguments[0] : window.location.search;
-console.trace();
-alert(search);
+
     if (!search) return {};
     var queryString = search[0] === '?' ? search.substring(1) : search;
     var query = {};
@@ -3378,7 +3376,6 @@ var Gitment = function () {
     var user = {};
     try {
       var userInfo = localStorage.getItem(_constants.LS_USER_KEY);
-      console.log(userInfo);
       if (this.accessToken && userInfo) {
         Object.assign(user, JSON.parse(userInfo), {
           fromCache: true
@@ -3397,9 +3394,8 @@ var Gitment = function () {
       commentReactions: {},
       currentPage: 1
     });
+
     var query = _utils.Query.parse();
-    console.log(query);
-    alert(query.code);
     if (query.code) {
       var _oauth = this.oauth,
           client_id = _oauth.client_id,
@@ -3463,11 +3459,7 @@ var Gitment = function () {
     key: 'update',
     value: function update() {
       var _this4 = this;
-console.log(this.loadUserInfo());
-console.log(this.loadMeta());
-alert(this.loadUserInfo());
-console.log(Promise.all([this.loadMeta(), this.loadUserInfo()]));
-alert("update");
+
       return Promise.all([this.loadMeta(), this.loadUserInfo()]).then(function () {
         return Promise.all([_this4.loadComments().then(function () {
           return _this4.loadCommentReactions();
