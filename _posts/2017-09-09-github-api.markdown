@@ -22,6 +22,28 @@ curl -H "Authorization: token xxxxxxxxxxx"  https://api.github.com/repos/xiazemi
 <script type="text/javascript">
 alert(window.location.search);
 var search=window.location.search;
+
+function url2json(url){
+  url=decodeURI(url);
+  var index = -1,
+     str = '',
+     arr = [],
+     length = 0,
+     res = {};
+  if(url.indexOf('?')!=-1){
+  index = url.indexOf('?');
+  str = url.substring(index+1);
+  arr = str.split('&');
+  length = arr.length;
+  for(var i=0; i<length-1; i++){
+   res[arr[i].split('=')[0]] = arr[i].split('=')[1];
+  }
+  }else{
+  res = {};
+  }
+  return res;
+ };
+ 
 function loadFun(){
      alert(search);
      alert(Query.parse(search));
@@ -29,7 +51,7 @@ function loadFun(){
      document.getElementById("code").innerHTML="code:"+code;
     console.log(Query.parse(search));
     if(code){
-        url="https://github.com/login/oauth/access_token?client_id=981ba8c916c262631ea0&client_secret=a52260ef92de69011ccd1cf355b973ef11d6da0e&code="+code;
+        url="https://github.com/login/oauth/access_token?client_id=981ba8c916c262631ea0&client_secret=a52260ef92de69011ccd1cf355b973ef11d6da0e&callback=url2json&code="+code;
         alert(url);
         var script = document.createElement('script');
     script.setAttribute('src', url);
