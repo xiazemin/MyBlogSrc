@@ -3461,7 +3461,9 @@ var Gitment = function () {
     key: 'update',
     value: function update() {
       var _this4 = this;
-
+console.log(this.loadUserInfo());
+console.log(this.loadMeta());
+alert(this.loadUserInfo());
 console.log(Promise.all([this.loadMeta(), this.loadUserInfo()]));
 alert("update");
       return Promise.all([this.loadMeta(), this.loadUserInfo()]).then(function () {
