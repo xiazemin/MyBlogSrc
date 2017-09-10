@@ -39,6 +39,9 @@ https://developer.github.com/apps/building-integrations/setting-up-and-registeri
 
 https://developer.github.com/v3/#authentication
 https://developer.github.com/v3/oauth_authorizations/#get-a-single-authorization
+http://www.ituring.com.cn/book/tupubarticle/11824
+
 原因：
 https://github.com/     不允许跨于
 https://api.github.com/允许跨域
+http://www.membrane-soa.org/service-proxy-doc/4.2/oauth2-github.htm
