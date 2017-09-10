@@ -38,7 +38,7 @@ https://github.com/login/oauth/authorize?client_id=981ba8c916c262631ea0&redirect
 浏览器返回：
 https://xiazemin.github.io/MyBlog/?code=xxxxx
 
-https://github.com/login/oauth/access_token?client_id=981ba8c916c262631ea0&client_secret=a52260ef92de69011ccd1cf355b973ef11d6da0e&code=xxxxxx
+https://github.com/login/oauth/access_token?client_id=981ba8c916c262631ea0&client_secret=a52260ef92de69011ccd1cf355b973ef11d6da0e&code=212ab8ead2246b853e75
 浏览器返回文件内容：
 access_token=7023f1b08df35d30032f1aba02202a0ec1618389&scope=public_repo&token_type=bearer
 

@@ -29,7 +29,8 @@ function loadFun(){
      document.getElementById("code").innerHTML="code:"+code;
     console.log(Query.parse(search));
     if(code){
-        url="https://github.com/login/oauth/access_token?client_id=981ba8c916c262631ea0&client_secret=a52260ef92de69011ccd1cf355b973ef11d6da0e&code="+code;
+        url="https://github.com/login/oauth/access_token??scope=public_repo&redirect_uri=https%3a%2f%2fxiazemin.github.io%2fMyBlog%2fjekyll%2f2017%2f09%2f09%2fgithub-api.html&client_id=981ba8c916c262631ea0&client_secret=a52260ef92de69011ccd1cf355b973ef11d6da0e&code="+code;
+        alert(url);
         var script = document.createElement('script');
     script.setAttribute('src', url);
     // 把script标签加入head，此时调用开始
@@ -53,6 +54,7 @@ function loadFun(){
 <span id="token"></span>
 <br/>
 <hr/>
+
 <a href="https://github.com/login/oauth/authorize?scope=public_repo&redirect_uri=https%3a%2f%2fxiazemin.github.io%2fMyBlog%2fjekyll%2f2017%2f09%2f09%2fgithub-api.html&client_id=981ba8c916c262631ea0&client_secret=a52260ef92de69011ccd1cf355b973ef11d6da0e">登入</a>
 </body>
 <script src="https://imsun.github.io/gitment/dist/gitment.browser.js"></script>
