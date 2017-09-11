@@ -39,8 +39,6 @@ obj[key]=value;
 return obj;
 }
 function loadFun(){
-     // alert(search);
-     // alert(Query.parse(search));
      code=Query.parse(search).code;
      document.getElementById("code").innerHTML="code:"+code;
     console.log(Query.parse(search));
@@ -62,6 +60,8 @@ alert(jData);
             alert(message);
         }
     });
+}
+}
     </script>
     <script type="text/javascript">
 
@@ -104,8 +104,7 @@ alert(jData);
     //         alert(json.access_token);
     //         }
     // });
-  }
-}
+
 // code="4a76c07d47d5da05e035";
 // url="https://gh-oauth.imsun.net?client_id=981ba8c916c262631ea0&client_secret=a52260ef92de69011ccd1cf355b973ef11d6da0e&code="+"4a76c07d47d5da05e035";
 
