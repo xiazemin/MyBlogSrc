@@ -21,29 +21,7 @@ curl -H "Authorization: token xxxxxxxxxxx"  https://api.github.com/repos/xiazemi
 <script type="text/javascript" src="{{site.baseurl}}/js/json2.js">
 </script>
 <script type="text/javascript">
-// code="4a76c07d47d5da05e035";
-// url="https://gh-oauth.imsun.net?client_id=981ba8c916c262631ea0&client_secret=a52260ef92de69011ccd1cf355b973ef11d6da0e&code="+"4a76c07d47d5da05e035";
-
-// jsonData='{"client_id":"981ba8c916c262631ea0","client_secret":"a52260ef92de69011ccd1cf355b973ef11d6da0e","code":"'+code+'"}';
-// $.ajax({
-//         type: "POST",
-//         url: "https://gh-oauth.imsun.net",
-//         contentType: "application/json; charset=utf-8",
-//         data:jsonData,
-//         dataType: "json",
-//         success: function (message) {
-//             console.log(message);
-//             alert(message);
-//         },
-//         error: function (message) {
-//              console.log(message);
-//             alert(message);
-//         }
-//     });
-
-//alert(window.location.search);
 var search=window.location.search;
-
 function parseQueryString(url)
 {
 url=decodeURI(url);
@@ -60,7 +38,6 @@ obj[key]=value;
 } 
 return obj;
 }
-
 function loadFun(){
      // alert(search);
      // alert(Query.parse(search));
@@ -75,7 +52,6 @@ function loadFun(){
     // script.setAttribute('src', url);
     // // 把script标签加入head，此时调用开始
     // document.getElementsByTagName('head')[0].appendChild(script);
-
 var jData=JSON.stringify({
     client_id:"981ba8c916c262631ea0",
     client_secret:"a52260ef92de69011ccd1cf355b973ef11d6da0e",
@@ -96,8 +72,7 @@ alert(jData);
             alert(message);
         }
     });
-    
-//     $.ajax({
+    //     $.ajax({
 // type: "POST",
 // url: url,
 // dataType: 'json',
@@ -119,9 +94,7 @@ alert(jData);
 // alert(e); 
 // }
 // });
-
-
-    //     $.ajax({
+  //     $.ajax({
     // type: "GET",
     // url: "https://github.com/login/oauth/access_token?client_id=981ba8c916c262631ea0&client_secret=a52260ef92de69011ccd1cf355b973ef11d6da0e&code="+code,
     // success: function(json) {
@@ -132,6 +105,26 @@ alert(jData);
     // });
   }
 }
+// code="4a76c07d47d5da05e035";
+// url="https://gh-oauth.imsun.net?client_id=981ba8c916c262631ea0&client_secret=a52260ef92de69011ccd1cf355b973ef11d6da0e&code="+"4a76c07d47d5da05e035";
+
+// jsonData='{"client_id":"981ba8c916c262631ea0","client_secret":"a52260ef92de69011ccd1cf355b973ef11d6da0e","code":"'+code+'"}';
+// $.ajax({
+//         type: "POST",
+//         url: "https://gh-oauth.imsun.net",
+//         contentType: "application/json; charset=utf-8",
+//         data:jsonData,
+//         dataType: "json",
+//         success: function (message) {
+//             console.log(message);
+//             alert(message);
+//         },
+//         error: function (message) {
+//              console.log(message);
+//             alert(message);
+//         }
+//     });
+//alert(window.location.search);
 </script>
 <body onload="loadFun()">
 <span id="code"></span>
