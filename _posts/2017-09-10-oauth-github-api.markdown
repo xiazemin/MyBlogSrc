@@ -70,3 +70,18 @@ XMLHttpRequest cannot load https://gh-oauth.imsun.net/?client_id=981ba8c916c2626
         withCredentials:true
     },
 改为false
+
+$curl -i https://gh-oauth.imsun.net/ -d 'client_id=981ba8c916c262631ea0&client_secret=a52260ef92de69011ccd1cf355b973ef11d6da0e&code=2a519af00b0c087c9467'
+HTTP/1.1 200 OK
+x-powered-by: Express
+access-control-allow-origin: *
+access-control-allow-headers: Origin, X-Requested-With, Content-Type, Accept, Authorization
+content-type: application/json; charset=utf-8
+content-length: 103
+etag: W/"67-PeAQcsRx2WA+cub4aPbs/mJhXYo"
+date: Mon, 11 Sep 2017 02:07:43 GMT
+connection: close
+Vary: Accept-Encoding
+
+{"access_token":"41294d53c2f9925b28c979dc5b530196b0d5c84c","token_type":"bearer","scope":"public_repo"}
+
