@@ -42,7 +42,8 @@ return obj;
 function getComment(token){
       $.ajax({
         type: "POST",
-        url: " https://api.github.com/repos/xiazemin/MyBlogComment/issues/33/comments?access_token=xxxxxxx",
+        url: " https://api.github.com/repos/xiazemin/MyBlogComment/issues/33/comments",
+        data:token,
         success: function (message) {
             console.log(message);
             alert(message);
