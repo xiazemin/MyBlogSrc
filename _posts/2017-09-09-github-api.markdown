@@ -16,7 +16,8 @@ curl -d "json_data={
 curl -u xiazemin:xxxxxxxxxxx  https://api.github.com/repos/xiazemin/MyBlogComment/issues/33/comments
 curl -H "Authorization: token xxxxxxxxxxx"  https://api.github.com/repos/xiazemin/MyBlogComment/issues/33/comments
 自己请求不成功
-
+<script type="text/javascript" src="{{site.baseurl}}/js/utils.js">
+</script>
 <script type="text/javascript" src="{{site.baseurl}}/js/json2.js">
 </script>
 <script type="text/javascript">
