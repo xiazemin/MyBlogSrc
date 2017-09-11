@@ -38,7 +38,6 @@ obj[key]=value;
 } 
 return obj;
 }
-
 function getComment(token){
       $.ajax({
         type: "POST",
@@ -54,7 +53,6 @@ function getComment(token){
         }
     });
 }
-
 function loadFun(){
      code=Query.parse(search).code;
      document.getElementById("code").innerHTML="code:"+code;
@@ -79,7 +77,7 @@ function loadFun(){
     });
 }
 }
-    </script>
+</script>
     <script type="text/javascript">
 
       //url="https://github.com/login/oauth/access_token?client_id=981ba8c916c262631ea0&client_secret=a52260ef92de69011ccd1cf355b973ef11d6da0e&callback=parseQueryString&code="+code;
