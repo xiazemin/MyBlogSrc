@@ -76,10 +76,10 @@ function loadFun(){
     // document.getElementsByTagName('head')[0].appendChild(script);
 
 var jData='{"client_id":"981ba8c916c262631ea0","client_secret":"a52260ef92de69011ccd1cf355b973ef11d6da0e","code":"'+code+'"}';
-//alert(jData);
+alert(jData);
     $.ajax({
         type: "POST",
-        url: "https://gh-oauth.imsun.net",
+        url: "https://gh-oauth.imsun.net/",
         contentType: "application/json; charset=utf-8",
         data:jData,
         dataType: "json",
