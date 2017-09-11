@@ -21,6 +21,17 @@ curl -H "Authorization: token xxxxxxxxxxx"  https://api.github.com/repos/xiazemi
 <script type="text/javascript" src="{{site.baseurl}}/js/json2.js">
 </script>
 <script type="text/javascript">
+function testUpdate(){
+ $.ajax({
+        type: "PATCH",
+        url: "https://api.github.com/repos/xiazemin/MyBlogComment/comments/328255639?access_token=86b6f833a136d213d6e3c5c5e0c6ad562dd5c4d0&body=1",
+        success: function (message) {
+            console.log(message);
+        },
+        error: function (message) {
+             console.log(message);
+        }
+    });}
 var search=window.location.search;
 function parseQueryString(url)
 {
