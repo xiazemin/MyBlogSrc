@@ -17,7 +17,7 @@ curl -u xiazemin:xxxxxxxxxxx  https://api.github.com/repos/xiazemin/MyBlogCommen
 curl -H "Authorization: token xxxxxxxxxxx"  https://api.github.com/repos/xiazemin/MyBlogComment/issues/33/comments
 自己请求不成功
 
-<script type="text/javascript" src="{{site.baseurl}}/js/utils.js">
+<script type="text/javascript" src="{{site.baseurl}}/js/json2.js">
 </script>
 <script type="text/javascript">
 // code="4a76c07d47d5da05e035";
@@ -75,7 +75,10 @@ function loadFun(){
     // // 把script标签加入head，此时调用开始
     // document.getElementsByTagName('head')[0].appendChild(script);
 
-var jData='{"client_id":"981ba8c916c262631ea0","client_secret":"a52260ef92de69011ccd1cf355b973ef11d6da0e","code":"'+code+'"}';
+var jData=JSON.stringify({
+    client_id:"981ba8c916c262631ea0",
+    client_secret:"a52260ef92de69011ccd1cf355b973ef11d6da0e",
+    code:code});
 alert(jData);
     $.ajax({
         type: "POST",
