@@ -57,7 +57,8 @@ $     curl  -i -X POST -H "Accept: application/json" 'https://github.com/login/o
 
 {"error":"bad_verification_code","error_description":"The code passed is incorrect or expired.","error_uri":"https://developer.github.com/v3/oauth/#bad-verification-code"}
 
-
+更新
+$ curl -i -X PATCH  -H "Authorization token:86b6f833a136d213d6e3c5c5e0c6ad562dd5c4d0"  https://api.github.com/repos/xiazemin/MyBlogComment/issues/comments/328255639  -d '{"body":"102"}'  返回错误
 
 
 
