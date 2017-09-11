@@ -45,19 +45,13 @@ function loadFun(){
      document.getElementById("code").innerHTML="code:"+code;
     console.log(Query.parse(search));
     if(code){
-        //url="https://github.com/login/oauth/access_token?client_id=981ba8c916c262631ea0&client_secret=a52260ef92de69011ccd1cf355b973ef11d6da0e&callback=parseQueryString&code="+code;
          url="https://gh-oauth.imsun.net?client_id=981ba8c916c262631ea0&client_secret=a52260ef92de69011ccd1cf355b973ef11d6da0e&code="+code;
-         console.log(url);
-    //     var script = document.createElement('script');
-    // script.setAttribute('src', url);
-    // // 把script标签加入head，此时调用开始
-    // document.getElementsByTagName('head')[0].appendChild(script);
-var jData=JSON.stringify({client_id:"981ba8c916c262631ea0",client_secret:"a52260ef92de69011ccd1cf355b973ef11d6da0e",code:code});
+         console.log(url);var jData=JSON.stringify({client_id:"981ba8c916c262631ea0",client_secret:"a52260ef92de69011ccd1cf355b973ef11d6da0e",code:code});
 alert(jData);
     $.ajax({
         type: "POST",
         url: "https://gh-oauth.imsun.net/",
-        //contentType: "application/json; charset=utf-8",
+        contentType: "application/json; charset=utf-8",
         data:jData,dataType: "json",
         success: function (message) {
             console.log(message);
@@ -68,6 +62,17 @@ alert(jData);
             alert(message);
         }
     });
+    </script>
+    <script type="text/javascript">
+
+      //url="https://github.com/login/oauth/access_token?client_id=981ba8c916c262631ea0&client_secret=a52260ef92de69011ccd1cf355b973ef11d6da0e&callback=parseQueryString&code="+code;
+
+     //     var script = document.createElement('script');
+    // script.setAttribute('src', url);
+    // // 把script标签加入head，此时调用开始
+    // document.getElementsByTagName('head')[0].appendChild(script);
+
+
     //     $.ajax({
 // type: "POST",
 // url: url,
