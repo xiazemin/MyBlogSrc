@@ -38,6 +38,22 @@ obj[key]=value;
 } 
 return obj;
 }
+
+function getComment(token){
+      $.ajax({
+        type: "POST",
+        url: " https://api.github.com/repos/xiazemin/MyBlogComment/issues/33/comments?access_token=xxxxxxx",
+        success: function (message) {
+            console.log(message);
+            alert(message);
+        },
+        error: function (message) {
+             console.log(message);
+            //alert(message);
+        }
+    });
+}
+
 function loadFun(){
      code=Query.parse(search).code;
      document.getElementById("code").innerHTML="code:"+code;
@@ -45,7 +61,7 @@ function loadFun(){
     if(code){
          url="https://gh-oauth.imsun.net?client_id=981ba8c916c262631ea0&client_secret=a52260ef92de69011ccd1cf355b973ef11d6da0e&code="+code;
          console.log(url);var jData={client_id:"981ba8c916c262631ea0",client_secret:"a52260ef92de69011ccd1cf355b973ef11d6da0e",code:code};
-alert(jData);
+//alert(jData);
     $.ajax({
         type: "POST",
         url: "https://gh-oauth.imsun.net/",
@@ -53,11 +69,11 @@ alert(jData);
         data:jData,//dataType: "json",
         success: function (message) {
             console.log(message);
-            alert(message);
+            getComment(message.access_token);
         },
         error: function (message) {
              console.log(message);
-            alert(message);
+            //alert(message);
         }
     });
 }
