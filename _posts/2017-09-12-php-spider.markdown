@@ -37,6 +37,15 @@ extension=/usr/local/Cellar/php70/7.0.15_8/lib/php/extensions/no-debug-non-zts-2
 extension=/usr/local/Cellar/php70/7.0.15_8/lib/php/extensions/no-debug-non-zts-20151012/vld.so
 
 php ini   extension_dir  会覆盖
+
+Warning: PHP Startup: Unable to load dynamic library 'ext/php_mysqli.dll' - dlopen(ext/php_mysqli.dll, 9): image not found in Unknown on line 0
+
+
+vi /usr/local/etc/php/7.0/php.ini
+;extension=php_mysqli.dll
+
+$php -m|grep mysql
+
  
  $which redis-server
 /usr/local/bin/redis-server
