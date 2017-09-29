@@ -11,7 +11,7 @@ GitHub下载地址:
 https://github.com/alibaba/fastjson
 
 最新发布版本jar包 1.2.23 下载地址: https://search.maven.org/remote_content?g=com.alibaba&a=fastjson&v=LATEST
-{% highligh scala linenos %}
+{% highlight scala linenos %}
 import com.alibaba.fastjson.JSON
 object FastJsonExp {
   def main(args:Array[String]){
