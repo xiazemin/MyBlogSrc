@@ -5,9 +5,60 @@
     <description>夏泽民的个人主页，学习笔记。</description>
     <link>https://xiazemin.github.io/MyBlog/</link>
     <atom:link href="https://xiazemin.github.io/MyBlog/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Thu, 12 Oct 2017 14:32:30 +0800</pubDate>
-    <lastBuildDate>Thu, 12 Oct 2017 14:32:30 +0800</lastBuildDate>
+    <pubDate>Fri, 13 Oct 2017 13:00:15 +0800</pubDate>
+    <lastBuildDate>Fri, 13 Oct 2017 13:00:15 +0800</lastBuildDate>
     <generator>Jekyll v3.6.0.pre.beta1</generator>
+    
+      <item>
+        <title>spark基本概念</title>
+        <description>&lt;!-- more --&gt;
+&lt;p&gt;我们知道Spark总是以集群的方式运行的，Standalone的部署方式是集群方式中最为精简的一种（另外的是Mesos和Yarn）。Standalone模式中，资源调度是自己实现的，是MS架构的集群模式，故存在单点故障问题。
+下面提出几个问题并解决：
+1、Standalone部署方式下包含哪些节点？&lt;/p&gt;
+
+&lt;p&gt;由不同级别的三个节点组成，分别是Master主控节点、Worker工作节点、客户端节点；
+（1）其中Master主控节点，顾名思义，类似于领导者，在整个集群中，最多只有一个Master处于Active状态。在使用spark-shell等交互式运行或者使用官方提供的run-example实例时，Driver运行在Master节点中；若是使用spark-submit工具进行任务的提交或者IDEA等工具开发运行任务时，Driver是运行在本地客户端的。
+Master一方面负责各种信息，比如Driver、Worker、Application的注册；另一方面还负责Executor的启动，Worker心跳等诸多信息的处理。
+（2）Woker节点，类似于yarn中的NodeManager，在整个集群中，可以有多个Worker（&amp;gt;0）。负责当前WorkerNode上的资源汇报、监督当前节点运行的Executor。并通过心跳机制来保持和Master的存活性连接。Executor受到Worker掌控，一个Worker启动Executor的个数受限于 机器中CPU核数。每个Worker节点存在一个多个CoarseGrainedExecutorBackend进程，每个进程包含一个Executor对象，该对象持有一个线程池，每个线程执行一个Task。
+2、基本的概念？&lt;/p&gt;
+
+&lt;p&gt;（1）Application：指的是用户编写的Spark应用程序，包含了含有一个Driver功能的代码和分布在集群中多个节点上运行的Executor代码。
+（2）Driver:运行Application的main函数并创建SparkContext，SparkContext的目的是为了准备Spark应用程序的运行环境。SparkContext负责资源的申请、任务分配和监控等。当Executor运行结束后，Driver负责关闭SparkContext；
+（3）Job：一个Application可以产生多个Job，其中Job由Spark Action触发产生。每个Job包含多个Task组成的并行计算。
+（4）Stage：每个Job会拆分为多个Task，作为一个TaskSet,称为Stage；Stage的划分和调度是由DAGScheduler负责的。Stage分为Result Stage和Shuffle Map Stage；
+（5）Task：Application的运行基本单位，Executor上的工作单元。其调度和 管理又TaskScheduler负责。
+（6）RDD：Spark基本计算单元，是Spark最核心的东西。表示已被分区、被序列化、不可变的、有容错机制的、能被并行操作的数据集合。
+(7) DAGScheduler:根据Job构建基于Stage的DAG，划分Stage依据是RDD之间的依赖关系。
+（8）TaskScheduler：将TaskSet提交给Worker运行，每个Worker运行了什么Task于此处分配。同时还负责监控、汇报任务运行情况等。
+3、Standalone启动过程是啥？&lt;/p&gt;
+
+&lt;p&gt;（1）首先，启动master，worker节点。
+worker启动后触发Master的RegisterWorker事件，进行注册。主要讲要注册的Worker信息封装成WorkerInfo对象，包括Worker节点的CPU、内存等基本信息。记录Worker的信息（IP、Address）到master缓存中（HashMap），若Worker节点的注册信息有效，持久化已注册的Worker信息。然后给个完成注册的反馈信号。
+（2）提交Application
+运行spark-shell时，会由Driver端的DAGScheduler向Master发送RegisterApplication请求。根据此请求信息会创建ApplicationInfo对象，将Application加入到Master的缓存apps中，这个结构是HashSet。
+如果worker已经注册，发送lanchExecutor指令给相应的Worker。
+（3）Worker收到lanchExecutor后，会由ExecutorRunner启动Excutor进程，启动的Executor进程会根据启动时的入参，将自己注册到Drive中的ScheduleBackend。
+(4)ScheduleBackend收到Excutor的注册信息后，会将提交到的Spark Job分解为多个具体的Task，然后通过LaunchTask指令将这些Task分散到各个Executor上运行。
+4、Standalone部署方式下某一节点出现问题时，系统如何处理？&lt;/p&gt;
+
+&lt;p&gt;出现问题的节点可能发生的情况有三种：
+（1）Master崩掉了：这个坏掉了，就真的没法完了。单点故障的问题。
+有两种解决办法：第一种基于文件系统的故障恢复，适合Master进程本身挂掉，那直接重启就Ok了。
+第二种是基于ZookerKeep的HA方式。此方式被许多的分布式框架使用。
+（2）某一Worker崩掉了：
+若是所有的Worker挂掉，则整个集群就不可用；
+Worker退出之前，会将管控的所有Executor进程kill；由于Worker挂掉，不能向master玩心跳了，根据超时处理会知道Worker挂了，然后Master将相应的情况汇报给Driver。Driver会根据master的信息和没有收到Executor的StatusUpdate确定这个Worker挂了，则Driver会将这个注册的Executor移除。
+（3）某Worker的Excutor崩掉了：
+Excutor的作为一个独立的进程在运行，由ExcutorRunner线程启动，并收到ExcutorRunner的监控，当Excutor挂了，ExcutorRunner会注意到异常情况，将ExecutorStateChanged汇报给Master，master会再次发送lanchExecutor指令给相应的Worker启动相应的Excutor。&lt;/p&gt;
+</description>
+        <pubDate>Fri, 13 Oct 2017 00:00:00 +0800</pubDate>
+        <link>https://xiazemin.github.io/MyBlog/spark/2017/10/13/spark_concepts.html</link>
+        <guid isPermaLink="true">https://xiazemin.github.io/MyBlog/spark/2017/10/13/spark_concepts.html</guid>
+        
+        
+        <category>spark</category>
+        
+      </item>
     
       <item>
         <title>java_scala</title>
@@ -24,6 +75,74 @@
         <pubDate>Thu, 12 Oct 2017 00:00:00 +0800</pubDate>
         <link>https://xiazemin.github.io/MyBlog/spark/2017/10/12/java_scala.html</link>
         <guid isPermaLink="true">https://xiazemin.github.io/MyBlog/spark/2017/10/12/java_scala.html</guid>
+        
+        
+        <category>spark</category>
+        
+      </item>
+    
+      <item>
+        <title>Scala_collection</title>
+        <description>&lt;!-- more --&gt;
+&lt;p&gt;Scala 集合分为可变的和不可变的集合。&lt;/p&gt;
+
+&lt;p&gt;1	Scala List(列表)
+List的特征是其元素以线性方式存储，集合中可以存放重复对象。
+参考 API文档
+2	Scala Set(集合)
+Set是最简单的一种集合。集合中的对象不按特定的方式排序，并且没有重复对象。
+参考 API文档
+3	Scala Map(映射)
+Map 是一种把键对象和值对象映射的集合，它的每一个元素都包含一对键对象和值对象。
+参考 API文档
+4	Scala 元组
+元组是不同类型的值的集合
+5	Scala Option
+Option[T] 表示有可能包含值的容器，也可能不包含值。
+6	Scala Iterator（迭代器）
+迭代器不是一个容器，更确切的说是逐一访问容器内元素的方法。&lt;/p&gt;
+
+&lt;p&gt;　Scala中的三种集合类型包含:Array,List,Tuple．那么究竟这三种有哪些异同呢？说实话，我之前一直没弄明确，所以今天特意花了点时间学习了一下．&lt;/p&gt;
+
+&lt;p&gt;　　　　同样点:
+　　　　　1.长度都是固定的，不可变长
+　　　　　２.早期的Scala版本号,Array、List都不能混合类型，仅仅有Tuple能够,2.8版本号以后,3者的元素都能够混合不同的类型（转化为Any类型）&lt;/p&gt;
+
+&lt;p&gt;　　　　不同点:
+　　　　　1.Array 中的元素值可变，List和Tuple中的元素值不可变
+　　　　　２.Array通常是先确定长度，后赋值，而List和Tuple在声明的时候就须要赋值
+　　　　　３.Array取单个元素的效率非常高。而List读取单个元素的效率是O(n)
+　　　　　4.List和Array的声明不须要newkeyword。而Tuple声明无论有无new 都能够&lt;/p&gt;
+
+&lt;pre&gt;&lt;code&gt;      val arrayTest = Array(1,2,3,4)   //正确
+      val arrayTest = Array(1,2,3,4)   //错误&amp;lt;span style=&quot;font-family: Arial, Helvetica, sans-serif;&quot;&amp;gt;  &amp;lt;/span&amp;gt;
+      val listTest = List(1,2,3,4)         //正确
+      val listTest = new List(1,2,3,4)    //错误
+
+      val tupleTest = Tuple(1,2,&quot;aaa&quot;)        //正确
+      val tupleTest = new Tuple(1,2,&quot;aaa&quot;)    //正确
+      val tupleTest = (1,2,&quot;aaa&quot;)             //正确 　　 　　　　　5.当使用混合类型时，Array和List会将元素类型转化为Any类型,而Tuple则保留每个元素的初始类型
+
+                6.訪问方式不同。Array和List的下标从0開始，且使用小括号,而Tuple的下标从1開始，切使用点加下划线的方式訪问，如：arrayTest(0), listTest(0); Tuple訪问: tupleTest._1
+&lt;/code&gt;&lt;/pre&gt;
+
+&lt;p&gt;List 有个叫“ ::: ” 的方法实现叠加功能。你可以这么用：&lt;/p&gt;
+
+&lt;p&gt;val oneTwo = List(1, 2)
+val threeFour = List(3, 4)&lt;/p&gt;
+
+&lt;p&gt;val oneTwoThreeFour = oneTwo ::: threeFour&lt;/p&gt;
+
+&lt;p&gt;List 最常用的操作符是发音为“ cons ” 的‘ :: 。 Cons 把一个新元素组合到已有 List 的最前端，然后返回结果 List 。例如，若执行这个脚本：
+val twoThree = list(2, 3)
+val oneTwoThree = 1 :: twoThree&lt;/p&gt;
+
+&lt;p&gt;表达式“ 1 :: twoThree ” 中， :: 是它右操作数，列表 twoThree ，的方法。你或许会疑惑 :: 方法的关联性上有什么东西搞错了，不过这只是一个简单的需记住的规则：如果一个方法被用作操作符标注，如 a * b ，那么方法被左操作数调用，就像 a.*(b) 除非方法名以冒号结尾。这种情况下，方法被右操作数调用。因此， 1 :: twoThree 里， :: 方法被 twoThree 调用，传入 1 ，像这样： twoThree.::(1) 。&lt;/p&gt;
+
+</description>
+        <pubDate>Thu, 12 Oct 2017 00:00:00 +0800</pubDate>
+        <link>https://xiazemin.github.io/MyBlog/spark/2017/10/12/Scala_collection.html</link>
+        <guid isPermaLink="true">https://xiazemin.github.io/MyBlog/spark/2017/10/12/Scala_collection.html</guid>
         
         
         <category>spark</category>
@@ -774,240 +893,6 @@ df.selectExpr(“topic”, “CAST(key AS STRING)”, “CAST(value AS STRING)�
         
         
         <category>web</category>
-        
-      </item>
-    
-      <item>
-        <title>mysql-time</title>
-        <description>&lt;!-- more --&gt;
-&lt;p&gt;MySQL 获得当前日期时间 函数
-获得当前日期+时间（date + time）函数：now()&lt;/p&gt;
-
-&lt;p&gt;复制代码
-mysql&amp;gt; select now();&lt;/p&gt;
-
-&lt;p&gt;+———————+
-| now() |
-+———————+
-| 2008-08-08 22:20:46 |
-+———————+
-复制代码
-获得当前日期+时间（date + time）函数：sysdate()
-sysdate() 日期时间函数跟 now() 类似，不同之处在于：now() 在执行开始时值就得到了， sysdate() 在函数执行时动态得到值。看下面的例子就明白了：&lt;/p&gt;
-
-&lt;p&gt;复制代码
-mysql&amp;gt; select now(), sleep(3), now();&lt;/p&gt;
-
-&lt;p&gt;+———————+———-+———————+
-| now() | sleep(3) | now() |
-+———————+———-+———————+
-| 2008-08-08 22:28:21 | 0 | 2008-08-08 22:28:21 |
-+———————+———-+———————+
-复制代码
-sysdate() 日期时间函数，一般情况下很少用到。&lt;/p&gt;
-
-&lt;p&gt;MySQL 获得当前时间戳函数：current_timestamp, current_timestamp()&lt;/p&gt;
-
-&lt;p&gt;复制代码
-mysql&amp;gt; select current_timestamp, current_timestamp();&lt;/p&gt;
-
-&lt;p&gt;+———————+———————+
-| current_timestamp | current_timestamp() |
-+———————+———————+
-| 2008-08-09 23:22:24 | 2008-08-09 23:22:24 |
-+———————+———————+
-复制代码&lt;/p&gt;
-
-&lt;p&gt;MySQL 日期转换函数、时间转换函数
-MySQL Date/Time to Str（日期/时间转换为字符串）函数：date_format(date,format), time_format(time,format)&lt;/p&gt;
-
-&lt;p&gt;复制代码
-mysql&amp;gt; select date_format(‘2008-08-08 22:23:01’, ‘%Y%m%d%H%i%s’);&lt;/p&gt;
-
-&lt;p&gt;+—————————————————-+
-| date_format(‘2008-08-08 22:23:01’, ‘%Y%m%d%H%i%s’) |
-+—————————————————-+
-| 20080808222301 |
-+—————————————————-+
-复制代码
-MySQL 日期、时间转换函数：date_format(date,format), time_format(time,format) 能够把一个日期/时间转换成各种各样的字符串格式。它是 str_to_date(str,format) 函数的 一个逆转换。&lt;/p&gt;
-
-&lt;p&gt;MySQL Str to Date （字符串转换为日期）函数：str_to_date(str, format)&lt;/p&gt;
-
-&lt;p&gt;select str_to_date(‘08/09/2008’, ‘%m/%d/%Y’); – 2008-08-09
-select str_to_date(‘08/09/08’ , ‘%m/%d/%y’); – 2008-08-09
-select str_to_date(‘08.09.2008’, ‘%m.%d.%Y’); – 2008-08-09
-select str_to_date(‘08:09:30’, ‘%h:%i:%s’); – 08:09:30
-select str_to_date(‘08.09.2008 08:09:30’, ‘%m.%d.%Y %h:%i:%s’); – 2008-08-09 08:09:30
-可以看到，str_to_date(str,format) 转换函数，可以把一些杂乱无章的字符串转换为日期格式。另外，它也可以转换为时间。“format” 可以参看 MySQL 手册。&lt;/p&gt;
-
-&lt;p&gt;MySQL （日期、天数）转换函数：to_days(date), from_days(days)&lt;/p&gt;
-
-&lt;p&gt;select to_days(‘0000-00-00’); – 0
-select to_days(‘2008-08-08’); – 733627&lt;/p&gt;
-
-&lt;p&gt;MySQL （时间、秒）转换函数：time_to_sec(time), sec_to_time(seconds)&lt;/p&gt;
-
-&lt;p&gt;select time_to_sec(‘01:00:05’); – 3605
-select sec_to_time(3605); – ‘01:00:05’&lt;/p&gt;
-
-&lt;p&gt;MySQL 拼凑日期、时间函数：makdedate(year,dayofyear), maketime(hour,minute,second)&lt;/p&gt;
-
-&lt;p&gt;select makedate(2001,31); – ‘2001-01-31’
-select makedate(2001,32); – ‘2001-02-01’
-select maketime(12,15,30); – ‘12:15:30’&lt;/p&gt;
-
-&lt;p&gt;MySQL （Unix 时间戳、日期）转换函数&lt;/p&gt;
-
-&lt;p&gt;unix_timestamp(),
-unix_timestamp(date),
-from_unixtime(unix_timestamp),
-from_unixtime(unix_timestamp,format)&lt;/p&gt;
-
-&lt;p&gt;下面是示例：&lt;/p&gt;
-
-&lt;p&gt;复制代码
-select unix_timestamp(); – 1218290027
-select unix_timestamp(‘2008-08-08’); – 1218124800
-select unix_timestamp(‘2008-08-08 12:30:00’); – 1218169800&lt;/p&gt;
-
-&lt;p&gt;select from_unixtime(1218290027); – ‘2008-08-09 21:53:47’
-select from_unixtime(1218124800); – ‘2008-08-08 00:00:00’
-select from_unixtime(1218169800); – ‘2008-08-08 12:30:00’&lt;/p&gt;
-
-&lt;p&gt;select from_unixtime(1218169800, ‘%Y %D %M %h:%i:%s %x’); – ‘2008 8th August 12:30:00 2008’
-复制代码&lt;/p&gt;
-
-&lt;p&gt;MySQL 日期时间计算函数&lt;/p&gt;
-
-&lt;p&gt;MySQL 为日期增加一个时间间隔：date_add()&lt;/p&gt;
-
-&lt;p&gt;复制代码
-set @dt = now();&lt;/p&gt;
-
-&lt;p&gt;select date_add(@dt, interval 1 day); – add 1 day
-select date_add(@dt, interval 1 hour); – add 1 hour
-select date_add(@dt, interval 1 minute); – …
-select date_add(@dt, interval 1 second);
-select date_add(@dt, interval 1 microsecond);
-select date_add(@dt, interval 1 week);
-select date_add(@dt, interval 1 month);
-select date_add(@dt, interval 1 quarter);
-select date_add(@dt, interval 1 year);&lt;/p&gt;
-
-&lt;p&gt;select date_add(@dt, interval -1 day); – sub 1 day
-复制代码&lt;/p&gt;
-
-&lt;p&gt;MySQL adddate(), addtime()函数，可以用 date_add() 来替代。下面是 date_add() 实现 addtime() 功能示例：&lt;/p&gt;
-
-&lt;p&gt;复制代码
-mysql&amp;gt; set @dt = ‘2008-08-09 12:12:33’;&lt;/p&gt;
-
-&lt;p&gt;mysql&amp;gt;
-mysql&amp;gt; select date_add(@dt, interval ‘01:15:30’ hour_second);&lt;/p&gt;
-
-&lt;p&gt;+————————————————+
-| date_add(@dt, interval ‘01:15:30’ hour_second) |
-+————————————————+
-| 2008-08-09 13:28:03 |
-+————————————————+&lt;/p&gt;
-
-&lt;p&gt;mysql&amp;gt; select date_add(@dt, interval ‘1 01:15:30’ day_second);&lt;/p&gt;
-
-&lt;p&gt;+————————————————-+
-| date_add(@dt, interval ‘1 01:15:30’ day_second) |
-+————————————————-+
-| 2008-08-10 13:28:03 |
-+————————————————-+
-复制代码&lt;/p&gt;
-
-&lt;p&gt;MySQL 为日期减去一个时间间隔：date_sub()&lt;/p&gt;
-
-&lt;p&gt;复制代码
-mysql&amp;gt; select date_sub(‘1998-01-01 00:00:00’, interval ‘1 1:1:1’ day_second);&lt;/p&gt;
-
-&lt;p&gt;+—————————————————————-+
-| date_sub(‘1998-01-01 00:00:00’, interval ‘1 1:1:1’ day_second) |
-+—————————————————————-+
-| 1997-12-30 22:58:59 |
-+—————————————————————-+
-复制代码
-MySQL date_sub() 日期时间函数 和 date_add() 用法一致，不再赘述。&lt;/p&gt;
-
-&lt;p&gt;MySQL 日期、时间相减函数：datediff(date1,date2), timediff(time1,time2)&lt;/p&gt;
-
-&lt;p&gt;MySQL datediff(date1,date2)：两个日期相减 date1 - date2，返回天数。
-select datediff(‘2008-08-08’, ‘2008-08-01’); – 7
-select datediff(‘2008-08-01’, ‘2008-08-08’); – -7
-MySQL timediff(time1,time2)：两个日期相减 time1 - time2，返回 time 差值。&lt;/p&gt;
-
-&lt;p&gt;select timediff(‘2008-08-08 08:08:08’, ‘2008-08-08 00:00:00’); – 08:08:08
-select timediff(‘08:08:08’, ‘00:00:00’); – 08:08:08
-注意：timediff(time1,time2) 函数的两个参数类型必须相同。&lt;/p&gt;
-
-&lt;p&gt;MySQL 时间戳（timestamp）转换、增、减函数：&lt;/p&gt;
-
-&lt;p&gt;timestamp(date) – date to timestamp
-timestamp(dt,time) – dt + time
-timestampadd(unit,interval,datetime_expr) –
-timestampdiff(unit,datetime_expr1,datetime_expr2) –
-请看示例部分：&lt;/p&gt;
-
-&lt;p&gt;复制代码
-select timestamp(‘2008-08-08’); – 2008-08-08 00:00:00
-select timestamp(‘2008-08-08 08:00:00’, ‘01:01:01’); – 2008-08-08 09:01:01
-select timestamp(‘2008-08-08 08:00:00’, ‘10 01:01:01’); – 2008-08-18 09:01:01&lt;/p&gt;
-
-&lt;p&gt;select timestampadd(day, 1, ‘2008-08-08 08:00:00’); – 2008-08-09 08:00:00
-select date_add(‘2008-08-08 08:00:00’, interval 1 day); – 2008-08-09 08:00:00&lt;/p&gt;
-
-&lt;p&gt;MySQL timestampadd() 函数类似于 date_add()。
-select timestampdiff(year,’2002-05-01’,’2001-01-01’); – -1
-select timestampdiff(day ,’2002-05-01’,’2001-01-01’); – -485
-select timestampdiff(hour,’2008-08-08 12:00:00’,’2008-08-08 00:00:00’); – -12&lt;/p&gt;
-
-&lt;p&gt;select datediff(‘2008-08-08 12:00:00’, ‘2008-08-01 00:00:00’); – 7
-复制代码
-MySQL timestampdiff() 函数就比 datediff() 功能强多了，datediff() 只能计算两个日期（date）之间相差的天数。&lt;/p&gt;
-
-&lt;p&gt;MySQL 时区（timezone）转换函数
-convert_tz(dt,from_tz,to_tz)&lt;/p&gt;
-
-&lt;p&gt;select convert_tz(‘2008-08-08 12:00:00’, ‘+08:00’, ‘+00:00’); – 2008-08-08 04:00:00
-时区转换也可以通过 date_add, date_sub, timestampadd 来实现。&lt;/p&gt;
-
-&lt;p&gt;select date_add(‘2008-08-08 12:00:00’, interval -8 hour); – 2008-08-08 04:00:00
-select date_sub(‘2008-08-08 12:00:00’, interval 8 hour); – 2008-08-08 04:00:00
-select timestampadd(hour, -8, ‘2008-08-08 12:00:00’); – 2008-08-08 04:00:00&lt;/p&gt;
-
-</description>
-        <pubDate>Wed, 20 Sep 2017 00:00:00 +0800</pubDate>
-        <link>https://xiazemin.github.io/MyBlog/jekyll/2017/09/20/mysql-time.html</link>
-        <guid isPermaLink="true">https://xiazemin.github.io/MyBlog/jekyll/2017/09/20/mysql-time.html</guid>
-        
-        
-        <category>jekyll</category>
-        
-      </item>
-    
-      <item>
-        <title>mac 安装 sshfs</title>
-        <description>
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-bash&quot; data-lang=&quot;bash&quot;&gt;&lt;span&gt;&lt;/span&gt;&lt;span class=&quot;lineno&quot;&gt;1 &lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;$brew&lt;/span&gt; cask install osxfuse
-&lt;span class=&quot;lineno&quot;&gt;2 &lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;$brew&lt;/span&gt; install sshfs&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;!-- more --&gt;
-&lt;p&gt;挂载(如果配上ssh key就可以完全自动化了):
-sshfs root@192.168.9.109:/opt /opt/s109
-卸载:
-fusermount -u /opt/s109&lt;/p&gt;
-</description>
-        <pubDate>Mon, 18 Sep 2017 00:00:00 +0800</pubDate>
-        <link>https://xiazemin.github.io/MyBlog/jekyll/2017/09/18/sshfs.html</link>
-        <guid isPermaLink="true">https://xiazemin.github.io/MyBlog/jekyll/2017/09/18/sshfs.html</guid>
-        
-        
-        <category>jekyll</category>
         
       </item>
     
