@@ -83,3 +83,6 @@ $> eclipse.  ---将下载相关引用库
 版本不正确，参考：
 https://github.com/typesafehub/sbteclipse
 设置com.typesafe.sbteclipse
+
+sbt参考文档：
+http://www.scala-sbt.org/0.13/docs/zh-cn/Hello.html
