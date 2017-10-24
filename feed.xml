@@ -5,9 +5,569 @@
     <description>夏泽民的个人主页，学习笔记。</description>
     <link>https://xiazemin.github.io/MyBlog/</link>
     <atom:link href="https://xiazemin.github.io/MyBlog/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Mon, 23 Oct 2017 16:04:58 +0800</pubDate>
-    <lastBuildDate>Mon, 23 Oct 2017 16:04:58 +0800</lastBuildDate>
+    <pubDate>Tue, 24 Oct 2017 13:22:32 +0800</pubDate>
+    <lastBuildDate>Tue, 24 Oct 2017 13:22:32 +0800</lastBuildDate>
     <generator>Jekyll v3.6.0.pre.beta1</generator>
+    
+      <item>
+        <title>使用Phabricator做为Code Review工具</title>
+        <description>&lt;!-- more --&gt;
+&lt;p&gt;目录&lt;/p&gt;
+
+&lt;p&gt;0x10 概述
+0x20 我的应用环境
+0x30 路线图
+0x40 安装
+0x41 LNMP环境的安装
+0x42 Phabricator源码下载及运行
+0x50 配置
+0x51 解决基本的配置问题
+0x52 设置用户登录认证方式
+0x53 设置邮件发送服务参数
+0x54 配置代码仓库访问方式：SSH/HTTP
+0x60 使用Phabricator进行Code Review
+0x61 Phabricator Code Review工作流
+0x62 进行Code Review所用工具
+0x63 配置进行Code Review
+0x70 与GitHub集成
+0x80 与Jenkins集成
+0x90 结束语
+0xA0 Q/A
+0x10 概述&lt;/p&gt;
+
+&lt;p&gt;Phabricator是一套基于Web的软件开发协作工具，包括代码审查工具Differential，资源库浏览器Diffusion，变更监测工具Herald，Bug跟踪工具Maniphest和维基工具Phriction。Phabricator可与Git、Mercurial、Subversion集成使用。
+Phabricator是开源软件，可在Apache许可证第2版下作为自由软件分发。
+Phabricator最初是Facebook的一个内部工具，主要开发者为Evan Priestley。Evan Priestley离开Facebook后，在名为Phacility的新公司继续Phabricator的开发。
+官网：https://www.phacility.com/&lt;/p&gt;
+
+&lt;p&gt;官网中的文档很多很全，但是如果对这个工具不太了解，或者对于Code Review不太了解的话，读起来可能会觉得没有头绪。这篇文章就自己的安装及使用过程做一个梳理，对于同样想用这个工具的读者，或许起到一些帮助作用。
+对于本文中的一些章节，如果在官方文档有所提及，我会把官方文档地址附上，读者可以阅读一下官方文档，因为他们的语言和表达更优秀。&lt;/p&gt;
+
+&lt;p&gt;0x20 我的应用环境&lt;/p&gt;
+
+&lt;p&gt;我：一个做了很多年Android的程序员啊 （所以当这篇文章有幸被所涉及领域的专家看到，又发现有的部分有所不妥，或者有更好的想法时，请主动联系我改进，多谢~~~ 有任何问题，欢迎评论交流）
+主机：Ubuntu 14.04 PC一台
+网络：内网
+代码库：GitHub
+CI：Jenkins
+0x30 路线图&lt;/p&gt;
+
+&lt;p&gt;安装和使用路线大致如此图，下面开始详细说明。&lt;/p&gt;
+
+&lt;p&gt;0x40 安装&lt;/p&gt;
+
+&lt;p&gt;Phabricator是一个基于Web的工具软件，使用PHP语言编写的，为了能让他运行起来，我们需要搭建一个LNMP（Linux，Nginx，MySQL，PHP）的Web Server环境。搭建完LNMP的环境后，下载Phabricator源码，配置后即可使用。&lt;/p&gt;
+
+&lt;p&gt;先看我
+如果你不想读那么多文字，在Ubuntu环境下可以试试下面的脚本，这个脚本可以安装LNMP环境和下载Phabricator源码，执行完脚本并成功后，跳到 0x42 Phabricator源码下载及运行 查看如何让Phabricator跑起来。&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-bash&quot; data-lang=&quot;bash&quot;&gt;&lt;span&gt;&lt;/span&gt;&lt;span class=&quot;lineno&quot;&gt; 1 &lt;/span&gt;&lt;span class=&quot;ch&quot;&gt;#!/bin/bash&lt;/span&gt;
+&lt;span class=&quot;lineno&quot;&gt; 2 &lt;/span&gt;confirm&lt;span class=&quot;o&quot;&gt;()&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+&lt;span class=&quot;lineno&quot;&gt; 3 &lt;/span&gt;  &lt;span class=&quot;nb&quot;&gt;echo&lt;/span&gt; &lt;span class=&quot;s2&quot;&gt;&amp;quot;Press RETURN to continue, or ^C to cancel.&amp;quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+&lt;span class=&quot;lineno&quot;&gt; 4 &lt;/span&gt;  &lt;span class=&quot;nb&quot;&gt;read&lt;/span&gt; -e ignored
+&lt;span class=&quot;lineno&quot;&gt; 5 &lt;/span&gt;&lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+&lt;span class=&quot;lineno&quot;&gt; 6 &lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;GIT&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&lt;span class=&quot;s1&quot;&gt;&amp;#39;git&amp;#39;&lt;/span&gt;
+&lt;span class=&quot;lineno&quot;&gt; 7 &lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;LTS&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&lt;span class=&quot;s2&quot;&gt;&amp;quot;Ubuntu 10.04&amp;quot;&lt;/span&gt;
+&lt;span class=&quot;lineno&quot;&gt; 8 &lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;ISSUE&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&lt;span class=&quot;sb&quot;&gt;`&lt;/span&gt;cat /etc/issue&lt;span class=&quot;sb&quot;&gt;`&lt;/span&gt;
+&lt;span class=&quot;lineno&quot;&gt; 9 &lt;/span&gt;&lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;[[&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;$ISSUE&lt;/span&gt; !&lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; Ubuntu* &lt;span class=&quot;o&quot;&gt;]]&lt;/span&gt;
+&lt;span class=&quot;lineno&quot;&gt;10 &lt;/span&gt;&lt;span class=&quot;k&quot;&gt;then&lt;/span&gt;
+&lt;span class=&quot;lineno&quot;&gt;11 &lt;/span&gt;  &lt;span class=&quot;nb&quot;&gt;echo&lt;/span&gt; &lt;span class=&quot;s2&quot;&gt;&amp;quot;This script is intended for use on Ubuntu, but this system appears&amp;quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+&lt;span class=&quot;lineno&quot;&gt;12 &lt;/span&gt;  &lt;span class=&quot;nb&quot;&gt;echo&lt;/span&gt; &lt;span class=&quot;s2&quot;&gt;&amp;quot;to be something else. Your results may vary.&amp;quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+&lt;span class=&quot;lineno&quot;&gt;13 &lt;/span&gt;  &lt;span class=&quot;nb&quot;&gt;echo&lt;/span&gt;
+&lt;span class=&quot;lineno&quot;&gt;14 &lt;/span&gt;  confirm
+&lt;span class=&quot;lineno&quot;&gt;15 &lt;/span&gt;&lt;span class=&quot;k&quot;&gt;elif&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;[[&lt;/span&gt; &lt;span class=&quot;sb&quot;&gt;`&lt;/span&gt;expr match &lt;span class=&quot;s2&quot;&gt;&amp;quot;&lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;$ISSUE&lt;/span&gt;&lt;span class=&quot;s2&quot;&gt;&amp;quot;&lt;/span&gt; &lt;span class=&quot;s2&quot;&gt;&amp;quot;&lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;$LTS&lt;/span&gt;&lt;span class=&quot;s2&quot;&gt;&amp;quot;&lt;/span&gt;&lt;span class=&quot;sb&quot;&gt;`&lt;/span&gt; -eq &lt;span class=&quot;si&quot;&gt;${#&lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;LTS&lt;/span&gt;&lt;span class=&quot;si&quot;&gt;}&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;]]&lt;/span&gt;
+&lt;span class=&quot;lineno&quot;&gt;16 &lt;/span&gt;&lt;span class=&quot;k&quot;&gt;then&lt;/span&gt;
+&lt;span class=&quot;lineno&quot;&gt;17 &lt;/span&gt;  &lt;span class=&quot;nv&quot;&gt;GIT&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&lt;span class=&quot;s1&quot;&gt;&amp;#39;git-core&amp;#39;&lt;/span&gt;
+&lt;span class=&quot;lineno&quot;&gt;18 &lt;/span&gt;&lt;span class=&quot;k&quot;&gt;fi&lt;/span&gt;
+&lt;span class=&quot;lineno&quot;&gt;19 &lt;/span&gt;&lt;span class=&quot;nb&quot;&gt;echo&lt;/span&gt; &lt;span class=&quot;s2&quot;&gt;&amp;quot;PHABRICATOR UBUNTU INSTALL SCRIPT&amp;quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+&lt;span class=&quot;lineno&quot;&gt;20 &lt;/span&gt;&lt;span class=&quot;nb&quot;&gt;echo&lt;/span&gt; &lt;span class=&quot;s2&quot;&gt;&amp;quot;This script will install Phabricator and all of its core dependencies.&amp;quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+&lt;span class=&quot;lineno&quot;&gt;21 &lt;/span&gt;&lt;span class=&quot;nb&quot;&gt;echo&lt;/span&gt; &lt;span class=&quot;s2&quot;&gt;&amp;quot;Run it from the directory you want to install into.&amp;quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+&lt;span class=&quot;lineno&quot;&gt;22 &lt;/span&gt;&lt;span class=&quot;nb&quot;&gt;echo&lt;/span&gt;
+&lt;span class=&quot;lineno&quot;&gt;23 &lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;ROOT&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&lt;span class=&quot;sb&quot;&gt;`&lt;/span&gt;&lt;span class=&quot;nb&quot;&gt;pwd&lt;/span&gt;&lt;span class=&quot;sb&quot;&gt;`&lt;/span&gt;
+&lt;span class=&quot;lineno&quot;&gt;24 &lt;/span&gt;&lt;span class=&quot;nb&quot;&gt;echo&lt;/span&gt; &lt;span class=&quot;s2&quot;&gt;&amp;quot;Phabricator will be installed to: &lt;/span&gt;&lt;span class=&quot;si&quot;&gt;${&lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;ROOT&lt;/span&gt;&lt;span class=&quot;si&quot;&gt;}&lt;/span&gt;&lt;span class=&quot;s2&quot;&gt;.&amp;quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+&lt;span class=&quot;lineno&quot;&gt;25 &lt;/span&gt;confirm
+&lt;span class=&quot;lineno&quot;&gt;26 &lt;/span&gt;&lt;span class=&quot;nb&quot;&gt;echo&lt;/span&gt; &lt;span class=&quot;s2&quot;&gt;&amp;quot;Testing sudo...&amp;quot;&lt;/span&gt;
+&lt;span class=&quot;lineno&quot;&gt;27 &lt;/span&gt;sudo &lt;span class=&quot;nb&quot;&gt;true&lt;/span&gt;
+&lt;span class=&quot;lineno&quot;&gt;28 &lt;/span&gt;&lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;[&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;$?&lt;/span&gt; -ne &lt;span class=&quot;m&quot;&gt;0&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;]&lt;/span&gt;
+&lt;span class=&quot;lineno&quot;&gt;29 &lt;/span&gt;&lt;span class=&quot;k&quot;&gt;then&lt;/span&gt;
+&lt;span class=&quot;lineno&quot;&gt;30 &lt;/span&gt;  &lt;span class=&quot;nb&quot;&gt;echo&lt;/span&gt; &lt;span class=&quot;s2&quot;&gt;&amp;quot;ERROR: You must be able to sudo to run this script.&amp;quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+&lt;span class=&quot;lineno&quot;&gt;31 &lt;/span&gt;  &lt;span class=&quot;nb&quot;&gt;exit&lt;/span&gt; &lt;span class=&quot;m&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+&lt;span class=&quot;lineno&quot;&gt;32 &lt;/span&gt;&lt;span class=&quot;k&quot;&gt;fi&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+&lt;span class=&quot;lineno&quot;&gt;33 &lt;/span&gt;&lt;span class=&quot;nb&quot;&gt;echo&lt;/span&gt; &lt;span class=&quot;s2&quot;&gt;&amp;quot;Installing dependencies: git, nginx, mysql, php...&amp;quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+&lt;span class=&quot;lineno&quot;&gt;34 &lt;/span&gt;&lt;span class=&quot;nb&quot;&gt;echo&lt;/span&gt;
+&lt;span class=&quot;lineno&quot;&gt;35 &lt;/span&gt;&lt;span class=&quot;nb&quot;&gt;set&lt;/span&gt; +x
+&lt;span class=&quot;lineno&quot;&gt;36 &lt;/span&gt;sudo apt-get -qq update
+&lt;span class=&quot;lineno&quot;&gt;37 &lt;/span&gt;sudo apt-get install &lt;span class=&quot;se&quot;&gt;\&lt;/span&gt;
+&lt;span class=&quot;lineno&quot;&gt;38 &lt;/span&gt;  &lt;span class=&quot;nv&quot;&gt;$GIT&lt;/span&gt; nginx mysql-server dpkg-dev &lt;span class=&quot;se&quot;&gt;\&lt;/span&gt;
+&lt;span class=&quot;lineno&quot;&gt;39 &lt;/span&gt;  php5 php5-mysql php5-gd php5-dev php5-curl php-apc php5-cli php5-json
+&lt;span class=&quot;lineno&quot;&gt;40 &lt;/span&gt;&lt;span class=&quot;c1&quot;&gt;# Enable mod_rewrite&lt;/span&gt;
+&lt;span class=&quot;lineno&quot;&gt;41 &lt;/span&gt;sudo a2enmod rewrite
+&lt;span class=&quot;lineno&quot;&gt;42 &lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;HAVEPCNTL&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&lt;span class=&quot;sb&quot;&gt;`&lt;/span&gt;php -r &lt;span class=&quot;s2&quot;&gt;&amp;quot;echo extension_loaded(&amp;#39;pcntl&amp;#39;);&amp;quot;&lt;/span&gt;&lt;span class=&quot;sb&quot;&gt;`&lt;/span&gt;
+&lt;span class=&quot;lineno&quot;&gt;43 &lt;/span&gt;&lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;[&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;$HAVEPCNTL&lt;/span&gt; !&lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;s2&quot;&gt;&amp;quot;1&amp;quot;&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;]&lt;/span&gt;
+&lt;span class=&quot;lineno&quot;&gt;44 &lt;/span&gt;&lt;span class=&quot;k&quot;&gt;then&lt;/span&gt;
+&lt;span class=&quot;lineno&quot;&gt;45 &lt;/span&gt;  &lt;span class=&quot;nb&quot;&gt;echo&lt;/span&gt; &lt;span class=&quot;s2&quot;&gt;&amp;quot;Installing pcntl...&amp;quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+&lt;span class=&quot;lineno&quot;&gt;46 &lt;/span&gt;  &lt;span class=&quot;nb&quot;&gt;echo&lt;/span&gt;
+&lt;span class=&quot;lineno&quot;&gt;47 &lt;/span&gt;  apt-get &lt;span class=&quot;nb&quot;&gt;source&lt;/span&gt; php5
+&lt;span class=&quot;lineno&quot;&gt;48 &lt;/span&gt;  &lt;span class=&quot;nv&quot;&gt;PHP5&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&lt;span class=&quot;sb&quot;&gt;`&lt;/span&gt;ls -1F &lt;span class=&quot;p&quot;&gt;|&lt;/span&gt; grep &lt;span class=&quot;s1&quot;&gt;&amp;#39;^php5-.*/$&amp;#39;&lt;/span&gt;&lt;span class=&quot;sb&quot;&gt;`&lt;/span&gt;
+&lt;span class=&quot;lineno&quot;&gt;49 &lt;/span&gt;  &lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nb&quot;&gt;cd&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;$PHP5&lt;/span&gt;/ext/pcntl &lt;span class=&quot;o&quot;&gt;&amp;amp;&amp;amp;&lt;/span&gt; phpize &lt;span class=&quot;o&quot;&gt;&amp;amp;&amp;amp;&lt;/span&gt; ./configure &lt;span class=&quot;o&quot;&gt;&amp;amp;&amp;amp;&lt;/span&gt; make &lt;span class=&quot;o&quot;&gt;&amp;amp;&amp;amp;&lt;/span&gt; sudo make install&lt;span class=&quot;o&quot;&gt;)&lt;/span&gt;
+&lt;span class=&quot;lineno&quot;&gt;50 &lt;/span&gt;&lt;span class=&quot;k&quot;&gt;else&lt;/span&gt;
+&lt;span class=&quot;lineno&quot;&gt;51 &lt;/span&gt;  &lt;span class=&quot;nb&quot;&gt;echo&lt;/span&gt; &lt;span class=&quot;s2&quot;&gt;&amp;quot;pcntl already installed&amp;quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+&lt;span class=&quot;lineno&quot;&gt;52 &lt;/span&gt;&lt;span class=&quot;k&quot;&gt;fi&lt;/span&gt;
+&lt;span class=&quot;lineno&quot;&gt;53 &lt;/span&gt;&lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;[&lt;/span&gt; ! -e libphutil &lt;span class=&quot;o&quot;&gt;]&lt;/span&gt;
+&lt;span class=&quot;lineno&quot;&gt;54 &lt;/span&gt;&lt;span class=&quot;k&quot;&gt;then&lt;/span&gt;
+&lt;span class=&quot;lineno&quot;&gt;55 &lt;/span&gt;  git clone https://github.com/phacility/libphutil.git
+&lt;span class=&quot;lineno&quot;&gt;56 &lt;/span&gt;&lt;span class=&quot;k&quot;&gt;else&lt;/span&gt;
+&lt;span class=&quot;lineno&quot;&gt;57 &lt;/span&gt;  &lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nb&quot;&gt;cd&lt;/span&gt; libphutil &lt;span class=&quot;o&quot;&gt;&amp;amp;&amp;amp;&lt;/span&gt; git pull --rebase&lt;span class=&quot;o&quot;&gt;)&lt;/span&gt;
+&lt;span class=&quot;lineno&quot;&gt;58 &lt;/span&gt;&lt;span class=&quot;k&quot;&gt;fi&lt;/span&gt;
+&lt;span class=&quot;lineno&quot;&gt;59 &lt;/span&gt;&lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;[&lt;/span&gt; ! -e arcanist &lt;span class=&quot;o&quot;&gt;]&lt;/span&gt;
+&lt;span class=&quot;lineno&quot;&gt;60 &lt;/span&gt;&lt;span class=&quot;k&quot;&gt;then&lt;/span&gt;
+&lt;span class=&quot;lineno&quot;&gt;61 &lt;/span&gt;  git clone https://github.com/phacility/arcanist.git
+&lt;span class=&quot;lineno&quot;&gt;62 &lt;/span&gt;&lt;span class=&quot;k&quot;&gt;else&lt;/span&gt;
+&lt;span class=&quot;lineno&quot;&gt;63 &lt;/span&gt;  &lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nb&quot;&gt;cd&lt;/span&gt; arcanist &lt;span class=&quot;o&quot;&gt;&amp;amp;&amp;amp;&lt;/span&gt; git pull --rebase&lt;span class=&quot;o&quot;&gt;)&lt;/span&gt;
+&lt;span class=&quot;lineno&quot;&gt;64 &lt;/span&gt;&lt;span class=&quot;k&quot;&gt;fi&lt;/span&gt;
+&lt;span class=&quot;lineno&quot;&gt;65 &lt;/span&gt;&lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;[&lt;/span&gt; ! -e phabricator &lt;span class=&quot;o&quot;&gt;]&lt;/span&gt;
+&lt;span class=&quot;lineno&quot;&gt;66 &lt;/span&gt;&lt;span class=&quot;k&quot;&gt;then&lt;/span&gt;
+&lt;span class=&quot;lineno&quot;&gt;67 &lt;/span&gt;  git clone https://github.com/phacility/phabricator.git
+&lt;span class=&quot;lineno&quot;&gt;68 &lt;/span&gt;&lt;span class=&quot;k&quot;&gt;else&lt;/span&gt;
+&lt;span class=&quot;lineno&quot;&gt;69 &lt;/span&gt;  &lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nb&quot;&gt;cd&lt;/span&gt; phabricator &lt;span class=&quot;o&quot;&gt;&amp;amp;&amp;amp;&lt;/span&gt; git pull --rebase&lt;span class=&quot;o&quot;&gt;)&lt;/span&gt;
+&lt;span class=&quot;lineno&quot;&gt;70 &lt;/span&gt;&lt;span class=&quot;k&quot;&gt;fi&lt;/span&gt;
+&lt;span class=&quot;lineno&quot;&gt;71 &lt;/span&gt;&lt;span class=&quot;nb&quot;&gt;echo&lt;/span&gt;
+&lt;span class=&quot;lineno&quot;&gt;72 &lt;/span&gt;&lt;span class=&quot;nb&quot;&gt;echo&lt;/span&gt;
+&lt;span class=&quot;lineno&quot;&gt;73 &lt;/span&gt;&lt;span class=&quot;nb&quot;&gt;echo&lt;/span&gt; &lt;span class=&quot;s2&quot;&gt;&amp;quot;Install probably worked mostly correctly. Continue with the &amp;#39;Configuration Guide&amp;#39;:&amp;quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+&lt;span class=&quot;lineno&quot;&gt;74 &lt;/span&gt;&lt;span class=&quot;nb&quot;&gt;echo&lt;/span&gt;
+&lt;span class=&quot;lineno&quot;&gt;75 &lt;/span&gt;&lt;span class=&quot;nb&quot;&gt;echo&lt;/span&gt; &lt;span class=&quot;s2&quot;&gt;&amp;quot;    https://secure.phabricator.com/book/phabricator/article/configuration_guide/&amp;quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+&lt;span class=&quot;lineno&quot;&gt;76 &lt;/span&gt;&lt;span class=&quot;nb&quot;&gt;echo&lt;/span&gt;
+&lt;span class=&quot;lineno&quot;&gt;77 &lt;/span&gt;&lt;span class=&quot;nb&quot;&gt;echo&lt;/span&gt; &lt;span class=&quot;s2&quot;&gt;&amp;quot;You can delete any php5-* stuff that&amp;#39;s left over in this directory if you want.&amp;quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;关于安装和配置，官方文档中有所提及（官方介绍的是 LAMP），请参考&lt;/p&gt;
+
+&lt;p&gt;https://secure.phabricator.com/book/phabricator/article/installation_guide/
+0x41 LNMP环境的安装&lt;/p&gt;
+
+&lt;p&gt;安装Linux
+关于Linux的安装，这里就不说了。&lt;/p&gt;
+
+&lt;p&gt;安装Nginx&lt;/p&gt;
+
+&lt;p&gt;sudo apt-get install nginx
+安装完成后，Nginx 的配置文件存放在 /etc/nginx 目录下。使用下面的命令可以启动Nginx&lt;/p&gt;
+
+&lt;p&gt;sudo service nginx start
+在安装完并启动后，可以使用浏览器访问 http://127.0.0.1 试试是否可以跳转到Nginx欢迎页面&lt;/p&gt;
+
+&lt;p&gt;安装MySQL&lt;/p&gt;
+
+&lt;p&gt;sudo apt-get install mysql-server
+在安装过程中，会两次提示输入 root 用户密码。
+在安装完成后，打开终端，使用以下命令登录MySQL&lt;/p&gt;
+
+&lt;p&gt;mysql -u root -p
+安装PHP
+Phabricator需要 PHP 5.2 或者更高版本，但是 不支持 PHP 7 。
+可以使用以下命令安装PHP&lt;/p&gt;
+
+&lt;p&gt;sudo apt-get install -y php5 php5-fpm php5-mysql
+安装完成后，可使用以下命令查看是否安装成功&lt;/p&gt;
+
+&lt;p&gt;php -v
+安装成功后，输出类似以下信息&lt;/p&gt;
+
+&lt;p&gt;安装其它
+如果你使用 git 来管理代码库的话，你还需要安装 git&lt;/p&gt;
+
+&lt;p&gt;sudo apt-get install git
+一些必要的PHP扩展&lt;/p&gt;
+
+&lt;p&gt;mbstring, iconv, mysql (or mysqli), curl, pcntl（这些扩展一般会以 “php-mysql” 或 “php5-mysql” 方式使用）
+一些可选的PHP扩展&lt;/p&gt;
+
+&lt;p&gt;gd, apc（官方文档中有详细的介绍和安装说明）, xhprof（如果你想自己开发Phabricator的话，你需要安装这个，官方文档中有详细的介绍说明）
+0x42 Phabricator源码下载及运行&lt;/p&gt;
+
+&lt;p&gt;在成功安装LNMP环境后，需要下载Phabricator的源码并配置让它跑起来。&lt;/p&gt;
+
+&lt;p&gt;源码下载
+在你想要存放Phabricator源码的位置（假设为 ./path_to_pha），执行这些命令&lt;/p&gt;
+
+&lt;p&gt;git clone https://github.com/phacility/libphutil.git
+git clone https://github.com/phacility/arcanist.git
+git clone https://github.com/phacility/phabricator.git
+或者，你也可以直接点击上面的链接去GitHub下载压缩包，下载完成后解压。&lt;/p&gt;
+
+&lt;p&gt;Nginx配置
+在下载完成后，我们需要配置Nginx，让Phabricator跑起来。假设你想为Phabricator分配这个域名：http://pha.example.com
+在 /etc/nginx/conf.d 目录下创建文件 pha.example.com.conf，存放Phabricator代理配置信息，以下为我的文件内容（注意把 你存放Phabricator的路径 改为你的实际路径）&lt;/p&gt;
+
+&lt;p&gt;server {
+    listen       80;
+    server_name  pha.example.com; 
+    location / {
+        index index.php;
+        rewrite ^/(.*)$ /index.php?&lt;strong&gt;path&lt;/strong&gt;=/$1 last;
+    }&lt;/p&gt;
+
+&lt;pre&gt;&lt;code&gt;#error_page  404              /404.html;
+
+# redirect server error pages to the static page /50x.html
+#
+error_page   500 502 503 504  /50x.html;
+location = /50x.html {
+    root   /usr/share/nginx/html;
+}
+
+ # pass the PHP scripts to FastCGI server listening on 127.0.0.1:9000
+#
+location ~ \.php$ {
+    root           /你存放Phabricator的路径/phabricator/webroot;
+    fastcgi_pass   127.0.0.1:9000;
+    fastcgi_index  index.php;
+    fastcgi_param  SCRIPT_FILENAME  /你存放Phabricator的路径/phabricator/webroot$fastcgi_script_name;
+    include        fastcgi_params;
+} } 配置完成后，重启Nginx
+&lt;/code&gt;&lt;/pre&gt;
+
+&lt;p&gt;sudo service nginx restart
+然后在你的 hosts 文件中，加入 pha.example.com 对应的IP&lt;/p&gt;
+
+&lt;p&gt;127.0.0.1 pha.example.com
+打开浏览器，访问 http://pha.example.com，会跳转到Phabricator用户注册界面，在这个界面注册的第一个用户，将会成为管理员用户。&lt;/p&gt;
+
+&lt;p&gt;0x50 配置&lt;/p&gt;
+
+&lt;p&gt;0x51 解决基本的配置问题&lt;/p&gt;
+
+&lt;p&gt;使用管理员账号登录，左上角会出现黄色感叹号图标，提示有一些配置问题未解决&lt;/p&gt;
+
+&lt;p&gt;这些问题基本都是关于一些参数的设置。点击每一个问题，显示的界面中会有很详细的关于这个问题的描述，和如何解决。&lt;/p&gt;
+
+&lt;p&gt;0x52 设置用户登录认证方式&lt;/p&gt;
+
+&lt;p&gt;使用管理员账号登录，在左侧的菜单中选择 Auth ，然后点击右上侧 Add Provider，在列表中选则你需要的认证方式。&lt;/p&gt;
+
+&lt;p&gt;我选择是 Username/Password 的方式，即用户自己注册Phabricator账号。为了保障安全，我设置了只允许公司邮箱地址注册：Config —&amp;gt; Core Settings —&amp;gt; Authentication —&amp;gt; auth.email-domains。你还可以选择 auth.require-approval ，即新注册用户需要管理员批准。&lt;/p&gt;
+
+&lt;p&gt;0x53 设置邮件发送服务参数&lt;/p&gt;
+
+&lt;p&gt;首先，配置 mail-adapter （邮件发送方式）：Config —&amp;gt; Core Settings —&amp;gt; Mail —&amp;gt; metamta.mail-adapter，我选择的是 PhabricatorMailImplementationPHPMailerAdapter ，通过SMTP的方式发送邮件。在选择完之后，需要设置SMTP服务器地址、账号和密码：Config —&amp;gt; Core Settings —&amp;gt; PHPMailer —&amp;gt; metamta.mail-adapter，根据你自己邮箱的配置，相应的设置 phpmailer.smtp-host、phpmailer.smtp-port、phpmailer.smtp-protocol、phpmailer.smtp-user、phpmailer.smtp-password、phpmailer.smtp-encoding 。&lt;/p&gt;
+
+&lt;p&gt;0x54 配置代码仓库访问方式：SSH/HTTP&lt;/p&gt;
+
+&lt;p&gt;SSH
+(如果你不打算允许使用SSH的方式访问代码仓库的话，请忽略这部分)
+1）配置用户账号
+Phabricator需要三个用户账号（三种用户身份）：两个用于基本运行，一个用于配置SSH访问。这些账号是指Phabricator所运行服务器系统的账号，不是Phabricator用户账号。
+三个账号分别是：
+www-user：Phabricator Web服务器运行身份。
+daemon-user ：daemons （守护进程）运行身份。这个账号是唯一直接与代码仓库交互的账号，其它账号需要切换到这个账号身份（sudo）才能操作代码仓库。
+vcs-user：我们需要以这个账号SSH连接Phabricator。
+如果你的服务器系统中现在没有这三个账号，需要创建：
+www-user：大部分情况下，这个账号已经存在了，我们不需要理这个账号。
+daemon-user ：一般情况下，我们直接使用 root 账号，因为会需要很多权限（当然这可能不安全）。
+vcs-user：可以使用系统中现有的一个用户账号，直接创建一个就叫 vcsuser。当用户克隆仓库的时候，需要使用类似 vcsuser@pha.example.com 的URI。
+2）配置Phabricator
+首先，设置 phd.user 为 daemon-user（root）&lt;/p&gt;
+
+&lt;p&gt;./path_to_pha/bin/config set phd.user root
+重启 daemons 以确认这个配置工作正常&lt;/p&gt;
+
+&lt;p&gt;./path_to_pha/bin/phd restart
+然后，配置SSH用户账号vcs-user（vcsuser 或其它你想用的用户）&lt;/p&gt;
+
+&lt;p&gt;./path_to_pha/bin/config set diffusion.ssh-user vcsuser
+3）配置 Sudo
+www-user 和 vcs-user 需要能够使用 sudo 切换到 daemon-user 用户身份才能与仓库交互，所以我们需要配置更改系统的 sudo 配置。
+直接编辑 /etc/sudoers 或者在 /etc/sudoers.d 下创建一个新文件，然后把这些内容写到文件内容中&lt;/p&gt;
+
+&lt;p&gt;www-user ALL=(root) SETENV: NOPASSWD: /usr/lib/git-core/git, /usr/bin/git, /var/lib/git, /usr/lib/git-core/git-http-backend, /usr/bin/ssh, /etc/ssh, /etc/default/ssh, /etc/init.d/ssh
+vcs-user ALL=(root) SETENV: NOPASSWD: /bin/sh, /usr/bin/git-upload-pack, /usr/bin/git-receive-pack
+当然，别忘了把 www-user 和 vcs-user 替换为你实际对应的用户。
+接下来，看看你文件中是不是有这行&lt;/p&gt;
+
+&lt;p&gt;Defaults requiretty
+如果有的话，请用 # 注释掉。&lt;/p&gt;
+
+&lt;p&gt;4）其它SSH配置
+我们还需要查看这两个文件 /etc/shadow 和 /etc/passwd 中 vcs-user 对应的配置是否正确。
+打开 /etc/shadow 文件，找到 vcs-user 对应的那行，看一下第二个字段（密码），是不是 !! ，如果是，请改为 空值（什么都不写） 或者 NP 。
+打开 /etc/passwd 文件，找到 vcs-user 对应的那行，如果有类似于这样的配置 /bin/false ，请修改为 /bin/sh，否则 sshd 无法执行命令。&lt;/p&gt;
+
+&lt;p&gt;5）配置SSHD端口
+注意：Phabricator运行的服务器系统中 sshd 的版本 必须高于 6.2。
+假设我们把Phabricator使用的sshd端口设置为 22，这样做的好处是我们不需要在仓库的URI中加入端口号，类似ssh://vcs-user@pha.example.com/xxx/xxx/xxx.git。当然，如果这样做需要我们更改系统已存在的sshd配置改为其它端口。下面来看一下配置的三个步骤：
+i）创建脚本 phabricator-ssh-hook.sh，并且把这个脚本放到类似 /usr/libexec/phabricator-ssh-hook.sh 的目录中（我直接放在 /etc/ssh/ 中，后面会要求变更这个脚本和它的父文件夹所有者，所以这个脚本和它的父文件夹所在的文件夹的所有者不正确的话可能会导致这个脚本执行失败），脚本内容如下&lt;/p&gt;
+
+&lt;p&gt;#!/bin/sh&lt;/p&gt;
+
+&lt;h1 id=&quot;note-replace-this-with-the-username-that-you-expect-users-to-connect-with&quot;&gt;NOTE: Replace this with the username that you expect users to connect with.&lt;/h1&gt;
+&lt;p&gt;VCSUSER=”vcs-user”&lt;/p&gt;
+
+&lt;h1 id=&quot;note-replace-this-with-the-path-to-your-phabricator-directory&quot;&gt;NOTE: Replace this with the path to your Phabricator directory.&lt;/h1&gt;
+&lt;p&gt;ROOT=”/path_to_pha”&lt;/p&gt;
+
+&lt;p&gt;if [ “$1” != “$VCSUSER” ];
+then
+  exit 1
+fi&lt;/p&gt;
+
+&lt;p&gt;exec “$ROOT/bin/ssh-auth” $@
+注意把 VCSUSER 替换为你实际的用户，把 ROOT 值替换为你Phabricator源码路径。
+创建完脚本后，需要把脚本和它的父文件夹所有者改为 root，并且赋予脚本 755 权限：&lt;/p&gt;
+
+&lt;p&gt;sudo chown root /path/to/somewhere/
+sudo chown root /path/to/somewhere/phabricator-ssh-hook.sh
+sudo chmod 755 /path/to/somewhere/phabricator-ssh-hook.sh
+如果你不这么做，sshd 会拒绝执行 hook。&lt;/p&gt;
+
+&lt;p&gt;ii）为Phabricator创建 sshd_config
+在 /etc/ssh 中创建文件名类似 sshd_config.phabricator 的文件，文件内容如下：&lt;/p&gt;
+
+&lt;h1 id=&quot;note-you-must-have-opensshd-62-or-newer-support-for-authorizedkeyscommand&quot;&gt;NOTE: You must have OpenSSHD 6.2 or newer; support for AuthorizedKeysCommand&lt;/h1&gt;
+&lt;h1 id=&quot;was-added-in-this-version&quot;&gt;was added in this version.&lt;/h1&gt;
+
+&lt;h1 id=&quot;note-edit-these-to-the-correct-values-for-your-setup&quot;&gt;NOTE: Edit these to the correct values for your setup.&lt;/h1&gt;
+
+&lt;p&gt;AuthorizedKeysCommand /你的脚本路径/phabricator-ssh-hook.sh
+AuthorizedKeysCommandUser vcs-user
+AllowUsers vcs-user&lt;/p&gt;
+
+&lt;h1 id=&quot;you-may-need-to-tweak-these-options-but-mostly-they-just-turn-off-everything&quot;&gt;You may need to tweak these options, but mostly they just turn off everything&lt;/h1&gt;
+&lt;h1 id=&quot;dangerous&quot;&gt;dangerous.&lt;/h1&gt;
+
+&lt;p&gt;Port 你配置的端口号
+Protocol 2
+PermitRootLogin no
+AllowAgentForwarding no
+AllowTcpForwarding no
+PrintMotd no
+PrintLastLog no
+PasswordAuthentication no
+AuthorizedKeysFile none&lt;/p&gt;
+
+&lt;p&gt;PidFile /var/run/sshd-phabricator.pid
+注意把 AuthorizedKeysCommand 值替换为你在上一步中脚本实际路径，把 AuthorizedKeysCommandUser 和 AllowUsers 替换为你实际的用户，把 Port 替换为你想配置的端口号。如果你的 Port 值为 22，在你进行下面的操作之前，请查看当前系统中 22 端口是已否占用&lt;/p&gt;
+
+&lt;p&gt;sudo netstat -atlunp | grep ssh
+如果已经被占用，请修改使用 22 端口的 sshd 配置，一般它们会在 /etc/ssh 下，名称类似 sshd_config，修改完成后，请重启 ssh 服务&lt;/p&gt;
+
+&lt;p&gt;sudo /etc/init.d/ssh restart
+在完成上面的步骤后，我们来启动Phabricator的 ssh 服务&lt;/p&gt;
+
+&lt;p&gt;sudo /path/to/sshd -f /你的Phabricator sshd配置路径/sshd_config.phabricator
+一般情况下，sshd 路径为 /usr/sbin。
+在启动后，我们需要验证以下配置是否有效：
+首先，请把你的公钥添加到Phabricator自己的账号中（你可以自己注册一个新的账号），注册完成后登录，然后 点击你的头像 —&amp;gt; 左侧菜单面板 Manage —&amp;gt; 右侧菜单面板 Edit Settings —&amp;gt; 左侧菜单面板 SSH Public Keys —&amp;gt; 右上角 SSH Key Actions —&amp;gt; Upload Public Key&lt;/p&gt;
+
+&lt;p&gt;上传公钥后，执行下面的命令&lt;/p&gt;
+
+&lt;p&gt;echo {} | ssh vcs-user@phabricator.yourcompany.com conduit conduit.ping
+如果出现类似下面的结果，说明配置有效&lt;/p&gt;
+
+&lt;p&gt;{“result”:”phabricator.yourcompany.com”,”error_code”:null,”error_info”:null}
+如果没有出现别的情况，请参考官方文档 Troubleshooting SSH 部分，官方文档地址如下&lt;/p&gt;
+
+&lt;p&gt;https://secure.phabricator.com/book/phabricator/article/diffusion_hosting/
+接下来，看一下如何配置 HTTP&lt;/p&gt;
+
+&lt;p&gt;HTTP
+首先，请确认Phabricator的配置项 diffusion.allow-http-auth 设置为 true。可以在 左侧菜单面板 All Setttings 中查找 diffusion.allow-http-auth ，点击之后可设置，请设置为 Allow HTTP Basic Auth。
+然后，所有用户需要使用 HTTP 访问仓库之前，需要设置自己的密码：点击你的头像 —&amp;gt; 左侧菜单面板 Manage —&amp;gt; 右侧菜单面板 Edit Settings —&amp;gt; 左侧菜单面板 VCS Password&lt;/p&gt;
+
+&lt;p&gt;强烈建议不要把这个密码设置为你的Phabricator登录密码，因为 vcs 密码很容易泄露。
+一般来说，不需要其它配置就可以使用 HTTP 了，如果有问题，请参考官方文档 Troubleshooting HTTP 部分&lt;/p&gt;
+
+&lt;p&gt;https://secure.phabricator.com/book/phabricator/article/diffusion_hosting/
+配置完仓库访问方式后，我们来看一下如何使用 Phabricator 进行 Code Review。&lt;/p&gt;
+
+&lt;p&gt;0x60 使用Phabricator进行Code Review&lt;/p&gt;
+
+&lt;p&gt;在进行 Code Review 实践前，先说一些理论方面的东西（开头和 0x61 ，不喜欢可绕过）
+Code Review，有时候就像打架一样：我提交了变更，你说不行，要修改；我又提交了一次，你说还是不行，还要改。我不知道你究竟要怎样，你也不知道我感觉受到了打击有多不爽。所以，大家需要对Code Review这件事抱有开放的态度：&lt;/p&gt;
+
+&lt;p&gt;为什么我的代码需要其他人审查？
+因为我不是神，我会制造Bug，我会当局者迷。
+为什么我要审查其他人的代码？
+因为我要对我们的团队负责，我要保证我们产品的质量，我可能会看到他人代码的Bug，在这些Bug显示出它们的”威力”前，把它们弄死。
+Code Review这件事，旨在创造一个共进的团队氛围（交流和技术等），在产品交付给用户（包括我们的测试人员）前，保证产品的质量。&lt;/p&gt;
+
+&lt;p&gt;在了解如何使用Phabricator进行Code Review前，我们先了解一下Phabricator Code Review的流程，对其有一个整体上的了解。&lt;/p&gt;
+
+&lt;p&gt;0x61 Phabricator Code Review工作流&lt;/p&gt;
+
+&lt;p&gt;Phabricator提供两种Code Review的方式：pre-push，post-push
+pre-push 是指审查发生在变更发布前；post-push 是指审查发生在变更已经被发布或者正在发布。
+这里我们认为 pre-push 的方式更适合，所以接下来说一下 pre-push 的工作流：&lt;/p&gt;
+
+&lt;p&gt;Write, Review, Merge, Publish
+从这篇文章，我了解到了这个流程&lt;/p&gt;
+
+&lt;p&gt;https://secure.phabricator.com/phame/post/view/766/write_review_merge_publish_phabricator_review_workflow/
+如果你之前用过其它的Code Review工具，可能会对这样的流程感到不习惯。在其它工具中，变更（代码，资源文件或其它）会经历这样一个流程： Write, Publish, Review, Merge。首先，你做出一些变更（Write），然后把他们推送到远程仓库（Publish）等待审查者审查。一旦这些代码被审查（Review）并通过，变更会合并（Merge）到一个指定的功能分支。在这个流程中，被合并的变更恰好是被推送的变更（这句话有点模模糊糊，不痛不痒，接下来我们看一下Phabricator的流程，也许会清晰很多）。
+接下来，我们看一下Phabricator略有不同的工作流：Write, Review, Merge, Publish。像上面一样，开始的时候，你做出一些变更。但是，接下来的流程就不一样了。
+Phabricator认为在开发过程中审查（Review）是一个重要的步骤，对于那些没有审查过的变更，是不可以发布的。
+理论上来说，没有审查过的变更不算数：这些变更可能只是临时的，易变的。可能方法上不对，可能缺少来龙去脉，可能根本就是解决错误的问题，等等。审查的参考基础是建立在开发人员和审查人员拥有一个共同认可的变更处理方式，并且这种处理方式是开发过程所有参与人员（项目管理、产品、开发）都期望的，而不仅仅是仅仅做到最终的产品看起来没问题。直到变更经过了这样的审查，我们才能得到稳固的版本。
+这样的工作流跟其它工具的审查流程没有实质上的技术区别，但是存在明显的社交活动上的不同：由于变更必须经过审查才能被合并、发布，变更作者需要根据反馈对变更进行调整。另外，审查者根据粗略的草图（所有开发参与人员共同认可的变更方式）进行反馈，而不是简单的批判一件已经完成的变更工作。
+Phabricator和其它工具的工作流都有着同样的目的：未审查的代码都只是临时的变更，没有长久或者明显的价值，直到通过审查。
+Phabricator工作流的第二步是审查（Review）,审查的对象是还没有发布的变更。没有发布的变更被发送到Phabricator等待被审查（通常我们使用 arc diff命令发送审查请求），然后审查者做出反馈。变更作者根据反馈进行修改，在修改过程中，作者不必担心版本、解决方式这些事情。作者可以自由的复位、使用、移除或者舍弃老的变更。在从变更提交审核到审核者反馈，以及作者再次修改整个过程中，没有那种审核者把作者推入一个必须接受或者只能做少量改变的默认发布状态。
+一旦通过审核，变更会被合并（Merge）和发布（Publish）（通常，这两个步骤由一个命令完成 arc land）。
+这里，Phabricator也与那些先 Publish 的工具不同：默认情况下，Phabricator会舍弃到达最后变更前的所做的中间过程，把最后变更的整个过程压缩成一次提交。总体来说，这意味着舍弃checkpoint commits, rebases, squash-merges, 并且把整个变更过程做为一次 fast-forward commit 提交到目标分支。
+Phabricator在一定程度上能做到这些，是因为：什么都没有被发布，所以这种工作流可以以任何想要的方式发布变更。
+有了这些，我们可以以我们想要的版本自由的rebase，fast-commit，这些是Phabricator默认的行为。&lt;/p&gt;
+
+&lt;p&gt;0x62 进行Code Review所用工具&lt;/p&gt;
+
+&lt;p&gt;做为一般用户，常用的工具有两个 Differential 和 Arcanist 。&lt;/p&gt;
+
+&lt;p&gt;Differential-审查代码的工作台&lt;/p&gt;
+
+&lt;p&gt;我们在这里查看变更审查情况，对变更进行审查或评论等操作。
+这是某次变更界面操作部分截图&lt;/p&gt;
+
+&lt;p&gt;做为 审查人，可进行的操作有：
+Comment：说点什么。可以针对某行代码进行评论，直接点击行号即可
+Accept Revision：接受变更，这哥们代码写得不错，不需要改
+Request Changes：不行，还要改
+Resign as Reviewer：重新指定审查代码的人
+Commandeer Revision：字面意思是将这个Revision据为己有的意思，实际上这个时候Reviewer的身份已经变为Owner的身份了，不能再进行Review了，但是Comment还是可以的
+Add Reviewer：添加审查人
+Add Subscribers：添加订阅者，CC&lt;/p&gt;
+
+&lt;p&gt;做为 作者，可进行的操作有：
+Comment：说点什么。可以针对某行代码进行评论，直接点击行号即可
+Abandon Revision：废除版本。废除后，这个版本就不需要再审核了
+Plan Changes：计划变更，我自己发现了一些问题或者需求有变，正在改
+Add Reviewer：添加其它审查人（除当前审查人外）
+Add Subscribers：添加订阅者，CC&lt;/p&gt;
+
+&lt;p&gt;Arcanist - 命令交互
+我们用这个工具提交变更和审查请求，对变更做出更改，或者在通过审查后发布到远程仓库分支中。
+常用的命令有：
+arc diff：发送变更详情和审查请求
+arc land：推送变更（Git and Mercurial），当通过审查后使用这个命令
+arc list：显示变更处理的情况
+arc cover：查找最有可能审查变更的人
+arc patch：给版本打补丁
+arc export：从Differential下载补丁
+arc amend：更新Git commit
+arc commit：提交变更（SVN）
+arc branch：查看Git branches更加详细的信息&lt;/p&gt;
+
+&lt;p&gt;在配置了 lint 和 unit test intergration后，可以用这些命令：
+arc lint：静态代码检查
+arc unit：单元测试&lt;/p&gt;
+
+&lt;p&gt;与其它工具交互：
+arc upload：上传文件
+arc download：下载文件
+arc paste：创建和查看剪贴&lt;/p&gt;
+
+&lt;p&gt;还有一些高级功能：
+arc call-conduit：执行 Conduit 方法
+arc liberate：创建或更新 libphutil 库
+arc shell-complete：激活 tab 补全&lt;/p&gt;
+
+&lt;p&gt;0x63 配置进行Code Review&lt;/p&gt;
+
+&lt;p&gt;一些基本的配置和安装 —&amp;gt; 写代码 —&amp;gt; 提交审查请求(arc diff) —&amp;gt; 审查（Differential） —&amp;gt; （审查通过后）合并提交（arc land）
+一些基本的配置和安装
+包括：
+配置代码仓库（Diffusion）
+把你本地的Git远程URL设置为Phabricator上代码仓库地址
+安装Arcanist
+配置Project信息&lt;/p&gt;
+
+&lt;p&gt;配置代码仓库（Diffusion）
+在开始进行代码审查后，我们的代码是由Phabricator直接托管的，所以我们需要配置代码仓库。
+使用管理员账号登录Phabricator，点击左侧面板菜单 Diffusion ，然后点击右上侧 Create Repository ，选择你所使用的 Repository 类型，填写 Name 等信息，在创建完成后即可使用。如果没有什么特殊的需求，不需要进行特别的配置，这里列举两种你可能遇到的打算开始使用 Phabricator 时的场景：&lt;/p&gt;
+
+&lt;p&gt;1、代码之前由 GitHub 或其它托管，现在我需要把之前的代码导入
+点击 Manage Repository ，点击左侧 URIs，点击 Add New URI，填写GitHub或其它托管系统对应仓库的 URI ， I/O Type 选择 Observe，点击 Create Repository URI 添加新的 URI 。&lt;/p&gt;
+
+&lt;p&gt;在添加完新的 URI 后，你还需要点击 Set Credential 设置访问新的 URI 的认证方式。
+如果你打算此时就开始使用 Phabricator ，请务必通知你的团队，暂停一下，不要再向GitHub等提交代码。如果你的 GitHub 等也设置了代码审查，请督促相关人员完成代码审查流程。 
+稍等片刻，待 Phabricator 同步完之前的代码后，编辑你添加的 GitHub 或其它代码托管系统的 URI ，务必修改 I/O Type：
+1）如果你不再需要使用之前的托管系统，选择 No I/O
+2）如果你想继续把代码备份到之前的代码托管系统，选择 Mirror，这时， Phabricator 代码仓库的变更会覆盖推送到之前的代码托管系统
+如果你不修改 I/O Type，向 Phabricator 代码仓库提交代码会失败，因为是只读的。
+当然，对于导入之前的代码，还有别的方式，例如直接把本地的代码再次向 Phabricator 代码仓库再提交一次。&lt;/p&gt;
+
+&lt;p&gt;2、开始一个新的项目，创建一个新的仓库
+参考第1种场景，在 Phabricator 创建代码仓库。如果你希望把代码备份到其它的托管系统，只需要添加对应的 URI，并且把 I/O Type 选为 Mirror。&lt;/p&gt;
+
+&lt;p&gt;把你本地的Git远程URL设置为Phabricator上代码仓库地址&lt;/p&gt;
+
+&lt;p&gt;git remote set-url 远程名称 新的url
+安装Arcanist&lt;/p&gt;
+
+&lt;p&gt;https://secure.phabricator.com/book/phabricator/article/arcanist_quick_start/
+配置Project信息
+在你项目代码的根目录下，创建 .arcconfig 文件，内容如下：&lt;/p&gt;
+
+&lt;p&gt;{
+“phabricator.uri” : “你Phabricator系统访问URL”
+}
+Windows系统下，创建类似这种文件名的文件可能很麻烦，可以使用这条命令创建：&lt;/p&gt;
+
+&lt;p&gt;arc set-config phabricator.uri “你Phabricator系统访问URL”
+Windows系统下，还需要配置 Editor ，详情参考：&lt;/p&gt;
+
+&lt;p&gt;https://secure.phabricator.com/book/phabricator/article/arcanist_windows/
+Arcanist 使用可参考：&lt;/p&gt;
+
+&lt;p&gt;https://secure.phabricator.com/book/phabricator/article/arcanist_quick_start/
+https://secure.phabricator.com/book/phabricator/article/arcanist/
+在进行完基本的配置和安装后，可以开始 Code Review 了。&lt;/p&gt;
+
+&lt;p&gt;写代码
+当然，不只是代码可以被审查，图标等资源文件的变更也可以被审查。&lt;/p&gt;
+
+&lt;p&gt;提交审查请求（arc diff）
+一般情况下，我们直接使用 arc diff 即可，默认情况下，Arcanist 会把本地分支的 HEAD 与远程对应分支的 HEAD 进行对比，并生成差异对比发送到 Phabricator。当你所做的修改没有 commit 时，会提示你进行 commit。
+在一些情况下，我们并不希望与本地分支的 HEAD 进行比较，假设想要与上次的 commit 比较，上次 commit id 是 8ffc88dc05d31fffd28e3ff1129d1b8c321dffff，那么我们需要在 arc diff 后把这个 id 加上：arc diff 8ffc88dc05d31fffd28e3ff1129d1b8c321dffff。
+执行这条命令时我们需要按照模板填写title（必填），summary（必填），Test Plan（必填，没有可写 N/A 之类的标识），Reviewers（必填，且必须为真实有效的用户名），Subscribers（可选），填写完成后关闭编辑器，Arcanist会自动提交审查请求。&lt;/p&gt;
+
+&lt;p&gt;审查（Differential）
+做为 审查人，需要在 Differential 工作台完成代码审查工作，上面已经介绍了 Differential，这里就不再多说了。&lt;/p&gt;
+
+&lt;p&gt;（审查通过后）合并提交（arc land）
+做为 作者，在代码审查通过后，需要使用 arc land 把变更发布到远程分支。
+注意，在首次执行这条命令前（不一定非要到这个步骤，可以是这个步骤前的任意时刻，例如开始写代码前），建议请使用 git branch -u 远程名称/远程分支名称 把本地的分支与远程分支相关联，否则，在执行完 arc land 后，本地分支会被删除。如果你不想这样做，又需要保留现在分支的话，请使用 arc land –keep-branch。
+默认情况下，Arcanist 会把变更推送到与本地分支相关联的远程分支，你可以使用 –remote 和 –onto 参数推送到你想要的远程和远程分支。
+关于 arc land 的详细说明，可使用 arc land –help 查看。&lt;/p&gt;
+
+&lt;p&gt;0x70 与GitHub集成&lt;/p&gt;
+
+&lt;p&gt;这里的“集成”其实说的很心虚，因为在使用 Phabricator 后，GitHub 已经变为一个文件存储服务器了。常见的使用情况已经在 0x63 配置进行Code Review 的 配置代码仓库（Diffusion） 中写出，所以你懂的。&lt;/p&gt;
+
+&lt;p&gt;0x80 与Jenkins集成&lt;/p&gt;
+
+&lt;p&gt;在很久很久以前，我已经搭建了 Jenkins 用于自动构建，所以这次把 Phabricator 与 Jenkins 做了集成。
+在 Jenkins 中安装完插件： Phabricator Differential Plugin 后，请参考这篇文章：&lt;/p&gt;
+
+&lt;p&gt;https://github.com/uber/phabricator-jenkins-plugin#phabricator-jenkins-plugin–
+0x90 结束语&lt;/p&gt;
+
+&lt;p&gt;从配置完到开始试用已经有一个月左右，期间遇到了各种问题。经历了这些问题的洗礼，算是对 Phabricator 使用入门了吧。
+这篇文章时隔多日才完成，尽管我想把每个细节写的详尽，但是记忆总是像被虫蛀过的木头，难免有些疏漏。加之文笔水平有限，各位就凑合着看吧。
+在安装和使用过程中遇到的问题，欢迎各位评论交流。&lt;/p&gt;
+
+&lt;p&gt;0xA0 Q/A&lt;/p&gt;
+
+&lt;p&gt;1、如何强制用户 Code Review？
+再次强调一下前提：在开始 Code Review 流程前，请先确认团队成员的git remote url已经切换为Phabricator上对应仓库地址。
+强制用户Code Review，需要创建Herald Rule。在创建时，New Rule for 选：Commit Hook: Commit Content.；Rule Type选：Global，或者根据自己需要选择；Conditions中是组合条件，可以根据自己需要指定一些条件；Action 指定当前情况符合你指定的条件组合时执行的动作。示例如图：&lt;/p&gt;
+
+&lt;p&gt;示例中定义了以下规则：在向develop分支提交代码时，所提交的代码必须是通过 Code Review 流程审查通过的，否则会被拒绝；除非 Commit Message 中包含字符 @bypass-review 。
+指定 Commit Message 中包含字符 @bypass-review 这种例外情况，主要考虑到在紧急修复一些问题，没时间等待审查时使用。
+当提交被拒绝时，如图：&lt;/p&gt;
+</description>
+        <pubDate>Tue, 24 Oct 2017 00:00:00 +0800</pubDate>
+        <link>https://xiazemin.github.io/MyBlog/web/2017/10/24/Phabricator.html</link>
+        <guid isPermaLink="true">https://xiazemin.github.io/MyBlog/web/2017/10/24/Phabricator.html</guid>
+        
+        
+        <category>web</category>
+        
+      </item>
     
       <item>
         <title>cut</title>
@@ -571,316 +1131,6 @@ val oneTwoThree = 1 :: twoThree&lt;/p&gt;
         <pubDate>Thu, 12 Oct 2017 00:00:00 +0800</pubDate>
         <link>https://xiazemin.github.io/MyBlog/spark/2017/10/12/Scala_collection.html</link>
         <guid isPermaLink="true">https://xiazemin.github.io/MyBlog/spark/2017/10/12/Scala_collection.html</guid>
-        
-        
-        <category>spark</category>
-        
-      </item>
-    
-      <item>
-        <title>scala_list</title>
-        <description>&lt;!-- more --&gt;
-&lt;p&gt;一、常用操作符（操作符其实也是函数）&lt;/p&gt;
-
-&lt;p&gt;++ ++&lt;a href=&quot;that: GenTraversableOnce[B]&quot;&gt;B&lt;/a&gt;: List[B] 从列表的尾部添加另外一个列表&lt;/p&gt;
-
-&lt;p&gt;++: ++:&lt;a href=&quot;that: collection.Traversable[B]&quot;&gt;B &amp;gt;: A, That&lt;/a&gt;(implicit bf: CanBuildFrom[List[A], B, That]): That 在列表的头部添加一个列表&lt;/p&gt;
-
-&lt;p&gt;+: +:(elem: A): List[A] 在列表的头部添加一个元素&lt;/p&gt;
-
-&lt;p&gt;:+ :+(elem: A): List[A] 在列表的尾部添加一个元素&lt;/p&gt;
-
-&lt;p&gt;:: ::(x: A): List[A] 在列表的头部添加一个元素&lt;/p&gt;
-
-&lt;p&gt;::: :::(prefix: List[A]): List[A] 在列表的头部添加另外一个列表&lt;/p&gt;
-
-&lt;p&gt;:\ :&lt;a href=&quot;z: B&quot;&gt;B&lt;/a&gt;(op: (A, B) ⇒ B): B 与foldRight等价&lt;/p&gt;
-
-&lt;p&gt;val left = List(1,2,3)
-val right = List(4,5,6)&lt;/p&gt;
-
-&lt;p&gt;//以下操作等价
-left ++ right   // List(1,2,3,4,5,6)
-left ++: right  // List(1,2,3,4,5,6)
-right.++:(left)    // List(1,2,3,4,5,6)
-right.:::(left)  // List(1,2,3,4,5,6)&lt;/p&gt;
-
-&lt;p&gt;//以下操作等价
-0 +: left    //List(0,1,2,3)
-left.+:(0)   //List(0,1,2,3)&lt;/p&gt;
-
-&lt;p&gt;//以下操作等价
-left :+ 4    //List(1,2,3,4)
-left.:+(4)   //List(1,2,3,4)&lt;/p&gt;
-
-&lt;p&gt;//以下操作等价
-0 :: left      //List(0,1,2,3)
-left.::(0)     //List(0,1,2,3)
-看到这里大家应该跟我一样有一点晕吧，怎么这么多奇怪的操作符，这里给大家一个提示，任何以冒号结果的操作符，都是右绑定的，即 0 :: List(1,2,3) = List(1,2,3).::(0) = List(0,1,2,3) 从这里可以看出操作::其实是右边List的操作符，而非左边Int类型的操作符&lt;/p&gt;
-
-&lt;p&gt;二、常用变换操作&lt;/p&gt;
-
-&lt;p&gt;1.map&lt;/p&gt;
-
-&lt;p&gt;map&lt;a href=&quot;f: (A) ⇒ B&quot;&gt;B&lt;/a&gt;: List[B]&lt;/p&gt;
-
-&lt;p&gt;定义一个变换,把该变换应用到列表的每个元素中,原列表不变，返回一个新的列表数据&lt;/p&gt;
-
-&lt;p&gt;Example1 平方变换&lt;/p&gt;
-
-&lt;p&gt;val nums = List(1,2,3)
-val square = (x: Int) =&amp;gt; x&lt;em&gt;x &lt;br /&gt;
-val squareNums1 = nums.map(num =&amp;gt; num&lt;/em&gt;num)    //List(1,4,9)
-val squareNums2 = nums.map(math.pow(_,2))    //List(1,4,9)
-val squareNums3 = nums.map(square)            //List(1,4,9)&lt;/p&gt;
-
-&lt;p&gt;Example2 保存文本数据中的某几列&lt;/p&gt;
-
-&lt;p&gt;val text = List(“Homeway,25,Male”,”XSDYM,23,Female”)
-val usersList = text.map(_.split(“,”)(0))  &lt;br /&gt;
-val usersWithAgeList = text.map(line =&amp;gt; {
-    val fields = line.split(“,”)
-    val user = fields(0)
-    val age = fields(1).toInt
-    (user,age)
-})
-2.flatMap, flatten&lt;/p&gt;
-
-&lt;p&gt;flatten: flatten[B]: List[B] 对列表的列表进行平坦化操作 flatMap: flatMap&lt;a href=&quot;f: (A) ⇒ GenTraversableOnce[B]&quot;&gt;B&lt;/a&gt;: List[B] map之后对结果进行flatten&lt;/p&gt;
-
-&lt;p&gt;定义一个变换f, 把f应用列表的每个元素中，每个f返回一个列表，最终把所有列表连结起来。&lt;/p&gt;
-
-&lt;p&gt;val text = List(“A,B,C”,”D,E,F”)
-val textMapped = text.map(&lt;em&gt;.split(“,”).toList) // List(List(“A”,”B”,”C”),List(“D”,”E”,”F”))
-val textFlattened = textMapped.flatten          // List(“A”,”B”,”C”,”D”,”E”,”F”)
-val textFlatMapped = text.flatMap(&lt;/em&gt;.split(“,”).toList) // List(“A”,”B”,”C”,”D”,”E”,”F”)&lt;/p&gt;
-
-&lt;p&gt;3.reduce&lt;/p&gt;
-
-&lt;p&gt;reduce&lt;a href=&quot;op: (A1, A1) ⇒ A1&quot;&gt;A1 &amp;gt;: A&lt;/a&gt;: A1&lt;/p&gt;
-
-&lt;p&gt;定义一个变换f, f把两个列表的元素合成一个，遍历列表，最终把列表合并成单一元素&lt;/p&gt;
-
-&lt;p&gt;Example 列表求和&lt;/p&gt;
-
-&lt;p&gt;val nums = List(1,2,3)
-val sum1 = nums.reduce((a,b) =&amp;gt; a+b)   //6
-val sum2 = nums.reduce(&lt;em&gt;+&lt;/em&gt;)            //6
-val sum3 = nums.sum                 //6&lt;/p&gt;
-
-&lt;p&gt;4.reduceLeft,reduceRight&lt;/p&gt;
-
-&lt;p&gt;reduceLeft: reduceLeft&lt;a href=&quot;f: (B, A) ⇒ B&quot;&gt;B &amp;gt;: A&lt;/a&gt;: B&lt;/p&gt;
-
-&lt;p&gt;reduceRight: reduceRight&lt;a href=&quot;op: (A, B) ⇒ B&quot;&gt;B &amp;gt;: A&lt;/a&gt;: B&lt;/p&gt;
-
-&lt;p&gt;reduceLeft从列表的左边往右边应用reduce函数，reduceRight从列表的右边往左边应用reduce函数&lt;/p&gt;
-
-&lt;p&gt;Example&lt;/p&gt;
-
-&lt;p&gt;val nums = List(2.0,2.0,3.0)
-val resultLeftReduce = nums.reduceLeft(math.pow)  // = pow( pow(2.0,2.0) , 3.0) = 64.0
-val resultRightReduce = nums.reduceRight(math.pow) // = pow(2.0, pow(2.0,3.0)) = 256.0&lt;/p&gt;
-
-&lt;p&gt;5.fold,foldLeft,foldRight&lt;/p&gt;
-
-&lt;p&gt;fold: fold&lt;a href=&quot;z: A1&quot;&gt;A1 &amp;gt;: A&lt;/a&gt;(op: (A1, A1) ⇒ A1): A1 带有初始值的reduce,从一个初始值开始，从左向右将两个元素合并成一个，最终把列表合并成单一元素。&lt;/p&gt;
-
-&lt;p&gt;foldLeft: foldLeft&lt;a href=&quot;z: B&quot;&gt;B&lt;/a&gt;(f: (B, A) ⇒ B): B 带有初始值的reduceLeft&lt;/p&gt;
-
-&lt;p&gt;foldRight: foldRight&lt;a href=&quot;z: B&quot;&gt;B&lt;/a&gt;(op: (A, B) ⇒ B): B 带有初始值的reduceRight&lt;/p&gt;
-
-&lt;p&gt;val nums = List(2,3,4)
-val sum = nums.fold(1)(&lt;em&gt;+&lt;/em&gt;)  // = 1+2+3+4 = 9&lt;/p&gt;
-
-&lt;p&gt;val nums = List(2.0,3.0)
-val result1 = nums.foldLeft(4.0)(math.pow) // = pow(pow(4.0,2.0),3.0) = 4096
-val result2 = nums.foldRight(1.0)(math.pow) // = pow(1.0,pow(2.0,3.0)) = 8.0&lt;/p&gt;
-
-&lt;p&gt;6.sortBy,sortWith,sorted&lt;/p&gt;
-
-&lt;p&gt;sortBy: sortBy&lt;a href=&quot;f: (A) ⇒ B&quot;&gt;B&lt;/a&gt;(implicit ord: math.Ordering[B]): List[A] 按照应用函数f之后产生的元素进行排序&lt;/p&gt;
-
-&lt;p&gt;sorted： sorted&lt;a href=&quot;implicit ord: math.Ordering[B]&quot;&gt;B &amp;gt;: A&lt;/a&gt;: List[A] 按照元素自身进行排序&lt;/p&gt;
-
-&lt;p&gt;sortWith： sortWith(lt: (A, A) ⇒ Boolean): List[A] 使用自定义的比较函数进行排序&lt;/p&gt;
-
-&lt;p&gt;val nums = List(1,3,2,4)
-val sorted = nums.sorted  //List(1,2,3,4)&lt;/p&gt;
-
-&lt;p&gt;val users = List((“HomeWay”,25),(“XSDYM”,23))
-val sortedByAge = users.sortBy{case(user,age) =&amp;gt; age}  //List((“XSDYM”,23),(“HomeWay”,25))
-val sortedWith = users.sortWith{case(user1,user2) =&amp;gt; user1._2 &amp;lt; user2._2} //List((“XSDYM”,23),(“HomeWay”,25))&lt;/p&gt;
-
-&lt;p&gt;7.filter, filterNot&lt;/p&gt;
-
-&lt;p&gt;filter: filter(p: (A) ⇒ Boolean): List[A]&lt;/p&gt;
-
-&lt;p&gt;filterNot: filterNot(p: (A) ⇒ Boolean): List[A]&lt;/p&gt;
-
-&lt;p&gt;filter 保留列表中符合条件p的列表元素 ， filterNot，保留列表中不符合条件p的列表元素&lt;/p&gt;
-
-&lt;p&gt;val nums = List(1,2,3,4)
-val odd = nums.filter( _ % 2 != 0) // List(1,3)
-val even = nums.filterNot( _ % 2 != 0) // List(2,4)&lt;/p&gt;
-
-&lt;p&gt;8.count&lt;/p&gt;
-
-&lt;p&gt;count(p: (A) ⇒ Boolean): Int&lt;/p&gt;
-
-&lt;p&gt;计算列表中所有满足条件p的元素的个数，等价于 filter(p).length&lt;/p&gt;
-
-&lt;p&gt;val nums = List(-1,-2,0,1,2) val plusCnt1 = nums.count( &amp;gt; 0) val plusCnt2 = nums.filter( &amp;gt; 0).length&lt;/p&gt;
-&lt;ol&gt;
-  &lt;li&gt;diff, union, intersect&lt;/li&gt;
-&lt;/ol&gt;
-
-&lt;p&gt;diff:diff(that: collection.Seq[A]): List[A] 保存列表中那些不在另外一个列表中的元素，即从集合中减去与另外一个集合的交集&lt;/p&gt;
-
-&lt;p&gt;union : union(that: collection.Seq[A]): List[A] 与另外一个列表进行连结&lt;/p&gt;
-
-&lt;p&gt;intersect: intersect(that: collection.Seq[A]): List[A] 与另外一个集合的交集&lt;/p&gt;
-
-&lt;p&gt;val nums1 = List(1,2,3)
-val nums2 = List(2,3,4)
-val diff1 = nums1 diff nums2   // List(1)
-val diff2 = nums2.diff(num1)   // List(4)
-val union1 = nums1 union nums2  // List(1,2,3,2,3,4)
-val union2 = nums2 ++ nums1        // List(2,3,4,1,2,3)
-val intersection = nums1 intersect nums2  //List(2,3)&lt;/p&gt;
-
-&lt;p&gt;10.distinct&lt;/p&gt;
-
-&lt;p&gt;distinct: List[A] 保留列表中非重复的元素，相同的元素只会被保留一次&lt;/p&gt;
-
-&lt;p&gt;val list = List(“A”,”B”,”C”,”A”,”B”) val distincted = list.distinct // List(“A”,”B”,”C”)
-1
-11.groupBy, grouped&lt;/p&gt;
-
-&lt;p&gt;groupBy : groupBy&lt;a href=&quot;f: (A) ⇒ K&quot;&gt;K&lt;/a&gt;: Map[K, List[A]] 将列表进行分组，分组的依据是应用f在元素上后产生的新元素 
-grouped: grouped(size: Int): Iterator[List[A]] 按列表按照固定的大小进行分组&lt;/p&gt;
-
-&lt;p&gt;val data = List((“HomeWay”,”Male”),(“XSDYM”,”Femail”),(“Mr.Wang”,”Male”))
-val group1 = data.groupBy(_._2) // = Map(“Male” -&amp;gt; List((“HomeWay”,”Male”),(“Mr.Wang”,”Male”)),”Female” -&amp;gt; List((“XSDYM”,”Femail”)))
-val group2 = data.groupBy{case (name,sex) =&amp;gt; sex} // = Map(“Male” -&amp;gt; List((“HomeWay”,”Male”),(“Mr.Wang”,”Male”)),”Female” -&amp;gt; List((“XSDYM”,”Femail”)))
-val fixSizeGroup = data.grouped(2).toList // = Map(“Male” -&amp;gt; List((“HomeWay”,”Male”),(“XSDYM”,”Femail”)),”Female” -&amp;gt; List((“Mr.Wang”,”Male”)))&lt;/p&gt;
-
-&lt;p&gt;12.scan&lt;/p&gt;
-
-&lt;p&gt;scan&lt;a href=&quot;z: B&quot;&gt;B &amp;gt;: A, That&lt;/a&gt;(op: (B, B) ⇒ B)(implicit cbf: CanBuildFrom[List[A], B, That]): That&lt;/p&gt;
-
-&lt;p&gt;由一个初始值开始，从左向右，进行积累的op操作，这个比较难解释，具体的看例子吧。&lt;/p&gt;
-
-&lt;p&gt;val nums = List(1,2,3)
-val result = nums.scan(10)(&lt;em&gt;+&lt;/em&gt;)   // List(10,10+1,10+1+2,10+1+2+3) = List(10,11,12,13)&lt;/p&gt;
-
-&lt;p&gt;13.scanLeft,scanRight&lt;/p&gt;
-
-&lt;p&gt;scanLeft: scanLeft&lt;a href=&quot;z: B&quot;&gt;B, That&lt;/a&gt;(op: (B, A) ⇒ B)(implicit bf: CanBuildFrom[List[A], B, That]): That&lt;/p&gt;
-
-&lt;p&gt;scanRight: scanRight&lt;a href=&quot;z: B&quot;&gt;B, That&lt;/a&gt;(op: (A, B) ⇒ B)(implicit bf: CanBuildFrom[List[A], B, That]): That&lt;/p&gt;
-
-&lt;p&gt;scanLeft: 从左向右进行scan函数的操作，scanRight：从右向左进行scan函数的操作&lt;/p&gt;
-
-&lt;p&gt;val nums = List(1.0,2.0,3.0)
-val result = nums.scanLeft(2.0)(math.pow)   // List(2.0,pow(2.0,1.0), pow(pow(2.0,1.0),2.0),pow(pow(pow(2.0,1.0),2.0),3.0) = List(2.0,2.0,4.0,64.0)
-val result = nums.scanRight(2.0)(math.pow)  // List(2.0,pow(3.0,2.0), pow(2.0,pow(3.0,2.0)), pow(1.0,pow(2.0,pow(3.0,2.0))) = List(1.0,512.0,9.0,2.0)&lt;/p&gt;
-
-&lt;p&gt;14.take,takeRight,takeWhile&lt;/p&gt;
-
-&lt;p&gt;take : takeRight(n: Int): List[A] 提取列表的前n个元素 takeRight: takeRight(n: Int): List[A] 提取列表的最后n个元素 takeWhile: takeWhile(p: (A) ⇒ Boolean): List[A] 从左向右提取列表的元素，直到条件p不成立&lt;/p&gt;
-
-&lt;p&gt;val nums = List(1,1,1,1,4,4,4,4)
-val left = nums.take(4)   // List(1,1,1,1)
-val right = nums.takeRight(4) // List(4,4,4,4)
-val headNums = nums.takeWhile( _ == nums.head)  // List(1,1,1,1)&lt;/p&gt;
-
-&lt;p&gt;15.drop,dropRight,dropWhile&lt;/p&gt;
-
-&lt;p&gt;drop: drop(n: Int): List[A] 丢弃前n个元素，返回剩下的元素 dropRight: dropRight(n: Int): List[A] 丢弃最后n个元素，返回剩下的元素 dropWhile: dropWhile(p: (A) ⇒ Boolean): List[A] 从左向右丢弃元素，直到条件p不成立&lt;/p&gt;
-
-&lt;p&gt;val nums = List(1,1,1,1,4,4,4,4)
-val left = nums.drop(4)   // List(4,4,4,4)
-val right = nums.dropRight(4) // List(1,1,1,1)
-val tailNums = nums.dropWhile( _ == nums.head)  // List(4,4,4,4)&lt;/p&gt;
-
-&lt;p&gt;16.span, splitAt, partition&lt;/p&gt;
-
-&lt;p&gt;span : span(p: (A) ⇒ Boolean): (List[A], List[A]) 从左向右应用条件p进行判断，直到条件p不成立，此时将列表分为两个列表&lt;/p&gt;
-
-&lt;p&gt;splitAt: splitAt(n: Int): (List[A], List[A]) 将列表分为前n个，与，剩下的部分&lt;/p&gt;
-
-&lt;p&gt;partition: partition(p: (A) ⇒ Boolean): (List[A], List[A]) 将列表分为两部分，第一部分为满足条件p的元素，第二部分为不满足条件p的元素&lt;/p&gt;
-
-&lt;p&gt;val nums = List(1,1,1,2,3,2,1)
-val (prefix,suffix) = nums.span( _ == 1) // prefix = List(1,1,1), suffix = List(2,3,2,1)
-val (prefix,suffix) = nums.splitAt(3)  // prefix = List(1,1,1), suffix = List(2,3,2,1)
-val (prefix,suffix) = nums.partition( _ == 1) // prefix = List(1,1,1,1), suffix = List(2,3,2)&lt;/p&gt;
-
-&lt;p&gt;17.padTo&lt;/p&gt;
-
-&lt;p&gt;padTo(len: Int, elem: A): List[A]&lt;/p&gt;
-
-&lt;p&gt;将列表扩展到指定长度，长度不够的时候，使用elem进行填充，否则不做任何操作。&lt;/p&gt;
-
-&lt;p&gt;val nums = List(1,1,1)
- val padded = nums.padTo(6,2)   // List(1,1,1,2,2,2)&lt;/p&gt;
-
-&lt;p&gt;18.combinations,permutations&lt;/p&gt;
-
-&lt;p&gt;combinations: combinations(n: Int): Iterator[List[A]] 取列表中的n个元素进行组合，返回不重复的组合列表，结果一个迭代器&lt;/p&gt;
-
-&lt;p&gt;permutations: permutations: Iterator[List[A]] 对列表中的元素进行排列，返回不重得的排列列表，结果是一个迭代器&lt;/p&gt;
-
-&lt;p&gt;val nums = List(1,1,3)
-val combinations = nums.combinations(2).toList //List(List(1,1),List(1,3))
-val permutations = nums.permutations.toList        // List(List(1,1,3),List(1,3,1),List(3,1,1))&lt;/p&gt;
-
-&lt;p&gt;19.zip, zipAll, zipWithIndex, unzip,unzip3&lt;/p&gt;
-
-&lt;p&gt;zip: zip&lt;a href=&quot;that: GenIterable[B]&quot;&gt;B&lt;/a&gt;: List[(A, B)] 与另外一个列表进行拉链操作，将对应位置的元素组成一个pair，返回的列表长度为两个列表中短的那个&lt;/p&gt;
-
-&lt;p&gt;zipAll: zipAll&lt;a href=&quot;that: collection.Iterable[B], thisElem: A, thatElem: B&quot;&gt;B&lt;/a&gt;: List[(A, B)] 与另外一个列表进行拉链操作，将对应位置的元素组成一个pair，若列表长度不一致，自身列表比较短的话使用thisElem进行填充，对方列表较短的话使用thatElem进行填充&lt;/p&gt;
-
-&lt;p&gt;zipWithIndex：zipWithIndex: List[(A, Int)] 将列表元素与其索引进行拉链操作，组成一个pair&lt;/p&gt;
-
-&lt;p&gt;unzip: unzip&lt;a href=&quot;implicit asPair: (A) ⇒ (A1, A2)&quot;&gt;A1, A2&lt;/a&gt;: (List[A1], List[A2]) 解开拉链操作&lt;/p&gt;
-
-&lt;p&gt;unzip3: unzip3&lt;a href=&quot;implicit asTriple: (A) ⇒ (A1, A2, A3)&quot;&gt;A1, A2, A3&lt;/a&gt;: (List[A1], List[A2], List[A3]) 3个元素的解拉链操作&lt;/p&gt;
-
-&lt;p&gt;val alphabet = List(“A”,B”,”C”)
-val nums = List(1,2)
-val zipped = alphabet zip nums   // List((“A”,1),(“B”,2))
-val zippedAll = alphabet.zipAll(nums,”*”,-1)   // List((“A”,1),(“B”,2),(“C”,-1))
-val zippedIndex = alphabet.zipWithIndex  // List((“A”,0),(“B”,1),(“C”,3))
-val (list1,list2) = zipped.unzip        // list1 = List(“A”,”B”), list2 = List(1,2)
-val (l1,l2,l3) = List((1, “one”, ‘1’),(2, “two”, ‘2’),(3, “three”, ‘3’)).unzip3   // l1=List(1,2,3),l2=List(“one”,”two”,”three”),l3=List(‘1’,’2’,’3’)&lt;/p&gt;
-
-&lt;p&gt;20.slice&lt;/p&gt;
-
-&lt;p&gt;slice(from: Int, until: Int): List[A] 提取列表中从位置from到位置until(不含该位置)的元素列表&lt;/p&gt;
-
-&lt;p&gt;val nums = List(1,2,3,4,5)
-val sliced = nums.slice(2,4)  //List(3,4)&lt;/p&gt;
-
-&lt;p&gt;21.sliding&lt;/p&gt;
-
-&lt;p&gt;sliding(size: Int, step: Int): Iterator[List[A]] 将列表按照固定大小size进行分组，步进为step，step默认为1,返回结果为迭代器&lt;/p&gt;
-
-&lt;p&gt;val nums = List(1,1,2,2,3,3,4,4)
-val groupStep2 = nums.sliding(2,2).toList  //List(List(1,1),List(2,2),List(3,3),List(4,4))
-val groupStep1 = nums.sliding(2).toList //List(List(1,1),List(1,2),List(2,2),List(2,3),List(3,3),List(3,4),List(4,4))&lt;/p&gt;
-
-&lt;p&gt;22.updated&lt;/p&gt;
-
-&lt;p&gt;updated(index: Int, elem: A): List[A] 对列表中的某个元素进行更新操作&lt;/p&gt;
-
-&lt;p&gt;val nums = List(1,2,3,3)
-val fixed = nums.updated(3,4)  // List(1,2,3,4)&lt;/p&gt;
-</description>
-        <pubDate>Wed, 11 Oct 2017 00:00:00 +0800</pubDate>
-        <link>https://xiazemin.github.io/MyBlog/spark/2017/10/11/scala_list.html</link>
-        <guid isPermaLink="true">https://xiazemin.github.io/MyBlog/spark/2017/10/11/scala_list.html</guid>
         
         
         <category>spark</category>
