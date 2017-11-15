@@ -5,9 +5,40 @@
     <description>夏泽民的个人主页，学习笔记。</description>
     <link>https://xiazemin.github.io/MyBlog/</link>
     <atom:link href="https://xiazemin.github.io/MyBlog/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Tue, 14 Nov 2017 14:34:34 +0800</pubDate>
-    <lastBuildDate>Tue, 14 Nov 2017 14:34:34 +0800</lastBuildDate>
+    <pubDate>Wed, 15 Nov 2017 10:58:12 +0800</pubDate>
+    <lastBuildDate>Wed, 15 Nov 2017 10:58:12 +0800</lastBuildDate>
     <generator>Jekyll v3.6.0.pre.beta1</generator>
+    
+      <item>
+        <title>spark_memory</title>
+        <description>&lt;p&gt;在 spark-env.sh 中添加：&lt;/p&gt;
+
+&lt;p&gt;export JAVA_HOME=/home/tom/jdk1.8.0_73/
+export SCALA_HOME=/home/tom//scala-2.10.6
+export SPARK_MASTER_IP=localhost
+export SPARK_WORKER_MEMORY=4G&lt;/p&gt;
+
+&lt;p&gt;内存设置太少会导致运行失败
+可以代码中设置内存
+//set new runtime options
+spark.conf.set(“spark.sql.shuffle.partitions”, 1)
+spark.conf.set(“spark.executor.memory”, “512m”)&lt;/p&gt;
+
+&lt;p&gt;Spark虽然是in memory的运算平台，但从官方资料看，似乎本身对内存的要求并不是特别苛刻。官方网站只是要求内存在8GB之上即可（Impala要求机器配置在128GB）Spark建议需要提供至少75%的内存空间分配给Spark，至于其余的内存空间，则分配给操作系统与buffer cache。Spark对内存的消耗主要分为三部分（即取决于你的应用程序的需求）：
+      数据集中对象的大小；
+      访问这些对象的内存消耗；
+      垃圾回收GC的消耗&lt;/p&gt;
+
+&lt;p&gt;spark executor都是装载在container里运行，container默认的内存是1G（参数yarn.scheduler.minimum-allocation-mb定义），executor分配的内存是executor-memory，所以向YARN申请的内存是（executor-memory + 1）* num-executors。 Executor 内存的大小，和性能本身当然并没有直接的关系，但是几乎所有运行时性能相关的内容都或多或少间接和内存大小相关。这个参数最终会被设置到Executor的JVM的heap尺寸上。如果Executor的数量和内存大小受机器物理配置影响相对固定，那么你就需要合理规划每个分区任务的数据规模，例如采用更多的分区，用增加任务数量（进而需要更多的批次来运算所有的任务）的方式来减小每个任务所需处理的数据大小。&lt;/p&gt;
+</description>
+        <pubDate>Wed, 15 Nov 2017 00:00:00 +0800</pubDate>
+        <link>https://xiazemin.github.io/MyBlog/spark/2017/11/15/spark_memory.html</link>
+        <guid isPermaLink="true">https://xiazemin.github.io/MyBlog/spark/2017/11/15/spark_memory.html</guid>
+        
+        
+        <category>spark</category>
+        
+      </item>
     
       <item>
         <title>spark toDF 失败原因总结</title>
@@ -239,6 +270,120 @@ val ds = df.toJSON&lt;/p&gt;
       </item>
     
       <item>
+        <title>dataSet和dataFrame的创建方法</title>
+        <description>&lt;p&gt;Spark创建DataFrame的三种方法
+跟关系数据库的表(Table)一样，DataFrame是Spark中对带模式(schema)行列数据的抽象。DateFrame广泛应用于使用SQL处理大数据的各种场景。&lt;/p&gt;
+
+&lt;p&gt;通过导入(importing)Spark sql implicits, 就可以将本地序列(seq), 数组或者RDD转为DataFrame。只要这些数据的内容能指定数据类型即可。
+本地seq + toDF创建DataFrame示例：&lt;/p&gt;
+
+&lt;p&gt;import sqlContext.implicits._
+val df = Seq(
+  (1, “First Value”, java.sql.Date.valueOf(“2010-01-01”)),
+  (2, “Second Value”, java.sql.Date.valueOf(“2010-02-01”))
+).toDF(“int_column”, “string_column”, “date_column”)
+注意：如果直接用toDF()而不指定列名字，那么默认列名为”_1”, “_2”, …&lt;/p&gt;
+
+&lt;p&gt;通过case class + toDF创建DataFrame的示例&lt;/p&gt;
+
+&lt;p&gt;// sc is an existing SparkContext.
+val sqlContext = new org.apache.spark.sql.SQLContext(sc)
+// this is used to implicitly convert an RDD to a DataFrame.
+import sqlContext.implicits._&lt;/p&gt;
+
+&lt;p&gt;// Define the schema using a case class.
+// Note: Case classes in Scala 2.10 can support only up to 22 fields. To work around this limit,
+// you can use custom classes that implement the Product interface.
+case class Person(name: String, age: Int)&lt;/p&gt;
+
+&lt;p&gt;// Create an RDD of Person objects and register it as a table.
+val people = sc.textFile(“examples/src/main/resources/people.txt”).map(_.split(“,”)).map(p =&amp;gt; Person(p(0), p(1).trim.toInt)).toDF()
+people.registerTempTable(“people”)&lt;/p&gt;
+
+&lt;p&gt;// 使用 sqlContext 执行 sql 语句.
+val teenagers = sqlContext.sql(“SELECT name FROM people WHERE age &amp;gt;= 13 AND age &amp;lt;= 19”)&lt;/p&gt;
+
+&lt;p&gt;// 注：sql()函数的执行结果也是DataFrame，支持各种常用的RDD操作.
+// The columns of a row in the result can be accessed by ordinal.
+teenagers.map(t =&amp;gt; “Name: “ + t(0)).collect().foreach(println)&lt;/p&gt;
+
+&lt;p&gt;方法二，Spark中使用createDataFrame函数创建DataFrame&lt;/p&gt;
+
+&lt;p&gt;在SqlContext中使用createDataFrame也可以创建DataFrame。跟toDF一样，这里创建DataFrame的数据形态也可以是本地数组或者RDD。
+通过row+schema创建示例&lt;/p&gt;
+
+&lt;p&gt;import org.apache.spark.sql.types._
+val schema = StructType(List(
+    StructField(“integer_column”, IntegerType, nullable = false),
+    StructField(“string_column”, StringType, nullable = true),
+    StructField(“date_column”, DateType, nullable = true)
+))&lt;/p&gt;
+
+&lt;p&gt;val rdd = sc.parallelize(Seq(
+  Row(1, “First Value”, java.sql.Date.valueOf(“2010-01-01”)),
+  Row(2, “Second Value”, java.sql.Date.valueOf(“2010-02-01”))
+))
+val df = sqlContext.createDataFrame(rdd, schema)
+方法三，通过文件直接创建DataFrame&lt;/p&gt;
+
+&lt;p&gt;使用parquet文件创建&lt;/p&gt;
+
+&lt;p&gt;val df = sqlContext.read.parquet(“hdfs:/path/to/file”)
+使用json文件创建&lt;/p&gt;
+
+&lt;p&gt;val df = spark.read.json(“examples/src/main/resources/people.json”)&lt;/p&gt;
+
+&lt;p&gt;// Displays the content of the DataFrame to stdout
+df.show()
+// +—-+——-+
+// | age|   name|
+// +—-+——-+
+// |null|Michael|
+// |  30|   Andy|
+// |  19| Justin|
+// +—-+——-+
+使用csv文件,spark2.0+之后的版本可用&lt;/p&gt;
+
+&lt;p&gt;//首先初始化一个SparkSession对象
+val spark = org.apache.spark.sql.SparkSession.builder
+        .master(“local”)
+        .appName(“Spark CSV Reader”)
+        .getOrCreate;&lt;/p&gt;
+
+&lt;p&gt;//然后使用SparkSessions对象加载CSV成为DataFrame
+val df = spark.read
+        .format(“com.databricks.spark.csv”)
+        .option(“header”, “true”) //reading the headers
+        .option(“mode”, “DROPMALFORMED”)
+        .load(“csv/file/path”); //.csv(“csv/file/path”) //spark 2.0 api&lt;/p&gt;
+
+&lt;p&gt;df.show()&lt;/p&gt;
+
+&lt;p&gt;DataSet数据集是一个强类型的域特定对象的集合，可以使用功能或关系操作并行转换.。每个数据集还有一个无类型的视图称为Dataframe，这是一个行(Row)的数据集。
+在DataSet上的操作，分为transformations和actions。transformations会产生新的数据集（DataSet），而actions则是触发计算并产生结果。transformations包括：map, filter, select, and aggregate (&lt;code&gt;groupBy&lt;/code&gt;). 等操作。而actions 包括： count, show 或把数据写入文件系统中。
+DataSet是懒惰(‘lazy’)的，也就是说当一个action被调用时才会触发一个计算。在内部实现，数据集表示的是一个逻辑计划，它描述了生成数据所需的计算。当action被调用时，spark的查询优化器会优化这个逻辑计划，并生成一个物理计划，该物理计划可以通过并行和分布式的方式来执行。使用&lt;code&gt;explain&lt;/code&gt;解释函数，来进行逻辑计划的探索和物理计划的优化。
+为了有效地支持特定领域的对象，Encoder（编码器）是必需的。例如，给出一个Person的类，有两个字段：name(string)和age(int)，通过一个encoder来告诉spark在运行的时候产生代码把Person对象转换成一个二进制结构。这种二进制结构通常有更低的内存占用，以及优化的数据处理效率（例如在一个柱状格式）。若要了解数据的内部二进制表示，请使用schema(表结构)函数。&lt;/p&gt;
+
+&lt;p&gt;创建一个数据集有两种方式。
+1, 第一种也是最常用的一种，就是利用SparkSession的read函数在存储系统中读取一个文件。代码如下：
+val people = spark.read.parquet(“…”).as[Person]&lt;/p&gt;
+
+&lt;p&gt;2, 利用Datasets的转换(transformations)函数，例如下面的代码：利用filter来创建一个新的Dataset。&lt;/p&gt;
+
+&lt;p&gt;数据集(Dataset)的操作是无类型的，通过各种DSL(domain-specific-language)函数，这些函数是基于数据集Dataset , 类[[Column]],和 函数[[functions]]来定义的。这些操作非常类似基于R和Python抽象出来的data frame的操作。
+从Dateset中选择一列
+val ageCol = people(“age”) // in Scala&lt;/p&gt;
+</description>
+        <pubDate>Tue, 14 Nov 2017 00:00:00 +0800</pubDate>
+        <link>https://xiazemin.github.io/MyBlog/spark/2017/11/14/dataSet_dataFrame.html</link>
+        <guid isPermaLink="true">https://xiazemin.github.io/MyBlog/spark/2017/11/14/dataSet_dataFrame.html</guid>
+        
+        
+        <category>spark</category>
+        
+      </item>
+    
+      <item>
         <title>php_session</title>
         <description>&lt;!-- more --&gt;
 &lt;p&gt;void session_write_close ( void )&lt;/p&gt;
@@ -387,335 +532,6 @@ python -m SimpleHTTPServer 8000&lt;/p&gt;
         
         
         <category>web</category>
-        
-      </item>
-    
-      <item>
-        <title>composer</title>
-        <description>&lt;p&gt;参考：http://docs.phpcomposer.com/01-basic-usage.html#composer.json-Project-Setup
-&lt;!-- more --&gt;
-自动加载&lt;/p&gt;
-
-&lt;p&gt;对于库的自动加载信息，Composer 生成了一个 vendor/autoload.php 文件。你可以简单的引入这个文件，你会得到一个免费的自动加载支持。&lt;/p&gt;
-
-&lt;p&gt;require ‘vendor/autoload.php’;
-这使得你可以很容易的使用第三方代码。例如：如果你的项目依赖 monolog，你就可以像这样开始使用这个类库，并且他们将被自动加载。&lt;/p&gt;
-
-&lt;p&gt;$log = new Monolog\Logger(‘name’);
-$log-&amp;gt;pushHandler(new Monolog\Handler\StreamHandler(‘app.log’, Monolog\Logger::WARNING));&lt;/p&gt;
-
-&lt;p&gt;$log-&amp;gt;addWarning(‘Foo’);
-你可以在 composer.json 的 autoload 字段中增加自己的 autoloader。&lt;/p&gt;
-
-&lt;p&gt;{
-    “autoload”: {
-        “psr-4”: {“Acme\”: “src/”}
-    }
-}
-Composer 将注册一个 PSR-4 autoloader 到 Acme 命名空间。&lt;/p&gt;
-
-&lt;p&gt;你可以定义一个从命名空间到目录的映射。此时 src 会在你项目的根目录，与 vendor 文件夹同级。例如 src/Foo.php 文件应该包含 Acme\Foo 类。&lt;/p&gt;
-
-&lt;p&gt;添加 autoload 字段后，你应该再次运行 install 命令来生成 vendor/autoload.php 文件。&lt;/p&gt;
-
-&lt;p&gt;引用这个文件也将返回 autoloader 的实例，你可以将包含调用的返回值存储在变量中，并添加更多的命名空间。这对于在一个测试套件中自动加载类文件是非常有用的，例如。&lt;/p&gt;
-
-&lt;p&gt;$loader = require ‘vendor/autoload.php’;
-$loader-&amp;gt;add(‘Acme\Test\’, &lt;strong&gt;DIR&lt;/strong&gt;);&lt;/p&gt;
-
-&lt;p&gt;prefer-stable (root-only)&lt;/p&gt;
-
-&lt;p&gt;当此选项被激活时，Composer 将优先使用更稳定的包版本。&lt;/p&gt;
-
-&lt;p&gt;使用 “prefer-stable”: true 来激活它。&lt;/p&gt;
-
-&lt;p&gt;repositories (root-only)&lt;/p&gt;
-
-&lt;p&gt;使用自定义的包资源库。&lt;/p&gt;
-
-&lt;p&gt;默认情况下 composer 只使用 packagist 作为包的资源库。通过指定资源库，你可以从其他地方获取资源包。&lt;/p&gt;
-
-&lt;p&gt;Repositories 并不是递归调用的，只能在“Root包”的 composer.json 中定义。附属包中的 composer.json 将被忽略。&lt;/p&gt;
-
-&lt;p&gt;支持以下类型的包资源库：&lt;/p&gt;
-
-&lt;p&gt;composer: 一个 composer 类型的资源库，是一个简单的网络服务器（HTTP、FTP、SSH）上的 packages.json 文件，它包含一个 composer.json 对象的列表，有额外的 dist 和/或 source 信息。这个 packages.json 文件是用一个 PHP 流加载的。你可以使用 options 参数来设定额外的流信息。
-vcs: 从 git、svn 和 hg 取得资源。
-pear: 从 pear 获取资源。
-package: 如果你依赖于一个项目，它不提供任何对 composer 的支持，你就可以使用这种类型。你基本上就只需要内联一个 composer.json 对象。
-更多相关内容，请查看 资源库。&lt;/p&gt;
-
-&lt;p&gt;实例：&lt;/p&gt;
-
-&lt;p&gt;{
-    “repositories”: [
-        {
-            “type”: “composer”,
-            “url”: “http://packages.example.com”
-        },
-        {
-            “type”: “composer”,
-            “url”: “https://packages.example.com”,
-            “options”: {
-                “ssl”: {
-                    “verify_peer”: “true”
-                }
-            }
-        },
-        {
-            “type”: “vcs”,
-            “url”: “https://github.com/Seldaek/monolog”
-        },
-        {
-            “type”: “pear”,
-            “url”: “http://pear2.php.net”
-        },
-        {
-            “type”: “package”,
-            “package”: {
-                “name”: “smarty/smarty”,
-                “version”: “3.1.7”,
-                “dist”: {
-                    “url”: “http://www.smarty.net/files/Smarty-3.1.7.zip”,
-                    “type”: “zip”
-                },
-                “source”: {
-                    “url”: “http://smarty-php.googlecode.com/svn/”,
-                    “type”: “svn”,
-                    “reference”: “tags/Smarty_3_1_7/distribution/”
-                }
-            }
-        }
-    ]
-}
-注意： 顺序是非常重要的，当 Composer 查找资源包时，它会按照顺序进行。默认情况下 Packagist 是最后加入的，因此自定义设置将可以覆盖 Packagist 上的包。&lt;/p&gt;
-
-&lt;p&gt;config (root-only)&lt;/p&gt;
-
-&lt;p&gt;下面的这一组选项，仅用于项目。&lt;/p&gt;
-
-&lt;p&gt;支持以下选项：&lt;/p&gt;
-
-&lt;p&gt;process-timeout: 默认为 300。处理进程结束时间，例如：git 克隆的时间。Composer 将放弃超时的任务。如果你的网络缓慢或者正在使用一个巨大的包，你可能要将这个值设置的更高一些。
-use-include-path: 默认为 false。如果为 true，Composer autoloader 还将在 PHP include path 中继续查找类文件。
-preferred-install: 默认为 auto。它的值可以是 source、dist 或 auto。这个选项允许你设置 Composer 的默认安装方法。
-github-protocols: 默认为 [“git”, “https”, “ssh”]。从 github.com 克隆时使用的协议优先级清单，因此默认情况下将优先使用 git 协议进行克隆。你可以重新排列它们的次序，例如，如果你的网络有代理服务器或 git 协议的效率很低，你就可以提升 https 协议的优先级。
-github-oauth: 一个域名和 oauth keys 的列表。 例如：使用 {“github.com”: “oauthtoken”} 作为此选项的值， 将使用 oauthtoken 来访问 github 上的私人仓库，并绕过 low IP-based rate 的 API 限制。 关联知识 关于如何获取 GitHub 的 OAuth token。
-vendor-dir: 默认为 vendor。通过设置你可以安装依赖到不同的目录。
-bin-dir: 默认为 vendor/bin。如果一个项目包含二进制文件，它们将被连接到这个目录。
-cache-dir: unix 下默认为 $home/cache，Windows 下默认为 C:\Users&amp;lt;user&amp;gt;\AppData\Local\Composer。用于存储 composer 所有的缓存文件。相关信息请查看 COMPOSER_HOME。
-cache-files-dir: 默认为 $cache-dir/files。存储包 zip 存档的目录。
-cache-repo-dir: 默认为 $cache-dir/repo。存储 composer 类型的 VCS（svn、github、bitbucket） repos 目录。
-cache-vcs-dir: 默认为 $cache-dir/vcs。此目录用于存储 VCS 克隆的 git/hg 类型的元数据，并加快安装速度。
-cache-files-ttl: 默认为 15552000（6个月）。默认情况下 Composer 缓存的所有数据都将在闲置6个月后被删除，这个选项允许你来调整这个时间，你可以将其设置为0以禁用缓存。
-cache-files-maxsize: 默认为 300MiB。Composer 缓存的最大容量，超出后将优先清除旧的缓存数据，直到缓存量低于这个数值。
-prepend-autoloader: 默认为 true。如果设置为 false，composer autoloader 将不会附加到现有的自动加载机制中。这有时候用来解决与其它自动加载机制产生的冲突。
-autoloader-suffix: 默认为 null。Composer autoloader 的后缀，当设置为空时将会产生一个随机的字符串。
-optimize-autoloader Defaults to false. Always optimize when dumping the autoloader.
-github-domains: 默认为 [“github.com”]。一个 github mode 下的域名列表。这是用于GitHub的企业设置。
-notify-on-install: 默认为 true。Composer 允许资源仓库定义一个用于通知的 URL，以便有人从其上安装资源包时能够得到一个反馈通知。此选项允许你禁用该行为。
-discard-changes: 默认为 false，它的值可以是 true、false 或 stash。这个选项允许你设置在非交互模式下，当处理失败的更新时采用的处理方式。true 表示永远放弃更改。”stash” 表示继续尝试。Use this for CI servers or deploy scripts if you tend to have modified vendors.
-实例：&lt;/p&gt;
-
-&lt;p&gt;{
-    “config”: {
-        “bin-dir”: “bin”
-    }
-}&lt;/p&gt;
-
-&lt;p&gt;scripts (root-only)&lt;/p&gt;
-
-&lt;p&gt;Composer 允许你在安装过程中的各个阶段挂接脚本。&lt;/p&gt;
-
-&lt;p&gt;更多细节和案例请查看 脚本。&lt;/p&gt;
-
-&lt;p&gt;extra&lt;/p&gt;
-
-&lt;p&gt;任意的，供 scripts 使用的额外数据。.&lt;/p&gt;
-
-&lt;p&gt;这可以是几乎任何东西。若要从脚本事件访问处理程序，你可以这样做：&lt;/p&gt;
-
-&lt;p&gt;$extra = $event-&amp;gt;getComposer()-&amp;gt;getPackage()-&amp;gt;getExtra();
-可选。&lt;/p&gt;
-
-&lt;p&gt;bin&lt;/p&gt;
-
-&lt;p&gt;该属性用于标注一组应被视为二进制脚本的文件，他们会被软链接到（config 对象中的）bin-dir 属性所标注的目录，以供其他依赖包调用。&lt;/p&gt;
-
-&lt;p&gt;详细请查看 Vendor Binaries。&lt;/p&gt;
-
-&lt;p&gt;可选。&lt;/p&gt;
-
-&lt;p&gt;archive&lt;/p&gt;
-
-&lt;p&gt;这些选项在创建包存档时使用。&lt;/p&gt;
-
-&lt;p&gt;支持以下选项：&lt;/p&gt;
-
-&lt;p&gt;exclude: 允许设置一个需要被排除的路径的列表。使用与 .gitignore 文件相同的语法。一个前导的（!）将会使其变成白名单而无视之前相同目录的排除设定。前导斜杠只会在项目的相对路径的开头匹配。星号为通配符。
-实例：&lt;/p&gt;
-
-&lt;p&gt;{
-    “archive”: {
-        “exclude”: [“/foo/bar”, “baz”, “/*.test”, “!/foo/bar/baz”]
-    }
-}
-在这个例子中我们 include /dir/foo/bar/file、/foo/bar/baz、/file.php、/foo/my.test 但排除了 /foo/bar/any、/foo/baz、/my.test。&lt;/p&gt;
-
-&lt;p&gt;可选。&lt;/p&gt;
-
-</description>
-        <pubDate>Fri, 03 Nov 2017 00:00:00 +0800</pubDate>
-        <link>https://xiazemin.github.io/MyBlog/web/2017/11/03/composer.html</link>
-        <guid isPermaLink="true">https://xiazemin.github.io/MyBlog/web/2017/11/03/composer.html</guid>
-        
-        
-        <category>web</category>
-        
-      </item>
-    
-      <item>
-        <title>scala_partion_function</title>
-        <description>&lt;!-- more --&gt;
-&lt;p&gt;从使用case语句构造匿名函数谈起&lt;/p&gt;
-
-&lt;p&gt;在Scala里，我们可以使用case语句来创建一个匿名函数（函数字面量），这有别于一般的匿名函数创建方法。来看个例子：&lt;/p&gt;
-
-&lt;p&gt;scala&amp;gt; List(1,2,3) map {case i:Int=&amp;gt;i+1}
-res1: List[Int] = List(2, 3, 4)
-1
-2
-这很有趣，case i:Int=&amp;gt;i+1构建的匿名函数等同于(i:Int)=&amp;gt;i+1，也就是下面这个样子：&lt;/p&gt;
-
-&lt;p&gt;scala&amp;gt; List(1,2,3) map {(i:Int)=&amp;gt;i+1}
-res2: List[Int] = List(2, 3, 4)
-1
-2
-《Scala In Programming》一书对独立的case语句作为匿名函数（函数字面量）有权威的解释：&lt;/p&gt;
-
-&lt;p&gt;Essentially, a case sequence is a function literal, only more general. Instead of having a single entry point and list of parameters, a case sequence has multiple entry points, each with their own list of parameters. Each case is an entry point to the function, and the parameters are specified with the pattern. 
-1
-2
-一个case语句就是一个独立的匿名函数，如果有一组case语句的话，从效果上看，构建出的这个匿名函数会有多种不同的参数列表，每一个case对应一种参数列表，参数是case后面的变量声明，其值是通过模式匹配赋予的。&lt;/p&gt;
-
-&lt;p&gt;使用case语句构造匿名函数的“额外”好处&lt;/p&gt;
-
-&lt;p&gt;使用case语句构造匿名函数是有“额外”好处的，这个“好处”在下面这个例子中得到了充分的体现：&lt;/p&gt;
-
-&lt;p&gt;List(1, 3, 5, “seven”) map { case i: Int =&amp;gt; i + 1 } // won’t work
-// scala.MatchError: seven (of class java.lang.String)
-List(1, 3, 5, “seven”) collect { case i: Int =&amp;gt; i + 1 }
-// verify
-assert(List(2, 4, 6) == (List(1, 3, 5, “seven”) collect { case i: Int =&amp;gt; i + 1 }))
-1
-2
-3
-4
-5
-在这个例子中：传递给map的case语句构建的是一个普通的匿名函数，在把这个函数适用于”seven”元素时发生了类型匹配错误。而对于collect,它声明接受的是一个偏函数：PartialFunction，传递的case语句能良好的工作说明这个case语句被编译器自动编译成了一个PartialFunction！这就是case语句“额外”的好处：case语句（组合）除了可以被编译为匿名函数（类型是FunctionX，在Scala里，所有的函数字面量都是一个对象，这个对象的类型是FunctionX），还可以非常方便的编译为一个偏函数PartialFunction！（注意：PartialFunction同时是Function1的子类）编译器会根据调用处的函数类型声明自动帮我们判定如何编译这个case语句（组合）。&lt;/p&gt;
-
-&lt;p&gt;上面我们直接抛出了偏函数的概念，这会让人头晕，我们可以只从collect这个示例的效果上去理解偏函数：它只对会作用于指定类型的参数或指定范围值的参数实施计算，超出它的界定范围之外的参数类型和值它会忽略（未必会忽略，这取决于你打算怎样处理）。就像上面例子中一样，case i: Int =&amp;gt; i + 1只声明了对Int参数的处理，在遇到”seven”元素时，不在偏函数的适用范围内，所以这个元素被忽略了。&lt;/p&gt;
-
-&lt;p&gt;正式认识偏函数Partial Function&lt;/p&gt;
-
-&lt;p&gt;如同在一开始的例子中那样，我们手动实现了一个与case i:Int=&amp;gt;i+1等价的那个匿名函数(i:Int)=&amp;gt;i+1,那么在上面的collect方法中使用到的case i: Int =&amp;gt; i + 1它的等价函数是什么呢？显然，不可能是(i:Int)=&amp;gt;i+1了，因为我们已经解释了，collect接受的参数类型是PartialFunction[Any,Int],而不是(Int)=&amp;gt;Int。 那个case语句对应的偏函数具体是什么样的呢？来看：&lt;/p&gt;
-
-&lt;p&gt;scala&amp;gt; val inc = new PartialFunction[Any, Int] {
-     | def apply(any: Any) = any.asInstanceOf[Int]+1
-     | def isDefinedAt(any: Any) = if (any.isInstanceOf[Int]) true else false
-     | }
-inc: PartialFunction[Any,Int] = &lt;function1&gt;&lt;/function1&gt;&lt;/p&gt;
-
-&lt;p&gt;scala&amp;gt; List(1, 3, 5, “seven”) collect inc
-res4: List[Int] = List(2, 4, 6)
-1
-2
-3
-4
-5
-6
-7
-8
-PartialFunction特质规定了两个要实现的方法：apply和isDefinedAt，isDefinedAt用来告知调用方这个偏函数接受参数的范围，可以是类型也可以是值，在我们这个例子中我们要求这个inc函数只处理Int型的数据。apply方法用来描述对已接受的值如何处理，在我们这个例子中，我们只是简单的把值+1，注意，非Int型的值已被isDefinedAt方法过滤掉了，所以不用担心类型转换的问题。&lt;/p&gt;
-
-&lt;p&gt;上面这个例子写起来真得非常笨拙，和前面的case语句方式比起来真是差太多了。这个例子从反面展示了：通过case语句组合去是实现一个偏函数是多么简洁。实际上case语句组合与偏函数的用意是高度贴合的，所以使用case语句组合是最简单明智的选择，同样是上面的inc函数，换成case去写如下：&lt;/p&gt;
-
-&lt;p&gt;scala&amp;gt; def inc: PartialFunction[Any, Int] =
-     | { case i: Int =&amp;gt; i + 1 }
-inc: PartialFunction[Any,Int]&lt;/p&gt;
-
-&lt;p&gt;scala&amp;gt; List(1, 3, 5, “seven”) collect inc
-res5: List[Int] = List(2, 4, 6)
-1
-2
-3
-4
-5
-6
-当然，如果偏函数的逻辑非常复杂，可能通过定义一个专门的类并继承PartialFunction是更好选择。&lt;/p&gt;
-
-&lt;p&gt;Case语句是如何被编译成偏函数的&lt;/p&gt;
-
-&lt;p&gt;关于这个问题在《Programming In Scala》中有较为详细的解释。对于这样一个使用case写在的偏函数：&lt;/p&gt;
-
-&lt;p&gt;val second: PartialFunction[List[Int],Int] = {
-    case x :: y :: _ =&amp;gt; y
-}
-1
-2
-3
-In fact, such an expression gets ranslated by the Scala compiler to a partial function by translating the patterns twice—once for the implementation of the real function, and once to test whether the function is defined or not. For instance, the function literal { case x :: y :: _ =&amp;gt; y }above gets translated to the following partialfunction value:&lt;/p&gt;
-
-&lt;p&gt;new PartialFunction[List[Int], Int] {
-    def apply(xs: List[Int]) = xs match {
-        case x :: y :: _ =&amp;gt; y
-    }
-    def isDefinedAt(xs: List[Int]) = xs match {
-        case x :: y :: _ =&amp;gt; true
-        case _ =&amp;gt; false
-    }
-}
-1
-2
-3
-4
-5
-6
-7
-8
-9
-为什么偏函数需要抽象成一个专门的Trait&lt;/p&gt;
-
-&lt;p&gt;首先，在Scala里，一切皆对象，函数字面量（匿名函数）也不例外！这也是为什么我们可以把函数字面量赋给一个变量的原因, 是对象就有对应的类型，那么一个函数字面量的真实类型是什么呢？看下面这个例子：&lt;/p&gt;
-
-&lt;p&gt;scala&amp;gt; var inc = (x: Int) =&amp;gt; x + 1
-inc: Int =&amp;gt; Int = &lt;function1&gt;&lt;/function1&gt;&lt;/p&gt;
-
-&lt;p&gt;scala&amp;gt; inc.isInstanceOf[Function1[Int,Int]]
-res0: Boolean = true
-1
-2
-3
-4
-5
-在Scala的scala包里，有一系列Function trait，它们实际上就是函数字面量作为“对象”存在时对应的类型。Function类型有多个版本，Function0表示无参数函数，Function1表示只有一个参数的函数，以此类推。至此我们解释的是一个普遍性问题：是函数就是对象，是对象就有类型。那么，接下来我们看一下偏函数又应该是什么样的一种“类型”？&lt;/p&gt;
-
-&lt;p&gt;从语义上讲，偏函数区别于普通函数的唯一特征就是：偏函数会自主地告诉调用方它的处理参数的范围，范围既可是值也可以是类型。针对这样的场景，我们需要给函数安插一种明确的“标识”，告诉编译器：这个函数具有这种特征。所以特质PartialFunction就被创建出来用于“标记”这类函数的，这个特质最主要的方法就是isDefinedAt！同时你也记得PartialFunction还是Function1的子类，所以它也要有apply方法，这是非常自然的，偏函数本身首先是一个函数嘛。&lt;/p&gt;
-
-&lt;p&gt;从另一个角度思考，偏函数的逻辑是可以通过普通函数去实现的，只是偏函数是更为优雅的一种方式，同时偏函数特质PartialFunction的存在对调用方和实现方都是一种语义更加丰富的约定，比如collect方法声明使用一个偏函数就暗含着它不太可能对每一个元素进行操作，它的返回结果仅仅是针对偏函数“感兴趣”的元素计算出来的&lt;/p&gt;
-
-&lt;p&gt;为什么偏函数只能有一个参数？&lt;/p&gt;
-
-&lt;p&gt;为什么只有针对单一参数的偏函数，而不是像Function特质那样，拥有多个版本的PartialFunction呢？在刚刚接触偏函数时，这也让我感到费解，但看透了偏函数的实质之后就会觉得很合理了。我们说所谓的偏函数本质上是由多个case语句组成的针对每一种可能的参数分别进行处理的一种“结构较为特殊”的函数，那特殊在什么地方呢？对，就是case语句，前面我们提到，case语句声明的变量就是偏函数的参数，既然case语句只能声明一个变量，那么偏函数受限于此，也只能有一个参数！说到底，类型PartialFunction无非是为由一组case语句描述的函数字面量提供一个类型描述而已，case语句只接受一个参数，则偏函数的类型声明自然就只有一个参数。&lt;/p&gt;
-
-&lt;p&gt;但是，上这并不会对编程造成什么阻碍，如果你想给一个偏函数传递多个参数，完全可以把这些参数封装成一个Tuple传递过去&lt;/p&gt;
-</description>
-        <pubDate>Tue, 24 Oct 2017 00:00:00 +0800</pubDate>
-        <link>https://xiazemin.github.io/MyBlog/spark/2017/10/24/scala_partion_function.html</link>
-        <guid isPermaLink="true">https://xiazemin.github.io/MyBlog/spark/2017/10/24/scala_partion_function.html</guid>
-        
-        
-        <category>spark</category>
         
       </item>
     
