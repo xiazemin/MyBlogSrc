@@ -4,6 +4,7 @@ layout: post
 category: web
 author: 夏泽民
 ---
+<div class="container">
 用户通过Order by语句即能达到将指定的结果集排序的目的，其实不仅仅是Order by语句，Group by语句，Distinct语句都会隐含使用排序
 
 1.排序优化与索引使用
@@ -56,7 +57,9 @@ B+树索引
 只有最底层的节点（叶子节点）才保存信息（相关表的行位置）
 其它节点只是在搜索中用来指引到正确节点的。
 <!-- more -->
+<div class="row">
 <img src="{{site.url}}{{site.baseurl}}/img/BPlusTree.png"/>
+</div>
 你可以看到，节点更多了（多了两倍）。确实，你有了额外的节点，它们就是帮助你找到正确节点的『决策节点』（正确节点保存着相关表中行的位置）。但是搜索复杂度还是在 O(log(N))（只多了一层）。一个重要的不同点是，最底层的节点是跟后续节点相连接的。
 
 用这个 B+树，假设你要找40到100间的值：
@@ -120,4 +123,4 @@ Administration管理器（Administration manager）：用于保存元数据（�
 事务管理器（Transaction manager）：用于处理事务
 缓存管理器（Cache manager）：数据被使用之前置于内存，或者数据写入磁盘之前置于内存
 数据访问管理器（Data access manager）：访问磁盘中的数据
-
+</div>
