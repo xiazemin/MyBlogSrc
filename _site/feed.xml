@@ -5,9 +5,80 @@
     <description>夏泽民的个人主页，学习笔记。</description>
     <link>https://xiazemin.github.io/MyBlog/</link>
     <atom:link href="https://xiazemin.github.io/MyBlog/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Sat, 02 Dec 2017 14:06:30 +0800</pubDate>
-    <lastBuildDate>Sat, 02 Dec 2017 14:06:30 +0800</lastBuildDate>
+    <pubDate>Tue, 05 Dec 2017 10:44:03 +0800</pubDate>
+    <lastBuildDate>Tue, 05 Dec 2017 10:44:03 +0800</lastBuildDate>
     <generator>Jekyll v3.6.0.pre.beta1</generator>
+    
+      <item>
+        <title>linux_memory</title>
+        <description>&lt;!-- more --&gt;
+&lt;p&gt;TLB(Translation Lookaside Buffer)转换检测缓冲区是一个内存管理单元,用于改进虚拟地址到物理地址转换速度的缓存。
+TLB是一个小的，虚拟寻址的缓存，其中每一行都保存着一个由单个PTE(Page Table Entry,页表项)组成的块。如果没有TLB，则每次取数据都需要两次访问内存，即查页表获得物理地址和取数据。
+当cpu要访问一个虚拟地址/线性地址时，CPU会首先根据虚拟地址的高20位（20是x86特定的，不同架构有不同的值）在TLB中查找。如果是表中没有相应的表项，称为TLB miss，需要通过访问慢速RAM中的页表计算出相应的物理地址。同时，物理地址被存放在一个TLB表项中，以后对同一线性地址的访问，直接从TLB表项中获取物理地址即可，称为TLB hit。
+Linux把物理内存划分为三个层次来管理
+存储节点(Node)	CPU被划分为多个节点(node), 内存则被分簇, 每个CPU对应一个本地物理内存, 即一个CPU-node对应一个内存簇bank，即每个内存簇被认为是一个节点
+管理区(Zone)	每个物理内存节点node被划分为多个内存管理区域, 用于表示不同范围的内存, 内核可以使用不同的映射方式映射物理内存
+页面(Page)	内存被细分为多个页面帧, 页面是最基本的页面分配的单位　
+为了支持NUMA模型，也即CPU对不同内存单元的访问时间可能不同，此时系统的物理内存被划分为几个节点(node), 一个node对应一个内存簇bank，即每个内存簇被认为是一个节点&lt;/p&gt;
+
+&lt;p&gt;首先, 内存被划分为结点. 每个节点关联到系统中的一个处理器, 内核中表示为pg_data_t的实例. 系统中每个节点被链接到一个以NULL结尾的pgdat_list链表中&amp;lt;而其中的每个节点利用pg_data_tnode_next字段链接到下一节．而对于PC这种UMA结构的机器来说, 只使用了一个成为contig_page_data的静态pg_data_t结构.&lt;/p&gt;
+
+&lt;p&gt;接着各个节点又被划分为内存管理区域, 一个管理区域通过struct zone_struct描述, 其被定义为zone_t, 用以表示内存的某个范围, 低端范围的16MB被描述为ZONE_DMA, 某些工业标准体系结构中的(ISA)设备需要用到它, 然后是可直接映射到内核的普通内存域ZONE_NORMAL,最后是超出了内核段的物理地址域ZONE_HIGHMEM, 被称为高端内存.　是系统中预留的可用内存空间, 不能被内核直接映射.&lt;/p&gt;
+
+&lt;p&gt;最后页帧(page frame)代表了系统内存的最小单位, 堆内存中的每个页都会创建一个struct page的一个实例. 传统上，把内存视为连续的字节，即内存为字节数组，内存单元的编号(地址)可作为字节数组的索引. 分页管理时，将若干字节视为一页，比如4K byte. 此时，内存变成了连续的页，即内存为页数组，每一页物理内存叫页帧，以页为单位对内存进行编号，该编号可作为页数组的索引，又称为页帧号.&lt;/p&gt;
+
+&lt;p&gt;传统伙伴系统算法&lt;/p&gt;
+
+&lt;p&gt;在内核分配内存时, 必须记录页帧的已分配或空闲状态, 以免两个进程使用同样的内存区域. 由于内存分配和释放非常频繁, 内核还必须保证相关操作尽快完成. 内核可以只分配完整的页帧. 将内存划分为更小的部分的工作, 则委托给用户空间中的标准库. 标准库将来源于内核的页帧拆分为小的区域, 并为进程分配内存.&lt;/p&gt;
+
+&lt;p&gt;内核中很多时候要求分配连续页. 为快速检测内存中的连续区域, 内核采用了一种古老而历经检验的技术: 伙伴系统&lt;/p&gt;
+
+&lt;p&gt;系统中的空闲内存块总是两两分组, 每组中的两个内存块称作伙伴. 伙伴的分配可以是彼此独立的. 但如果两个伙伴都是空闲的, 内核会将其合并为一个更大的内存块, 作为下一层次上某个内存块的伙伴.
+Linux内核中引入了伙伴系统算法(buddy system)。把所有的空闲页框分组为11个块链表，每个块链表分别包含大小为1，2，4，8，16，32，64，128，256，512和1024个连续页框的页框块。最大可以申请1024个连续页框，对应4MB大小的连续内存。每个页框块的第一个页框的物理地址是该块大小的整数倍。
+ 假设要申请一个256个页框的块，先从256个页框的链表中查找空闲块，如果没有，就去512个页框的链表中找，找到了则将页框块分为2个256个页框的块，一个分配给应用，另外一个移到256个页框的链表中。如果512个页框的链表中仍没有空闲块，继续向1024个页框的链表查找，如果仍然没有，则返回错误&lt;/p&gt;
+
+&lt;p&gt;Buddy算法的优缺点：
+1）尽管伙伴内存算法在内存碎片问题上已经做的相当出色，但是该算法中，一个很小的块往往会阻碍一个大块的合并，一个系统中，对内存块的分配，大小是随机的，一片内存中仅一个小的内存块没有释放，旁边两个大的就不能合并。&lt;/p&gt;
+
+&lt;p&gt;2）算法中有一定的浪费现象，伙伴算法是按2的幂次方大小进行分配内存块，当然这样做是有原因的，即为了避免把大的内存块拆的太碎，更重要的是使分配和释放过程迅速。但是他也带来了不利的一面，如果所需内存大小不是2的幂次方，就会有部分页面浪费。有时还很严重。比如原来是1024个块，申请了16个块，再申请600个块就申请不到了，因为已经被分割了。
+3）另外拆分和合并涉及到 较多的链表和位图操作，开销还是比较大的。
+Buddy（伙伴的定义）：
+这里给出伙伴的概念，满足以下三个条件的称为伙伴：
+1）两个块大小相同；
+2）两个块地址连续；
+3）两个块必须是同一个大块中分离出来的；
+Buddy算法的分配原理：
+假如系统需要4(2&lt;em&gt;2)个页面大小的内存块，该算法就到free_area[2]中查找，如果链表中有空闲块，就直接从中摘下并分配出去。如果没有，算法将顺着数组向上查找free_area[3],如果free_area[3]中有空闲块，则将其从链表中摘下，分成等大小的两部分，前四个页面作为一个块插入free_area[2]，后4个页面分配出去，free_area[3]中也没有，就再向上查找，如果free_area[4]中有，就将这16(2&lt;/em&gt;2&lt;em&gt;2&lt;/em&gt;2)个页面等分成两份，前一半挂如free_area[3]的链表头部，后一半的8个页等分成两等分，前一半挂free_area[2]
+的链表中，后一半分配出去。假如free_area[4]也没有，则重复上面的过程，知道到达free_area数组的最后，如果还没有则放弃分配。&lt;/p&gt;
+
+&lt;p&gt;Buddy算法的释放原理：
+内存的释放是分配的逆过程，也可以看作是伙伴的合并过程。当释放一个块时，先在其对应的链表中考查是否有伙伴存在，如果没有伙伴块，就直接把要释放的块挂入链表头；如果有，则从链表中摘下伙伴，合并成一个大块，然后继续考察合并后的块在更大一级链表中是否有伙伴存在，直到不能合并或者已经合并到了最大的块(2&lt;em&gt;2&lt;/em&gt;2&lt;em&gt;2&lt;/em&gt;2&lt;em&gt;2&lt;/em&gt;2&lt;em&gt;2&lt;/em&gt;2个页面)。
+slab机制
+slab是Linux操作系统的一种内存分配机制。其工作是针对一些经常分配并释放的对象，如进程描述符等，这些对象的大小一般比较小，如果直接采用伙伴系统来进行分配和释放，不仅会造成大量的内碎片，而且处理速度也太慢。而slab分配器是基于对象进行管理的，相同类型的对象归为一类(如进程描述符就是一类)，每当要申请这样一个对象，slab分配器就从一个slab列表中分配一个这样大小的单元出去，而当要释放时，将其重新保存在该列表中，而不是直接返回给伙伴系统，从而避免这些内碎片。slab分配器并不丢弃已分配的对象，而是释放并把它们保存在内存中。当以后又要请求新的对象时，就可以从内存直接获取而不用重复初始化。&lt;/p&gt;
+
+&lt;p&gt;Linux 的slab 可有三种状态：
+ 满的：slab 中的所有对象被标记为使用。
+ 空的：slab 中的所有对象被标记为空闲。
+ 部分：slab 中的对象有的被标记为使用，有的被标记为空闲。
+slab 分配器首先从部分空闲的slab 进行分配。如没有，则从空的slab 进行分配。如没有，则从物理连续页上分配新的slab，并把它赋给一个cache ，然后再从新slab 分配空间。&lt;/p&gt;
+
+&lt;p&gt;与传统的内存管理模式相比， slab 缓存分配器提供了很多优点。
+1、内核通常依赖于对小对象的分配，它们会在系统生命周期内进行无数次分配。
+2、slab 缓存分配器通过对类似大小的对象进行缓存而提供这种功能，从而避免了常见的碎片问题。
+3、slab 分配器还支持通用对象的初始化，从而避免了为同一目的而对一个对象重复进行初始化。
+4、slab 分配器还可以支持硬件缓存对齐和着色，这允许不同缓存中的对象占用相同的缓存行，从而提高缓存的利用率并获得更好的性能&lt;/p&gt;
+
+&lt;p&gt;Slab是基础，是最早从Sun OS那引进的；Slub是在Slab上进行的改进，在大型机上表现出色（不知道在普通PC上如何），据说还被IA-64作为默认；而Slob是针对小型系统设计的，当然了，主要是嵌入式。&lt;/p&gt;
+
+</description>
+        <pubDate>Tue, 05 Dec 2017 00:00:00 +0800</pubDate>
+        <link>https://xiazemin.github.io/MyBlog/linux/2017/12/05/linux_memory.html</link>
+        <guid isPermaLink="true">https://xiazemin.github.io/MyBlog/linux/2017/12/05/linux_memory.html</guid>
+        
+        
+        <category>linux</category>
+        
+      </item>
     
       <item>
         <title>server格式</title>
@@ -1496,39 +1567,6 @@ Notes：作为演讲者的备忘笔记，也不在幻灯片中显示。
         
         
         <category>saprk</category>
-        
-      </item>
-    
-      <item>
-        <title>Jupyter Notebook 添加目录</title>
-        <description>&lt;!-- more --&gt;
-&lt;div class=&quot;container&quot;&gt;	
-&lt;/div&gt;
-&lt;div class=&quot;row&quot;&gt;
-1.  安装 jupyter_contrib_nbextensions
-
-pip install jupyter_contrib_nbextensions
-
-2. 配置 nbextension
-jupyter contrib nbextension install --user
-
-3. 启动jupyter notebook
-选择 Nbextensions
-勾选 Table of Contents
-勾选 Add a Table of Contents cell at the top of the notebook
-4. 在markdown cell 中输入 
-＃ 空格 一级标题
-＃＃ 空格 二级标题
-5. 运行显示标题
-&lt;/div&gt;
-&lt;p&gt;&amp;lt;/div&amp;gt;&lt;/p&gt;
-</description>
-        <pubDate>Sat, 18 Nov 2017 00:00:00 +0800</pubDate>
-        <link>https://xiazemin.github.io/MyBlog/spark/2017/11/18/jupyter_index.html</link>
-        <guid isPermaLink="true">https://xiazemin.github.io/MyBlog/spark/2017/11/18/jupyter_index.html</guid>
-        
-        
-        <category>spark</category>
         
       </item>
     
