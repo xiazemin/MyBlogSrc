@@ -5,9 +5,225 @@
     <description>夏泽民的个人主页，学习笔记。</description>
     <link>https://xiazemin.github.io/MyBlog/</link>
     <atom:link href="https://xiazemin.github.io/MyBlog/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Tue, 05 Dec 2017 10:44:03 +0800</pubDate>
-    <lastBuildDate>Tue, 05 Dec 2017 10:44:03 +0800</lastBuildDate>
+    <pubDate>Wed, 06 Dec 2017 23:34:00 +0800</pubDate>
+    <lastBuildDate>Wed, 06 Dec 2017 23:34:00 +0800</lastBuildDate>
     <generator>Jekyll v3.6.0.pre.beta1</generator>
+    
+      <item>
+        <title>linux_rcu</title>
+        <description>&lt;!-- more --&gt;
+&lt;p&gt;1:RCU使用在读者多而写者少的情况.RCU和读写锁相似.但RCU的读者占锁没有任何的系统开销.写者与写写者之间必须要保持同步,且写者必须要等它之前的读者全部都退出之后才能释放之前的资源.
+2:RCU保护的是指针.这一点尤其重要.因为指针赋值是一条单指令.也就是说是一个原子操作.因它更改指针指向没必要考虑它的同步.只需要考虑cache的影响. 
+3:读者是可以嵌套的.也就是说rcu_read_lock()可以嵌套调用. 
+4:读者在持有rcu_read_lock()的时候,不能发生进程上下文切换.否则,因为写者需要要等待读者完成,写者进程也会一直被阻塞.&lt;/p&gt;
+
+&lt;p&gt;RCU（Read-Copy Update）是数据同步的一种方式，在当前的Linux内核中发挥着重要的作用。RCU主要针对的数据对象是链表，目的是提高遍历读取数据的效率，为了达到目的使用RCU机制读取数据的时候不对链表进行耗时的加锁操作。这样在同一时间可以有多个线程同时读取该链表，并且允许一个线程对链表进行修改（修改的时候，需要加锁）。RCU适用于需要频繁的读取数据，而相应修改数据并不多的情景，例如在文件系统中，经常需要查找定位目录，而对目录的修改相对来说并不多，这就是RCU发挥作用的最佳场景。&lt;/p&gt;
+
+&lt;p&gt;在RCU的实现过程中，我们主要解决以下问题：
+1，在读取过程中，另外一个线程删除了一个节点。删除线程可以把这个节点从链表中移除，但它不能直接销毁这个节点，必须等到所有的读取线程读取完成以后，才进行销毁操作。RCU中把这个过程称为宽限期（Grace period）。
+2，在读取过程中，另外一个线程插入了一个新节点，而读线程读到了这个节点，那么需要保证读到的这个节点是完整的。这里涉及到了发布-订阅机制（Publish-Subscribe Mechanism）。
+3， 保证读取链表的完整性。新增或者删除一个节点，不至于导致遍历一个链表从中间断开。但是RCU并不保证一定能读到新增的节点或者不读到要被删除的节点。&lt;/p&gt;
+
+</description>
+        <pubDate>Wed, 06 Dec 2017 00:00:00 +0800</pubDate>
+        <link>https://xiazemin.github.io/MyBlog/linux/2017/12/06/linux_rcu.html</link>
+        <guid isPermaLink="true">https://xiazemin.github.io/MyBlog/linux/2017/12/06/linux_rcu.html</guid>
+        
+        
+        <category>linux</category>
+        
+      </item>
+    
+      <item>
+        <title>Linux的mmap内存映射机制</title>
+        <description>&lt;!-- more --&gt;
+&lt;p&gt;一个进程应该包括一个mm_struct(memory manage struct), 该结构是进程虚拟地址空间的抽象描述,里面包括了进程虚拟空间的一些管理信息: start_code, end_code, start_data, end_data, start_brk, end_brk等等信息.另外,也有一个指向进程虚存区表(vm_area_struct: virtual memory area)的指针,该链是按照虚拟地址的增长顺序排列的.在Linux进程的地址空间被分作许多区(vma),每个区(vma)都对应虚拟地址空间上一段连续的区域, vma是可以被共享和保护的独立实体,这里的vma就是前面提到的内存对象.&lt;/p&gt;
+
+&lt;p&gt;设备驱动的mmap实现主要是将一个物理设备的可操作区域（设备空间）映射到一个进程的虚拟地址空间。这样就可以直接采用指针的方式像访问内存的方式访问设备。在驱动中的mmap实现主要是完成一件事，就是实际物理设备的操作区域到进程虚拟空间地址的映射过程。同时也需要保证这段映射的虚拟存储器区域不会被进程当做一般的空间使用，因此需要添加一系列的保护方式。&lt;/p&gt;
+
+&lt;p&gt;Linux提供了内存映射函数mmap,它把文件内容映射到一段内存上(准确说是虚拟内存上),通过对这段内存的读取和修改,实现对文件的读取和修改 。普通文件被映射到进程地址空间后，进程可以向访问普通内存一样对文件进行访问，不必再调用read()，write（）等操作。
+&lt;img src=&quot;https://xiazemin.github.io/MyBlog/img/linuxMMap.jpeg&quot; /&gt;
+mmap系统调用的实现过程是
+1.先通过文件系统定位要映射的文件；
+2.权限检查,映射的权限不会超过文件打开的方式,也就是说如果文件是以只读方式打开,那么则不允许建立一个可写映射； 
+3.创建一个vma对象,并对之进行初始化； 
+4.调用映射文件的mmap函数,其主要工作是给vm_ops向量表赋值；
+5.把该vma链入该进程的vma链表中,如果可以和前后的vma合并则合并；
+6.如果是要求VM_LOCKED(映射区不被换出)方式映射,则发出缺页请求,把映射页面读入内存中.&lt;/p&gt;
+
+&lt;p&gt;2、munmap函数
+munmap(void * start, size_t length):
+该调用可以看作是mmap的一个逆过程.它将进程中从start开始length长度的一段区域的映射关闭,如果该区域不是恰好对应一个vma,则有可能会分割几个或几个vma.
+ msync(void * start, size_t length, int flags):
+把映射区域的修改回写到后备存储中.因为munmap时并不保证页面回写,如果不调用msync,那么有可能在munmap后丢失对映射区的修改.其中flags可以是MS_SYNC, MS_ASYNC, MS_INVALIDATE, MS_SYNC要求回写完成后才返回, MS_ASYNC发出回写请求后立即返回, MS_INVALIDATE使用回写的内容更新该文件的其它映射.该系统调用是通过调用映射文件的sync函数来完成工作的.
+brk(void * end_data_segement):
+将进程的数据段扩展到end_data_segement指定的地址,该系统调用和mmap的实现方式十分相似,同样是产生一个vma,然后指定其属性.不过在此之前需要做一些合法性检查,比如该地址是否大于mm-&amp;gt;end_code, end_data_segement和mm-&amp;gt;brk之间是否还存在其它vma等等.通过brk产生的vma映射的文件为空,这和匿名映射产生的vma相似,关于匿名映射不做进一步介绍.库函数malloc就是通过brk实现的.&lt;/p&gt;
+</description>
+        <pubDate>Wed, 06 Dec 2017 00:00:00 +0800</pubDate>
+        <link>https://xiazemin.github.io/MyBlog/linux/2017/12/06/linux_mmap.html</link>
+        <guid isPermaLink="true">https://xiazemin.github.io/MyBlog/linux/2017/12/06/linux_mmap.html</guid>
+        
+        
+        <category>linux</category>
+        
+      </item>
+    
+      <item>
+        <title>linux_lock</title>
+        <description>&lt;!-- more --&gt;
+&lt;p&gt;在现代操作系统里，同一时间可能有多个内核执行流在执行，因此内核其实象多进程多线程编程一样也需要一些同步机制来同步各执行单元对共享数据的访问。尤其是在多处理器系统上，更需要一些同步机制来同步不同处理器上的执行单元对共享的数据的访问。在主流的Linux内核中包含了几乎所有现代的操作系统具有的同步机制，这些同步机制包括：原子操作、信号量（semaphore）、读写信号量（rw_semaphore）、spinlock、 BKL(Big Kernel Lock)、rwlock、brlock（只包含在2.4内核中）、RCU（只包含在2.6内核中）和seqlock（只包含在2.6内核中）。&lt;/p&gt;
+
+&lt;p&gt;原子操作通常用于实现资源的引用计数，在TCP/IP协议栈的IP碎片处理中，就使用了引用计数，碎片队列结构struct ipq描述了一个IP碎片，字段refcnt就是引用计数器，它的类型为atomic_t，当创建IP碎片时（在函数ip_frag_create中），使用atomic_set函数把它设置为1，当引用该IP碎片时，就使用函数atomic_inc把引用计数加1，当不需要引用该IP碎片时，就使用函数 ipq_put来释放该IP碎片，ipq_put使用函数atomic_dec_and_test把引用计数减1并判断引用计数是否为0，如果是就释放 IP碎片。函数ipq_kill把IP碎片从ipq队列中删除，并把该删除的IP碎片的引用计数减1（通过使用函数atomic_dec实现）。&lt;/p&gt;
+
+&lt;p&gt;Linux内核的信号量在概念和原理上与用户态的System V的IPC机制信号量是一样的，但是它绝不可能在内核之外使用，因此它与System V的IPC机制信号量毫不相干。&lt;/p&gt;
+
+&lt;p&gt;信号量在创建时需要设置一个初始值，表示同时可以有几个任务可以访问该信号量保护的共享资源，初始值为1就变成互斥锁（Mutex），即同时只能有一个任务可以访问信号量保护的共享资源。一个任务要想访问共享资源，首先必须得到信号量，获取信号量的操作将把信号量的值减1，若当前信号量的值为负数，表明无法获得信号量，该任务必须挂起在该信号量的等待队列等待该信号量可用；若当前信号量的值为非负数，表示可以获得信号量，因而可以立刻访问被该信号量保护的共享资源。当任务访问完被信号量保护的共享资源后，必须释放信号量，释放信号量通过把信号量的值加1实现，如果信号量的值为非正数，表明有任务等待当前信号量，因此它也唤醒所有等待该信号量的任务。&lt;/p&gt;
+
+&lt;p&gt;读写信号量对访问者进行了细分，或者为读者，或者为写者，读者在保持读写信号量期间只能对该读写信号量保护的共享资源进行读访问，如果一个任务除了需要读，可能还需要写，那么它必须被归类为写者，它在对共享资源访问之前必须先获得写者身份，写者在发现自己不需要写访问的情况下可以降级为读者。读写信号量同时拥有的读者数不受限制，也就说可以有任意多个读者同时拥有一个读写信号量。如果一个读写信号量当前没有被写者拥有并且也没有写者等待读者释放信号量，那么任何读者都可以成功获得该读写信号量；否则，读者必须被挂起直到写者释放该信号量。如果一个读写信号量当前没有被读者或写者拥有并且也没有写者等待该信号量，那么一个写者可以成功获得该读写信号量，否则写者将被挂起，直到没有任何访问者。因此，写者是排他性的，独占性的。&lt;/p&gt;
+
+&lt;p&gt;读写信号量有两种实现，一种是通用的，不依赖于硬件架构，因此，增加新的架构不需要重新实现它，但缺点是性能低，获得和释放读写信号量的开销大；另一种是架构相关的，因此性能高，获取和释放读写信号量的开销小，但增加新的架构需要重新实现。在内核配置时，可以通过选项去控制使用哪一种实现。&lt;/p&gt;
+
+&lt;p&gt;自旋锁与互斥锁有点类似，只是自旋锁不会引起调用者睡眠，如果自旋锁已经被别的执行单元保持，调用者就一直循环在那里看是否该自旋锁的保持者已经释放了锁，”自旋”一词就是因此而得名。由于自旋锁使用者一般保持锁时间非常短，因此选择自旋而不是睡眠是非常必要的，自旋锁的效率远高于互斥锁。&lt;/p&gt;
+
+&lt;p&gt;信号量和读写信号量适合于保持时间较长的情况，它们会导致调用者睡眠，因此只能在进程上下文使用（_trylock的变种能够在中断上下文使用），而自旋锁适合于保持时间非常短的情况，它可以在任何上下文使用。如果被保护的共享资源只在进程上下文访问，使用信号量保护该共享资源非常合适，如果对共巷资源的访问时间非常短，自旋锁也可以。但是如果被保护的共享资源需要在中断上下文访问（包括底半部即中断处理句柄和顶半部即软中断），就必须使用自旋锁。&lt;/p&gt;
+
+&lt;p&gt;自旋锁保持期间是抢占失效的，而信号量和读写信号量保持期间是可以被抢占的。自旋锁只有在内核可抢占或SMP的情况下才真正需要，在单CPU且不可抢占的内核下，自旋锁的所有操作都是空操作。&lt;/p&gt;
+
+&lt;p&gt;跟互斥锁一样，一个执行单元要想访问被自旋锁保护的共享资源，必须先得到锁，在访问完共享资源后，必须释放锁。如果在获取自旋锁时，没有任何执行单元保持该锁，那么将立即得到锁；如果在获取自旋锁时锁已经有保持者，那么获取锁操作将自旋在那里，直到该自旋锁的保持者释放了锁。&lt;/p&gt;
+
+&lt;p&gt;无论是互斥锁，还是自旋锁，在任何时刻，最多只能有一个保持者，也就说，在任何时刻最多只能有一个执行单元获得锁。&lt;/p&gt;
+
+</description>
+        <pubDate>Wed, 06 Dec 2017 00:00:00 +0800</pubDate>
+        <link>https://xiazemin.github.io/MyBlog/linux/2017/12/06/linux_lock.html</link>
+        <guid isPermaLink="true">https://xiazemin.github.io/MyBlog/linux/2017/12/06/linux_lock.html</guid>
+        
+        
+        <category>linux</category>
+        
+      </item>
+    
+      <item>
+        <title>linux_elf</title>
+        <description>&lt;!-- more --&gt;
+&lt;p&gt;可执行连接格式是UNIX系统实验室(USL)作为应用程序二进制接口
+(Application Binary Interface(ABI)而开发和发布的。工具接口标准委
+员会(TIS)选择了正在发展中的ELF标准作为工作在32位INTEL体系上不同操
+作系统之间可移植的二进制文件格式。
+假定开发者定义了一个二进制接口集合，ELF标准用它来支持流线型的软件
+发展。 应该减少不同执行接口的数量。因此可以减少重新编程重新编译的
+代码。&lt;/p&gt;
+
+&lt;p&gt;在object文件中有三种主要的类型。&lt;/p&gt;
+&lt;ul&gt;
+  &lt;li&gt;一个可重定位(relocatable)文件保存着代码和适当的数据，用来和其他的
+object文件一起来创建一个可执行文件或者是一个共享文件。&lt;/li&gt;
+  &lt;li&gt;一个可执行(executable)文件保存着一个用来执行的程序；该文件指出了
+exec(BA_OS)如何来创建程序进程映象。&lt;/li&gt;
+  &lt;li&gt;一个共享object文件保存着代码和合适的数据，用来被下面的两个链接器
+链接。第一个是连接编辑器[请参看ld(SD_CMD)]，可以和其他的可重定位和
+共享object文件来创建其他的object。第二个是动态链接器，联合一个
+可执行文件和其他的共享object文件来创建一个进程映象。
+一个object文件被汇编器和联接器创建, 想要在处理机上直接运行的object
+文件都是以二进制来存放的。那些需要抽象机制的程序，比如象shell脚本，
+是不被接受的。&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;一个ELF头在文件的开始，保存了路线图(road map)，描述了该文件的组织情况。
+sections保存着object 文件的信息，从连接角度看：包括指令，数据，
+符号表，重定位信息等等。&lt;/p&gt;
+
+&lt;p&gt;假如一个程序头表（program header table）存在，那么它告诉系统如何来创建一
+个进程的内存映象。被用来建立进程映象(执行一个程序)的文件必须要有一个程
+序头表（program header table）；可重定位文件不需要这个头表。一个
+section头表（section header table）包含了描述文件sections的信息。每个
+section在这个表中有一个入口；每个入口给出了该section的名字，大小，
+等等信息。在联接过程中的文件必须有一个section头表；其他object文件可要
+可不要这个section头表。&lt;/p&gt;
+
+&lt;p&gt;对象文件(Object files)有三个种类：&lt;/p&gt;
+
+&lt;p&gt;1) 可重定位的对象文件(Relocatable file)&lt;/p&gt;
+
+&lt;p&gt;这是由汇编器汇编生成的 .o 文件。后面的链接器(link editor)拿一个或一些 Relocatable object files 作为输入，经链接处理后，生成一个可执行的对象文件 (Executable file) 或者一个可被共享的对象文件(Shared object file)。我们可以使用 ar 工具将众多的 .o Relocatable object files 归档(archive)成 .a 静态库文件。如何产生 Relocatable file，你应该很熟悉了，请参见我们相关的基本概念文章和JulWiki。另外，可以预先告诉大家的是我们的内核可加载模块 .ko 文件也是 Relocatable object file。&lt;/p&gt;
+
+&lt;p&gt;2) 可执行的对象文件(Executable file)&lt;/p&gt;
+
+&lt;p&gt;这我们见的多了。文本编辑器vi、调式用的工具gdb、播放mp3歌曲的软件mplayer等等都是Executable object file。你应该已经知道，在我们的 Linux 系统里面，存在两种可执行的东西。除了这里说的 Executable object file，另外一种就是可执行的脚本(如shell脚本)。注意这些脚本不是 Executable object file，它们只是文本文件，但是执行这些脚本所用的解释器就是 Executable object file，比如 bash shell 程序。&lt;/p&gt;
+
+&lt;p&gt;3) 可被共享的对象文件(Shared object file)&lt;/p&gt;
+
+&lt;p&gt;这些就是所谓的动态库文件，也即 .so 文件。如果拿前面的静态库来生成可执行程序，那每个生成的可执行程序中都会有一份库代码的拷贝。如果在磁盘中存储这些可执行程序，那就会占用额外的磁盘空间；另外如果拿它们放到Linux系统上一起运行，也会浪费掉宝贵的物理内存。如果将静态库换成动态库，那么这些问题都不会出现。动态库在发挥作用的过程中，必须经过两个步骤：&lt;/p&gt;
+
+&lt;p&gt;a) 链接编辑器(link editor)拿它和其他Relocatable object file以及其他shared object file作为输入，经链接处理后，生存另外的 shared object file 或者 executable file。&lt;/p&gt;
+
+&lt;p&gt;b) 在运行时，动态链接器(dynamic linker)拿它和一个Executable file以及另外一些 Shared object file 来一起处理，在Linux系统里面创建一个进程映像。&lt;/p&gt;
+
+&lt;p&gt;以上所提到的 link editor 以及 dynamic linker 是什么东西，你可以参考我们基本概念中的相关文章。对于什么是编译器，汇编器等你应该也已经知道，在这里只是使用他们而不再对他们进行详细介绍。为了下面的叙述方便，你可以下载test.tar.gz包，解压缩后使用”make”进行编译。编译完成后，会在目录中生成一系列的ELF对象文件，更多描述见里面的 README 文件。我们下面的论述都基于这些产生的对象文件。&lt;/p&gt;
+
+&lt;p&gt;ELF格式需要使用在两种场合：&lt;/p&gt;
+
+&lt;p&gt;a) 组成不同的可重定位文件，以参与可执行文件或者可被共享的对象文件的链接构建；&lt;/p&gt;
+
+&lt;p&gt;b) 组成可执行文件或者可被共享的对象文件，以在运行时内存中进程映像的构建。&lt;/p&gt;
+</description>
+        <pubDate>Wed, 06 Dec 2017 00:00:00 +0800</pubDate>
+        <link>https://xiazemin.github.io/MyBlog/linux/2017/12/06/linux_elf.html</link>
+        <guid isPermaLink="true">https://xiazemin.github.io/MyBlog/linux/2017/12/06/linux_elf.html</guid>
+        
+        
+        <category>linux</category>
+        
+      </item>
+    
+      <item>
+        <title>linux_cow</title>
+        <description>&lt;!-- more --&gt;
+&lt;p&gt;在Linux程序中，fork（）会产生一个和父进程完全相同的子进程，但子进程在此后多会exec系统调用，出于效率考虑，linux中引入了“写时复制“技术，也就是只有进程空间的各段的内容要发生变化时，才会将父进程的内容复制一份给子进程。&lt;/p&gt;
+
+&lt;pre&gt;&lt;code&gt;  那么子进程的物理空间没有代码，怎么去取指令执行exec系统调用呢？
+
+  在fork之后exec之前两个进程用的是相同的物理空间（内存区），子进程的代码段、数据段、堆栈都是指向父进程的物理空间，也就是说，两者的虚拟空间不同，但其对应的物理空间是同一个。当父子进程中有更改相应段的行为发生时，再为子进程相应的段分配物理空间，如果不是因为exec，内核会给子进程的数据段、堆栈段分配相应的物理空间（至此两者有各自的进程空间，互不影响），而代码段继续共享父进程的物理空间（两者的代码完全相同）。而如果是因为exec，由于两者执行的代码不同，子进程的代码段也会分配单独的物理空间。      
+
+  在网上看到还有个细节问题就是，fork之后内核会通过将子进程放在队列的前面，以让子进程先执行，以免父进程执行导致写时复制，而后子进程执行exec系统调用，因无意义的复制而造成效率的下降。
+&lt;/code&gt;&lt;/pre&gt;
+</description>
+        <pubDate>Wed, 06 Dec 2017 00:00:00 +0800</pubDate>
+        <link>https://xiazemin.github.io/MyBlog/linux/2017/12/06/linux_cow.html</link>
+        <guid isPermaLink="true">https://xiazemin.github.io/MyBlog/linux/2017/12/06/linux_cow.html</guid>
+        
+        
+        <category>linux</category>
+        
+      </item>
+    
+      <item>
+        <title>Kibana</title>
+        <description>&lt;!-- more --&gt;
+&lt;p&gt;ibana是一个针对Elasticsearch的开源分析及可视化平台，用来搜索、查看交互存储在Elasticsearch索引中的数据。使用Kibana，可以通过各种图表进行高级数据分析及展示。&lt;/p&gt;
+
+&lt;p&gt;Kibana让海量数据更容易理解。它操作简单，基于浏览器的用户界面可以快速创建仪表板（dashboard）实时显示Elasticsearch查询动态。&lt;/p&gt;
+
+&lt;p&gt;设置Kibana非常简单。无需编码或者额外的基础架构，几分钟内就可以完成Kibana安装并启动Elasticsearch索引监测。&lt;/p&gt;
+
+&lt;p&gt;主要功能&lt;/p&gt;
+
+&lt;p&gt;Elasticsearch无缝之集成
+Kibana架构为Elasticsearch定制，可以将任何结构化和非结构化数据加入Elasticsearch索引。Kibana还充分利用了Elasticsearch强大的搜索和分析功能&lt;/p&gt;
+
+&lt;p&gt;Kibana可以非常方便地把来自Logstash、ES-Hadoop、Beats或第三方技术的数据整合到Elasticsearch，支持的第三方技术包括Apache Flume、Fluentd等。&lt;/p&gt;
+
+&lt;p&gt;Sense是一个可视化终端，通过Kibana插件支持自动补全、自动缩进和语法检查功能。提升了与Elasticsearch API交互的体验&lt;/p&gt;
+
+</description>
+        <pubDate>Wed, 06 Dec 2017 00:00:00 +0800</pubDate>
+        <link>https://xiazemin.github.io/MyBlog/spark/2017/12/06/Kibana.html</link>
+        <guid isPermaLink="true">https://xiazemin.github.io/MyBlog/spark/2017/12/06/Kibana.html</guid>
+        
+        
+        <category>spark</category>
+        
+      </item>
     
       <item>
         <title>linux_memory</title>
@@ -523,1050 +739,6 @@ $go get github.com/derekparker/delve/cmd/dlv
         
         
         <category>web</category>
-        
-      </item>
-    
-      <item>
-        <title>go_pprof</title>
-        <description>&lt;!-- more --&gt;
-&lt;div class=&quot;container&quot;&gt;
-go tool pprof
-
-我们可以使用go tool pprof命令来交互式的访问概要文件的内容。命令将会分析指定的概要文件，并会根据我们的要求为我们提供高可读性的输出信息。
-
-在Go语言中，我们可以通过标准库的代码包runtime和runtime/pprof中的程序来生成三种包含实时性数据的概要文件，分别是CPU概要文件、内存概要文件和程序阻塞概要文件。下面我们先来分别介绍用于生成这三种概要文件的API的用法。
-
-CPU概要文件
-
-在介绍CPU概要文件的生成方法之前，我们先来简单了解一下CPU主频。CPU的主频，即CPU内核工作的时钟频率（CPU Clock Speed）。CPU的主频的基本单位是赫兹（Hz），但更多的是以兆赫兹（MHz）或吉赫兹（GHz）为单位。时钟频率的倒数即为时钟周期。时钟周期的基本单位为秒（s），但更多的是以毫秒（ms）、微妙（us）或纳秒（ns）为单位。在一个时钟周期内，CPU执行一条运算指令。也就是说，在1000 Hz的CPU主频下，每1毫秒可以执行一条CPU运算指令。在1 MHz的CPU主频下，每1微妙可以执行一条CPU运算指令。而在1 GHz的CPU主频下，每1纳秒可以执行一条CPU运算指令。
-
-在默认情况下，Go语言的运行时系统会以100 Hz的的频率对CPU使用情况进行取样。也就是说每秒取样100次，即每10毫秒会取样一次。为什么使用这个频率呢？因为100 Hz既足够产生有用的数据，又不至于让系统产生停顿。并且100这个数上也很容易做换算，比如把总取样计数换算为每秒的取样数。实际上，这里所说的对CPU使用情况的取样就是对当前的Goroutine的堆栈上的程序计数器的取样。由此，我们就可以从样本记录中分析出哪些代码是计算时间最长或者说最耗CPU资源的部分了。我们可以通过以下代码启动对CPU使用情况的记录。
-
-func startCPUProfile() {
-    if *cpuProfile != &quot;&quot; {
-        f, err := os.Create(*cpuProfile)
-        if err != nil {
-            fmt.Fprintf(os.Stderr, &quot;Can not create cpu profile output file: %s&quot;,
-                err)
-            return
-        }
-        if err := pprof.StartCPUProfile(f); err != nil {
-            fmt.Fprintf(os.Stderr, &quot;Can not start cpu profile: %s&quot;, err)
-            f.Close()
-            return
-        }
-    }
-}
-在函数startCPUProfile中，我们首先创建了一个用于存放CPU使用情况记录的文件。这个文件就是CPU概要文件，其绝对路径由*cpuProfile的值表示。然后，我们把这个文件的实例作为参数传入到函数`pprof.StartCPUProfile中。如果此函数没有返回错误，就说明记录操作已经开始。需要注意的是，只有CPU概要文件的绝对路径有效时此函数才会开启记录操作。
-
-如果我们想要在某一时刻停止CPU使用情况记录操作，就需要调用下面这个函数：
-
-func stopCPUProfile() {
-    if *cpuProfile != &quot;&quot; {
-        pprof.StopCPUProfile() // 把记录的概要信息写到已指定的文件
-    }
-}
-在这个函数中，并没有代码用于CPU概要文件写入操作。实际上，在启动CPU使用情况记录操作之后，运行时系统就会以每秒100次的频率将取样数据写入到CPU概要文件中。pprof.StopCPUProfile函数通过把CPU使用情况取样的频率设置为0来停止取样操作。并且，只有当所有CPU使用情况记录都被写入到CPU概要文件之后，pprof.StopCPUProfile函数才会退出。从而保证了CPU概要文件的完整性。
-
-内存概要文件
-
-内存概要文件用于保存在用户程序执行期间的内存使用情况。这里所说的内存使用情况，其实就是程序运行过程中堆内存的分配情况。Go语言运行时系统会对用户程序运行期间的所有的堆内存分配进行记录。不论在取样的那一时刻、堆内存已用字节数是否有增长，只要有字节被分配且数量足够，分析器就会对其进行取样。开启内存使用情况记录的方式如下：
-
-func startMemProfile() {
-    if *memProfile != &quot;&quot; &amp;amp;&amp;amp; *memProfileRate &amp;gt; 0 {
-        runtime.MemProfileRate = *memProfileRate
-    }
-}
-我们可以看到，开启内存使用情况记录的方式非常简单。在函数startMemProfile中，只有在*memProfile和*memProfileRate的值有效时才会进行后续操作。*memProfile的含义是内存概要文件的绝对路径。*memProfileRate的含义是分析器的取样间隔，单位是字节。当我们将这个值赋给int类型的变量runtime.MemProfileRate时，就意味着分析器将会在每分配指定的字节数量后对内存使用情况进行取样。实际上，即使我们不给runtime.MemProfileRate变量赋值，内存使用情况的取样操作也会照样进行。此取样操作会从用户程序开始时启动，且一直持续进行到用户程序结束。runtime.MemProfileRate变量的默认值是512 * 1024，即512K个字节。只有当我们显式的将0赋给runtime.MemProfileRate变量之后，才会取消取样操作。
-
-在默认情况下，内存使用情况的取样数据只会被保存在运行时内存中，而保存到文件的操作只能由我们自己来完成。请看如下代码：
-
-func stopMemProfile() {
-    if *memProfile != &quot;&quot; {
-        f, err := os.Create(*memProfile)
-        if err != nil {
-            fmt.Fprintf(os.Stderr, &quot;Can not create mem profile output file: %s&quot;, err)
-            return
-        }
-        if err = pprof.WriteHeapProfile(f); err != nil {
-            fmt.Fprintf(os.Stderr, &quot;Can not write %s: %s&quot;, *memProfile, err)
-        }
-        f.Close()
-    }
-}
-从函数名称上看，stopMemProfile函数的功能是停止对内存使用情况的取样操作。但是，它只做了将取样数据保存到内存概要文件的操作。在stopMemProfile函数中，我们调用了函数pprof.WriteHeapProfile，并把代表内存概要文件的文件实例作为了参数。如果pprof.WriteHeapProfile函数没有返回错误，就说明数据已被写入到了内存概要文件中。
-
-需要注意的是，对内存使用情况进行取样的程序会假定取样间隔在用户程序的运行期间内都是一成不变的，并且等于runtime.MemProfileRate变量的当前值。因此，我们应该在我们的程序中只改变内存取样间隔一次，且应尽早改变。比如，在命令源码文件的main函数的开始处就改变它。
-
-程序阻塞概要文件
-
-程序阻塞概要文件用于保存用户程序中的Goroutine阻塞事件的记录。我们来看开启这项操作的方法：
-
-func startBlockProfile() {
-    if *blockProfile != &quot;&quot; &amp;amp;&amp;amp; *blockProfileRate &amp;gt; 0 {
-        runtime.SetBlockProfileRate(*blockProfileRate)
-    }
-}
-与开启内存使用情况记录的方式类似，在函数startBlockProfile中，当*blockProfile和*blockProfileRate的值有效时，我们会设置对Goroutine阻塞事件的取样间隔。*blockProfile的含义为程序阻塞概要文件的绝对路径。*blockProfileRate的含义是分析器的取样间隔，单位是次。函数runtime.SetBlockProfileRate的唯一参数是int类型的。它的含义是分析器会在每发生几次Goroutine阻塞事件时对这些事件进行取样。如果我们不显式的使用runtime.SetBlockProfileRate函数设置取样间隔，那么取样间隔就为1。也就是说，在默认情况下，每发生一次Goroutine阻塞事件，分析器就会取样一次。与内存使用情况记录一样，运行时系统对Goroutine阻塞事件的取样操作也会贯穿于用户程序的整个运行期。但是，如果我们通过runtime.SetBlockProfileRate函数将这个取样间隔设置为0或者负数，那么这个取样操作就会被取消。
-
-我们在程序结束之前可以将被保存在运行时内存中的Goroutine阻塞事件记录存放到指定的文件中。代码如下：
-
-func stopBlockProfile() {
-    if *blockProfile != &quot;&quot; &amp;amp;&amp;amp; *blockProfileRate &amp;gt;= 0 {
-        f, err := os.Create(*blockProfile)
-        if err != nil {
-            fmt.Fprintf(os.Stderr, &quot;Can not create block profile output file: %s&quot;, err)
-            return
-        }
-        if err = pprof.Lookup(&quot;block&quot;).WriteTo(f, 0); err != nil {
-            fmt.Fprintf(os.Stderr, &quot;Can not write %s: %s&quot;, *blockProfile, err)
-        }
-        f.Close()
-    }
-}
-在创建程序阻塞概要文件之后，stopBlockProfile函数会先通过函数pprof.Lookup将保存在运行时内存中的内存使用情况记录取出，并在记录的实例上调用WriteTo方法将记录写入到文件中。
-
-更多的概要文件
-
-我们可以通过pprof.Lookup函数取出更多种类的取样记录。如下表：
-
-表0-20 可从pprof.Lookup函数中取出的记录
-
-名称	说明	取样频率
-goroutine	活跃Goroutine的信息的记录。	仅在获取时取样一次。
-threadcreate	系统线程创建情况的记录。	仅在获取时取样一次。
-heap	堆内存分配情况的记录。	默认每分配512K字节时取样一次。
-block	Goroutine阻塞事件的记录。	默认每发生一次阻塞事件时取样一次。
-在上表中，前两种记录均为一次取样的记录，具有即时性。而后两种记录均为多次取样的记录，具有实时性。实际上，后两种记录“heap”和“block”正是我们前面讲到的内存使用情况记录和程序阻塞情况记录。
-
-我们知道，在用户程序运行期间各种状态是在不断变化的。尤其对于后两种记录来说，随着取样次数的增多，记录项的数量也会不断增长。而对于前两种记录“goroutine”和“threadcreate”来说，如果有新的活跃Goroutine产生或新的系统线程被创建，其记录项数量也会增大。所以，Go语言的运行时系统在从内存中获取记录时都会先预估一个记录项数量。如果在从预估记录项数量到获取记录之间的时间里又有新记录项产生，那么运行时系统会试图重新获取全部记录项。另外，运行时系统使用切片来装载所有记录项的。如果当前使用的切片装不下所有记录项，运行时系统会根据当前记录项总数创建一个更大的切片，并再次试图装载所有记录项。直到这个切片足以装载所有的记录项为止。但是，如果记录项增长过快的话，运行时系统将不得不不断的进行尝试。这可能导致过多的时间消耗。对于前两种记录“goroutine”和“threadcreate”来说，运行时系统创建的切片的大小为当前记录项总数再加10。对于前两种记录“heap”和“block”来说，运行时系统创建的切片的大小为当前记录项总数再加50。虽然上述情况发生的概率可能并不会太高，但是如果我们在对某些高并发的用户程序获取上述记录的时候耗费的时间过长，可以先排查一下这类原因。实际上，我们在前面介绍的这几 种记录操作更适合用于对高并发的用户程序进行状态检测。
-
-我们可以通过下面这个函数分别将四种记录输出到文件。
-
-func SaveProfile(workDir string, profileName string, ptype ProfileType, debug int) {
-    absWorkDir := getAbsFilePath(workDir)
-    if profileName == &quot;&quot; {
-        profileName = string(ptype)
-    }
-    profilePath := filepath.Join(absWorkDir, profileName)
-    f, err := os.Create(profilePath)
-    if err != nil {
-        fmt.Fprintf(os.Stderr, &quot;Can not create profile output file: %s&quot;, err)
-        return
-    }
-    if err = pprof.Lookup(string(ptype)).WriteTo(f, debug); err != nil {
-        fmt.Fprintf(os.Stderr, &quot;Can not write %s: %s&quot;, profilePath, err)
-    }
-    f.Close()
-}
-函数SaveProfile有四个参数。第一个参数是概要文件的存放目录。第二个参数是概要文件的名称。第三个参数是概要文件的类型。其中，类型ProfileType只是为string类型起的一个别名而已。这样是为了对它的值进行限制。它的值必须为“goroutine”、“threadcreate”、“heap”或“block”中的一个。我们现在来重点说一下第四个参数。参数debug控制着概要文件中信息的详细程度。这个参数也就是传给结构体pprof.Profile的指针方法WriteTo的第二个参数。而pprof.Profile结构体的实例的指针由函数pprof.Lookup产生。下面我们看看参数debug的值与写入概要文件的记录项内容的关系。
-
-表0-21 参数debug对概要文件内容的影响
-
-记录\debug	小于等于0	等于1	大于等于2
-goroutine	为每个记录项提供调用栈中各项的以十六进制表示的内存地址。	在左边提供的信息的基础上，为每个记录项的调用栈中各项提供与内存地址对应的带代码包导入路径的函数名和源码文件路径及源码所在行号。	以高可读的方式提供各活跃Goroutine的状态信息和调用栈信息。
-threadcreate	同上。	同上。	同左。
-heap	同上。	在左边提供的信息的基础上，为每个记录项的调用栈中各项提供与内存地址对应的带代码包导入路径的函数名和源码文件路径及源码所在行，并提供内存状态信息。	同左。
-block	同上。	在左边提供的信息的基础上，为每个记录项的调用栈中各项提供与内存地址对应的带代码包导入路径的函数名和源码文件路径及源码所在行号。	同左。
-从上表可知，当debug的值小于等于0时，运行时系统仅会将每个记录项中的基本信息写入到概要文件中。记录项的基本信息只包括其调用栈中各项的以十六进制表示的内存地址。debug的值越大，我们能从概要文件中获取的信息越多。但是，go tool pprof命令会无视那些除基本信息以外的附加信息。实际上，运行时系统在向概要文件中写入附加信息时会在最左边加入“#”，以表示当前行为注释行。也正因为有了这个前缀，go tool pprof命令才会略过对这些附加信息的解析。这其中有一个例外，那就是当debug大于等于2时，Goroutine记录并不是在基本信息的基础上附加信息，而是完全以高可读的方式写入各活跃Goroutine的状态信息和调用栈信息。并且，在所有行的最左边都没有前缀“#”。显然，这个概要文件是无法被go tool pprof命令解析的。但是它对于我们来说会更加直观和有用。
-
-至此，我们已经介绍了使用标准库代码包runtime和runtime/pprof中的程序生成概要文件的全部方法。在上面示例中的所有代码都被保存在goc2p项目的代码包basic/prof中。代码包basic/prof中的这些程序非常易于使用。不过由于Go语言目前没有类似停机钩子（Shutdown Hook）的API（应用程序接口），所以代码包basic/prof中的程序目前只能以侵入式的方式被使用。
-
-pprof工具
-
-我们在上一小节中提到过，任何以go tool开头的Go命令内部指向的特殊工具都被保存在目录GOROOT/pkg/tool/GOOS_$GOARCH/中。我们把这个目录叫做Go工具目录。与其他特殊工具不同的是，pprof工具并不是用Go语言编写的，而是由Perl语言编写的。（Perl是一种通用的、动态的解释型编程语言）与Go语言不同，Perl语言可以直接读取源码并运行。正因为如此，pprof工具的源码文件被直接保存在了Go工具目录下。而对于其它Go工具，存在此目录的都是经过编译而生成的可执行文件。我们可以直接用任意一种文本查看工具打开在Go工具目录下的pprof工具的源码文件pprof。实际上，这个源码文件拷贝自Google公司发起的开源项目gperftools。此项目中包含了很多有用的工具。这些工具可以帮助开发者创建更健壮的应用程序。pprof就是其中的一个非常有用的工具。
-
-因为pprof工具是用Perl语言编写的，所以执行go tool pprof命令的前提条件是需要在当前环境下安装Perl语言，推荐的版本号是5.x。关于Perl语言的安装方法就不在这里叙述了，读者可以自己找到方法并自行安装它。在安装完Perl语言之后，我们可以在命令行终端中进入到Go工具目录，并执行命令perl pprof。它与我们在任意目录下执行go tool pprof命令的效果是一样的。当然，如果想要让go tool pprof命令在任意目录下都可以被执行，我们需要先设置好与Go语言相关的环境变量。
-
-我们在本小节已经讨论过，go tool pprof命令会分析指定的概要文件并使得我们能够以交互式的方式访问其中的信息。但是光有概要文件还不够，我们还需要概要文件中信息的来源——命令源码文件的可执行文件。毕竟，概要文件中的信息是对在运行期间的用户程序取样的结果。而可以运行的Go语言程序只能是编译命令源码文件后生成的可执行文件。因此，为了演示go tool pprof命令的用法，我们还创建或改造一个命令源码文件。在我们的goc2p项目的代码包中有一个名称为showpds.go的命令源码文件。这个命令源码文件用来解析指定的代码包的依赖关系，并将这些依赖关系打印到标准输出设备上。选用这个命令源码文件的原因是，我们可以通过改变指定的代码包来控制这个命令源码文件的运行时间的长短。不同的代码包可能会有不同数量的直接依赖包和间接依赖包。依赖包越多的代码包会使这个命令源码文件耗费更多的时间来解析它的依赖关系。命令源码文件运行的时间越长，我们得到的概要文件中的信息就越有意义。为了生成概要文件，我们需要稍微的改造一下这个命令源码文件。首先我们需要在这个文件中导入代码包basic/prof。然后，我们需要在它的main函数的开头加入一行代码prof.Start()。这行代码的含义是检查相关标记，并在标记有效时开启或设置对应的使用情况记录操作。最后，我们还需要在main函数的defer代码块中加入一行代码prof.Stop()。这行代码的含义是，获取已开启的记录的取样数据并将它们写入到指定的概要文件中。通过这三个步骤，我们就已经把生成运行时概要文件的功能附加到这个命令源码文件中了。为了开启这些功能，我还需要在通过执行go run命令来运行这个命令源码文件的时候，加入相应的标记。对代码包basic/prof中的程序有效的标记如下表。
-
-表0-22 对代码包basic/prof的API有效的标记
-
-标记名称	标记描述
--cpuprofile	指定CPU概要文件的保存路径。该路径可以是相对路径也可以是绝对路径，但其父路径必须已存在。
--blockprofile	指定程序阻塞概要文件的保存路径。该路径可以是相对路径也可以是绝对路径，但其父路径必须已存在。
--blockprofilerate	定义其值为n。此标记指定每发生n次Goroutine阻塞事件时，进行一次取样操作。
--memprofile	指定内存概要文件的保存路径。该路径可以是相对路径也可以是绝对路径，但其父路径必须已存在。
--memprofilerate	定义其值为n。此标记指定每分配n个字节的堆内存时，进行一次取样操作。
-下面我们使用go run命令运行改造后的命令源码文件showpds.go。示例如下：
-
-hc@ubt:~/golang/goc2p$ mkdir pprof
-hc@ubt:~/golang/goc2p$ cd helper/pds
-hc@ubt:~/golang/goc2p/helper/pds$ go run showpds.go -p=&quot;runtime&quot; cpuprofile=&quot;../../../pprof/cpu.out&quot; -blockprofile=&quot;../../../pprof/block.out&quot; -blockprofilerate=1 -memprofile=&quot;../../../pprof/mem.out&quot; -memprofilerate=10
-The package node of 'runtime': {/usr/local/go/src/pkg/ runtime [] [] false}
-The dependency structure of package 'runtime':
-runtime-&amp;gt;unsafe
-在上面的示例中，我们使用了所有的对代码包basic/prof的API有效的标记。另外，标记-p是对命令源码文件showpds.go有效的。其含义是指定要解析依赖关系的代码包的导入路径。
-
-现在我们来查看一下goc2p项目目录下的pprof子目录：
-
-hc@ubt:~/golang/goc2p/helper/pds$ ls ../../../pprof
-block.out  cpu.out  mem.out
-这个目录中的三个文件分别对应了三种包含实时性数据的概要文件。这也证明了我们对命令源码文件showpds.go的改造是有效的。
-
-好了，一切准备工作就绪。现在，我们就来看看go tool pprof命令都能做什么。首先，我们来编译命令源码文件showpds.go。
-
-hc@ubt:~/golang/goc2p/helper/pds$ go build showpds.go
-hc@ubt:~/golang/goc2p/helper/pds$ ls
-showpds showpds.go
-然后，我们需要准备概要文件。标准库代码包runtime的依赖包极少，这使得可执行文件showpds在极短的时间内就会运行完毕。之前我们说过，程序运行的时间越长越好。所以我们需要找到一个直接和间接依赖包都很多的代码包。做过Web应用系统开发的同行们都知道，一个Web应用系统的后端程序可能会有很多的依赖，不论是代码库还是其他资源。根据我们的直觉，在Go语言的世界里也应该是在这样。在Go语言的标准库中，代码包net/http专门用来为Web应用系统开发提供各种API支持。我们就用这个代码包来生成所需的概要文件。
-
-hc@ubt:~/golang/goc2p/helper/pds$ ./showpds -p=&quot;net/http&quot; -cpuprofile=&quot;../../../pprof/cpu.out&quot; -blockprofile=&quot;../../../pprof/block.out&quot; -blockprofilerate=1 -memprofile=&quot;../../../pprof/mem.out&quot; -memprofilerate=10
-标准库代码包net/http的依赖包很多。也正因为如此，我忽略了所有输出的内容。读者可以自己试试上面的这个命令。我们一口气生成了所有能够生成的概要文件作为备用。这写概要文件被保存在了goc2p项目的pprof目录中。如果在上面的命令被执行前还没有pprof目录，命令会报错。所以读者需要先创建这个目录。
-
-现在我们就以可执行文件showpds和pprof目录下的CPU概要文件cpu.out作为参数来执行go tool pprof命令。实际上，我们通过go tool pprof命令进入的就是pprof工具的交互模式的界面。
-
-hc@ubt:~/golang/goc2p/helper/pds$ go tool pprof showpds ../../../pprof/cpu.out
-Welcome to pprof!  For help, type 'help'.
-(pprof)
-我们可以在提示符“(pprof)”后面输入一些命令来查看概要文件。pprof工具在交互模式下支持的命令如下表。
-
-表0-23 pprof工具在交互模式下支持的命令
-
-名称	参数	标签	说明
-gv	[focus]		将当前概要文件以图形化和层次化的形式显示出来。当没有任何参数时，在概要文件中的所有抽样都会被显示。如果指定了focus参数，则只显示调用栈中有名称与此参数相匹配的函数或方法的抽样。focus参数应该是一个正则表达式。
-web	[focus]		与gv命令类似，web命令也会用图形化的方式来显示概要文件。但不同的是，web命令是在一个Web浏览器中显示它。如果你的Web浏览器已经启动，那么它的显示速度会非常快。如果想改变所使用的Web浏览器，可以在Linux下设置符号链接/etc/alternatives/gnome-www-browser或/etc/alternatives/x-www-browser，或在OS X下改变SVG文件的关联Finder。
-list	[routine_regexp]		列出名称与参数“routine_regexp”代表的正则表达式相匹配的函数或方法的相关源代码。
-weblist	[routine_regexp]		在Web浏览器中显示与list命令的输出相同的内容。它与list命令相比的优势是，在我们点击某行源码时还可以显示相应的汇编代码。
-top[N]		[--cum]	top命令可以以本地取样计数为顺序列出函数或方法及相关信息。如果存在标记“--cum”则以累积取样计数为顺序。默认情况下top命令会列出前10项内容。但是如果在top命令后面紧跟一个数字，那么其列出的项数就会与这个数字相同。
-disasm	[routine_regexp]		显示名称与参数“routine_regexp”相匹配的函数或方法的反汇编代码。并且，在显示的内容中还会标注有相应的取样计数。
-callgrind	[filename]		利用callgrind工具生成统计文件。在这个文件中，说明了程序中函数的调用情况。如果未指定“filename”参数，则直接调用kcachegrind工具。kcachegrind可以以可视化的方式查看callgrind工具生成的统计文件。
-help			显示帮助信息。
-quit			退出go tool pprof命令。Ctrl-d也可以达到同样效果。
-在上面表格中的绝大多数命令（除了help和quit）都可以在其所有参数和标签后追加一个或多个参数，以表示想要忽略显示的函数或方法的名称。我们需要在此类参数上加入减号“-”作为前缀，并且多个参数之间需要以空格分隔。当然，我们也可以用正则表达式替代函数或方法的名称。追加这些约束之后，任何调用栈中包含名称与这类参数相匹配的函数或方法的抽样都不会出现在命令的输出内容中。下面我们对这几个命令进行逐一说明。
-
-gv命令
-
-对于命令gv的用法，请看如下示例：
-
-hc@ubt:~/golang/goc2p/helper/pds$ go tool pprof showpds ../../../pprof/cpu.out
-Welcome to pprof!  For help, type 'help'.
-(pprof) gv
-Total: 101 samples
-sh: 1: dot: not found
-go tool pprof: signal: broken pipe
-其中，“(pprof)”是pprof工具在交互模式下的提示符。
-
-从输出信息中我们可以看到，gv命令并没有正确的被执行。原因是没有找到命令dot。经查，这个命令属于一个开源软件Graphviz。Graphviz的核心功能是图表的可视化。我们可以通过命令sudo apt-get install graphviz来安装这个软件。注意，上面这条命令仅可用于Debian的Linux发行版及其衍生版。如果是在Redhat的Linux发行版及其衍生版下，可以使用命令“yum install graphviz”来安装Graphviz。安装好Graphviz后，我们再来执行gv命令。
-
-(pprof) gv
-Total: 101 samples
-gv -scale 0
-(pprof) sh: 1: gv: not found
-现在，输出信息有提示我们没有找到命令gv。gv是自由软件工程项目GNU（GNU's Not Unix）中的一款开源软件，用来以图形化的方式查看PDF文档。我们以同样的方式安装它。在Debian的Linux发行版及其衍生版下，执行命令sudo apt-get install gv，在Redhat的Linux发行版及其衍生版下，执行命令yum install gv。软件gv被安装好后，我们再次执行gv命令。在运行着图形界面软件的Linux操作系统下，会弹出这样一个窗口。如图5-3。
-
-pprof工具的gv命令的执行结果
-
-图0-3 pprof工具的gv命令的执行结果
-
-我们看到，在概要图的最上面显示了一些基本的信息。其中，“showpds”是我们生成概要文件时用到的那个可执行文件。它也是概要文件中内容的来源。“Total samples：”后面的数字23的含义是在本次程序执行期间分析器一共进行了23次取样。我们已经知道，CPU使用情况的取样操作会以每10毫秒一次的频率进行。因此，取样23次就意味着程序运行所花费的CPU时间大约为10毫秒 * 23 = 0.23秒。由于我们并没有在gv命令后加入用于约束显示内容的参数focus，所以在“Focusing on：”后面的数字也是23。也正是由于这个原因，后边两行信息中的数字均为0。读者可以自行试验一下在gv命令后加入focus参数的情形，例如：gv ShowDepStruct。在下面的描述中，我们把函数和方法统称为函数。
-
-现在，我们把视线放在主要的图形上。此图形由矩形和有向线段组成。在此图形的大多数矩形中都包含三行信息。第一行是函数的名字。第二行包含了该函数的本地取样计数（在括号左边的数字）及其在取样总数中所占的比例（在括号内的百分比）。第三行则包含了该函数的累积取样计数（括号左边的数字）及其在取样总数中所占的比例（在括号内的百分比）。
-
-首先，读者需要搞清楚两个相似但不相同的概念，即：本地取样计数和累积取样计数。本地取样计数的含义是当前函数在取样中直接出现的次数。累积取样计数的含义是当前函数以及当前函数直接或间接调用的函数在取样中直接出现的次数。所以，存在这样一种场景：对于一个函数来说，它的本地取样计数是0。因为它没有在取样中直接出现过。但是，由于它直接或间接调用的函数频繁的直接出现在取样中，所以这个函数的累积取样计数却会很高。我们以上图中的函数mian.main为例。由于main.main函数在所有取样中都没有直接出现过，所以它的本地取样计数为0。但又由于它是命令源码文件中的入口函数，程序中其他的函数都直接或间接的被它调用。所以，它的累积取样计数是所有函数中最高的，达到了22。注意，不论是本地取样计数还是累积取样计数都没有把函数对自身的调用计算在内。函数对自身的调用又被称为递归调用。
-
-最后需要说明的是，图形中的有向线段表示函数之间的调用关系。有向线段旁边的数字为线段起始位置的函数对线段末端位置的函数的调用计数。这里所说的调用计数其实是以函数的累积取样计数为依托的。更具体的讲，如果有一个从函数A到函数B的有向线段且旁边的数字为10，那么就说明在函数B的累加取样计数中有10次计数是由函数A对函数B的直接调用所引起的。也由于这个原因，函数A对函数B的调用计数必定小于等于函数B的累积取样计数。
-
-至此，我们已经对概要图中的所有元素都进行了说明，相信读者已经能够读懂它了。那么，我们怎样通过概要图对程序进行分析呢？
-
-我们可以把概要图中的这个主要图形看成是一张函数调用关系图。在一般情况下，处在非终端节点位置的函数的本地取样计数会非常小，至少会比该函数的累积取样计数小很多。因为它们都是通过对其它函数的调用来实现自身的功能的。进一步说，所有使用Go语言编写的代码的功能最后都需要依托操作系统所提供的API来实现。处在终端节点位置的函数一般都存在于平台相关的源码文件中，甚至有的函数本身就是操作系统的某个API在Go语言中的映射。它们的累积取样计数与本地取样计数是一致的。因此，这类函数的描述信息只有两行，即它的名称和它的累积取样计数。
-
-现在我们已经明确了在概要图中出现的一个函数的本地取样计数、累积取样计数和调用计数的概念和含义以及它们之间的关系。这三个计数是我们分析程序性能的重要依据。
-
-我们可以通过一个函数的累积取样次数计算出执行它所花费的时间。一个函数的累积取样计数越大就说明调用它所花费的CPU时间越多。具体来说，我们可以用CPU取样间隔（10毫秒）乘以函数的累积取样计数得出它所花费的实际时间。虽然这个实际时间只精确到了10毫秒的级别，但是这对于程序性能分析来说已经足够了。即使一个函数的累积取样计数很大，我们也不能判定这个函数本身就是有问题的。我们应该顺藤摸瓜，去寻找这个函数直接或间接调用的函数中最耗费CPU时间的那些函数。其实，这样的查找很容易，因为我们已经有了概要图。在其中的函数调用关系图中，累积取样计数越大的函数就拥有更大的节点（图中的矩形）面积。不过这也有例外，那就是程序的入口函数。广义来讲，在整个函数调用关系中处在初始位置附近且与之相连的有向线段在同一方向上至多只有一个的函数都可以被称作入口函数。无论它们的累积取样计数有多大，其所属的节点的面积都是在函数调用关系图中最小的。由于出现在取样和函数调用关系图中的所有函数几乎都源自入口函数的直接或间接的调用，所以入口函数的累积取样次数必定是它们中最大的。一般情况下，我们并不需要在意入口函数的计数数值，所以在函数调用关系图中也就不需要使用大面积的节点来强调它们。在图5-3中，函数runtime.main和main.main都可以被视为入口函数。另外，在函数调用关系图中，有向线段的粗细也反应了对应的调用计数的大小。
-
-下面，作者总结了根据函数的相关计数来对其进行分析的三个过程：
-
-如果一个处在终端节点位置上的函数的累积取样计数和百分比都很大，就说明它自身花费了过多的CPU时间。这时，需要检查这个函数所实现的功能是否确实需要花费如此多的时间。如果花费的时间超出了我们的估算，则需要通过list命令找出函数体内最耗时的代码并进行进一步分析。如果我们发现这个函数所承担的职责过多，那么可以直接将这个函数拆分成多个拥有不同职责的更小的函数。
-
-如果一个处在非终端节点位置上的函数的累积取样计数和百分比都很大并且超出了我们的估算，那么我们应该首先查看其本地取样计数的大小。如果它的本地取样计数和百分比也很大，我们就需要通过list命令对这个函数体中的代码进行进一步分析。否则，我们就应该把关注点放在其下的分支节点所对应的函数上。如果当前节点下的所有直接分支节点的函数的累积取样计数都不大，但是直接分支节点的数量却非常多（十几甚至几十个），那么大致上可以断定当前节点的函数承担了过多的与流程控制相关的职责，我们需要对它进行拆分甚至重新设计。如果当前节点下的分支节点中包含累积取样计数和百分比很大的函数，那么我们就应该根据这个分支节点的类型（终端节点或非终端节点）来对其进行过程1或过程2的分析。
-
-单从调用计数的角度，我们并不能判断一个函数是否承担了过多的职责或者包含了过多的流程控制逻辑。但是，我们可以把调用计数作为定位问题的一种辅助手段。举个例子，如果根据过程1和过程2中的分析，我们怀疑在函数B及其调用的函数中可能存在性能问题，并且我们还发现函数A对函数B的调用计数也非常大，那么我们就应该想到函数B在取样中的频繁出现也许是由函数A对函数B的频繁调用引起的。在这种情况下，我们就应该先查看函数A中的代码，检查其中是否包含了过多的对函数B的不合理调用。如果存在不合理的调用，我们就应该对这部分代码进行重新设计。除此之外，我们还可以根据调用计数来判定一些小问题。比如，如果一个函数与调用它的所有函数都处于同一个代码包，那么我们就应该考虑把被调用的函数的访问权限设置为包内私有。如果对一个函数的调用都是来自于同一个函数，我们可以考虑在符合单一职责原则的情况下把这两个函数合并。读者可能已经注意到，这与过程1中的一个建议是相互对立的。实际上，这也属于一种推迟优化策略。
-在上述几个分析过程中的所有建议都不是绝对的。程序优化是一个复杂的过程，在很多时候都需要在多个指标或多个解决方案之间进行权衡和博弈。
-
-在这几个分析过程的描述中，我们多次提到了list命令。现在我们就来对它进行说明。先来看一个示例：
-
-(pprof) list ShowDepStruct
-Total: 23 samples
-ROUTINE ====================== main.ShowDepStruct in /home/hc/golang/goc2p
-    /src/helper/pds/showpds.go
-     0     20 Total samples (flat / cumulative)
-     .      .   44:     }
-     .      .   45:     fmt.Printf(&quot;The dependency structure of package '%s':\n&quot;,
-     pkgImportPath)
-     .      .   46:     ShowDepStruct(pn, &quot;&quot;)
-     .      .   47: }
-     .      .   48: 
----
-     .      .   49: func ShowDepStruct(pnode *pkgtool.PkgNode, prefix string) {
-     .      .   50:     var buf bytes.Buffer
-     .      .   51:     buf.WriteString(prefix)
-     .      .   52:     importPath := pnode.ImportPath()
-     .      2   53:     buf.WriteString(importPath)
-     .      1   54:     deps := pnode.Deps()
-     .      .   55:     //fmt.Printf(&quot;P_NODE: '%s', DEP_LEN: %d\n&quot;, importPath,
-     len(deps))
-     .      .   56:     if len(deps) == 0 {
-     .      5   57:         fmt.Printf(&quot;%s\n&quot;, buf.String())
-     .      .   58:         return
-     .      .   59:     }
-     .      .   60:     buf.WriteString(ARROWS)
-     .      .   61:     for _, v := range deps {
-     .     12   62:         ShowDepStruct(v, buf.String())
-     .      .   63:     }
-     .      .   64: }
----
-     .      .   65: 
-     .      .   66: func getPkgImportPath() string {
-     .      .   67:     if len(pkgImportPathFlag) &amp;gt; 0 {
-     .      .   68:         return pkgImportPathFlag
-     .      .   69:     }
-(pprof) 
-我们在pprof工具的交互界面中输入了命令list ShowDepStruct之后得到了很多输出信息。其中，ShowDepStruct为参数routine_regexp的值。输出信息的第一行告诉我们CPU概要文件中的取样一共有23个。这与我们之前讲解gv命令时看到的一样。输出信息的第二行显示，与我们提供的程序正则表达式（也就是参数routine_regexp）的值匹配的函数是main.ShowDepStruct，并且这个函数所在的源码文件的绝对路径是/home/hc/golang/goc2p/src/helper/pds/showpds.go。输出信息中的第三行告诉我们，在main.ShowDepStruct函数体中的代码的本地取样计数的总和是0，而累积取样计数的总和是20。在第三行最右边的括号中，flat代表本地取样计数，而cumulative代表累积取样计数。这是对该行最左边的那两个数字（也就是0和20）的含义的提示。从输出信息的第四行开始是对上述源码文件中的代码的截取，其中包含了main.ShowDepStruct函数的源码。list命令在这些代码的左边添加了对应的行号，这让我们查找代码更加容易。另外，在代码行号左边的对应位置上显示了每行代码的本地取样计数和累积取样计数。如果计数为0，则用英文句号“.”代替。这使得我们可以非常方便的找到存在计数值的代码行。
-
-一般情况下，每行代码对应的本地取样计数和累积取样计数都应该与我们用gv命令生成的函数调用关系图中的计数相同。但是，如果一行代码中存在多个函数调用的话，那么在代码行号左边的计数值就会有偏差。比如，在上述示例中，第62行代码ShowDepStruct(v, buf.String())的累积取样计数是12。但是从之前的函数调用关系图中我们得知，函数main.ShowDepStruct的累积取样计数是10。它们之间的偏差是2。实际上，在程序被执行的时候，第62行代码是由两个操作步骤组成的。第一个步骤是执行函数调用buf.String()并获得结果。第二个步骤是，调用函数ShowDepStruct，同时将变量v``和执行第一个步骤所获得的结果作为参数传入。所以，这2个取样计数应该归咎于第62行代码中的函数调用子句buf.String()。也就是说，第62行代码的累积取样计数由两部分组成，即函数main.ShowDepStruct的累积取样计数和函数bytes.(*Buffer).String的累积取样计数。同理，示例中的第57行代码fmt.Printf(&quot;%s\n&quot;, buf.String())```的累积取样计数也存在偏差。读者可以试着分析一下原因。
-
-如果读者想验证上面所说的产生偏差的原因的话，可以将上面示例中的第62行代码和第57行代码分别拆成两行，然后再对命令源码文件showpds.go进行编译、运行（记得加入相关标记）并用pprof工具的list命令进行查看。不过，验证这个原因还有一个更简便的方式——使用pprof工具中的disasm命令。我们在下面的示例中执行disasm命令并后跟routine_regexp参数值ShowDepStruct。
-
-bash
-(pprof) disasm ShowDepStruct
-Total: 23 samples
-ROUTINE ====================== main.ShowDepStruct
-     0     20 samples (flat, cumulative) 87.0% of total
--------------------- /home/hc/mybook/goc2p/src/helper/pds/showpds.go
-     .      .    49: func ShowDepStruct(pnode *pkgtool.PkgNode, prefix string) {
-&lt;省略部分输出内容&gt;
-     .     10    62: ShowDepStruct(v, buf.String())
-     .      .     80490ce: MOVL main.&amp;amp;buf+3c(SP),AX
-     .      .     80490d2: XORL BX,BX
-     .      .     80490d4: CMPL BX,AX
-     .      .     80490d6: JNE  main.ShowDepStruct+0x25f(SB)
-     .      .     80490d8: LEAL go.string.*+0x12d4(SB),BX
-     .      .     80490de: MOVL 0(BX),CX
-     .      .     80490e0: MOVL 4(BX),AX
-     .      .     80490e3: MOVL main.v+48(SP),BX
-     .      .     80490e7: MOVL BX,0(SP)
-     .      .     80490ea: MOVL CX,4(SP)
-     .      .     80490ee: MOVL AX,8(SP)
-     .     10     80490f2: CALL main.ShowDepStruct(SB)
-     .      .     80490f7: MOVL main.autotmp_0046+44(SP),DX
-     .      .     80490fb: MOVL main.autotmp_0048+70(SP),CX
-     .      .    61: for _, v := range deps {
-     .      .     80490ff: INCL DX
-     .      .     8049100: MOVL main.autotmp_0047+2c(SP),BX
-     .      .     8049104: CMPL BX,DX
-     .      .     8049106: JLT  main.ShowDepStruct+0x20b(SB)
-     .      .    64: }
-     .      .     8049108: ADDL $80,SP
-     .      .     804910e:    RET
-     .      2    62: ShowDepStruct(v, buf.String())
-     .      .     804910f: MOVL 8(AX),DI
-     .      .     8049112: MOVL 4(AX),DX
-     .      .     8049115: MOVL c(AX),CX
-     .      .     8049118: CMPL CX,DX
-     .      .     804911a: JCC  main.ShowDepStruct+0x273(SB)
-     .      .     804911c: CALL runtime.panicslice(SB)
-     .      .     8049121:    UD2
-     .      .     8049123: MOVL DX,SI
-     .      .     8049125: SUBL CX,SI
-     .      .     8049127: MOVL DI,DX
-     .      .     8049129: SUBL CX,DX
-     .      .     804912b: MOVL 0(AX),BP
-     .      .     804912d: ADDL CX,BP
-     .      .     804912f: MOVL BP,main.autotmp_0073+74(SP)
-     .      .     8049133: MOVL main.autotmp_0073+74(SP),BX
-     .      .     8049137: MOVL BX,0(SP)
-     .      .     804913a: MOVL SI,4(SP)
-     .      .     804913e: MOVL DX,8(SP)
-     .      2     8049142: CALL runtime.slicebytetostring(SB)
-&lt;省略部分输出内容&gt;
-(pprof) 
-
-(pprof) 
-由于篇幅原因，我们只显示了部分输出内容。disasm命令与list命令的输出内容有几分相似。实际上，disasm命令在输出函数main.ShowDepStruct的源码的同时还在每一行代码的下面列出了与这行代码对应的汇编指令。并且，命令还在每一行的最左边的对应位置上标注了该行汇编指令的本地取样计数和累积取样计数，同样以英文句号“.”代表计数为0的情况。另外，在汇编指令的左边且仅与汇编指令以一个冒号相隔的并不是像Go语言代码行中那样的行号，而是汇编指令对应的内存地址。
-
-在上面这个示例中，我们只关注命令源码文件showpds.go中的第62行代码`ShowDepStruct(v, buf.String())所对应的汇编指令。请读者着重查看在累积取样计数的列上有数字的行。像这样的行一共有四个。为了方便起见，我们把这四行摘抄如下：
-
-     .     10    62: ShowDepStruct(v, buf.String())
-     .     10     80490f2: CALL main.ShowDepStruct(SB)
-     .      2    62: ShowDepStruct(v, buf.String())
-     .      2     8049142: CALL runtime.slicebytetostring(SB)
-其中的第一行和第三行说明了第62行代码的累积取样计数的组成，而第二行和第四行说明了存在这样的组成的原因。其中，汇编指令CALL main.ShowDepStruct(SB)的累积取样计数为10。也就是说，调用main.ShowDepStruct函数期间分析器进行了10次取样。而汇编指令runtime.slicebytetostring(SB)的累积取样计数为2，意味着在调用函数runtime.slicebytetostring期间分析器进行了2次取样。但是，runtime.slicebytetostring函数又是做什么用的呢？实际上，runtime.slicebytetostring函数正是被函数bytes.(*Buffer).String函数调用的。它实现的功能是把元素类型为byte的切片转换为字符串。综上所述，确实像我们之前说的那样，命令源码文件showpds.go中的第62行代码ShowDepStruct(v, buf.String())的累积取样计数12由函数main.ShowDepStruct的累积取样计数10和函数bytes.(*Buffer).String的累积取样计数2组成。
-
-至此，我们介绍了三个非常有用的命令，它们是gv命令、list命令和disasm命令。我们可以通过gv命令以图像化的方式查看程序中各个函数的本地取样计数、累积取样计数以及它们之间的调用关系和调用计数，并且可以很容易的通过节点面积的大小和有向线段的粗细找到计数值较大的节点。当我们依照之前所描述的分析过程找到可疑的高耗时的函数时，便可以使用list命令来查看函数内部各个代码行的本地取样计数和累积取样计数情况，并能够准确的找到使用了过多的CPU时间的代码。同时，我们还可以使用disasm命令来查看函数中每行代码所对应的汇编指令，并找到代码耗时的根源所在。因此，只要我们适时配合使用上述的这三条命令，就几乎可以在任何情况下理清程序性能问题的来龙去脉。可以说，它们是Go语言为我们提供的用于解决程序性能问题的瑞士军刀。
-
-但是，有时候我们只是想了解哪些函数花费的CPU时间最多。在这种情况下，前面讲到的那几个命令所产生的数据就显得不那么直观了。不过不要担心，pprof工具为此提供了top命令。请看如下示例：
-
-bash
-(pprof) top
-Total: 23 samples
-       5  21.7%  21.7%        5  21.7% runtime.findfunc
-       5  21.7%  43.5%        5  21.7% stkbucket
-       3  13.0%  56.5%        3  13.0% os.(*File).write
-       1   4.3%  60.9%        1   4.3% MHeap_AllocLocked
-       1   4.3%  65.2%        1   4.3% getaddrbucket
-       1   4.3%  69.6%        2   8.7% runtime.MHeap_Alloc
-       1   4.3%  73.9%        1   4.3% runtime.SizeToClass
-       1   4.3%  78.3%        1   4.3% runtime.aeshashbody
-       1   4.3%  82.6%        1   4.3% runtime.atomicload64
-       1   4.3%  87.0%        1   4.3% runtime.convT2E
-(pprof) 
-在默认情况下，top命令会输出以本地取样计数为顺序的列表。我们可以把这个列表叫做本地取样计数排名列表。列表中的每一行都有六列。我们现在从左到右看，第一列和第二列的含义分别是：函数的本地取样计数和该本地取样计数在总取样计数中所占的比例。第四列和第五列的含义分别是：函数的累积取样计数和该累积取样计数在总取样计数中所占的比例。第五列的含义是左边几列数据所对应的函数的名称。读者应该对它们已经很熟悉了。这里需要重点说明的是第三列。第三列的含义是目前已打印出的函数的本地取样计数之和在总取样计数中所占的百分比。更具体的讲，第三行第三列上的百分比值就是列表前三行的三个本地取样计数的总和13除以总取样计数23而得出的。我们还可以通过将第二行上的百分比值43.5%与第三行第二列上的百分比值13.0%相加得到第三行第三列上的百分比值。第三列的百分比值可以使我们很直观的了解到最耗时的几个函数总共花费掉的CPU时间的比重。我们可以利用这一比重为性能优化任务制定更加多样化的目标。比如，我们的性能优化目标是把前四个函数的总耗时比重占比从60.9%降低到50%，等等。
-
-从上面的示例我们可以看出，本地取样计数较大的函数都属于标准库的代码包或者Go语言内部。所以，我们无法或者不方便对这些函数进行优化。我们在之前提到过，在一般情况下，用户程序中的函数的本地取样计数都会非常低甚至是0。所以，如果我们编写的函数处在本地取样计数排名列表中的前几名的位置上话，就说明这个函数可能存在着性能问题。这时就需要我们通过list命令产生针对于这个函数的数据并仔细进行分析。举个例子，如果我们在函数中加入了一些并发控制代码（不论是同步并发控制还是异步的并发控制）使得这个函数本身的执行时间很长并在本地取样计数排名列表中处于前几名的位置，那么我们就应该仔细查看该函数中各行代码的取样计数以及它们的逻辑合理性。比如，用于同步并发控制的代码中是否存在产生死锁的可能性，或者用于异步并发控制的代码中是否存在协调失衡或者资源分配不均的地方。与编写合理和优秀的并发控制代码有关的内容在本书的第三部分。
-
-在默认情况下，top命令输出的列表中只包含本地取样计数最大的前十个函数。如果我们想自定义这个列表的项数，那么需要在top命令后面紧跟一个项数值。比如：命令top5会输出行数为5的列表，命令top20会输出行数为20的列表，等等。
-
-如果我们在top命令后加入标签--cum，那么输出的列表就是以累积取样计数为顺序的。示例如下：
-
-(pprof) top20 --cum
-Total: 23 samples
-       0   0.0%   0.0%       23 100.0% gosched0
-       0   0.0%   0.0%       22  95.7% main.main
-       0   0.0%   0.0%       22  95.7% runtime.main
-       0   0.0%   0.0%       16  69.6% runtime.mallocgc
-       0   0.0%   0.0%       12  52.2% pkgtool.(*PkgNode).Grow
-       0   0.0%   0.0%       11  47.8% runtime.MProf_Malloc
-       0   0.0%   0.0%       10  43.5% main.ShowDepStruct
-       0   0.0%   0.0%       10  43.5% pkgtool.getImportsFromPackage
-       0   0.0%   0.0%        8  34.8% cnew
-       0   0.0%   0.0%        8  34.8% makeslice1
-       0   0.0%   0.0%        8  34.8% runtime.cnewarray
-       0   0.0%   0.0%        7  30.4% gostringsize
-       0   0.0%   0.0%        7  30.4% runtime.slicebytetostring
-       0   0.0%   0.0%        6  26.1% pkgtool.getImportsFromGoSource
-       0   0.0%   0.0%        6  26.1% runtime.callers
-       1   4.3%   4.3%        6  26.1% runtime.gentraceback
-       0   0.0%   4.3%        6  26.1% runtime.makeslice
-       5  21.7%  26.1%        5  21.7% runtime.findfunc
-       5  21.7%  47.8%        5  21.7% stkbucket
-       0   0.0%  47.8%        4  17.4% fmt.Fprintf
-(pprof) 
-我们可以把这类列表叫做累积取样计数排名列表。在这个列表中，有命令源码文件showpds.go和代码包pkgtool中的函数上榜。它们都存在于项目goc2p中。在实际场景中，用户程序中的函数一般都处于函数调用关系图的上游。尤其是命令源码文件的入口函数main.main。所以，它们的累积取样计数一般都比较大，即使在累积取样计数排名列表中名列前茅也不足为奇。不过，如果一个函数的累积取样计数和百分比都很大，就应该引起我们的注意了。这在前面讲解gv命令的时候也有所提及。如果我们想在排名列表中过滤掉一些我们不关注的函数，还可以在命令的最后追加一个或多个我们想忽略的函数的名称或相应的正则表达式。像这样：
-
-(pprof) top20 --cum -fmt\..* -os\..*
-Ignoring samples in call stacks that match 'fmt\..*|os\..*'
-Total: 23 samples
-After ignoring 'fmt\..*|os\..*': 15 samples of 23 (65.2%)
-       0   0.0%   0.0%       15  65.2% gosched0
-       0   0.0%   0.0%       14  60.9% main.main
-       0   0.0%   0.0%       14  60.9% runtime.main
-       0   0.0%   0.0%       12  52.2% runtime.mallocgc
-       0   0.0%   0.0%        8  34.8% pkgtool.(*PkgNode).Grow
-       0   0.0%   0.0%        7  30.4% gostringsize
-       0   0.0%   0.0%        7  30.4% pkgtool.getImportsFromPackage
-       0   0.0%   0.0%        7  30.4% runtime.MProf_Malloc
-       0   0.0%   0.0%        7  30.4% runtime.slicebytetostring
-       0   0.0%   0.0%        6  26.1% main.ShowDepStruct
-       0   0.0%   0.0%        6  26.1% pkgtool.getImportsFromGoSource
-       0   0.0%   0.0%        5  21.7% cnew
-       0   0.0%   0.0%        5  21.7% makeslice1
-       0   0.0%   0.0%        5  21.7% runtime.cnewarray
-       0   0.0%   0.0%        4  17.4% runtime.callers
-       1   4.3%   4.3%        4  17.4% runtime.gentraceback
-       0   0.0%   4.3%        3  13.0% MCentral_Grow
-       0   0.0%   4.3%        3  13.0% runtime.MCache_Alloc
-       0   0.0%   4.3%        3  13.0% runtime.MCentral_AllocList
-       3  13.0%  17.4%        3  13.0% runtime.findfunc
-(pprof) 
-在上面的示例中，我们通过命令top20获取累积取样计数最大的20个函数的信息，同时过滤掉了来自代码包fmt和os中的函数。
-
-我们要详细讲解的最后一个命令是callgrind。pprof工具可以将概要转化为强大的Valgrind工具集中的组件Callgrind支持的格式。Valgrind是可运行在Linux操作系统上的用来成分析程序性能及程序中的内存泄露错误的强力工具。而作为其中组件之一的Callgrind的功能是收集程序运行时的一些数据、函数调用关系等信息。由此可知，Callgrind工具的功能基本上与我们之前使用标准库代码包runtime的API对程序运行情况进行取样的操作是一致的。
-
-我们可以通过callgrind命令将概要文件的内容转化为Callgrind工具可识别的格式并保存到文件中。示例如下：
-
-(pprof) callgrind cpu.callgrind
-Writing callgrind file to 'cpu.callgrind'.
-(pprof)
-文件cpu.callgrind是一个普通文本文件，所以我们可以使用任何文本查看器来查看其中的内容。但更方便的是，我们可以使用callgrind命令直接查看到图形化的数据。现在我们来尝试一下：
-
-(pprof) callgrind
-Writing callgrind file to '/tmp/pprof2641.0.callgrind'.
-Starting 'kcachegrind /tmp/pprof2641.0.callgrind &amp;amp; '
-(pprof) sh: 1: kcachegrind: not found
-我们没有在callgrind命令后添加任何作为参数的统计文件路径。所以callgrind命令会自行使用kcachegrind工具以可视化的方式显示统计数据。然而，我们的系统中还没有安装kcachegrind工具。
-
-在Debian的Linux发行版及其衍生版下，我们可以直接使用命令sudo apt-get install kcachegrind来安装kcachegrind工具。或者我们可以从其官方网站下载安装包来进行安装。
-
-安装好kcachegrind工具之后，我们再来执行callgrind命令：
-
-bash
-(pprof) callgrind
-Writing callgrind file to '/tmp/pprof2641.1.callgrind'.
-Starting 'kcachegrind /tmp/pprof2641.1.callgrind &amp;amp; '
-(pprof) 
-从命令输出的提示信息可以看出，实际上callgrind命令把统计文件保存到了Linux的临时文件夹/tmp中。然后使用kcachegrind工具进行查看。下图为在pprof工具交互模式下执行callgrind命令后弹出的kcachegrind工具界面。
-
-使用kcachegrind工具查看概要数据
-
-图0-4 使用kcachegrind工具查看概要数据
-
-从上图中我们可以看到，kcachegrind工具对数据的展现非常直观。总体上来说，界面被分为了左右两栏。在左栏中的是概要文件中记录的函数的信息列表。列表一共有五列，从左到右的含义 分别是函数的累积取样计数在总取样计数中的百分比、函数的本地取样计数在总取样计数中的百分比、函数被调用的总次数（包括递归调用）、函数的名称以及函数所在的源码文件的名称。而在界面的右栏，我们查看在左栏中选中的行的详细信息。kcachegrind工具的功能非常强大。不过由于对它的介绍超出了本书的范围，所以我们就此暂告一个段落。
-
-我们刚刚提到过，不加任何参数callgrind命令的执行分为两个步骤——生成统计文件和使用kcachegrind工具查看文件内容。还记得我们在之前已经生成了一个名为统计文件cpu.callgrind吗？其实，我们可以使用命令kcachegrind cpu.callgrind直接对它进行查看。执行这个命令后所弹出的kcachegrind工具界面与我们之前看到的完全一致。
-
-到现在为止，我们又介绍了两个可以更直观的统计和查看概要文件中数据的命令。top命令让我们可以在命令行终端中查看这些统计信息。而callgrind命令使我们通过kcachegrind工具查看概要文件的数据成为了可能。这两个命令都让我们可以宏观的、从不同维度的来查看和分析概要文件。它们都是非常给力的统计辅助工具。
-
-除了上面详细讲述的那些命令之外，pprof工具在交互模式下还支持少许其它的命令。这在表5-23中也有所体现。这些命令有的只是主要命令的另一种形式（比如web命令和weblist命令），而有的只是为了提供辅助功能（比如help命令和quit命令）。
-
-在本小节中，我们只使用go tool pprof命令对CPU概要文件进行了查看和分析。读者可以试着对内存概要文件和程序阻塞概要文件进行分析。
-
-相对于普通的编程方式来讲，并发编程都是复杂的。所以，我们就更需要像pprof这样的工具为我们保驾护航。大家可以将本小节当作一篇该工具的文档，并在需要时随时查看。
-&amp;lt;/div&amp;gt;
-&lt;/省略部分输出内容&gt;&lt;/省略部分输出内容&gt;&lt;/div&gt;
-</description>
-        <pubDate>Wed, 29 Nov 2017 00:00:00 +0800</pubDate>
-        <link>https://xiazemin.github.io/MyBlog/web/2017/11/29/go_pprof.html</link>
-        <guid isPermaLink="true">https://xiazemin.github.io/MyBlog/web/2017/11/29/go_pprof.html</guid>
-        
-        
-        <category>web</category>
-        
-      </item>
-    
-      <item>
-        <title>go_vs_code</title>
-        <description>&lt;!-- more --&gt;
-&lt;div class=&quot;container&quot;&gt;
-	一、GoLang的安装
-
-GoLang在Windows的安装比较简单，过程省略。
-
-验证一下:
-
-D:\&amp;gt;go version
-go version go1.5.1 windows/amd64
-
-要注意，GoLang的安装要确保两个环境变量，一个是GOROOT环境变量；二是PATH环境变量要包含$GOROOT\bin值。
-
-二、GoLang插件介绍
-
-对于Visual Studio Code开发工具，有一款优秀的GoLang插件，它的主页为：https://github.com/microsoft/vscode-go
-
-这款插件的特性包括：
-
-代码着彩色
-代码自动完成（使用gocode）
-代码片段
-快速提示信息（使用godef）
-跳转到定义（使用godef）
-搜索参考引用（使用go-find-references）
-文件大纲（使用go-outline）
-重命名（使用gorename）
-保存构建（使用go build和go test）
-代码格式化（使用goreturns或goimports或gofmt）
-调试代码（使用delve）
-三、插件安装
-
-1、安装Visual Studio Code 0.10.2版
-
-去官方网站：https://code.visualstudio.com/ 
-下载Visual Studio Code 0.10.2版，安装过程略。
-
-2、安装插件
-
-进入Visual Studio Code界面，使用快捷键Ctrrl+Shift+p，打开命令面板，选择“Extensions: Install Extension”，等待插件名列表的加载（这一步国内较慢）。 
-然后在输入框“ext install ”输入go，选择go 0.6.15，点击安装，安装完成后要求重启开发环境，点击重启按钮，自动刷新环境。
-
-3、设置GOPATH环境变量
-
-在Windows系统中设置GOPATH环境变量，我的值为D:\tools\VSCode\works 
-缺少GOPATH环境变量通常会报“$GOPATH not set.”这样的错误。
-
-4、开启自动保存
-
-强烈建议把自动保存功能开启。开启方法为：选择菜单File，点击Auto save。
-
-5、安装Git
-
-Windows安装Git的过程省略。记得把git\bin配置到PATH环境变量中。
-
-四、配置插件
-
-Visual Studio Code的配置选项支持GoLang插件的设置，可以通过用户偏好设置或workspace设置进行配置。在菜单File-&amp;gt;Preferences处可以找到。
-
-1、点击User Settings
-
-找到
-
-// Specifies the GOPATH to use when no environment variable is set.
-&quot;go.gopath&quot;: null,
-如果没有设置GOPATH环境变量，那么这里就该设置。
-
-2、执行命令
-
-1）安装gocode
-
-go get -u -v github.com/nsf/gocode
-
-2）安装godef
-
-go get -u -v github.com/rogpeppe/godef
-
-3）安装golint
-
-go get -u -v github.com/golang/lint/golint
-
-4）安装go-find-references
-
-go get -u -v github.com/lukehoban/go-find-references
-
-5）安装go-outline
-
-go get -u -v github.com/lukehoban/go-outline
-
-6）安装goreturns
-
-go get -u -v sourcegraph.com/sqs/goreturns
-
-7）安装gorename
-
-go get -u -v golang.org/x/tools/cmd/gorename
-
-&lt;/div&gt;
-</description>
-        <pubDate>Tue, 28 Nov 2017 00:00:00 +0800</pubDate>
-        <link>https://xiazemin.github.io/MyBlog/web/2017/11/28/go_vs_code.html</link>
-        <guid isPermaLink="true">https://xiazemin.github.io/MyBlog/web/2017/11/28/go_vs_code.html</guid>
-        
-        
-        <category>web</category>
-        
-      </item>
-    
-      <item>
-        <title>scala tuple</title>
-        <description>&lt;!-- more --&gt;
-&lt;div&gt;
-Scala元组将固定数量的项目组合在一起，以便它们可以作为一个整体传递。 与数组或列表不同，元组可以容纳不同类型的对象，但它们也是不可变的。
-val t = (1, &quot;hello&quot;, Console)
-val t = new Tuple3(1, &quot;hello&quot;, Console)
-元组的实际类型取决于它包含的数量和元素以及这些元素的类型。 因此，(99，&quot;Luftballons&quot;)的类型是Tuple2 [Int，String]
-
-元组是类型Tuple1，Tuple2，Tuple3等等。目前在Scala中只能有22个上限，如果您需要更多个元素，那么可以使用集合而不是元组。 对于每个TupleN类型，其中上限为1 &amp;lt;= N &amp;lt;= 22，Scala定义了许多元素访问方法。给定以下定义 -
-val t = (4,3,2,1)
-要访问元组t的元素，可以使用t._1方法访问第一个元素，t._2方法访问第二个元素
-
-scala&amp;gt;  val t2=(&quot;test&quot;,1)
-t2: (String, Int) = (test,1)
-
-scala&amp;gt; t2.getClass
-res0: Class[_ &amp;lt;: (String, Int)] = class scala.Tuple2
-
-scala&amp;gt; val t1=(&quot;test&quot;)
-t1: String = test
-
-scala&amp;gt; t1.getClass
-res3: Class[_ &amp;lt;: String] = class java.lang.String
-
-scala&amp;gt; val t1=(Tuple1)(&quot;test&quot;)
-t1: (String,) = (test,)
-
-scala&amp;gt; t1.getClass
-res8: Class[_ &amp;lt;: (String,)] = class scala.Tuple1
-
-tuple1.apply 的作用：将任何类型的元素装箱为tuple1的对象，可以toDF（）转换了
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-scala&quot; data-lang=&quot;scala&quot;&gt;&lt;span&gt;&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;val&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;data&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;Seq&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;
-      &lt;span class=&quot;nc&quot;&gt;Vectors&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;sparse&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;4&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;Seq&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;((&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;mf&quot;&gt;1.0&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;),&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;3&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;-&lt;/span&gt;&lt;span class=&quot;mf&quot;&gt;2.0&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;))),&lt;/span&gt;
-      &lt;span class=&quot;nc&quot;&gt;Vectors&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;dense&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;mf&quot;&gt;4.0&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;mf&quot;&gt;5.0&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;mf&quot;&gt;0.0&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;mf&quot;&gt;3.0&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;),&lt;/span&gt;
-      &lt;span class=&quot;nc&quot;&gt;Vectors&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;dense&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;mf&quot;&gt;6.0&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;mf&quot;&gt;7.0&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;mf&quot;&gt;0.0&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;mf&quot;&gt;8.0&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;),&lt;/span&gt;
-      &lt;span class=&quot;nc&quot;&gt;Vectors&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;sparse&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;4&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;Seq&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;((&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;mf&quot;&gt;9.0&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;),&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;3&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;mf&quot;&gt;1.0&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;)))&lt;/span&gt;
-    &lt;span class=&quot;o&quot;&gt;)&lt;/span&gt;
-    &lt;span class=&quot;n&quot;&gt;data&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;foreach&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;println&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;_&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;))&lt;/span&gt;
-    &lt;span class=&quot;n&quot;&gt;data&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;map&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nc&quot;&gt;Tuple1&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;apply&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;).&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;foreach&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;println&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;_&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;))&lt;/span&gt;
-    &lt;span class=&quot;k&quot;&gt;val&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;df&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;data&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;map&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nc&quot;&gt;Tuple1&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;apply&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;).&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;toDF&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;&amp;quot;features&amp;quot;&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;)&lt;/span&gt;
-    &lt;span class=&quot;n&quot;&gt;df&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;show&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kc&quot;&gt;false&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;)&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-  
-装箱前
-(4,[0,3],[1.0,-2.0])
-[4.0,5.0,0.0,3.0]
-[6.0,7.0,0.0,8.0]
-(4,[0,3],[9.0,1.0])
-装箱后
-((4,[0,3],[1.0,-2.0]))
-([4.0,5.0,0.0,3.0])
-([6.0,7.0,0.0,8.0])
-((4,[0,3],[9.0,1.0]))
-df显示
-+--------------------+
-|features            |
-+--------------------+
-|(4,[0,3],[1.0,-2.0])|
-|[4.0,5.0,0.0,3.0]   |
-|[6.0,7.0,0.0,8.0]   |
-|(4,[0,3],[9.0,1.0]) |
-+--------------------+
-&lt;/div&gt;
-</description>
-        <pubDate>Sun, 19 Nov 2017 00:00:00 +0800</pubDate>
-        <link>https://xiazemin.github.io/MyBlog/spark/2017/11/19/scala_tuple.html</link>
-        <guid isPermaLink="true">https://xiazemin.github.io/MyBlog/spark/2017/11/19/scala_tuple.html</guid>
-        
-        
-        <category>spark</category>
-        
-      </item>
-    
-      <item>
-        <title>redis协议</title>
-        <description>&lt;!-- more --&gt;
-&lt;p&gt;redis命令发送格式：
-*&lt;参数数量&gt; CRLF 
-$&amp;lt;参数 1 的字节数量&amp;gt; CRLF
-&amp;lt;参数 1 的数据&amp;gt; CRLF 
-... 
-$&lt;参数 N=&quot;&quot; 的字节数量=&quot;&quot;&gt; CRLF&lt;/参数&gt;&lt;/参数数量&gt;&lt;/p&gt;
-&lt;参数 N=&quot;&quot; 的数据=&quot;&quot;&gt; CRLF 
-其中CRLF表示 rn
-
-举个例子：set name wuzhc
-
-格式化输出：
-
-*3 
-$3 
-set 
-$4 
-name 
-$5 
-wuzhc
-
-说明：
-
-*开头，表示有多少个参数，例如*3表示有3个参数（set, name, wuzhc）
-$开头，表示参数的字节长度，例如$3表示set有3个字节，$4表示name有4个字节
-每行rn结尾
-通信协议为：
-
-*3\r\n$3\r\nset\r\n$4\r\nname\r\n$5\r\nwuzhc\r\n
-Redis 回复
-状态回复（status reply）的第一个字节是 &quot;+&quot;，例如+OK\r\n
-错误回复（error reply）的第一个字节是 &quot;-&quot;，例如-No such key\r\n
-整数回复（integer reply）的第一个字节是 &quot;:&quot;，例如:1\r\n
-批量回复（bulk reply）的第一个字节是 &quot;$&quot;，例如 $5\r\nwuzhc\r\n
-多条批量回复（multi bulk reply）的第一个字节是 &quot;*&quot;，例如*2\r\n$5\r\nwuzhc\r\n$3r\nage\r\n
-PHP 实现Redis客户端
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-php&quot; data-lang=&quot;php&quot;&gt;&lt;span&gt;&lt;/span&gt;&lt;span class=&quot;lineno&quot;&gt;  1 &lt;/span&gt;&lt;span class=&quot;cp&quot;&gt;&amp;lt;?php&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt;  2 &lt;/span&gt;&lt;span class=&quot;sd&quot;&gt;/**&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt;  3 &lt;/span&gt;&lt;span class=&quot;sd&quot;&gt; * Created by PhpStorm.&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt;  4 &lt;/span&gt;&lt;span class=&quot;sd&quot;&gt; * User: wuzhc2016@163.com&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt;  5 &lt;/span&gt;&lt;span class=&quot;sd&quot;&gt; * Date: 2017年09月12日&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt;  6 &lt;/span&gt;&lt;span class=&quot;sd&quot;&gt; * Time: 9:08&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt;  7 &lt;/span&gt;&lt;span class=&quot;sd&quot;&gt; */&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt;  8 &lt;/span&gt;&lt;span class=&quot;k&quot;&gt;class&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;Client&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt;  9 &lt;/span&gt;&lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt; 10 &lt;/span&gt;    &lt;span class=&quot;k&quot;&gt;private&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;$_socket&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;null&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt; 11 &lt;/span&gt;    &lt;span class=&quot;k&quot;&gt;public&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;function&lt;/span&gt; &lt;span class=&quot;fm&quot;&gt;__construct&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;$ip&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;$port&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; 
-&lt;span class=&quot;lineno&quot;&gt; 12 &lt;/span&gt;    &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt; 13 &lt;/span&gt;        &lt;span class=&quot;nv&quot;&gt;$this&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;_socket&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;stream_socket_client&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt; 14 &lt;/span&gt;            &lt;span class=&quot;s2&quot;&gt;&amp;quot;tcp://&lt;/span&gt;&lt;span class=&quot;si&quot;&gt;{&lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;$ip&lt;/span&gt;&lt;span class=&quot;si&quot;&gt;}&lt;/span&gt;&lt;span class=&quot;s2&quot;&gt;:&lt;/span&gt;&lt;span class=&quot;si&quot;&gt;{&lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;$port&lt;/span&gt;&lt;span class=&quot;si&quot;&gt;}&lt;/span&gt;&lt;span class=&quot;s2&quot;&gt;&amp;quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt; 15 &lt;/span&gt;            &lt;span class=&quot;nv&quot;&gt;$errno&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt; 16 &lt;/span&gt;            &lt;span class=&quot;nv&quot;&gt;$errstr&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt; 17 &lt;/span&gt;            &lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt; 18 &lt;/span&gt;            &lt;span class=&quot;nx&quot;&gt;STREAM_CLIENT_CONNECT&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt; 19 &lt;/span&gt;        &lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt; 20 &lt;/span&gt;        &lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;!&lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;$this&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;_socket&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt; 21 &lt;/span&gt;            &lt;span class=&quot;k&quot;&gt;exit&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;$errstr&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt; 22 &lt;/span&gt;        &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt; 23 &lt;/span&gt;    &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt; 24 &lt;/span&gt;    &lt;span class=&quot;sd&quot;&gt;/**&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt; 25 &lt;/span&gt;&lt;span class=&quot;sd&quot;&gt;     * 执行redis命令&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt; 26 &lt;/span&gt;&lt;span class=&quot;sd&quot;&gt;     * @param $command&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt; 27 &lt;/span&gt;&lt;span class=&quot;sd&quot;&gt;     * @return array|bool|string&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt; 28 &lt;/span&gt;&lt;span class=&quot;sd&quot;&gt;     */&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt; 29 &lt;/span&gt;    &lt;span class=&quot;k&quot;&gt;public&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;function&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;exec&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;$command&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt; 30 &lt;/span&gt;    &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;      
-&lt;span class=&quot;lineno&quot;&gt; 31 &lt;/span&gt;        &lt;span class=&quot;c1&quot;&gt;// 拼装发送命令格式&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt; 32 &lt;/span&gt;        &lt;span class=&quot;nv&quot;&gt;$command&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;$this&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;_execCommand&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;$command&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt; 33 &lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt; 34 &lt;/span&gt;        &lt;span class=&quot;c1&quot;&gt;// 发送命令到redis&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt; 35 &lt;/span&gt;        &lt;span class=&quot;nb&quot;&gt;fwrite&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;$this&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;_socket&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;$command&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt; 36 &lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt; 37 &lt;/span&gt;        &lt;span class=&quot;c1&quot;&gt;// 解析redis响应内容&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt; 38 &lt;/span&gt;        &lt;span class=&quot;k&quot;&gt;return&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;$this&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;_parseResponse&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;();&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt; 39 &lt;/span&gt;    &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt; 40 &lt;/span&gt;    &lt;span class=&quot;sd&quot;&gt;/**&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt; 41 &lt;/span&gt;&lt;span class=&quot;sd&quot;&gt;     * 将字符改为redis通讯协议格式&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt; 42 &lt;/span&gt;&lt;span class=&quot;sd&quot;&gt;     * 例如mget name age 格式化为 *3\r\n$4\r\nmget\r\n$4\r\nname\r\n$3\r\nage\r\n&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt; 43 &lt;/span&gt;&lt;span class=&quot;sd&quot;&gt;     * @param $command&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt; 44 &lt;/span&gt;&lt;span class=&quot;sd&quot;&gt;     * @return bool|string&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt; 45 &lt;/span&gt;&lt;span class=&quot;sd&quot;&gt;     */&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt; 46 &lt;/span&gt;    &lt;span class=&quot;k&quot;&gt;private&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;function&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;_execCommand&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;$command&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt; 47 &lt;/span&gt;    &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt; 48 &lt;/span&gt;        &lt;span class=&quot;nv&quot;&gt;$line&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;s1&quot;&gt;&amp;#39;&amp;#39;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt; 49 &lt;/span&gt;        &lt;span class=&quot;nv&quot;&gt;$crlf&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;s2&quot;&gt;&amp;quot;&lt;/span&gt;&lt;span class=&quot;se&quot;&gt;\r\n&lt;/span&gt;&lt;span class=&quot;s2&quot;&gt;&amp;quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt; 50 &lt;/span&gt;        &lt;span class=&quot;nv&quot;&gt;$params&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;explode&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;s1&quot;&gt;&amp;#39; &amp;#39;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;$command&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt; 51 &lt;/span&gt;        &lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;empty&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;$params&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;))&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt; 52 &lt;/span&gt;            &lt;span class=&quot;k&quot;&gt;return&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;$line&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt; 53 &lt;/span&gt;        &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt; 54 &lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt; 55 &lt;/span&gt;        &lt;span class=&quot;c1&quot;&gt;// 参数个数&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt; 56 &lt;/span&gt;        &lt;span class=&quot;nv&quot;&gt;$line&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;.=&lt;/span&gt; &lt;span class=&quot;s1&quot;&gt;&amp;#39;*&amp;#39;&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;.&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;count&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;$params&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;.&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;$crlf&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt; 57 &lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt; 58 &lt;/span&gt;        &lt;span class=&quot;c1&quot;&gt;// 各个参数拼装&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt; 59 &lt;/span&gt;        &lt;span class=&quot;k&quot;&gt;foreach&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;((&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;array&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;$params&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;as&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;$param&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt; 60 &lt;/span&gt;            &lt;span class=&quot;nv&quot;&gt;$line&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;.=&lt;/span&gt; &lt;span class=&quot;s1&quot;&gt;&amp;#39;$&amp;#39;&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;.&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;mb_strlen&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;$param&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;s1&quot;&gt;&amp;#39;8bit&amp;#39;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;.&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;$crlf&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt; 61 &lt;/span&gt;            &lt;span class=&quot;nv&quot;&gt;$line&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;.=&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;$param&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;.&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;$crlf&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt; 62 &lt;/span&gt;        &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt; 63 &lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt; 64 &lt;/span&gt;        &lt;span class=&quot;k&quot;&gt;return&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;$line&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt; 65 &lt;/span&gt;    &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt; 66 &lt;/span&gt;    &lt;span class=&quot;sd&quot;&gt;/**&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt; 67 &lt;/span&gt;&lt;span class=&quot;sd&quot;&gt;     * 解析redis回复&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt; 68 &lt;/span&gt;&lt;span class=&quot;sd&quot;&gt;     * @return array|bool|string&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt; 69 &lt;/span&gt;&lt;span class=&quot;sd&quot;&gt;     */&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt; 70 &lt;/span&gt;    &lt;span class=&quot;k&quot;&gt;private&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;function&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;_parseResponse&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;()&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt; 71 &lt;/span&gt;    &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt; 72 &lt;/span&gt;        &lt;span class=&quot;nv&quot;&gt;$line&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;fgets&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;$this&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;_socket&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt; 
-&lt;span class=&quot;lineno&quot;&gt; 73 &lt;/span&gt;        &lt;span class=&quot;nv&quot;&gt;$type&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;$line&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;];&lt;/span&gt; 
-&lt;span class=&quot;lineno&quot;&gt; 74 &lt;/span&gt;        &lt;span class=&quot;nv&quot;&gt;$msg&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;mb_substr&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;$line&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;-&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;2&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;s1&quot;&gt;&amp;#39;8bit&amp;#39;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt; 
-&lt;span class=&quot;lineno&quot;&gt; 75 &lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt; 76 &lt;/span&gt;        &lt;span class=&quot;k&quot;&gt;switch&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;$type&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt; 77 &lt;/span&gt;            &lt;span class=&quot;c1&quot;&gt;// 状态回复&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt; 78 &lt;/span&gt;            &lt;span class=&quot;k&quot;&gt;case&lt;/span&gt; &lt;span class=&quot;s1&quot;&gt;&amp;#39;+&amp;#39;&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt; 79 &lt;/span&gt;                &lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;$msg&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;==&lt;/span&gt; &lt;span class=&quot;s1&quot;&gt;&amp;#39;OK&amp;#39;&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;||&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;$msg&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;==&lt;/span&gt; &lt;span class=&quot;s1&quot;&gt;&amp;#39;PONG&amp;#39;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt; 80 &lt;/span&gt;                    &lt;span class=&quot;k&quot;&gt;return&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;true&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt; 81 &lt;/span&gt;                &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;else&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt; 82 &lt;/span&gt;                    &lt;span class=&quot;k&quot;&gt;return&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;$msg&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt; 83 &lt;/span&gt;                &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt; 84 &lt;/span&gt;            &lt;span class=&quot;c1&quot;&gt;// 错误回复&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt; 85 &lt;/span&gt;            &lt;span class=&quot;k&quot;&gt;case&lt;/span&gt; &lt;span class=&quot;s1&quot;&gt;&amp;#39;-&amp;#39;&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt; 86 &lt;/span&gt;                &lt;span class=&quot;k&quot;&gt;exit&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;$msg&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt; 87 &lt;/span&gt;            &lt;span class=&quot;c1&quot;&gt;// 整数回复&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt; 88 &lt;/span&gt;            &lt;span class=&quot;k&quot;&gt;case&lt;/span&gt; &lt;span class=&quot;s1&quot;&gt;&amp;#39;:&amp;#39;&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt; 89 &lt;/span&gt;                &lt;span class=&quot;k&quot;&gt;return&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;$msg&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt; 90 &lt;/span&gt;            &lt;span class=&quot;c1&quot;&gt;// 批量回复&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt; 91 &lt;/span&gt;            &lt;span class=&quot;k&quot;&gt;case&lt;/span&gt; &lt;span class=&quot;s1&quot;&gt;&amp;#39;$&amp;#39;&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;c1&quot;&gt;// $后面跟数据字节数(长度)&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt; 92 &lt;/span&gt;                &lt;span class=&quot;nv&quot;&gt;$line&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;fread&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;$this&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;_socket&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nx&quot;&gt;int&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;$msg&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;2&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt; &lt;span class=&quot;c1&quot;&gt;// 数据字节数 + (\r\n)两个字节&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt; 93 &lt;/span&gt;                &lt;span class=&quot;k&quot;&gt;return&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;mb_substr&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;$line&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;-&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;2&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;s1&quot;&gt;&amp;#39;8bit&amp;#39;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt; &lt;span class=&quot;c1&quot;&gt;// 去除最后两个字节&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt; 94 &lt;/span&gt;            &lt;span class=&quot;c1&quot;&gt;// 多条批量回复&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt; 95 &lt;/span&gt;            &lt;span class=&quot;k&quot;&gt;case&lt;/span&gt; &lt;span class=&quot;s1&quot;&gt;&amp;#39;*&amp;#39;&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;c1&quot;&gt;// *表示后面有多少个参数&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt; 96 &lt;/span&gt;                &lt;span class=&quot;nv&quot;&gt;$data&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;[];&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt; 97 &lt;/span&gt;                &lt;span class=&quot;k&quot;&gt;for&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;$i&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;$i&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;$msg&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;$i&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;++&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt; 98 &lt;/span&gt;                    &lt;span class=&quot;nv&quot;&gt;$data&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[]&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;$this&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;_parseResponse&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;();&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt; 99 &lt;/span&gt;                &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt;100 &lt;/span&gt;                &lt;span class=&quot;k&quot;&gt;return&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;$data&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt;101 &lt;/span&gt;        &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt;102 &lt;/span&gt;    &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt;103 &lt;/span&gt;&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt;104 &lt;/span&gt;&lt;span class=&quot;c1&quot;&gt;// demo&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt;105 &lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;$client&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;new&lt;/span&gt; &lt;span class=&quot;nx&quot;&gt;Client&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;s1&quot;&gt;&amp;#39;127.0.0.1&amp;#39;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;6379&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt;106 &lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;$client&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;exec&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;s1&quot;&gt;&amp;#39;set name wuzhc&amp;#39;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt;107 &lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;$res&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;$client&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;na&quot;&gt;exec&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;s1&quot;&gt;&amp;#39;get name&amp;#39;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
-&lt;span class=&quot;lineno&quot;&gt;108 &lt;/span&gt;&lt;span class=&quot;nb&quot;&gt;var_dump&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;$res&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-SET
-C:
-SET HENRY  HENRYFAN
-以上命令是设置HENRY 的值为HENRYFAN.在Redis的通讯协议上会以空格把命令拆分成三行;得到最终的命令如下：
-*3\r\n
-$3\r\n
-SET\r\n
-$5\r\n
-HENRY\r\n
-$8\r\n
-HENRYFAN\r\n
-S:
-服务端操作成功
-+OK\r\n
-如果出现错误服务端会返回
--错误信息\r\n
-GET
-C:
-GET HENRY
-产生的通讯指令是：
-*2\r\n
-$3\r\n
-GET\r\n
-$5\r\n
-HENRY\r\n
-S:
- 如果存在这个Key则返回
-$8\r\n
-HENRYFAN\r\n
-不存在返回
-$-1\r\n
-HKEYS
-C:
-HKEYS HENRY
-以上命令是获取对应HENRY有多少个field成员
-*2\r\n
-$5\r\n
-HKEYS\r\n
-$5\r\n
-HENRY\r\n
-S:
-如果不存在任何字段信息
-*0\r\n
-如果存在QQ字段信息
-*1\r\n
-$2\r\n
-QQ\r\n
-HMGET
-C:
-HMGET HENRY QQ
-以上命令是获取HENRY的QQ信息。
-*3\r\n
-$5\r\n
-HMGET\r\n
-$5\r\n
-HENRY\r\n
-$2\r\n
-QQ\r\n
-S:
-如果不存在字段值
-
-*1\r\n
-$-1\r\n
-存在字段值
-
-*1\r\n
-$8\r\n
-28304340\r\n
-&lt;/参数&gt;
-</description>
-        <pubDate>Sat, 18 Nov 2017 00:00:00 +0800</pubDate>
-        <link>https://xiazemin.github.io/MyBlog/web/2017/11/18/redis_protocal.html</link>
-        <guid isPermaLink="true">https://xiazemin.github.io/MyBlog/web/2017/11/18/redis_protocal.html</guid>
-        
-        
-        <category>web</category>
-        
-      </item>
-    
-      <item>
-        <title>jupyter 数学公式</title>
-        <description>&lt;!-- more --&gt;
-&lt;div class=&quot;container&quot;&gt;
-
-&lt;div class=&quot;row&quot;&gt;
-1、数学公式的前后要加上 $ 或 \( 和 \)，比如：$f(x) = 3x + 7$ 和 f(x)=3x+7 效果是一样的；如果用 \[ 和 \]，或者使用 $$ 和 $$，则该公式独占一行；如果用 \begin{equation} 和 \end{equation}，则公式除了独占一行还会自动被添加序号， 如何公式不想编号则使用 \begin{equation*} 和\end{equation*}.
-2、字符
-除了# $ % &amp;amp; ~ _ ^ \ { }普通字符在数学公式中含义一样，若要在数学环境中表示这些符号# $ % &amp;amp; _ { }，需要分别表示为\# \$ \% \&amp;amp; \_ \{ \}，即在个字符前加上\。
-
-3、上标和下标
-用 ^ 来表示上标，用 _ 来表示下标，看一简单例子：
-LaTeX可以通过这符号 $^$ 和 $_$ 来设置上标和下标。使用可以参见：技巧十。
-用 ^ 来表示上标，用 _ 来表示下标，如果上标的内容多于一个字符，注意用 { } 把上标括起来，上下标是可以嵌套的，下面是一些简单例子：
-$\sum_{i=1}^n a_i=0$
-$f(x)=x^{x^x}$
-4、希腊字母
-5、数学函数
-例如sin x， 输入应该为\sin x
-6、在公式中插入文本可以通过 \mbox{text} 在公式中添加text，比如：
-   \documentclass{article}
-	\usepackage{CJK}
-	\begin{CJK*}{GBK}{song} 
-	\begin{document} 
-	$$\mbox{对任意的$x&amp;gt;0$}, \mbox{有 }f(x)&amp;gt;0. $$ 
-	\end{CJK*}
-	\end{document}
-7、分数及开方
-\frac{numerator}{denominator} \sqrt{expression_r_r_r}表示开平方，
-\sqrt[n]{expression_r_r_r} 表示开 n 次方.
-8、省略号（3个点）
-\ldots 表示跟文本底线对齐的省略号；\cdots 表示跟文本中线对齐的省略号，
-9、括号和分隔符
-() 和 [ ] 和 ｜ 对应于自己；
-{} 对应于 \{ \}；
-|| 对应于 \|。
-当要显示大号的括号或分隔符时，要对应用 \left 和 \right
-10、多行的数学公式
-其中&amp;amp;是对其点，表示在此对齐。
-*使latex不自动显示序号，如果想让latex自动标上序号，则把*去掉
-11、矩阵
-12、导数、极限、求和、积分(Derivatives, Limits, Sums and Integrals)
-$\frac{du}{dt}   $
-$  \frac{d^2 u}{dx^2}$
-$\lim_{x \to +\infty}, \inf_{x &amp;gt; s}$
-$\frac{1}{\lim_{u \rightarrow \infty}}, \frac{1}{\lim\limits_{u \rightarrow \infty}} or
-\frac{1}{ \displaystyle \lim_{u \rightarrow \infty}}$
-&lt;/div&gt;
-&lt;/div&gt;
-</description>
-        <pubDate>Sat, 18 Nov 2017 00:00:00 +0800</pubDate>
-        <link>https://xiazemin.github.io/MyBlog/spark/2017/11/18/jupyter_math.html</link>
-        <guid isPermaLink="true">https://xiazemin.github.io/MyBlog/spark/2017/11/18/jupyter_math.html</guid>
-        
-        
-        <category>spark</category>
-        
-      </item>
-    
-      <item>
-        <title>jupyter 数学公式</title>
-        <description>&lt;div class=&quot;container&quot;&gt;
-&lt;div class=&quot;row&quot;&gt;
-	Notebook 文档是由一系列单元（Cell）构成，如何使用Cell？
-
-类型
-
-Code
-可执行的代码，Jupyter命令、Unix命令、各种脚本语言代码
-Markdown
-可书写markdown
-Raw NBconvert
-应该是默认格式（不确定）
-Heading
-标题级别，相当于html里面的h1、h2……
-
-主要有两种形式的单元：
-
-代码单元：这里是你编写代码的地方，通过按 Shift + Enter 运行代码，其结果显示在本单元下方。代码单元左边有 In [1]: 这样的序列标记，方便人们查看代码的执行次序。
-Markdown 单元：在这里对文本进行编辑，采用 markdown 的语法规范，可以设置文本格式、插入链接、图片甚至数学公式。同样使用 Shift + Enter 运行 markdown 单元来显示格式化的文本。
-
-类似于 Linux 的 Vim 编辑器，在 notebook 中也有两种模式：
-
-编辑模式：编辑文本和代码。选中单元并按 Enter 键进入编辑模式，此时单元左侧显示绿色竖线。
-命令模式：用于执行键盘输入的快捷命令。通过 Esc 键进入命令模式，此时单元左侧显示蓝色竖线。
-如果要使用快捷键，首先按 Esc 键进入命令模式，然后按相应的键实现对文档的操作。比如切换成代码单元（Y）或 markdown 单元（M），或者在本单元的下方增加一单元（B）。查看所有快捷命令可以按H。
-&lt;/div&gt;
-&lt;div class=&quot;row&quot;&gt;
-数学公式编辑
-&lt;/div&gt;
-&lt;div class=&quot;row&quot;&gt;
-如果你曾做过严肃的学术研究，一定对 LaTeX 并不陌生，这简直是写科研论文的必备工具，不但能实现严格的文档排版，而且能编辑复杂的数学公式。在 Jupyter Notebook 的 markdown 单元中我们也可以使用 LaTeX 的语法来插入数学公式。
-
-在文本行中插入数学公式，使用一对 $符号，比如质能方程 $E = mc^2$。如果要插入一个数学区块，则使用一对美元$符号。比如下面公式表示 z=x/y：
-&lt;!-- more --&gt;
-&lt;/div&gt;
-&lt;div class=&quot;row&quot;&gt;
-幻灯片制作
-&lt;/div&gt;
-&lt;div class=&quot;row&quot;&gt;
-既然Jupyter Notebook 擅长展示数据分析的过程，除了通过网页形式分享外，当然也可以将其制作成幻灯片的形式。这里有一个幻灯片示例供参考，其制作风格简洁明晰。
-
-那么如何用 Jupyter Notebook 制作幻灯片呢？首先在 notebook 的菜单栏选择 View &amp;gt; Cell Toolbar &amp;gt; Slideshow，这时在文档的每个单元右上角显示了 Slide Type 的选项。通过设置不同的类型，来控制幻灯片的格式。有如下5中类型：
-
-Slide：主页面，通过按左右方向键进行切换。
-Sub-Slide：副页面，通过按上下方向键进行切换。
-Fragment：一开始是隐藏的，按空格键或方向键后显示，实现动态效果。
-Skip：在幻灯片中不显示的单元。
-Notes：作为演讲者的备忘笔记，也不在幻灯片中显示。
-
-当编写好了幻灯片形式的 notebook，如何来演示呢？这时需要使用 nbconvert：
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-bash&quot; data-lang=&quot;bash&quot;&gt;&lt;span&gt;&lt;/span&gt;jupyter nbconvert notebook.ipynb --to slides --post serve&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;/div&gt;
-
-&lt;div class=&quot;row&quot;&gt;
-魔术关键字
-
-魔术关键字（magic keywords），正如其名，是用于控制 notebook 的特殊的命令。它们运行在代码单元中，以 % 或者 %% 开头，前者控制一行，后者控制整个单元。
-
-比如，要得到代码运行的时间，则可以使用 %timeit；如果要在文档中显示 matplotlib 包生成的图形，则使用 % matplotlib inline；如果要做代码调试，则使用 %pdb。但注意这些命令大多是在Python kernel 中适用的，其他 kernel 大多不适用。有许许多多的魔术关键字可以使用，更详细的清单请参考 Built-in magic commands 。
-&lt;/div&gt;
-&lt;/div&gt;
-</description>
-        <pubDate>Sat, 18 Nov 2017 00:00:00 +0800</pubDate>
-        <link>https://xiazemin.github.io/MyBlog/saprk/2017/11/18/jupyter_latex.html</link>
-        <guid isPermaLink="true">https://xiazemin.github.io/MyBlog/saprk/2017/11/18/jupyter_latex.html</guid>
-        
-        
-        <category>saprk</category>
         
       </item>
     
