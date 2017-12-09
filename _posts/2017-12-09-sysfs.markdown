@@ -1,0 +1,87 @@
+---
+title: linux sysfs
+layout: post
+category: linux
+author: 夏泽民
+---
+<!-- more -->
+在调试驱动，或驱动涉及一些参数的输入输出时，难免需要对驱动里的某些变量或内核参数进行读写，或函数调用。此时sysfs接口就很有用了，它可以使得可以在用户空间直接对驱动的这些变量读写或调用驱动的某些函数。sysfs接口与proc文件系统很相似，有人将proc文件系统形容为Windows XP，而将sysfs接口形容为Windows 7。
+而在Android系统中，振动器、背光、电源系统等往往使用sysfs接口作为内核空间和用户空间的接口，驱动程序需要提供这些接口内容。
+
+Sysfs文件系统是一个类 似于proc文件系统的特殊文件系统，用于将系统中的设备组织成层次结构，并向用户模式程序提供详细的内核数据结构信息。
+
+去/sys看一看，
+localhost:/sys#ls /sys/
+block/ bus/ class/ devices/ firmware/ kernel/ module/ power/
+Block目录：包含所有的块设备
+Devices目录：包含系统所有的设备，并根据设备挂接的总线类型组织成层次结构
+Bus目录：包含系统中所有的总线类型
+Drivers目录：包括内核中所有已注册的设备驱动程序
+Class目录：系统中的设备类型（如网卡设备，声卡设备等） 
+sys下面的目录和文件反映了整台机器的系统状况。比如bus，
+localhost:/sys/bus#ls
+i2c/ ide/ pci/ pci express/ platform/ pnp/ scsi/ serio/ usb/
+里面就包含了系统用到的一系列总线，比如pci, ide, scsi, usb等等。比如你可以在usb文件夹中发现你使用的U盘，USB鼠标的信息。
+我们要讨论一个文件系统，首先要知道这个文件系统的信息来源在哪里。所谓信息来源是指文件组织存放的地点。比如，我们挂载一个分区，
+mount -t vfat /dev/hda2 /mnt/C
+我们就知道挂载在/mnt/C下的是一个vfat类型的文件系统，它的信息来源是在第一块硬盘的第2个分区。
+但是，你可能根本没有去关心过sysfs的挂载过程，她是这样被挂载的。
+mount -t sysfs sysfs /sys
+ms看不出她的信息来源在哪。sysfs是一个特殊文件系统，并没有一个实际存放文件的介质。断电后就玩完了。简而言之，sysfs的信息来源是kobject层次结构，读一个sysfs文件，就是动态的从kobject结构提取信息，生成文件。
+
+Kobject 
+Kobject 是Linux 2.6引入的新的设备管理机制，在内核中由struct kobject表示。通过这个数据结构使所有设备在底层都具有统一的接口，kobject提供基本的对象管理，是构成Linux2.6设备模型的核心结 构，它与sysfs文件系统紧密关联，每个在内核中注册的kobject对象都对应于sysfs文件系统中的一个目录。Kobject是组成设备模型的基 本结构。类似于C++中的基类，它嵌入于更大的对象的对象中--所谓的容器--用来描述设备模型的组件。如bus,devices, drivers 都是典型的容器。这些容器就是通过kobject连接起来了，形成了一个树状结构。这个树状结构就与/sys向对应。
+kobject 结构为一些大的数据结构和子系统提供了基本的对象管理，避免了类似机能的重复实现。这些机能包括
+- 对象引用计数.
+- 维护对象链表(集合).
+- 对象上锁.
+- 在用户空间的表示.
+Kobject结构定义为：
+struct kobject {
+char * k name; 指向设备名称的指针
+char name[KOBJ NAME LEN]; 设备名称
+struct kref kref; 对象引用计数
+struct list head entry; 挂接到所在kset中去的单元
+struct kobject * parent; 指向父对象的指针
+struct kset * kset; 所属kset的指针
+struct kobj type * ktype; 指向其对象类型描述符的指针
+struct dentry * dentry; sysfs文件系统中与该对象对应的文件节点路径指针
+};
+其 中的kref域表示该对象引用的计数，内核通过kref实现对象引用计数管理，内核提供两个函数kobject_get()、kobject_put() 分别用于增加和减少引用计数，当引用计数为0时，所有该对象使用的资源释放。Ktype 域是一个指向kobj type结构的指针，表示该对象的类型。
+
+ Kobj type 
+struct kobj_type {
+void (*release)(struct kobject *);
+struct sysfs_ops * sysfs_ops;
+struct attribute ** default_attrs;
+};
+Kobj type数据结构包含三个域：一个release方法用于释放kobject占用的资源；一个sysfs ops指针指向sysfs操作表和一个sysfs文件系统缺省属性列表。Sysfs操作表包括两个函数store()和show()。当用户态读取属性 时，show()函数被调用，该函数编码指定属性值存入buffer中返回给用户态；而store()函数用于存储用户态传入的属性值。
+
+ kset 
+kset最重要的是建立上层(sub-system)和下层的 (kobject)的关联性。kobject 也会利用它了分辨自已是属于那一個类型，然後在/sys 下建立正确的目录位置。而kset 的优先权比较高，kobject会利用自已的*kset 找到自已所属的kset，並把*ktype 指定成該kset下的ktype，除非沒有定义kset，才会用ktype來建立关系。Kobject通过kset组织成层次化的结构，kset是具有相 同类型的kobject的集合，在内核中用kset数据结构表示，定义为：
+struct kset {
+struct subsystem * subsys; 所在的subsystem的指针
+struct kobj type * ktype; 指向该kset对象类型描述符的指针
+struct list head list; 用于连接该kset中所有kobject的链表头
+struct kobject kobj; 嵌入的kobject
+struct kset hotplug ops * hotplug ops; 指向热插拔操作表的指针
+};
+
+包 含在kset中的所有kobject被组织成一个双向循环链表，list域正是该链表的头。Ktype域指向一个kobj type结构，被该kset中的所有kobject共享，表示这些对象的类型。Kset数据结构还内嵌了一个kobject对象（由kobj域表示），所 有属于这个kset 的kobject对象的parent域均指向这个内嵌的对象。此外，kset还依赖于kobj维护引用计数：kset的引用计数实际上就是内嵌的 kobject对象的引用计数。
+
+subsystem 
+如果說kset 是管理kobject 的集合，同理，subsystem 就是管理kset 的集合。它描述系统中某一类设备子系统，如block subsys表示所有的块设备，对应于sysfs文件系统中的block目录。类似的，devices subsys对应于sysfs中的devices目录，描述系统中所有的设备。Subsystem由struct subsystem数据结构描述，定义为：
+struct subsystem {
+struct kset kset; 内嵌的kset对象
+struct rw semaphore rwsem; 互斥访问信号量
+};
+可以看出，subsystem与kset的区别就是多了一个信号量，所以在后来的代码中，subsystem已经完全被kset取缔了。
+每个kset属于某个subsystem，通过设置kset结构中的subsys域指向指定的subsystem可以将一个kset加入到该subsystem。所有挂接到同一subsystem的kset共享同一个rwsem信号量，用于同步访问kset中的链表。
+
+sysfs是用于表现设备驱动模型的文件系统，它基于ramfs。要学习linux的设备驱动模型，就要先做好底层工作，总结sysfs提供给外界的API就是其中之一。sysfs文件系统中提供了四类文件的创建与管理，分别是目录、普通文件、软链接文件、二进制文件。目录层次往往代表着设备驱动模型的结构，软链接文件则代表着不同部分间的关系。比如某个设备的目录只出现在/sys/devices下，其它地方涉及到它时只好用软链接文件链接过去，保持了设备唯一的实例。而普通文件和二进制文件往往代表了设备的属性，读写这些文件需要调用相应的属性读写。
+    sysfs是表现设备驱动模型的文件系统，它的目录层次实际反映的是对象的层次。为了配合这种目录，linux专门提供了两个结构作为sysfs的骨架，它们就是struct kobject和struct kset。我们知道，sysfs是完全虚拟的，它的每个目录其实都对应着一个kobject，要想知道这个目录下有哪些子目录，就要用到kset。从面向对象的角度来讲，kset继承了kobject的功能，既可以表示sysfs中的一个目录，还可以包含下层目录。对于kobject和kset，会在其它文章中专门分析到，这里简单描述只是为了更好地介绍sysfs提供的API。
+sysfs 与 proc 相比有很多优点，最重要的莫过于设计上的清晰。一个 proc 虚拟文件可能有内部格式，如 /proc/scsi/scsi
+，它是可读可写的，(其文件权限被错误地标记为了 0444
+！，这是内核的一个BUG)，并且读写格式不一样，代表不同的操作，应用程序中读到了这个文件的内容一般还需要进行字符串解析，而在写入时需要先用字符串
+格式化按指定的格式写入字符串进行操作；相比而言， sysfs 的设计原则是一个属性文件只做一件事情， sysfs
+属性文件一般只有一个值，直接读取或写入。整个 /proc/scsi 目录在2.6内核中已被标记为过时(LEGACY)，它的功能已经被相应的 /sys 属性文件所完全取代。新设计的内核机制应该尽量使用 sysfs 机制，而将 proc 保留给纯净的“进程文件系统”。
