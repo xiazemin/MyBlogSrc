@@ -5,9 +5,413 @@
     <description>夏泽民的个人主页，学习笔记。</description>
     <link>https://xiazemin.github.io/MyBlog/</link>
     <atom:link href="https://xiazemin.github.io/MyBlog/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Fri, 22 Dec 2017 21:22:15 +0800</pubDate>
-    <lastBuildDate>Fri, 22 Dec 2017 21:22:15 +0800</lastBuildDate>
+    <pubDate>Sun, 24 Dec 2017 20:34:01 +0800</pubDate>
+    <lastBuildDate>Sun, 24 Dec 2017 20:34:01 +0800</lastBuildDate>
     <generator>Jekyll v3.6.0.pre.beta1</generator>
+    
+      <item>
+        <title>UNIX下的5种IO模型</title>
+        <description>&lt;!-- more --&gt;
+&lt;p&gt;套接字的IO操作，如recvfrom，分为两个阶段：&lt;/p&gt;
+
+&lt;p&gt;（1）等待内核中的接收缓冲区中有数据可读。&lt;/p&gt;
+
+&lt;p&gt;（2）将接收缓冲区中的数据复制进应用缓冲区。&lt;/p&gt;
+
+&lt;p&gt;1，阻塞式IO&lt;/p&gt;
+
+&lt;p&gt;文件描述符open时，如果没有指定flags为O_NONBLOCK，或者open后，没有使用fcntl设置O_NONBLOCK，默认文件描述符为阻塞模式。&lt;/p&gt;
+
+&lt;p&gt;阻塞式IO在等待接收缓冲区数据到来时，会阻塞；&lt;/p&gt;
+
+&lt;p&gt;数据到来，进行数据复制时，也会阻塞。&lt;/p&gt;
+
+&lt;p&gt;2，非阻塞式IO&lt;/p&gt;
+
+&lt;p&gt;如上所述，可以通过open或者fcntl设置文件描述符为非阻塞模式。&lt;/p&gt;
+
+&lt;p&gt;非阻塞式IO，当内核缓冲区没有数据时，不会阻塞，会立即返回一个错误——EAGAIN或者EWOULDBLOCK。EAGAIN表示需要再次调用recvfrom，以判断数据是否准备好，这也是非阻塞式IO的用法，不断的调用recvfrom，以判断是否可以读。EWOULDBLOCK是虚拟语气，表示“本应该阻塞”，其实没有阻塞。由于并不确定返回EAGAIN还是EWOULDBLOCK，因此需要对这两个值都进行判断。&lt;/p&gt;
+
+&lt;p&gt;从接收缓冲区向应用缓冲区复制数据阶段，调用进程阻塞。&lt;/p&gt;
+
+&lt;p&gt;3，IO复用&lt;/p&gt;
+
+&lt;p&gt;在阻塞式IO中，如果接收缓冲区没有数据，调用进程阻塞于recvfrom操作。使用select或者poll，可以在此情况下使进程阻塞于select或者poll操作（因此要把文件描述符设置为非阻塞式），而且可以同时检测多个文件描述符是否可读，即检测这些描述符对应的内核中的接收缓冲区是否有数据。&lt;/p&gt;
+
+&lt;p&gt;从接收缓冲区向应用缓冲区复制数据阶段，调用进程阻塞。&lt;/p&gt;
+
+&lt;p&gt;4，信号驱动式IO&lt;/p&gt;
+
+&lt;p&gt;信号驱动式IO与上述三个IO模型相比，即不像阻塞式IO那样阻塞于recvfrom操作，也不像非阻塞式IO那样需要多次调用甚至轮询recvfrom才能得知是否有数据，也不像IO复用那样阻塞于select或者poll，而是当内核接收缓冲区有数据时向调用进程发送一个信号。&lt;/p&gt;
+
+&lt;p&gt;从接收缓冲区向应用缓冲区复制数据阶段，调用进程阻塞。&lt;/p&gt;
+
+&lt;p&gt;5，异步IO&lt;/p&gt;
+
+&lt;p&gt;上述4种IO模型，其不同点在于当接收缓冲区没有数据时，如何判断数据已经到来：阻塞式IO中recvfrom会阻塞直到接收缓冲区有数据；非阻塞式IO通过轮询recvfrom以判断接收缓冲区是否有数据；IO复用中使用select或者poll以判断接收缓冲区是否有数据；信号驱动IO通过信号通知接收缓冲区是否有数据。&lt;/p&gt;
+
+&lt;p&gt;其相同点在于，IO操作的第二个阶段，即从内核接收缓冲区向应用缓冲区复制数据时，调用recvfrom的进程会阻塞。&lt;/p&gt;
+
+&lt;p&gt;可见，上述4种IO模型都会使进程阻塞，直到IO操作的两个阶段都完成才能执行其他操作，因此称为同步IO。&lt;/p&gt;
+
+&lt;p&gt;异步IO模型中，IO操作的两个阶段都不阻塞，因此称为异步IO。&lt;/p&gt;
+
+&lt;p&gt;阻塞IO
+这是我们熟悉的IO模型，一个进程在作IO操作时，非要等到数据从内核空间拷贝到用户进程空间，才会返回。这个模型的优点就是简单，而且在阻塞的时候，CPU还可以进行调度，去执行别的进程。
+非阻塞IO
+一开始我看是非阻塞IO，觉得应该要比阻塞IO模型先进，可是当我一看使用方法的时候，就知道这个模型是不会被实际使用的，仅仅只能作为理论上存在的IO模型。这个模型的观点是：进行IO操作的时候，不阻塞，如果没有数据准备好，就直接返回错误码（或者是别的代码）。因此，使用者就只能不断进行轮询来调用IO函数。这样的后果就是，不仅在宏观上形成了与阻塞IO一共的“阻塞”效果，而且在微观上，CPU一直被用来轮询，造成了CPU的浪费。所以，这个模型还不如阻塞IO模型实用。
+IO复用
+对于IO复用，我的理解有三点：
+在一次系统调用中，实现了询问多个描述符的IO准备情况 —— 根据事件通知
+为了实现第一点，就需要把阻塞的地方进行转移。把一次系统调用，分为两次系统调用。第一次系统调用可以询问多个描述符的IO准备情况，在这个地方进行阻塞；而第二次系统调用，是针对已经准备好IO的描述符进行调用，此时，理论上（按照我的理解），也是会发生阻塞的，只不过是此时内核已经把数据准备好了，阻塞的时间可以忽略不计罢了。
+本质上，还是阻塞的。
+信号IO
+我们都知道，信号是UNIX提供了进程间进行通信的一种方式。我们常用的 kill -9 命令（kill是向进程传递信号量，9只是众多信号中的一个代号），或者是 Ctrl + C 的时候，就是向某个进程发出终止的信号，这样进程就退出了。
+而对于信号IO的模型，我是这么理解的：进程在发起IO操作，系统调用之后，直接访问，内核会在IO数据准备好之后，以某个信号通知发起IO操作的进程，从而使得该进程的信号处理函数可以读取IO数据的操作。
+本质上，这也是阻塞的IO模型，因为在信号处理函数中，同样也是要进行阻塞的，只是在在这个时候发起系统系统，内核已经把数据准备好了。
+异步IO
+这是真正的异步IO了。实现的机制是：用户在发起异步IO的系统调用时，会把相应的数据处理函数作为回调函数，等到IO数据准备好，内核会主动调用此回调函数。可以看出，用户进程在这种模型下，只调用了一次系统调用，而且是立即返回的，因此，就不会出现让进程阻塞的情况，也就符合了POSIX中异步IO的定义。
+其实我理解起来，思路是和信号IO差不多的，唯一不同的地方，对于IO数据的操作，异步IO是由内核主动发起的，而信号IO是由用户进程发起的。&lt;/p&gt;
+
+&lt;p&gt;进程切换
+为了控制进程的执行，内核必须有能力挂起正在CPU上运行的进程，并恢复以前挂起的某个进程的执行。这种行为被称为进程切换。因此可以说，任何进程都是在操作系统内核的支持下运行的，是与内核紧密相关的。&lt;/p&gt;
+
+&lt;p&gt;从一个进程的运行转到另一个进程上运行，这个过程中经过下面这些变化：&lt;/p&gt;
+&lt;ol&gt;
+  &lt;li&gt;保存处理机上下文，包括程序计数器和其他寄存器。&lt;/li&gt;
+  &lt;li&gt;更新PCB信息。&lt;/li&gt;
+  &lt;li&gt;把进程的PCB移入相应的队列，如就绪、在某事件阻塞等队列。&lt;/li&gt;
+  &lt;li&gt;选择另一个进程执行，并更新其PCB。&lt;/li&gt;
+  &lt;li&gt;更新内存管理的数据结构。&lt;/li&gt;
+  &lt;li&gt;恢复处理机上下文。&lt;/li&gt;
+&lt;/ol&gt;
+</description>
+        <pubDate>Sun, 24 Dec 2017 00:00:00 +0800</pubDate>
+        <link>https://xiazemin.github.io/MyBlog/linux/2017/12/24/unix_io5.html</link>
+        <guid isPermaLink="true">https://xiazemin.github.io/MyBlog/linux/2017/12/24/unix_io5.html</guid>
+        
+        
+        <category>linux</category>
+        
+      </item>
+    
+      <item>
+        <title>进程切换</title>
+        <description>&lt;p&gt;为了控制进程的执行，内核必须有能力挂起正在CPU上运行的进程，并恢复以前挂起的某个进程的执行。这种行为被称为进程切换（process switch）、任务切换（task switch）或上下文切换（content switch）。&lt;/p&gt;
+
+&lt;p&gt;硬件上下文
+尽管每个进程都有自己的地址空间，但所有进程必须共享CPU寄存器。因此，在恢复一个进程的执行之前，内核必须确保每个寄存器装载了挂起进程时所需要的值。&lt;/p&gt;
+
+&lt;p&gt;进程恢复执行前必须装入寄存器的一组数据成为硬件上下文（hardware context）。硬件上下文是进程可执行上下文的一个自己，因为可执行上下文包含进程执行时所需要的所有信息。在Linux中，进程硬件上下午的一部分存放在TSS段，而剩余部分存放在内核态堆栈中。&lt;/p&gt;
+
+&lt;p&gt;在下面描述中，假定用prev局部变量表示切换出的进程描述符，next表示切换进的进程描述符。因此，我们把进程切换定义为这样的行为：保存prev硬件上下文，用next硬件上下文代替prev。因为进程切换经常发生，因此减少保存和装入硬件上下文所话费的时间是非常重要的。&lt;/p&gt;
+
+&lt;p&gt;早期Linux版本利用80x86体系结构所需提供的硬件支持，并通过far jmp1指令跳到next进程TSS描述符的选择符来执行进程切换。当执行这条指令时，CPU通过自动保存原来的硬件上下文，装入新的硬件上下文来执行硬件上下文切换。但Linux2.6使用软件执行进程切换，原因有：&lt;/p&gt;
+
+&lt;p&gt;通过一组mov指令逐步执行切换，这样能较好地控制所装入的数据的合法性，一面被恶意用户伪造。far jmp指令不会有这样的检查。
+旧方法和新方法所需时间大致相同。
+进程切换值发生在内核态，在执行进程切换之前，用户态进程使用的所有寄存器内容已保存在内核堆栈上，这也包括ss和esp这对寄存器的内容。&lt;/p&gt;
+
+&lt;p&gt;任务状态段
+80x86体系结构包含了一个特殊的段类型，叫任务状态段（Task State Segment，TSS）来存放硬件上下文，尽管Linux并不使用硬件上下文切换，但是强制它为系统中每个不同的CPU创建一个TSS，这样做主要有两个理由：&lt;/p&gt;
+
+&lt;p&gt;当80x86的一个CPU从用户态切换到内核态时，它就从TSS中后去内核态堆栈的地址。
+当用户态进程试图通过in或out指令访问一个I/O端口时，CPU需要访问存放在TSS中的I/O许可位图以检查该进程是否有访问端口的权利。
+更确切的说，当进程在用户态执行in或out指令时，控制单元执行下列操作：&lt;/p&gt;
+
+&lt;p&gt;检查eflags寄存器中的2位IOPL字段，如果字段的值为3，控制单元就执行I/O指令。否则，执行下一个检查。
+访问tr寄存器以确定当前的TSS和相应的I/O许可权位图。
+检查I/O指令中指定的I/O端口在I/O许可权位图中对应的位，如果该位清，这条指令就执行，否则控制单元产生一个异常。
+tss_struct结构描述TSS的格式，init_tss数组为系统上每个不同的CPU存放一个TSS。在每次进程切换时，内核都更新TSS的某些字段以便相应的CPU控制单元可以安全地检索到它需要的信息。因此，TSS反映了CPU上当前进程的特权级，但不必为没有在运行的进程保留TSS。&lt;/p&gt;
+
+&lt;p&gt;每个TSS有它自己8字节的任务状态段描述符（Task State Segment Descriptor，TSSD）。这个描述符包括指向TSS起始地址的32位Base字段，20位Limit字段。TSSD的S标志位被清0，以表示相应的TSS时系统段的事实。&lt;/p&gt;
+
+&lt;p&gt;Type字段被置位11或9以表示这个段实际上是一个TSS。在Intel的原始设计中，系统中的每个进程都应当指向自己的TSS；Type字段的第二个有效位叫Busy位；如果进程正由CPU执行，则该位置1，否则为0。在Linux的设计中，每个CPU只有一个TSS，因此Busy位总是为1.&lt;/p&gt;
+
+&lt;p&gt;由Linux创建的TSSD存放在全局描述符表（GDT）中，GDT的基地址存放在每个CPU的gdtr寄存器中。每个CPU的tr寄存器包含相应TSS的TSSD选择符，也包含了两个隐藏的非编程字段：TSSD的Base字段和Limit字段。这样，处理器就能够直接TSS寻址而不需要从GDT中检索TSS地址。&lt;/p&gt;
+
+&lt;p&gt;thread字段
+在每次进程切换时，被替换的进程的硬件上下文必须保存在别处。不能像Intel原始设计那样保存在TSS中，因为Linux为每个处理器而不是为每个进程使用TSS。&lt;/p&gt;
+
+&lt;p&gt;因此，每个进程描述符包含一个类型为thread_struct的thread字段，只要进程被切换出去，内核就把其硬件上下文保存在这个结构中。随后可以看到，这个数据结构包含的字段涉及大部分CPU寄存器，但不包括eax、ebx等等这些通用寄存器。它们的值保留在内核堆栈中。&lt;/p&gt;
+
+&lt;p&gt;执行进程切换
+进程切换可能只发生在精心定义的点：schedule()函数，这个函数很长，会在以后更长的篇幅里讲解。。这里，只关注内核如何执行一个进程切换。&lt;/p&gt;
+
+&lt;p&gt;进程切换由两步组成：&lt;/p&gt;
+
+&lt;p&gt;切换页全局目录以安装一个新的地址空间。
+切换内核态堆栈和硬件上下文，因为硬件上下文提供了内核执行新进程所需要的所有信息，包含CPU寄存器。
+switch_to宏
+进程切换的第二步由switch_to宏执行。它是内核中与硬件关系最为密切的例程之一，必须下很多功夫了解。&lt;/p&gt;
+
+&lt;p&gt;&amp;lt;include/asm-generic/system.h&amp;gt;
+/* context switching is now performed out-of-line in switch_to.S */
+extern struct task_struct *__switch_to(struct task_struct *,
+        struct task_struct *);
+#define switch_to(prev, next, last)\
+    do {\
+        ((last) = __switch_to((prev), (next)));\
+    } while (0)
+首先，该宏有三个参数，prev、next和last，prev和next的作用仅是局部变量prev和next的占位符，即它们是输入参数，分别表示被替换进程和新进程描述符的地址在内存中的位置。&lt;/p&gt;
+
+&lt;p&gt;在任何进程切换中，涉及到的是三个进程而不是两个。假设内核决定暂停进程A而激活进程B，在schedule()函数中，prev指向A的描述符，而next指向B的进程描述符。switch_to宏一旦使A暂停，A的执行流就被冻结。&lt;/p&gt;
+
+&lt;p&gt;随后，当内核想再次激活A，就必须暂停另一个进程C，因为这通常不是B，因为B有可能被其他进程比如C切换。于是就要用prev指向C而next指向A来执行另一个switch_to宏。当A恢复它执行的流时，就会找到它原来的内核栈，于是prev局部变量还是指向A的描述符而next指向B的描述符。此时，代表进程A执行的内核就失去了对C的任何引用。但引用对于完成进程切换是有用的，所以需要保留。&lt;/p&gt;
+
+&lt;p&gt;switch_to宏的最后一个参数是输出参数，它表示宏把进程C的描述符地址写在内存的什么位置了，不过，这个是在恢复A执行之后完成的。在进程切换之前，宏把第一个输入参数prev表示的变量存入CPU的eax寄存器。在完成进程切换，A已经恢复执行时，宏把CPU的eax寄存器的内容写入由第三个参数last所指示的A在内存中的位置。因为CPU寄存器不会在切换点发生变化，所以C的描述符地址也存在内存的这个位置。在schedule()执行过程中，last参数指向A的局部变量prev，所以prev被C的地址覆盖。&lt;/p&gt;
+
+&lt;p&gt;__switch_to()函数
+__switch_to()函数执行大多数开始于switch_to()宏的进程切换。这个函数作用于prev_p和next_p参数，这两个参数表示前一个进程和新进程。这个函数的调用不同于一般的函数调用。因为__switch_to()从eax和edx取参数prev_p和next_p，而不像大多数函数一样从栈中取参数。&lt;/p&gt;
+
+&lt;p&gt;&amp;lt;arch/x86/kernel/process_32.c&amp;gt;
+__switch_to(
+    struct task_struct *prev_p,
+    struct task_struct *next_p)
+{
+    struct thread_struct *prev = &amp;amp;prev_p-&amp;gt;thread,
+                 *next = &amp;amp;next_p-&amp;gt;thread;
+    int cpu = smp_processor_id();
+    struct tss_struct *tss = &amp;amp;per_cpu(init_tss, cpu);
+    bool preload_fpu;&lt;/p&gt;
+
+&lt;pre&gt;&lt;code&gt;preload_fpu = tsk_used_math(next_p) &amp;amp;&amp;amp; next_p-&amp;gt;fpu_counter &amp;gt; 5;
+
+__unlazy_fpu(prev_p);
+
+if (preload_fpu)
+    prefetch(next-&amp;gt;xstate);
+
+load_sp0(tss, next);
+
+lazy_save_gs(prev-&amp;gt;gs);
+
+load_TLS(next, cpu);
+
+if (get_kernel_rpl() &amp;amp;&amp;amp; unlikely(prev-&amp;gt;iopl != next-&amp;gt;iopl))
+    set_iopl_mask(next-&amp;gt;iopl);
+
+if (unlikely(task_thread_info(prev_p)-&amp;gt;flags 
+    &amp;amp; _TIF_WORK_CTXSW_PREV
+    || task_thread_info(next_p)-&amp;gt;flags
+    &amp;amp; _TIF_WORK_CTXSW_NEXT))
+    __switch_to_xtra(prev_p, next_p, tss);
+
+if (preload_fpu)
+    clts();
+
+arch_end_context_switch(next_p);
+
+if (preload_fpu)
+    __math_state_restore();
+if (prev-&amp;gt;gs | next-&amp;gt;gs)
+    lazy_load_gs(next-&amp;gt;gs);
+
+percpu_write(current_task, next_p);
+
+return prev_p; } 这个函数执行步骤如下：
+&lt;/code&gt;&lt;/pre&gt;
+
+&lt;p&gt;执行由__unlay_fpu()宏代码产生的代码，以有选择地保存prev_p进程的FPU、MMX以及XMM寄存器的内容。&lt;/p&gt;
+
+&lt;p&gt;执行smp_processor_id()宏获得本地CPU的下表，即执行代码的CPU。该宏从当前进程的thread_info结构的cpu字段获得下标并保存到cpu局部变量。&lt;/p&gt;
+
+&lt;p&gt;把next_p-&amp;gt;thread.esp0装入对应于本地CPU的TSS的esp0字段。其实，任何由sysenter汇编指令产生的从用户态到内核态的特权级转换将把这个地址拷贝到esp寄存器中。&lt;/p&gt;
+
+&lt;p&gt;把next_p进程使用的线程局部存储（TLS）段装载入本地CPU的全局描述符表。&lt;/p&gt;
+
+&lt;p&gt;把fs和gs段寄存器的内容分别存放在prev_p-&amp;gt;thread.fs和prev_p-&amp;gt;thread.gs中。esi寄存器指向prev_p-&amp;gt;thread结构。&lt;/p&gt;
+
+&lt;p&gt;如果fs或gs段寄存器已经被prev_p或next_p进程中的任意一个使用，则将next_p进程的thread_struct描述符中保存的值装入这些寄存器。&lt;/p&gt;
+
+&lt;p&gt;用next_p-&amp;gt;thread.debugreg数组内容装载dr0…dr7中的6个调试寄存器。只有在next_p被挂起时正在使用调试寄存器，这种操作才能进行。&lt;/p&gt;
+
+&lt;p&gt;如果必要，则更新TSS中的I/O位图。然后终止，prev_p参数被拷贝到eax，因为缺省情况下任何C函数的返回值被传给eax寄存器。所以eax的值在调用__switch_to()的过程中被保护起来；这很重要，因为调用该函数时会假定eax总是用来存放将被替换的进程描述符地址。&lt;/p&gt;
+
+&lt;p&gt;汇编语言指令ret把栈定保存的返回地址装入eip程序计数器。不过，__swtich_to()函数时通过简单的跳转被调用的。因此，ret汇编指令在栈中找到标号为1的指令地址，其中标号为1的地址是由switch_to()宏推入堆栈的。&lt;/p&gt;
+</description>
+        <pubDate>Sun, 24 Dec 2017 00:00:00 +0800</pubDate>
+        <link>https://xiazemin.github.io/MyBlog/linux/2017/12/24/thread.html</link>
+        <guid isPermaLink="true">https://xiazemin.github.io/MyBlog/linux/2017/12/24/thread.html</guid>
+        
+        
+        <category>linux</category>
+        
+      </item>
+    
+      <item>
+        <title>IO多路复用之select、poll、epoll</title>
+        <description>&lt;!-- more --&gt;
+&lt;pre&gt;&lt;code&gt; 目前支持I/O多路复用的系统调用有 select，pselect，poll，epoll，I/O多路复用就是通过一种机制，一个进程可以监视多个描述符，一旦某个描述符就绪（一般是读就绪或者写就绪），能够通知程序进行相应的读写操作。但select，pselect，poll，epoll本质上都是同步I/O，因为他们都需要在读写事件就绪后自己负责进行读写，也就是说这个读写过程是阻塞的，而异步I/O则无需自己负责进行读写，异步I/O的实现会负责把数据从内核拷贝到用户空间。
+ 与多进程和多线程技术相比，I/O多路复用技术的最大优势是系统开销小，系统不必创建进程/线程，也不必维护这些进程/线程，从而大大减小了系统的开销。
+&lt;/code&gt;&lt;/pre&gt;
+
+&lt;p&gt;一、使用场景
+IO多路复用是指内核一旦发现进程指定的一个或者多个IO条件准备读取，它就通知该进程。IO多路复用适用如下场合：
+　　1）当客户处理多个描述符时（一般是交互式输入和网络套接口），必须使用I/O复用。
+　　2）当一个客户同时处理多个套接口时，这种情况是可能的，但很少出现。
+　　3）如果一个TCP服务器既要处理监听套接口，又要处理已连接套接口，一般也要用到I/O复用。
+　　4）如果一个服务器即要处理TCP，又要处理UDP，一般要使用I/O复用。
+　　5）如果一个服务器要处理多个服务或多个协议，一般要使用I/O复用。&lt;/p&gt;
+
+&lt;p&gt;二、select、poll、epoll简介
+　　epoll跟select都能提供多路I/O复用的解决方案。在现在的Linux内核里有都能够支持，其中epoll是Linux所特有，而select则应该是POSIX所规定，一般操作系统均有实现。
+1、select
+基本原理：select 函数监视的文件描述符分3类，分别是writefds、readfds、和exceptfds。调用后select函数会阻塞，直到有描述符就绪（有数据 可读、可写、或者有except），或者超时（timeout指定等待时间，如果立即返回设为null即可），函数返回。当select函数返回后，可以通过遍历fdset，来找到就绪的描述符。&lt;/p&gt;
+
+&lt;p&gt;基本流程，如图所示：
+	&lt;img src=&quot;https://xiazemin.github.io/MyBlog/img/ioMutex.png&quot; /&gt;&lt;/p&gt;
+
+&lt;p&gt;　　select目前几乎在所有的平台上支持，其良好跨平台支持也是它的一个优点。select的一个缺点在于单个进程能够监视的文件描述符的数量存在最大限制，在Linux上一般为1024，可以通过修改宏定义甚至重新编译内核的方式提升这一限制，但是这样也会造成效率的降低。&lt;/p&gt;
+
+&lt;p&gt;select本质上是通过设置或者检查存放fd标志位的数据结构来进行下一步处理。这样所带来的缺点是：
+1、select最大的缺陷就是单个进程所打开的FD是有一定限制的，它由FD_SETSIZE设置，默认值是1024。
+　　一般来说这个数目和系统内存关系很大，具体数目可以cat /proc/sys/fs/file-max察看。32位机默认是1024个。64位机默认是2048.
+2、对socket进行扫描时是线性扫描，即采用轮询的方法，效率较低。
+　　当套接字比较多的时候，每次select()都要通过遍历FD_SETSIZE个Socket来完成调度，不管哪个Socket是活跃的，都遍历一遍。这会浪费很多CPU时间。如果能给套接字注册某个回调函数，当他们活跃时，自动完成相关操作，那就避免了轮询，这正是epoll与kqueue做的。
+3、需要维护一个用来存放大量fd的数据结构，这样会使得用户空间和内核空间在传递该结构时复制开销大。&lt;/p&gt;
+
+&lt;p&gt;2、poll
+基本原理：poll本质上和select没有区别，它将用户传入的数组拷贝到内核空间，然后查询每个fd对应的设备状态，如果设备就绪则在设备等待队列中加入一项并继续遍历，如果遍历完所有fd后没有发现就绪设备，则挂起当前进程，直到设备就绪或者主动超时，被唤醒后它又要再次遍历fd。这个过程经历了多次无谓的遍历。&lt;/p&gt;
+
+&lt;p&gt;它没有最大连接数的限制，原因是它是基于链表来存储的，但是同样有一个缺点：
+1）大量的fd的数组被整体复制于用户态和内核地址空间之间，而不管这样的复制是不是有意义。
+2）poll还有一个特点是“水平触发”，如果报告了fd后，没有被处理，那么下次poll时会再次报告该fd。&lt;/p&gt;
+
+&lt;p&gt;注意：从上面看，select和poll都需要在返回后，通过遍历文件描述符来获取已经就绪的socket。事实上，同时连接的大量客户端在一时刻可能只有很少的处于就绪状态，因此随着监视的描述符数量的增长，其效率也会线性下降。&lt;/p&gt;
+
+&lt;p&gt;3、epoll
+　　epoll是在2.6内核中提出的，是之前的select和poll的增强版本。相对于select和poll来说，epoll更加灵活，没有描述符限制。epoll使用一个文件描述符管理多个描述符，将用户关系的文件描述符的事件存放到内核的一个事件表中，这样在用户空间和内核空间的copy只需一次。&lt;/p&gt;
+
+&lt;p&gt;基本原理：epoll支持水平触发和边缘触发，最大的特点在于边缘触发，它只告诉进程哪些fd刚刚变为就绪态，并且只会通知一次。还有一个特点是，epoll使用“事件”的就绪通知方式，通过epoll_ctl注册fd，一旦该fd就绪，内核就会采用类似callback的回调机制来激活该fd，epoll_wait便可以收到通知。&lt;/p&gt;
+
+&lt;p&gt;epoll的优点：
+1、没有最大并发连接的限制，能打开的FD的上限远大于1024（1G的内存上能监听约10万个端口）。
+2、效率提升，不是轮询的方式，不会随着FD数目的增加效率下降。
+　　只有活跃可用的FD才会调用callback函数；即Epoll最大的优点就在于它只管你“活跃”的连接，而跟连接总数无关，因此在实际的网络环境中，Epoll的效率就会远远高于select和poll。
+3、内存拷贝，利用mmap()文件映射内存加速与内核空间的消息传递；即epoll使用mmap减少复制开销。&lt;/p&gt;
+
+&lt;p&gt;epoll对文件描述符的操作有两种模式：LT（level trigger）和ET（edge trigger）。LT模式是默认模式，LT模式与ET模式的区别如下：
+LT模式：当epoll_wait检测到描述符事件发生并将此事件通知应用程序，应用程序可以不立即处理该事件。下次调用epoll_wait时，会再次响应应用程序并通知此事件。
+ET模式：当epoll_wait检测到描述符事件发生并将此事件通知应用程序，应用程序必须立即处理该事件。如果不处理，下次调用epoll_wait时，不会再次响应应用程序并通知此事件。
+1、LT模式
+　　LT(level triggered)是缺省的工作方式，并且同时支持block和no-block socket。在这种做法中，内核告诉你一个文件描述符是否就绪了，然后你可以对这个就绪的fd进行IO操作。如果你不作任何操作，内核还是会继续通知你的。
+2、ET模式
+　　ET(edge-triggered)是高速工作方式，只支持no-block socket。在这种模式下，当描述符从未就绪变为就绪时，内核通过epoll告诉你。然后它会假设你知道文件描述符已经就绪，并且不会再为那个文件描述符发送更多的就绪通知，直到你做了某些操作导致那个文件描述符不再为就绪状态了(比如，你在发送，接收或者接收请求，或者发送接收的数据少于一定量时导致了一个EWOULDBLOCK 错误）。但是请注意，如果一直不对这个fd作IO操作(从而导致它再次变成未就绪)，内核不会发送更多的通知(only once)。
+　　ET模式在很大程度上减少了epoll事件被重复触发的次数，因此效率要比LT模式高。epoll工作在ET模式的时候，必须使用非阻塞套接口，以避免由于一个文件句柄的阻塞读/阻塞写操作把处理多个文件描述符的任务饿死。
+3、在select/poll中，进程只有在调用一定的方法后，内核才对所有监视的文件描述符进行扫描，而epoll事先通过epoll_ctl()来注册一个文件描述符，一旦基于某个文件描述符就绪时，内核会采用类似callback的回调机制，迅速激活这个文件描述符，当进程调用epoll_wait()时便得到通知。(此处去掉了遍历文件描述符，而是通过监听回调的的机制。这正是epoll的魅力所在。)
+注意：如果没有大量的idle-connection或者dead-connection，epoll的效率并不会比select/poll高很多，但是当遇到大量的idle-connection，就会发现epoll的效率大大高于select/poll。&lt;/p&gt;
+
+&lt;p&gt;三、select、poll、epoll区别
+1、支持一个进程所能打开的最大连接数
+ 	&lt;img src=&quot;https://xiazemin.github.io/MyBlog/img/selectPoolConnect.png&quot; /&gt;
+2、FD剧增后带来的IO效率问题
+ 	&lt;img src=&quot;https://xiazemin.github.io/MyBlog/img/selectPollFd.png&quot; /&gt;
+3、消息传递方式
+ 	&lt;img src=&quot;https://xiazemin.github.io/MyBlog/img/selectPollMmap.png&quot; /&gt;&lt;/p&gt;
+
+&lt;p&gt;综上，在选择select，poll，epoll时要根据具体的使用场合以及这三种方式的自身特点：
+1、表面上看epoll的性能最好，但是在连接数少并且连接都十分活跃的情况下，select和poll的性能可能比epoll好，毕竟epoll的通知机制需要很多函数回调。
+2、select低效是因为每次它都需要轮询。但低效也是相对的，视情况而定，也可通过良好的设计改善。&lt;/p&gt;
+
+&lt;p&gt;select() 在BSD中被引入，而poll()是SysV STREAM流控制的产物。因此，这里就有了平台移植上的考虑：纯粹的BSD系统可 能仍然缺少poll()，而早一些的SVR3系统中可能没有select()，尽管在SVR4中将其加入。目前两者都是POSIX. 1g标准，（译者 注：因此在Linux上两者都存在）&lt;/p&gt;
+
+&lt;p&gt;select()和poll()本质上来讲做的是同一件事，只是完成的方法不一样。两者都通过检验一组文件描述符来检测是否有特定的时间将在上面发生并在一定的时间内等待其发生。&lt;/p&gt;
+
+&lt;p&gt;[重要事项：无论select()还是poll()都不对普通文件起很大效用，它们着重用于套接口(socket)、管道(pipe)、伪终端(pty)、终端设备(tty)和其他一些字符设备，但是这些操作都是系统相关(system-dependent)的。]&lt;/p&gt;
+
+&lt;p&gt;select()函数的接口主要是建立在一种叫’fd_set’类型的基础上。它(‘fd_set’) 是一组文件描述符(fd)的集合。由于fd_set类型的长度在不同平台上不同，因此应该用一组标准的宏定义来处理此类变量：&lt;/p&gt;
+
+&lt;pre&gt;&lt;code&gt;fd_set set;
+FD_ZERO(&amp;amp;set);       /* 将set清零 */
+FD_SET(fd, &amp;amp;set);    /* 将fd加入set */
+FD_CLR(fd, &amp;amp;set);    /* 将fd从set中清除 */
+FD_ISSET(fd, &amp;amp;set);  /* 如果fd在set中则真　*/
+&lt;/code&gt;&lt;/pre&gt;
+
+&lt;p&gt;在 过去，一个fd_set通常只能包含少于等于32个文件描述符，因为fd_set其实只用了一个int的比特矢量来实现，在大多数情况下，检查 fd_set能包括任意值的文件描述符是系统的责任，但确定你的fd_set到底能放多少有时你应该检查/修改宏FD_SETSIZE的值。&lt;em&gt;这个值是系 统相关的&lt;/em&gt;，同时检查你的系统中的select() 的man手册。有一些系统对多于1024个文件描述符的支持有问题。[译者注： Linux就是这样 的系统！你会发现sizeof(fd_set)的结果是128(*8 = FD_SETSIZE=1024)　尽管很少你会遇到这种情况。]&lt;/p&gt;
+
+&lt;p&gt;select的基本接口十分简单：&lt;/p&gt;
+
+&lt;pre&gt;&lt;code&gt;int select(int nfds, fd_set *readset, fd_set *writeset,
+           fd_set *exceptset, struct timeval *timeout);
+&lt;/code&gt;&lt;/pre&gt;
+
+&lt;p&gt;其中：&lt;/p&gt;
+
+&lt;p&gt;nfds   &lt;br /&gt;
+     需要检查的文件描述符个数，数值应该比是三组fd_set中最大数
+     更大，而不是实际文件描述符的总数。
+readset  &lt;br /&gt;
+     用来检查可读性的一组文件描述符。
+writeset
+     用来检查可写性的一组文件描述符。
+exceptset
+     用来检查意外状态的文件描述符。(注：错误并不是意外状态)
+timeout
+     NULL指针代表无限等待，否则是指向timeval结构的指针，代表最
+     长等待时间。(如果其中tv_sec和tv_usec都等于0, 则文件描述符
+     的状态不被影响，但函数并不挂起)&lt;/p&gt;
+
+&lt;p&gt;函数将返回响应操作的对应操作文件描述符的总数，且三组数据均在恰当位置被修改，只有响应操作的那一些没有修改。接着应该用FD_ISSET宏来查找返回的文件描述符组。&lt;/p&gt;
+
+&lt;p&gt;poll ()接受一个指向结构’struct pollfd’列表的指针，其中包括了你想测试的文件描述符和事件。事件由一个在结构中事件域的比特掩码确定。当前 的结构在调用后将被填写并在事件发生后返回。在SVR4(可能更早的一些版本)中的 “poll.h”文件中包含了用于确定事件的一些宏定义。事件的等待 时间精确到毫秒 (但令人困惑的是等待时间的类型却是int)，当等待时间为0时，poll()函数立即返回，-1则使poll()一直挂起直到一个指定 事件发生。下面是pollfd的结构。&lt;/p&gt;
+
+&lt;pre&gt;&lt;code&gt; struct pollfd {
+     int fd;        /* 文件描述符 */
+     short events;  /* 等待的事件 */
+     short revents; /* 实际发生了的事件 */
+ };
+&lt;/code&gt;&lt;/pre&gt;
+
+&lt;p&gt;于select()十分相似，当返回正值时，代表满足响应事件的文件描述符的个数，如果返回0则代表在规定事件内没有事件发生。如发现返回为负则应该立即查看 errno，因为这代表有错误发生。&lt;/p&gt;
+
+&lt;p&gt;如果没有事件发生，revents会被清空，所以你不必多此一举。&lt;/p&gt;
+</description>
+        <pubDate>Sun, 24 Dec 2017 00:00:00 +0800</pubDate>
+        <link>https://xiazemin.github.io/MyBlog/linux/2017/12/24/select_poll.html</link>
+        <guid isPermaLink="true">https://xiazemin.github.io/MyBlog/linux/2017/12/24/select_poll.html</guid>
+        
+        
+        <category>linux</category>
+        
+      </item>
+    
+      <item>
+        <title>goclipse eclipse go 开发环境搭建＋跳转支持</title>
+        <description>&lt;!-- more --&gt;
+&lt;p&gt;Eclipse Mars (4.5)  下载地址：https://www.eclipse.org/mars/
+golang 1.6.0rc2 下载地址：http://www.golangtc.com/download
+goclipse 0.14.1 下载地址: https://github.com/GoClipse/goclipse
+eclipse在线安装地址：http://goclipse.github.io/releases/
+eclipse+goclipse安装后不能联想和跳转问题解决
+Window-&amp;gt;Preferences-&amp;gt;Go
+指定$GOPATH 和$GOROOT
+&lt;img src=&quot;https://xiazemin.github.io/MyBlog/img/goclipse.png&quot; /&gt;&lt;/p&gt;
+
+&lt;p&gt;go get -u -v github.com/nsf/gocode&lt;/p&gt;
+
+&lt;p&gt;go install -u -v github.com/nsf/gocode&lt;/p&gt;
+
+&lt;p&gt;go get -v github.com/rogpeppe/godef&lt;/p&gt;
+
+&lt;p&gt;go install -v github.com/rogpeppe/godef&lt;/p&gt;
+
+&lt;p&gt;go get -u -v golang.org/x/tools/cmd/guru&lt;/p&gt;
+
+&lt;p&gt;go install  -u -v golang.org/x/tools/cmd/guru&lt;/p&gt;
+
+&lt;p&gt;&lt;img src=&quot;https://xiazemin.github.io/MyBlog/img/goClipseTool.png&quot; /&gt;
+至此可以完美支持跳转&lt;/p&gt;
+</description>
+        <pubDate>Sun, 24 Dec 2017 00:00:00 +0800</pubDate>
+        <link>https://xiazemin.github.io/MyBlog/web/2017/12/24/goclipse.html</link>
+        <guid isPermaLink="true">https://xiazemin.github.io/MyBlog/web/2017/12/24/goclipse.html</guid>
+        
+        
+        <category>web</category>
+        
+      </item>
     
       <item>
         <title>tcp_flag</title>
@@ -1000,283 +1404,6 @@ execvp(“ps”, ps_argv);&lt;/p&gt;
         
         
         <category>linux</category>
-        
-      </item>
-    
-      <item>
-        <title>各种树的应用场景</title>
-        <description>&lt;!-- more --&gt;
-&lt;p&gt;AVL树：平衡二叉树，一般是用平衡因子差值决定并通过旋转来实现，左右子树树高差不超过1，那么和红黑树比较它是严格的平衡二叉树，平衡条件非常严格（树高差只有1），只要插入或删除不满足上面的条件就要通过旋转来保持平衡。由于旋转是非常耗费时间的。我们可以推出AVL树适合用于插入删除次数比较少，但查找多的情况。&lt;/p&gt;
-
-&lt;p&gt;红黑树：平衡二叉树，通过对任何一条从根到叶子的简单路径上各个节点的颜色进行约束，确保没有一条路径会比其他路径长2倍，因而是近似平衡的。所以相对于严格要求平衡的AVL树来说，它的旋转保持平衡次数较少。用于搜索时，插入删除次数多的情况下我们就用红黑树来取代AVL。（现在部分场景使用跳表来替换红黑树，可搜索“为啥 redis 使用跳表(skiplist)而不是使用 red-black？”）&lt;/p&gt;
-
-&lt;p&gt;B树，B+树：它们特点是一样的，是多路查找树，一般用于数据库系统中，为 什么，因为它们分支多层数少呗，都知道磁盘IO是非常耗时的，而像大量数据存储在磁盘中所以我们要有效的减少磁盘IO次数避免磁盘频繁的查找。B+树是B树的变种树，有n棵子树的节点中含有n个关键字，每个关键字不保存数据，只用来索引，数据都保存在叶子节点。是为文件系统而生的。&lt;/p&gt;
-
-&lt;p&gt;Trie树：又名单词查找树，一种树形结构，常用来操作字符串。它是不同字符串的相同前缀只保存一份。相对直接保存字符串肯定是节省空间的，但是它保存大量字符串时会很耗费内存（是内存）。类似的有前缀树(prefix tree)，后缀树(suffix tree)，radix tree(patricia tree, compact prefix tree)，crit-bit tree（解决耗费内存问题），以及前面说的double array trie。简单的补充下我了解应用前缀树：字符串快速检索，字符串排序，最长公共前缀，自动匹配前缀显示后缀。后缀树：查找字符串s1在s2中，字符串s1在s2中出现的次数，字符串s1,s2最长公共部分，最长回文串。radix tree：linux内核，nginx。&lt;/p&gt;
-</description>
-        <pubDate>Wed, 13 Dec 2017 00:00:00 +0800</pubDate>
-        <link>https://xiazemin.github.io/MyBlog/web/2017/12/13/tree.html</link>
-        <guid isPermaLink="true">https://xiazemin.github.io/MyBlog/web/2017/12/13/tree.html</guid>
-        
-        
-        <category>web</category>
-        
-      </item>
-    
-      <item>
-        <title>sbt</title>
-        <description>&lt;!-- more --&gt;
-&lt;p&gt;SBT = (not so) Simple Build Tool,是scala的构建工具，与java的maven地位相同。其设计宗旨是让简单的项目可以简单的配置，而复杂的项目可以复杂的配置。。。
-sbt项目的目录规约
-和maven一样，sbt有约定了一个通用的目录结构，使用约定的结构会使后面的工作简单很多。
-base/&lt;br /&gt;
-          build.sbt              //构建配置文件
-         /project                 //也是构建配置的一部分
-                      /build.scala                         //高级配置，可选
-         /src/
-                /main
-                          /scala
-                          /java
-                         /resources
-               /test
-                          /scala
-                          /java
-                         /resources
-base代表项目的根目录
-项目配置可以在build.sbt文件里定义，也可以在base/project/build.scala文件里定义，一般情况下build.sbt就已经足够，除非多工程项目或者需要很多特殊定义的项目
-常用命令
-在我读完sbt的getting started文档之前，我也经常有疑问：为什么scala不沿用maven，而要搞出sbt这么个(not so simple) Simple Build Tool ？
-在读完文档，并实际操作后，我现在感觉确实是物有所值的。
-checkout 我的sbtTemple项目后，进入命令行，进入到项目根目录，输入sbt回车进入sbt交互模式
-sbt有哪些命令可用？输入help命令查询，即会列出一堆可用的命令，比如exit,reload等，不知道某个命令的作用？help 命令名，比如输入help exit显示exit命令的作用。 
-列出的命令里并没有compile,test等常用的命令？因为那些不是sbt的命令而是当前工程的task. 输入 tasks命令，就可以看见 compile,test,package等等任务的说明了。
-想查看项目的配置？用show命令，输入show name,看当前项目的名字，输入show libraryDependencies看当前项目依赖的库，libraryDependencies太长记不住？输入lib后按tab键！ 交互窗口是有tab提示的！输入help show，你可以看到show命令的作用是显示配置的值，如果show之后跟的是任务，则执行该任务并显示任务执行的结果。 你可以试试show compile看什么结果,如果你不想执行compile，而是想看命令的说明，请用inspect命令,inspect命令比较复杂，执行后输出的结果也比较复杂，具体这个命令的作用是什么请help inspect, 不过得等理解了build definition的含义后才能看懂help说的是什么。。。
-常用的任务则有compile, test, run,package,doc等，请顾名思义或自行help之。另外这些任务常常还有些变种，比如package-doc,package-src等，用tasks命令查看任务的列表，必有一款适合您
-有一个强大的任务不得不特别拎出来说一下：console
-输入console回车，会在当前会话内启动一个REPL，不要告诉我你不知道REPL是scala解释器的意思。。。就是你在命令行下输入scala回车后进入的那个交互界面。
-强大的是，sbt会加载你的项目依赖的全部jar包和你自己的代码！ 你可以在这个解释器里实验你的半成品。 我的模板工程里有一个sample/Account.scala文件，十几行很简单的代码，你可以看一下，然后在console窗口里玩弄Account类和Account伴生对象.  不过别忘了先import sample._
-因为依赖的jar包也都被加载了，所以对于那些你可能还不熟悉的第三方库，你有可以在console里玩个痛快！这功能很给力，谁用谁知道。
-顺便在提一下，sbt命令有3种执行模式：
-1、交互式，即上文所描述的
-2、批处理式，即在命令行下输入sbt 命令名来执行，比如sbt compile就会编译代码，而不进入交互模式
-3、连绵不绝式，在命令名前加上~号，即会进入连绵不绝模式，比如~compile,会编译当前代码，然后监听代码改变，每当你编辑了代码并保存后，sbt就会自动编译代码，~test也一样，当你修改代码后自动编译并运行单元测试。按回车键可退出此模式。
-build definition释义
-你前面应该试过show name和show libraryDependencies了吧？show出来的结果就是来自你的build.sbt文件，也就是build definition了。打开build.sbt就可以看到name := “sbt11template”  还有其他的一堆xxx := xxxx，很显然的，这就是个key-value pair,  sbt就是读取配置文件并构建一个key-value的map. 但是在build.sbt里面并非key := value, 而是key := expression. 文件里的每一行其实是一句scala语句，不行你可以试试把
-name := “sbt11template” 改成
-name := {“sbt11template”.toUpperCase} 
-然后reload,  再show name,你会看到变成大写的SBT11TEMPLATE
-:=是最常用的方法，其作用就是将key设置成expression的值，相同的key如果被多次赋值，则后面的值会覆盖掉前面的值。适用于简单类型的key，比如name,version等。
-其他的常用方法有
-+=，将值添加进现有值里，适用于集合类型的key，比如libraryDependencies
-++=,将一个集合值加入当前集合里
-~= ，。。这个牛X，你在~=后面写个函数，~=将key的当前值传给你的函数，然后将函数结果作为新值，比如你可以在name := xxx后面再来一句 
-name ~= { _. toUpperCase },一样是把name变成大写
-«= 将另一个key的值赋给当前key,比如auther «= name ,这个方法还有个高级用法，你可以组合多个其他key的值，赋给当前key，用文档里的例子
-name «= (name, organization, version) { (n, o, v) =&amp;gt; “project “ + n + “ from “ + o + “ version “ + v }
-还有适用于集合类型的版本
-&amp;lt;+= 和 &amp;lt;++=
-这些语法的官方文档在此https://github.com/harrah/xsbt/wiki/Getting-Started-More-About-Settings&lt;/p&gt;
-
-&lt;p&gt;依赖管理
-对于不打算通过官方repository管理的第三方库，在项目目录下建个lib目录，把jar包扔进去就行了。
-希望sbt待为管理的则在build.sbt里用下面的语法加入
-libraryDependencies += groupID % artifactID % revision % configuration
-% configuration是可选的，表示某依赖库只在特定配置中需要，比如模板项目里的”org.specs2” %% “specs2” % “1.7.1” % “test” 是单元测试框架，只在测试时需要。
-如果你视力好，会看到其中有个 %%，而不是一个%，这表示要求sbt寻找用当前你配置的scala版本编译出来的jar包，这是因为scala不同版本编译出来的结果会不兼容（悲剧），希望以后scala社区会解决这不兼容的问题。。。
-对于依赖的java语言写的库的jar包，就没这问题了，比如libraryDependencies += “org.slf4j” % “slf4j-api” % “1.6.4” 就不需要%%了
-配置好依赖后，运行sbt update，sbt会自动到maven库和scala官方库里去找这些jar包并下载到你的用户目录的.ivy2目录里面，如果你不同的项目用了相同的库，则sbt下载一次就够了。
-如果你希望sbt从你自己配置的repository里下载，使用这个语法：
-resolvers += name at location
-比如
-resolvers += “Scala-Tools Maven2 Snapshots Repository” at “http://scala-tools.org/repo-snapshots”
-所有的一切都是通过key类配置的，key 的列表在http://harrah.github.com/xsbt/latest/sxr/Keys.scala.html  慢慢看吧。。。
-sbt插件
-现有的sbt插件的列表在https://github.com/harrah/xsbt/wiki/sbt-0.10-plugins-list   安装的方法各有不同，请自己查阅
-我的项目模板里已经配置了sbteclipse插件,运行sbt eclipse或在交互模式下输入eclipse回车即会生成相应的eclipse项目文件，然后你就可以在eclipse里用import  /  existing projects into workspace来导入了。
-添加依赖&lt;/p&gt;
-
-&lt;p&gt;这个简单的解析器对于这点输入内容是可以正常工作的，但是我们还需要加入测试代码并且对它进行一些改造。首先要做的就是把specs测试库以及一个真正的JSON解析器加入到我们的工程里来。为了达到这个目标，我们需要在默认的工程结构上进行改造，然后创建项目。把下面的内容添加到project/build/SampleProject.scala里：&lt;/p&gt;
-
-&lt;p&gt;import sbt._&lt;/p&gt;
-
-&lt;p&gt;class SampleProject(info: ProjectInfo) extends DefaultProject(info) {
-  val jackson = “org.codehaus.jackson” % “jackson-core-asl” % “1.6.1”
-  val specs = “org.scala-tools.testing” % “specs_2.8.0” % “1.6.5” % “test”
-}
-常用命令&lt;/p&gt;
-
-&lt;p&gt;actions – 显示对当前工程可用的命令
-update – 下载依赖
-compile – 编译代码
-test – 运行测试代码
-package – 创建一个可发布的jar包
-publish-local – 把构建出来的jar包安装到本地的ivy缓存
-publish – 把jar包发布到远程仓库（如果配置了的话)
-更多命令&lt;/p&gt;
-
-&lt;p&gt;test-failed – 运行失败的spec
-test-quick – 运行所有失败的以及/或者是由依赖更新的spec
-clean-cache – 清除所有的sbt缓存。类似于sbt的clean命令
-clean-lib – 删除lib_managed下的所有内容&lt;/p&gt;
-
-&lt;p&gt;sbt结构说明&lt;/p&gt;
-
-&lt;p&gt;基础目录&lt;/p&gt;
-
-&lt;p&gt;在 sbt 的术语里，“基础目录”是包含项目的目录。所以，如果你创建了一个和 Hello, World 一样的项目hello ，包含 hello/build.sbt 和 hello/hw.scala， hello 就是基础目录。&lt;/p&gt;
-
-&lt;p&gt;源代码&lt;/p&gt;
-
-&lt;p&gt;源代码可以像 hello/hw.scala 一样的放在项目的基础目录中。然而，大多数人不会在真实的项目中这样做，因为太杂乱了。 sbt 和 Maven 的默认的源文件的目录结构是一样的（所有的路径都是相对于基础目录的）：&lt;/p&gt;
-
-&lt;p&gt;src/
-  main/
-    resources/
-       &lt;files to=&quot;&quot; include=&quot;&quot; in=&quot;&quot; main=&quot;&quot; jar=&quot;&quot; here=&quot;&quot;&gt;
-    scala/
-       &amp;lt;main Scala sources&amp;gt;
-    java/
-       &amp;lt;main Java sources&amp;gt;
-  test/
-    resources
-       &lt;files to=&quot;&quot; include=&quot;&quot; in=&quot;&quot; test=&quot;&quot; jar=&quot;&quot; here=&quot;&quot;&gt;
-    scala/
-       &lt;test Scala=&quot;&quot; sources=&quot;&quot;&gt;
-    java/
-       &lt;test Java=&quot;&quot; sources=&quot;&quot;&gt;
-src/ 中其他的目录将被忽略。而且，所有的隐藏目录也会被忽略。&lt;/test&gt;&lt;/test&gt;&lt;/files&gt;&lt;/files&gt;&lt;/p&gt;
-
-&lt;p&gt;构建产品&lt;/p&gt;
-
-&lt;p&gt;构建出来的文件（编译的 classes，打包的 jars，托管文件，caches 和文档）默认写在 target 目录中。&lt;/p&gt;
-
-&lt;p&gt;交互模式&lt;/p&gt;
-
-&lt;p&gt;在你的项目目录下运行 sbt 不跟任何参数：&lt;/p&gt;
-
-&lt;p&gt;$ sbt
-执行 sbt 不跟任何命令行参数将会进入交互模式。交互模式有一个命令行（含有 tab 自动补全功能和历史记录）。&lt;/p&gt;
-
-&lt;p&gt;例如，在 sbt 命令行里输入 compile：&lt;/p&gt;
-
-&lt;blockquote&gt;
-  &lt;p&gt;compile
-再次 compile，只需要按向上的方向键，然后回车。 输入 run 来启动程序。 输入 exit 或者 Ctrl+D （Unix）或者 Ctrl+Z （Windows）可以退出交互模式。&lt;/p&gt;
-&lt;/blockquote&gt;
-
-&lt;p&gt;批处理模式&lt;/p&gt;
-
-&lt;p&gt;你也可以用批处理模式来运行 sbt，可以以空格为分隔符指定参数。对于接受参数的 sbt 命令，将命令和参数用引号引起来一起传给 sbt。例如：&lt;/p&gt;
-
-&lt;p&gt;$ sbt clean compile “testOnly TestA TestB”
-在这个例子中，testOnly 有两个参数 TestA 和 TestB。这个命令会按顺序执行（clean， compile， 然后 testOnly）。&lt;/p&gt;
-
-&lt;p&gt;常用命令&lt;/p&gt;
-
-&lt;p&gt;下面是一些非常常用的的 sbt 命令。更加详细的列表请参见 命令行参考。&lt;/p&gt;
-
-&lt;p&gt;clean	删除所有生成的文件 （在 target 目录下）。
-compile	编译源文件（在 src/main/scala 和 src/main/java 目录下）。
-test	编译和运行所有测试。
-console	进入到一个包含所有编译的文件和所有依赖的 classpath 的 Scala 解析器。输入 :quit， Ctrl+D （Unix），或者 Ctrl+Z （Windows） 返回到 sbt。
-run &lt;参数&gt;*	在和 sbt 所处的同一个虚拟机上执行项目的 main class。
-package	将 src/main/resources 下的文件和 src/main/scala 以及 src/main/java 中编译出来的 class 文件打包成一个 jar 文件。
-help &lt;命令&gt;	显示指定的命令的详细帮助信息。如果没有指定命令，会显示所有命令的简介。
-reload	重新加载构建定义（build.sbt， project/*.scala， project/*.sbt 这些文件中定义的内容)。在修改了构建定义文件之后需要重新加载。
-添加依赖库&lt;/命令&gt;&lt;/参数&gt;&lt;/p&gt;
-
-&lt;p&gt;有两种方式添加第三方的依赖。一种是将 jar 文件 放入 lib/（非托管的依赖）中，另一种是在build.sbt 中添加托管的依赖，像这样：&lt;/p&gt;
-
-&lt;p&gt;val derby = “org.apache.derby” % “derby” % “10.4.1.3”&lt;/p&gt;
-
-&lt;p&gt;lazy val commonSettings = Seq(
-  organization := “com.example”,
-  version := “0.1.0”,
-  scalaVersion := “2.11.4”
-)&lt;/p&gt;
-
-&lt;p&gt;lazy val root = (project in file(“.”)).
-  settings(commonSettings: _*).
-  settings(
-    name := “hello”,
-    libraryDependencies += derby
-  )&lt;/p&gt;
-
-</description>
-        <pubDate>Wed, 13 Dec 2017 00:00:00 +0800</pubDate>
-        <link>https://xiazemin.github.io/MyBlog/spark/2017/12/13/sbt.html</link>
-        <guid isPermaLink="true">https://xiazemin.github.io/MyBlog/spark/2017/12/13/sbt.html</guid>
-        
-        
-        <category>spark</category>
-        
-      </item>
-    
-      <item>
-        <title>radix tree</title>
-        <description>&lt;p&gt;基数树&lt;/p&gt;
-
-&lt;p&gt;对于长整型数据的映射，如何解决Hash冲突和Hash表大小的设计是一个很头疼的问题。
-radix树就是针对这种稀疏的长整型数据查找，能快速且节省空间地完成映射。借助于Radix树，我们可以实现对于长整型数据类型的路由。利用radix树可以根据一个长整型（比如一个长ID）快速查找到其对应的对象指针。这比用hash映射来的简单，也更节省空间，使用hash映射hash函数难以设计，不恰当的hash函数可能增大冲突，或浪费空间。&lt;/p&gt;
-
-&lt;p&gt;radix tree是一种多叉搜索树，树的叶子结点是实际的数据条目。每个结点有一个固定的、2^n指针指向子结点（每个指针称为槽slot，n为划分的基的大小）&lt;/p&gt;
-
-&lt;p&gt;Radix树在Linux中的应用：
-Linux基数树（radix tree）是将long整数键值与指针相关联的机制，它存储有效率，并且可快速查询，用于整数值与指针的映射（如：IDR机制）、内存管理等。
-IDR（ID Radix）机制是将对象的身份鉴别号整数值ID与对象指针建立关联表，完成从ID与指针之间的相互转换。IDR机制使用radix树状结构作为由id进行索引获取指针的稀疏数组，通过使用位图可以快速分配新的ID，IDR机制避免了使用固定尺寸的数组存放指针。IDR机制的API函数在lib/idr.c中实现。&lt;/p&gt;
-
-&lt;p&gt;Linux radix树最广泛的用途是用于内存管理，结构address_space通过radix树跟踪绑定到地址映射上的核心页，该radix树允许内存管理代码快速查找标识为dirty或writeback的页。其使用的是数据类型unsigned long的固定长度输入的版本。每级代表了输入空间固定位数。Linux radix树的API函数在lib/radix-tree.c中实现。（把页指针和描述页状态的结构映射起来，使能快速查询一个页的信息。）&lt;/p&gt;
-
-&lt;p&gt;Linux内核利用radix树在文件内偏移快速定位文件缓存页。 
-Linux(2.6.7) 内核中的分叉为 64(2^6)，树高为 6(64位系统)或者 11(32位系统)，用来快速定位 32 位或者 64 位偏移，radix tree 中的每一个叶子节点指向文件内相应偏移所对应的Cache项。&lt;/p&gt;
-
-&lt;p&gt;【radix树为稀疏树提供了有效的存储，代替固定尺寸数组提供了键值到指针的快速查找。】&lt;/p&gt;
-
-&lt;p&gt;radix树概述&lt;/p&gt;
-
-&lt;p&gt;radix树是通用的字典类型数据结构，radix树又称为PAT位树（Patricia Trie or crit bit tree）。Linux内核使用了数据类型unsigned long的固定长度输入的版本。每级代表了输入空间固定位数。
-radix tree是一种多叉搜索树，树的叶子结点是实际的数据条目。每个结点有一个固定的、2^n指针指向子结点（每个指针称为槽slot），并有一个指针指向父结点。
-Linux内核利用radix树在文件内偏移快速定位文件缓存页，图4是一个radix树样例，该radix树的分叉为4(22)，树高为4，树的每个叶子结点用来快速定位8位文件内偏移，可以定位4x4x4x4=256页，如：图中虚线对应的两个叶子结点的路径组成值0x00000010和0x11111010，指向文件内相应偏移所对应的缓存页
-&lt;!-- more --&gt;&lt;/p&gt;
-&lt;div class=&quot;container&quot;&gt;
-	&lt;div class=&quot;row&quot;&gt;
-	&lt;img src=&quot;https://xiazemin.github.io/MyBlog/img/radix_tree.jpg&quot; /&gt;
-	&lt;/div&gt;
-&lt;/div&gt;
-&lt;p&gt;Linux radix树每个结点有64个slot，与数据类型long的位数相同，图1显示了一个有3级结点的radix树，每个数据条目（item）可用3个6位的键值（key）进行索引，键值从左到右分别代表第1~3层结点位置。没有孩子的结点在图中不出现。因此，radix树为稀疏树提供了有效的存储，代替固定尺寸数组提供了键值到指针的快速查找。 
-radix树slot数&lt;/p&gt;
-
-&lt;p&gt;Linux内核根用户配置将树的slot数定义为4或6，即每个结点有16或64个slot，如图2所示，当树高为1时，64个slot对应64个页，当树高为2时，对应64*64个页。&lt;/p&gt;
-</description>
-        <pubDate>Wed, 13 Dec 2017 00:00:00 +0800</pubDate>
-        <link>https://xiazemin.github.io/MyBlog/linux/2017/12/13/radix_tree.html</link>
-        <guid isPermaLink="true">https://xiazemin.github.io/MyBlog/linux/2017/12/13/radix_tree.html</guid>
-        
-        
-        <category>linux</category>
-        
-      </item>
-    
-      <item>
-        <title>maven 安装</title>
-        <description>&lt;!-- more --&gt;
-&lt;p&gt;https://maven.apache.org/download.cgi?Preferred=http%3A%2F%2Fmirror.bit.edu.cn%2Fapache%2F
-下载 Maven, 并解压到某个目录。例如/Users/robbie/apache-maven-3.3.3&lt;/p&gt;
-
-&lt;p&gt;打开Terminal,输入以下命令，设置Maven classpath&lt;/p&gt;
-
-&lt;p&gt;$ vi ~/.bash_profile
-添加下列两行代码，之后保存并退出Vi：
-export M2_HOME=/Users/robbie/apache-maven-3.3.3
-export PATH=$PATH:$M2_HOME/bin&lt;/p&gt;
-
-</description>
-        <pubDate>Wed, 13 Dec 2017 00:00:00 +0800</pubDate>
-        <link>https://xiazemin.github.io/MyBlog/spark/2017/12/13/maven.html</link>
-        <guid isPermaLink="true">https://xiazemin.github.io/MyBlog/spark/2017/12/13/maven.html</guid>
-        
-        
-        <category>spark</category>
         
       </item>
     
