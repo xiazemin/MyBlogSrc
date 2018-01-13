@@ -5,9 +5,356 @@
     <description>夏泽民的个人主页，学习笔记。</description>
     <link>https://xiazemin.github.io/MyBlog/</link>
     <atom:link href="https://xiazemin.github.io/MyBlog/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Fri, 12 Jan 2018 21:21:48 +0800</pubDate>
-    <lastBuildDate>Fri, 12 Jan 2018 21:21:48 +0800</lastBuildDate>
+    <pubDate>Sat, 13 Jan 2018 18:14:26 +0800</pubDate>
+    <lastBuildDate>Sat, 13 Jan 2018 18:14:26 +0800</lastBuildDate>
     <generator>Jekyll v3.6.0.pre.beta1</generator>
+    
+      <item>
+        <title>spark on hive</title>
+        <description>&lt;p&gt;$cp hive/hive/conf/hive-site.xml spark/spark/conf/
+&lt;!-- more --&gt;
+启动hive
+启动spark&lt;/p&gt;
+
+&lt;p&gt;import org.apache.spark.sql.SparkSession
+val sparkSession = SparkSession.builder.master(“local”).enableHiveSupport().getOrCreate();&lt;/p&gt;
+
+&lt;p&gt;Caused by: ERROR XJ040: Failed to start database ‘metastore_db’ with class loader org.apache.spark.sql.hive.client.IsolatedClientLoader$$anon$1@294b045b, see the next exception for details.
+	at org.apache.derby.iapi.error.StandardException.newException(Unknown Source)
+	at org.apache.derby.impl.jdbc.SQLExceptionFactory.wrapArgsForTransportAcrossDRDA(Unknown Source)
+	… 150 more
+Caused by: ERROR XSDB6: Another instance of Derby may have already booted the database /Users/didi/metastore_db.&lt;/p&gt;
+
+&lt;p&gt;在使用Hive on Spark模式操作hive里面的数据时，报以上错误，原因是因为HIVE采用了derby这个内嵌数据库作为数据库，它不支持多用户同时访问,解决办法就是把derby数据库换成mysql数据库即可&lt;/p&gt;
+
+&lt;p&gt;解决方式：&lt;/p&gt;
+
+&lt;p&gt;不使用默认的内嵌数据库derby，采用mysql作为统计的存储信息。&lt;/p&gt;
+
+&lt;p&gt;修改相关配置信息（hive-site.xml）：&lt;/p&gt;
+
+&lt;property&gt;
+
+       &lt;name&gt;hive.stats.dbclass&lt;/name&gt;
+
+       &lt;value&gt;jdbc:mysql&lt;/value&gt;
+
+&lt;/property&gt;
+
+&lt;property&gt;
+
+       &lt;name&gt;hive.stats.jdbcdriver&lt;/name&gt;
+
+       &lt;value&gt;com.mysql.jdbc.Driver&lt;/value&gt;
+
+&lt;/property&gt;
+
+&lt;property&gt;
+
+       &lt;name&gt;hive.stats.dbconnectionstring&lt;/name&gt;
+
+       &lt;value&gt;jdbc:mysql://localhost:3306/TempStatsStore&lt;/value&gt;
+
+&lt;/property&gt;
+
+&lt;p&gt;修改完成保存。
+另外后面还有一个步骤就是要在mysql里创建TempStatsStore这个数据库（mysql里不会自动创建该库，在derby里会自动创建）&lt;/p&gt;
+
+&lt;p&gt;方式二
+mv  metastore_db metastore_db_bak&lt;/p&gt;
+
+&lt;p&gt;scala&amp;gt; val sparkSession = SparkSession.builder.master(“local”).enableHiveSupport().getOrCreate();
+18/01/13 15:55:44 WARN spark.SparkContext: Using an existing SparkContext; some configuration may not take effect.
+18/01/13 15:55:45 WARN conf.HiveConf: HiveConf of name hive.conf.hidden.list does not exist
+18/01/13 15:55:47 WARN conf.HiveConf: HiveConf of name hive.conf.hidden.list does not exist
+18/01/13 15:55:49 WARN metastore.ObjectStore: Version information not found in metastore. hive.metastore.schema.verification is not enabled so recording the schema version 1.2.0
+18/01/13 15:55:50 WARN metastore.ObjectStore: Failed to get database default, returning NoSuchObjectException
+18/01/13 15:55:51 WARN metastore.ObjectStore: Failed to get database global_temp, returning NoSuchObjectException
+18/01/13 15:55:51 WARN conf.HiveConf: HiveConf of name hive.conf.hidden.list does not exist
+sparkSession: org.apache.spark.sql.SparkSession = org.apache.spark.sql.SparkSession@14c16388&lt;/p&gt;
+
+&lt;p&gt;beeline&amp;gt;  !connect jdbc:hive2://localhost:10000&lt;/p&gt;
+
+&lt;p&gt;0: jdbc:hive2://localhost:10000&amp;gt; show tables;
+Error: Error while processing statement: FAILED: Execution Error, return code 1 from org.apache.hadoop.hive.ql.exec.DDLTask. MetaException(message:For direct MetaStore DB connections, we don’t support retries at the client level.) (state=08S01,code=1)&lt;/p&gt;
+
+&lt;p&gt;scala&amp;gt; sparkSession.sql(“CREATE TABLE IF NOT EXISTS src (key INT, value STRING) ROW FORMAT DELIMITED FIELDS TERMINATED BY ‘\t’ “)
+18/01/13 16:04:23 WARN metastore.HiveMetaStore: Location: hdfs://localhost:8020/user/hive/warehouse/src specified for non-external table:src
+res8: org.apache.spark.sql.DataFrame = []&lt;/p&gt;
+
+&lt;p&gt;scala&amp;gt; sparkSession.sql(“show tables”).collect().foreach(println)
+[default,src,false]&lt;/p&gt;
+
+&lt;p&gt;scala&amp;gt; sparkSession.sql(“show databases”).collect().foreach(println)
+[default]&lt;/p&gt;
+
+&lt;p&gt;scala&amp;gt; sparkSession.sql(“show create  table src”).collect().foreach(println)
+[CREATE TABLE &lt;code&gt;src&lt;/code&gt;(&lt;code&gt;key&lt;/code&gt; int, &lt;code&gt;value&lt;/code&gt; string)
+ROW FORMAT SERDE ‘org.apache.hadoop.hive.serde2.lazy.LazySimpleSerDe’
+WITH SERDEPROPERTIES (
+  ‘field.delim’ = ‘	‘,
+  ‘serialization.format’ = ‘	‘
+)
+STORED AS
+  INPUTFORMAT ‘org.apache.hadoop.mapred.TextInputFormat’
+  OUTPUTFORMAT ‘org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat’
+TBLPROPERTIES (
+  ‘transient_lastDdlTime’ = ‘1515830663’
+)
+]&lt;/p&gt;
+
+&lt;p&gt;hive不支持用insert语句一条一条的进行插入操作，也不支持update操作。数据是以load的方式加载到建立好的表中。数据一旦导入就不可以修改。&lt;/p&gt;
+
+&lt;p&gt;DML包括：INSERT插入、UPDATE更新、DELETE删除&lt;/p&gt;
+
+&lt;p&gt;scala&amp;gt; sparkSession.sql(“insert into table src key=1234,value=’abc’”).collect().foreach(println)
+org.apache.spark.sql.catalyst.parser.ParseException:
+no viable alternative at input ‘key’(line 1, pos 22)&lt;/p&gt;
+
+&lt;p&gt;== SQL ==
+insert into table src key=1234,value=’abc’
+———————-^^^&lt;/p&gt;
+
+&lt;p&gt;既然Hive没有行级别的数据插入、更新和删除操作，那么往表中装载数据的唯一途径就是使用一种”大量“的数据装载操作。我们以如下格式文件演示五种数据导入Hive方式&lt;/p&gt;
+
+&lt;p&gt;Tom         24    NanJing   Nanjing University&lt;br /&gt;
+Jack        29    NanJing   Southeast China University&lt;br /&gt;
+Mary Kake   21    SuZhou    Suzhou University&lt;br /&gt;
+John Doe    24    YangZhou  YangZhou University&lt;br /&gt;
+Bill King   23    XuZhou    Xuzhou Normal University&lt;/p&gt;
+
+&lt;p&gt;数据格式以\t分隔，分别表示：姓名、年龄、地址、学校&lt;/p&gt;
+
+&lt;p&gt;一、从本地文件系统中导入数据
+ (1) 创建test1测试表
+scala&amp;gt; sparkSession.sql(“CREATE TABLE test1(name STRING,age INT, address STRING,school STRING)   ROW FORMAT DELIMITED FIELDS TERMINATED BY ‘\t’  STORED AS TEXTFILE”).collect().foreach(println)
+18/01/13 16:20:50 WARN metastore.HiveMetaStore: Location: hdfs://localhost:8020/user/hive/warehouse/test1 specified for non-external table:test1
+(2) 从本地加载数据 
+scala&amp;gt; sparkSession.sql(“ LOAD DATA LOCAL INPATH ‘/Users/didi/hive/testHive.txt’ INTO TABLE test1”).collect().foreach(println) 
+(3) 查看导入结果
+scala&amp;gt; sparkSession.sql(“select * from test1”).collect().foreach(println)
+[Tom         24    NanJing   Nanjing University  ,null,null,null]
+[Jack        29    NanJing   Southeast China University  ,null,null,null]
+[Mary Kake   21    SuZhou    Suzhou University  ,null,null,null]
+[John Doe    24    YangZhou  YangZhou University  ,null,null,null]
+[Bill King   23    XuZhou    Xuzhou Normal University,null,null,null] 
+        注意：此处使用的是LOCAL，表示从本地文件系统中加载数据到Hive中，同时没有OVERWRITE关键字，仅仅会把新增的文件增加到目标文件夹而不会删除之前的数据。如果使用OVERWRITE关键字，那么目标文件夹中之前的数据将会被先删除掉。
+二、从HDFS文件系统加载数据到Hive
+(1) 清空之前创建的表中数据
+insert overwrite table test1  select * from test1 where 1=0;  //清空表，一般不推荐这样操作&lt;br /&gt;
+ (2) 从HDFS加载数据
+hive&amp;gt; LOAD DATA INPATH “/input/test1.txt”&lt;br /&gt;
+    &amp;gt; OVERWRITE INTO TABLE test1;&lt;br /&gt;
+Loading data to table hive.test1&lt;br /&gt;
+rmr: DEPRECATED: Please use ‘rm -r’ instead.&lt;br /&gt;
+Deleted hdfs://secondmgt:8020/hive/warehouse/hive.db/test1&lt;br /&gt;
+Table hive.test1 stats: [numFiles=1, numRows=0, totalSize=201, rawDataSize=0]&lt;br /&gt;
+OK&lt;br /&gt;
+Time taken: 0.355 seconds&lt;br /&gt;
+ (3) 查询结果
+hive&amp;gt; select * from test1;&lt;br /&gt;
+OK&lt;br /&gt;
+Tom     24.0    NanJing Nanjing University&lt;br /&gt;
+Jack    29.0    NanJing Southeast China University&lt;br /&gt;
+Mary Kake       21.0    SuZhou  Suzhou University&lt;br /&gt;
+John Doe        24.0    YangZhou        YangZhou University&lt;br /&gt;
+Bill King       23.0    XuZhou  Xuzhou Normal University&lt;br /&gt;
+Time taken: 0.054 seconds, Fetched: 5 row(s)&lt;br /&gt;
+        注意：此处没有LOCAL关键字，表示分布式文件系统中的路径，这就是和第一种方法的主要区别，同时由日志可以发现，因为此处加了OVERWRITE关键字，执行了Deleted操作，即先删除之前存储的数据，然后再执行加载操作。
+       同时，INPATH子句中使用的文件路径还有一个限制，那就是这个路径下不可以包含任何文件夹。&lt;/p&gt;
+
+&lt;p&gt;三、通过查询语句向表中插入数据
+(1) 创建test4测试表
+scala&amp;gt; sparkSession.sql(“ CREATE TABLE test4(name STRING,age FLOAT,address STRING,school STRING)   ROW FORMAT DELIMITED FIELDS TERMINATED BY ‘\t’ STORED AS TEXTFILE”).collect().foreach(println)
+18/01/13 16:27:53 WARN metastore.HiveMetaStore: Location: hdfs://localhost:8020/user/hive/warehouse/test4 specified for non-external table:test4
+ 创建表过程基本和前面一样，此处不细讲
+(2) 从查询结果中导入数据
+scala&amp;gt; sparkSession.sql(“INSERT INTO TABLE test4 SELECT * FROM test1”).collect().foreach(println) 
+        注意：新建表的字段数，一定要和后面SELECT中查询的字段数一样，且要注意数据类型。如test4包含四个字段：name、age、address和school，则SELECT查询出的结果也应该对应这四个字段。
+(3) 查看导入结果
+scala&amp;gt; sparkSession.sql(“select * from test4”).collect().foreach(println)
+[Tom         24    NanJing   Nanjing University  ,null,null,null]
+[Jack        29    NanJing   Southeast China University  ,null,null,null]
+[Mary Kake   21    SuZhou    Suzhou University  ,null,null,null]
+[John Doe    24    YangZhou  YangZhou University  ,null,null,null]
+[Bill King   23    XuZhou    Xuzhou Normal University,null,null,null]
+四、分区插入
+        分区插入有两种，一种是静态分区，另一种是动态分区。如果混合使用静态分区和动态分区，则静态分区必须出现在动态分区之前。现分别介绍这两种分区插入
+(1) 静态分区插入&lt;/p&gt;
+
+&lt;p&gt;①创建分区表
+hive&amp;gt; CREATE TABLE test2(name STRING,address STRING,school STRING)&lt;br /&gt;
+    &amp;gt; PARTITIONED BY(age float)&lt;br /&gt;
+    &amp;gt; ROW FORMAT DELIMITED FIELDS TERMINATED BY ‘\t’&lt;br /&gt;
+    &amp;gt; STORED AS TEXTFILE ;&lt;br /&gt;
+OK&lt;br /&gt;
+Time taken: 0.144 seconds&lt;br /&gt;
+       此处创建了一个test2的分区表，以年龄分区&lt;/p&gt;
+
+&lt;p&gt;②从查询结果中导入数据    &lt;br /&gt;
+hive&amp;gt; INSERT INTO  TABLE test2 PARTITION (age=’24’) SELECT * FROM test1;&lt;br /&gt;
+FAILED: SemanticException [Error 10044]: Line 1:19 Cannot insert into target table because column number/types are different ‘‘24’’: Table insclause-0 has 3 columns, but query has 4 columns.&lt;br /&gt;
+ 此处报了一个错误。是因为test2中是以age分区的，有三个字段，SELECT * 语句中包含有四个字段，所以出错。正确如下：
+[html] view plain copy
+hive&amp;gt; INSERT INTO  TABLE test2 PARTITION (age=’24’) SELECT name,address,school FROM test1;&lt;br /&gt;
+ ③ 查看插入结果
+hive&amp;gt; select * from test2;&lt;br /&gt;
+OK&lt;br /&gt;
+Tom     NanJing Nanjing University      24.0&lt;br /&gt;
+Jack    NanJing Southeast China University      24.0&lt;br /&gt;
+Mary Kake       SuZhou  Suzhou University       24.0&lt;br /&gt;
+John Doe        YangZhou        YangZhou University     24.0&lt;br /&gt;
+Bill King       XuZhou  Xuzhou Normal University        24.0&lt;br /&gt;
+Time taken: 0.079 seconds, Fetched: 5 row(s)&lt;br /&gt;
+ 由查询结果可知，每条记录的年龄均为24，插入成功。
+(2) 动态分区插入
+静态分区需要创建非常多的分区，那么用户就需要写非常多的SQL！Hive提供了一个动态分区功能，其可以基于查询参数推断出需要创建的分区名称。&lt;/p&gt;
+
+&lt;p&gt;① 创建分区表，此过程和静态分区创建表一样，此处省略&lt;/p&gt;
+
+&lt;p&gt;② 参数设置
+hive&amp;gt; set hive.exec.dynamic.partition=true;&lt;br /&gt;
+hive&amp;gt; set hive.exec.dynamic.partition.mode=nonstrict;&lt;br /&gt;
+ 注意：动态分区默认情况下是没有开启的。开启后，默认是以”严格“模式执行的，在这种模式下要求至少有一列分区字段是静态的。这有助于阻止因设计错误导致查询产生大量的分区。但是此处我们不需要静态分区字段，估将其设为nonstrict。
+③ 数据动态插入
+hive&amp;gt; insert into table test2 partition (age) select name,address,school,age from test1;&lt;br /&gt;
+Total jobs = 1&lt;br /&gt;
+Launching Job 1 out of 1&lt;br /&gt;
+Number of reduce tasks not specified. Estimated from input data size: 1&lt;br /&gt;
+In order to change the average load for a reducer (in bytes):&lt;br /&gt;
+  set hive.exec.reducers.bytes.per.reducer=&lt;number&gt;  
+In order to limit the maximum number of reducers:  
+  set hive.exec.reducers.max=&lt;number&gt;  
+In order to set a constant number of reducers:  
+  set mapreduce.job.reduces=&lt;number&gt;  
+Starting Job = job_1419317102229_0029, Tracking URL = http://secondmgt:8088/proxy/application_1419317102229_0029/  
+Kill Command = /home/hadoopUser/cloud/hadoop/programs/hadoop-2.2.0/bin/hadoop job  -kill job_1419317102229_0029  
+Hadoop job information for Stage-1: number of mappers: 1; number of reducers: 1  
+2014-12-28 20:45:07,996 Stage-1 map = 0%,  reduce = 0%  
+2014-12-28 20:45:21,488 Stage-1 map = 100%,  reduce = 0%, Cumulative CPU 2.67 sec  
+2014-12-28 20:45:32,926 Stage-1 map = 100%,  reduce = 100%, Cumulative CPU 7.32 sec  
+MapReduce Total cumulative CPU time: 7 seconds 320 msec  
+Ended Job = job_1419317102229_0029  
+Loading data to table hive.test2 partition (age=null)  
+        Loading partition {age=29.0}  
+        Loading partition {age=23.0}  
+        Loading partition {age=21.0}  
+        Loading partition {age=24.0}  
+Partition hive.test2{age=21.0} stats: [numFiles=1, numRows=1, totalSize=35, rawDataSize=34]  
+Partition hive.test2{age=23.0} stats: [numFiles=1, numRows=1, totalSize=42, rawDataSize=41]  
+Partition hive.test2{age=24.0} stats: [numFiles=1, numRows=2, totalSize=69, rawDataSize=67]  
+Partition hive.test2{age=29.0} stats: [numFiles=1, numRows=1, totalSize=40, rawDataSize=39]  
+MapReduce Jobs Launched:  
+Job 0: Map: 1  Reduce: 1   Cumulative CPU: 7.32 sec   HDFS Read: 415 HDFS Write: 375 SUCCESS  
+Total MapReduce CPU Time Spent: 7 seconds 320 msec  
+OK  
+Time taken: 41.846 seconds  
+ 注意：查询语句select查询出来的age字段必须放在最后，和分区字段对应，不然结果会出错
+④ 查看插入结果
+[html] view plain copy
+hive&amp;gt; select * from test2;  
+OK  
+Mary Kake       SuZhou  Suzhou University       21.0  
+Bill King       XuZhou  Xuzhou Normal University        23.0  
+John Doe        YangZhou        YangZhou University     24.0  
+Tom     NanJing Nanjing University      24.0  
+Jack    NanJing Southeast China University      29.0  
+五、单个查询语句中创建表并加载数据
+         在实际情况中，表的输出结果可能太多，不适于显示在控制台上，这时候，将Hive的查询输出结果直接存在一个新的表中是非常方便的，我们称这种情况为CTAS（create table .. as select）
+        (1) 创建表
+hive&amp;gt; CREATE TABLE test3  
+    &amp;gt; AS  
+    &amp;gt; SELECT name,age FROM test1;  
+Total jobs = 3  
+Launching Job 1 out of 3  
+Number of reduce tasks is set to 0 since there's no reduce operator  
+Starting Job = job_1419317102229_0030, Tracking URL = http://secondmgt:8088/proxy/application_1419317102229_0030/  
+Kill Command = /home/hadoopUser/cloud/hadoop/programs/hadoop-2.2.0/bin/hadoop job  -kill job_1419317102229_0030  
+Hadoop job information for Stage-1: number of mappers: 1; number of reducers: 0  
+2014-12-28 20:59:59,375 Stage-1 map = 0%,  reduce = 0%  
+2014-12-28 21:00:10,795 Stage-1 map = 100%,  reduce = 0%, Cumulative CPU 2.68 sec  
+MapReduce Total cumulative CPU time: 2 seconds 680 msec  
+Ended Job = job_1419317102229_0030  
+Stage-4 is selected by condition resolver.  
+Stage-3 is filtered out by condition resolver.  
+Stage-5 is filtered out by condition resolver.  
+Moving data to: hdfs://secondmgt:8020/hive/scratchdir/hive_2014-12-28_20-59-45_494_6763514583931347886-1/-ext-10001  
+Moving data to: hdfs://secondmgt:8020/hive/warehouse/hive.db/test3  
+Table hive.test3 stats: [numFiles=1, numRows=5, totalSize=63, rawDataSize=58]  
+MapReduce Jobs Launched:  
+Job 0: Map: 1   Cumulative CPU: 2.68 sec   HDFS Read: 415 HDFS Write: 129 SUCCESS  
+Total MapReduce CPU Time Spent: 2 seconds 680 msec  
+OK  
+Time taken: 26.583 seconds  
+ (2) 查看插入结果
+hive&amp;gt; select * from test3;  
+OK  
+Tom     24.0  
+Jack    29.0  
+Mary Kake       21.0  
+John Doe        24.0  
+Bill King       23.0  
+Time taken: 0.045 seconds, Fetched: 5 row(s)&lt;/number&gt;&lt;/number&gt;&lt;/number&gt;&lt;/p&gt;
+
+&lt;p&gt;Exception in thread “main” java.lang.NoClassDefFoundError: scala/Product$class
+	at org.apache.spark.internal.config.ConfigBuilder.&lt;init&gt;(ConfigBuilder.scala:176)
+	at org.apache.spark.sql.internal.SQLConf$.buildConf(SQLConf.scala:58)
+	at org.apache.spark.sql.internal.SQLConf$.&lt;init&gt;(SQLConf.scala:67)
+	at org.apache.spark.sql.internal.SQLConf$.&lt;clinit&gt;(SQLConf.scala)
+	at org.apache.spark.sql.internal.StaticSQLConf$.&lt;init&gt;(StaticSQLConf.scala:31)
+	at org.apache.spark.sql.internal.StaticSQLConf$.&lt;clinit&gt;(StaticSQLConf.scala)
+	at org.apache.spark.sql.SparkSession$Builder.enableHiveSupport(SparkSession.scala:843)
+	at main.scala.hiveConnection$.main(hiveConnection.scala:6)
+	at main.scala.hiveConnection.main(hiveConnection.scala)&lt;/clinit&gt;&lt;/init&gt;&lt;/clinit&gt;&lt;/init&gt;&lt;/init&gt;&lt;/p&gt;
+
+&lt;p&gt;在使用Log4j时若提示如下信息：
+log4j:WARN No appenders could be found for logger (org.apache.ibatis.logging.LogFactory).&lt;br /&gt;
+log4j:WARN Please initialize the log4j system properly. 
+则，解决办法为：在项目的src下面新建file名为log4j.properties文件，内容如下:&lt;/p&gt;
+
+&lt;h1 id=&quot;configure-logging-for-testing-optionally-with-log-file&quot;&gt;Configure logging for testing: optionally with log file&lt;/h1&gt;
+&lt;p&gt;#可以设置级别：debug&amp;gt;info&amp;gt;error
+#debug:可以显式debug,info,error
+#info:可以显式info,error
+#error:可以显式error&lt;/p&gt;
+
+&lt;p&gt;log4j.rootLogger=debug,appender1
+#log4j.rootLogger=info,appender1
+#log4j.rootLogger=error,appender1&lt;/p&gt;
+
+&lt;p&gt;#输出到控制台
+log4j.appender.appender1=org.apache.log4j.ConsoleAppender
+#样式为TTCCLayout
+log4j.appender.appender1.layout=org.apache.log4j.TTCCLayout&lt;/p&gt;
+
+&lt;p&gt;然后，存盘退出。再次运行程序就会显示Log信息了。&lt;/p&gt;
+
+&lt;p&gt;通过配置文件可知，我们需要配置3个方面的内容：
+1、根目录（级别和目的地）；
+2、目的地（控制台、文件等等）；
+3、输出样式。&lt;/p&gt;
+
+&lt;p&gt;或者，使用下面的内容也可以：
+ # Configure logging for testing: optionally with log file
+log4j.rootLogger=WARN, stdout
+ # log4j.rootLogger=WARN, stdout, logfile
+log4j.appender.stdout=org.apache.log4j.ConsoleAppender
+log4j.appender.stdout.layout=org.apache.log4j.PatternLayout
+log4j.appender.stdout.layout.ConversionPattern=%d %p [%c] - %m%n
+log4j.appender.logfile=org.apache.log4j.FileAppender
+log4j.appender.logfile.File=target/spring.log
+log4j.appender.logfile.layout=org.apache.log4j.PatternLayout
+log4j.appender.logfile.layout.ConversionPattern=%d %p [%c] - %m%n&lt;/p&gt;
+
+</description>
+        <pubDate>Sat, 13 Jan 2018 00:00:00 +0800</pubDate>
+        <link>https://xiazemin.github.io/MyBlog/spark/2018/01/13/spark_hive.html</link>
+        <guid isPermaLink="true">https://xiazemin.github.io/MyBlog/spark/2018/01/13/spark_hive.html</guid>
+        
+        
+        <category>spark</category>
+        
+      </item>
     
       <item>
         <title>scala maven 版本冲突问题解决</title>
@@ -1292,622 +1639,6 @@ p(X = 矮) = 7/12,p(X =中) = 2/12,p(X=高) = 3/12
         <pubDate>Fri, 05 Jan 2018 00:00:00 +0800</pubDate>
         <link>https://xiazemin.github.io/MyBlog/spark/2018/01/05/shang.html</link>
         <guid isPermaLink="true">https://xiazemin.github.io/MyBlog/spark/2018/01/05/shang.html</guid>
-        
-        
-        <category>spark</category>
-        
-      </item>
-    
-      <item>
-        <title>Zookeeper与Paxos</title>
-        <description>&lt;p&gt;　Zookeeper是一个开源的分布式协调服务，其设计目标是将那些复杂的且容易出错的分布式一致性服务封装起来，构成一个高效可靠的原语集，并以一些列简单的接口提供给用户使用。其是一个典型的分布式数据一致性的解决方案，分布式应用程序可以基于它实现诸如数据发布/发布、负载均衡、命名服务、分布式协调/通知、集群管理、Master选举、分布式锁和分布式队列等功能。其可以保证如下分布式一致性特性。&lt;/p&gt;
-
-&lt;p&gt;　　① 顺序一致性，从同一个客户端发起的事务请求，最终将会严格地按照其发起顺序被应用到Zookeeper中去。&lt;/p&gt;
-
-&lt;p&gt;　　② 原子性，所有事务请求的处理结果在整个集群中所有机器上的应用情况是一致的，即整个集群要么都成功应用了某个事务，要么都没有应用。&lt;/p&gt;
-
-&lt;p&gt;　　③ 单一视图，无论客户端连接的是哪个Zookeeper服务器，其看到的服务端数据模型都是一致的。&lt;/p&gt;
-
-&lt;p&gt;　　④ 可靠性，一旦服务端成功地应用了一个事务，并完成对客户端的响应，那么该事务所引起的服务端状态变更将会一直被保留，除非有另一个事务对其进行了变更。&lt;/p&gt;
-
-&lt;p&gt;　　⑤ 实时性，Zookeeper保证在一定的时间段内，客户端最终一定能够从服务端上读取到最新的数据状态。&lt;/p&gt;
-
-&lt;p&gt;　　2.1 设计目标&lt;/p&gt;
-
-&lt;p&gt;　　Zookeeper致力于提供一个高性能、高可用、且具有严格的顺序访问控制能力（主要是写操作的严格顺序性）的分布式协调服务，其具有如下的设计目标。&lt;/p&gt;
-
-&lt;p&gt;　　① 简单的数据模型，Zookeeper使得分布式程序能够通过一个共享的树形结构的名字空间来进行相互协调，即Zookeeper服务器内存中的数据模型由一系列被称为ZNode的数据节点组成，Zookeeper将全量的数据存储在内存中，以此来提高服务器吞吐、减少延迟的目的。&lt;/p&gt;
-
-&lt;p&gt;　　② 可构建集群，一个Zookeeper集群通常由一组机器构成，组成Zookeeper集群的而每台机器都会在内存中维护当前服务器状态，并且每台机器之间都相互通信。&lt;/p&gt;
-
-&lt;p&gt;　　③ 顺序访问，对于来自客户端的每个更新请求，Zookeeper都会分配一个全局唯一的递增编号，这个编号反映了所有事务操作的先后顺序。&lt;/p&gt;
-
-&lt;p&gt;　　④ 高性能，Zookeeper将全量数据存储在内存中，并直接服务于客户端的所有非事务请求，因此它尤其适用于以读操作为主的应用场景。&lt;/p&gt;
-
-&lt;p&gt;　　2.2 基本概念&lt;/p&gt;
-
-&lt;p&gt;　　① 集群角色，最典型的集群就是Master/Slave模式（主备模式），此情况下把所有能够处理写操作的机器称为Master机器，把所有通过异步复制方式获取最新数据，并提供读服务的机器为Slave机器。Zookeeper引入了Leader、Follower、Observer三种角色，Zookeeper集群中的所有机器通过Leaser选举过程来选定一台被称为Leader的机器，Leader服务器为客户端提供写服务，Follower和Observer提供读服务，但是Observer不参与Leader选举过程，不参与写操作的过半写成功策略，Observer可以在不影响写性能的情况下提升集群的性能。&lt;/p&gt;
-
-&lt;p&gt;　　② 会话，指客户端会话，一个客户端连接是指客户端和服务端之间的一个TCP长连接，Zookeeper对外的服务端口默认为2181，客户端启动的时候，首先会与服务器建立一个TCP连接，从第一次连接建立开始，客户端会话的生命周期也开始了，通过这个连接，客户端能够心跳检测与服务器保持有效的会话，也能够向Zookeeper服务器发送请求并接受响应，同时还能够通过该连接接受来自服务器的Watch事件通知。&lt;/p&gt;
-
-&lt;p&gt;　　③ 数据节点，第一类指构成集群的机器，称为机器节点，第二类是指数据模型中的数据单元，称为数据节点-Znode，Zookeeper将所有数据存储在内存中，数据模型是一棵树，由斜杠/进行分割的路径，就是一个ZNode，如/foo/path1，每个ZNode都会保存自己的数据内存，同时还会保存一些列属性信息。ZNode分为持久节点和临时节点两类，持久节点是指一旦这个ZNode被创建了，除非主动进行ZNode的移除操作，否则这个ZNode将一直保存在Zookeeper上，而临时节点的生命周期和客户端会话绑定，一旦客户端会话失效，那么这个客户端创建的所有临时节点都会被移除。另外，Zookeeper还允许用户为每个节点添加一个特殊的属性：SEQUENTIAL。一旦节点被标记上这个属性，那么在这个节点被创建的时候，Zookeeper会自动在其节点后面追加一个整形数字，其是由父节点维护的自增数字。&lt;/p&gt;
-
-&lt;p&gt;　　④ 版本，对于每个ZNode，Zookeeper都会为其维护一个叫作Stat的数据结构，Stat记录了这个ZNode的三个数据版本，分别是version（当前ZNode的版本）、cversion（当前ZNode子节点的版本）、aversion（当前ZNode的ACL版本）。&lt;/p&gt;
-
-&lt;p&gt;　　⑤ Watcher，Zookeeper允许用户在指定节点上注册一些Watcher，并且在一些特定事件触发的时候，Zookeeper服务端会将事件通知到感兴趣的客户端。&lt;/p&gt;
-
-&lt;p&gt;　　⑥ ACL，Zookeeper采用ACL（Access Control Lists）策略来进行权限控制，其定义了如下五种权限：&lt;/p&gt;
-
-&lt;p&gt;　　　　· CREATE：创建子节点的权限。&lt;/p&gt;
-
-&lt;p&gt;　　　　· READ：获取节点数据和子节点列表的权限。&lt;/p&gt;
-
-&lt;p&gt;　　　　· WRITE：更新节点数据的权限。&lt;/p&gt;
-
-&lt;p&gt;　　　　· DELETE：删除子节点的权限。&lt;/p&gt;
-
-&lt;p&gt;　　　　· ADMIN：设置节点ACL的权限。&lt;/p&gt;
-
-&lt;p&gt;　　2.3 ZAB协议&lt;/p&gt;
-
-&lt;p&gt;　　Zookeeper使用了Zookeeper Atomic Broadcast（ZAB，Zookeeper原子消息广播协议）的协议作为其数据一致性的核心算法。ZAB协议是为Zookeeper专门设计的一种支持崩溃恢复的原子广播协议。&lt;/p&gt;
-
-&lt;p&gt;　　Zookeeper依赖ZAB协议来实现分布式数据的一致性，基于该协议，Zookeeper实现了一种主备模式的系统架构来保持集群中各副本之间的数据的一致性，即其使用一个单一的诸进程来接收并处理客户端的所有事务请求，并采用ZAB的原子广播协议，将服务器数据的状态变更以事务Proposal的形式广播到所有的副本进程中，ZAB协议的主备模型架构保证了同一时刻集群中只能够有一个主进程来广播服务器的状态变更，因此能够很好地处理客户端大量的并发请求。&lt;/p&gt;
-
-&lt;p&gt;　　ZAB协议的核心是定义了对于那些会改变Zookeeper服务器数据状态的事务请求的处理方式，即：所有事务请求必须由一个全局唯一的服务器来协调处理，这样的服务器被称为Leader服务器，余下的服务器则称为Follower服务器，Leader服务器负责将一个客户端事务请求转化成一个事务Proposal（提议），并将该Proposal分发给集群中所有的Follower服务器，之后Leader服务器需要等待所有Follower服务器的反馈，一旦超过半数的Follower服务器进行了正确的反馈后，那么Leader就会再次向所有的Follower服务器分发Commit消息，要求其将前一个Proposal进行提交。&lt;/p&gt;
-
-&lt;p&gt;　　ZAB一些包括两种基本的模式：崩溃恢复和消息广播。&lt;/p&gt;
-
-&lt;p&gt;　　当整个服务框架启动过程中或Leader服务器出现网络中断、崩溃退出与重启等异常情况时，ZAB协议就会进入恢复模式并选举产生新的Leader服务器。当选举产生了新的Leader服务器，同时集群中已经有过半的机器与该Leader服务器完成了状态同步之后，ZAB协议就会退出恢复模式，状态同步时指数据同步，用来保证集群在过半的机器能够和Leader服务器的数据状态保持一致。&lt;/p&gt;
-
-&lt;p&gt;　　当集群中已经有过半的Follower服务器完成了和Leader服务器的状态同步，那么整个服务框架就可以进入消息广播模式，当一台同样遵守ZAB协议的服务器启动后加入到集群中，如果此时集群中已经存在一个Leader服务器在负责进行消息广播，那么加入的服务器就会自觉地进入数据恢复模式：找到Leader所在的服务器，并与其进行数据同步，然后一起参与到消息广播流程中去。Zookeeper只允许唯一的一个Leader服务器来进行事务请求的处理，Leader服务器在接收到客户端的事务请求后，会生成对应的事务提议并发起一轮广播协议，而如果集群中的其他机器收到客户端的事务请求后，那么这些非Leader服务器会首先将这个事务请求转发给Leader服务器。&lt;/p&gt;
-
-&lt;p&gt;　　当Leader服务器出现崩溃或者机器重启、集群中已经不存在过半的服务器与Leader服务器保持正常通信时，那么在重新开始新的一轮的原子广播事务操作之前，所有进程首先会使用崩溃恢复协议来使彼此到达一致状态，于是整个ZAB流程就会从消息广播模式进入到崩溃恢复模式。一个机器要成为新的Leader，必须获得过半机器的支持，同时由于每个机器都有可能会崩溃，因此，ZAB协议运行过程中，前后会出现多个Leader，并且每台机器也有可能会多次成为Leader，进入崩溃恢复模式后，只要集群中存在过半的服务器能够彼此进行正常通信，那么就可以产生一个新的Leader并再次进入消息广播模式。如一个由三台机器组成的ZAB服务，通常由一个Leader、2个Follower服务器组成，某一个时刻，加入其中一个Follower挂了，整个ZAB集群是不会中断服务的。&lt;/p&gt;
-
-&lt;p&gt;　　① 消息广播，ZAB协议的消息广播过程使用原子广播协议，类似于一个二阶段提交过程，针对客户端的事务请求，Leader服务器会为其生成对应的事务Proposal，并将其发送给集群中其余所有的机器，然后再分别收集各自的选票，最后进行事务提交。&lt;/p&gt;
-
-&lt;p&gt;　　在ZAB的二阶段提交过程中，移除了中断逻辑，所有的Follower服务器要么正常反馈Leader提出的事务Proposal，要么就抛弃Leader服务器，同时，ZAB协议将二阶段提交中的中断逻辑移除意味着我们可以在过半的Follower服务器已经反馈Ack之后就开始提交事务Proposal，而不需要等待集群中所有的Follower服务器都反馈响应，但是，在这种简化的二阶段提交模型下，无法处理Leader服务器崩溃退出而带来的数据不一致问题，因此ZAB采用了崩溃恢复模式来解决此问题，另外，整个消息广播协议是基于具有FIFO特性的TCP协议来进行网络通信的，因此能够很容易保证消息广播过程中消息接受与发送的顺序性。再整个消息广播过程中，Leader服务器会为每个事务请求生成对应的Proposal来进行广播，并且在广播事务Proposal之前，Leader服务器会首先为这个事务Proposal分配一个全局单调递增的唯一ID，称之为事务ID（ZXID），由于ZAB协议需要保证每个消息严格的因果关系，因此必须将每个事务Proposal按照其ZXID的先后顺序来进行排序和处理。&lt;/p&gt;
-
-&lt;p&gt;　　② 崩溃恢复，在Leader服务器出现崩溃，或者由于网络原因导致Leader服务器失去了与过半Follower的联系，那么就会进入崩溃恢复模式，在ZAB协议中，为了保证程序的正确运行，整个恢复过程结束后需要选举出一个新的Leader服务器，因此，ZAB协议需要一个高效且可靠的Leader选举算法，从而保证能够快速地选举出新的Leader，同时，Leader选举算法不仅仅需要让Leader自身知道已经被选举为Leader，同时还需要让集群中的所有其他机器也能够快速地感知到选举产生的新的Leader服务器。&lt;/p&gt;
-
-&lt;p&gt;　　③ 基本特性，ZAB协议规定了如果一个事务Proposal在一台机器上被处理成功，那么应该在所有的机器上都被处理成功，哪怕机器出现故障崩溃。ZAB协议需要确保那些已经在Leader服务器上提交的事务最终被所有服务器都提交，假设一个事务在Leader服务器上被提交了，并且已经得到了过半Follower服务器的Ack反馈，但是在它Commit消息发送给所有Follower机器之前，Leader服务挂了。如下图所示&lt;/p&gt;
-
-&lt;p&gt;　　在集群正常运行过程中的某一个时刻，Server1是Leader服务器，其先后广播了P1、P2、C1、P3、C2（C2是Commit Of Proposal2的缩写），其中，当Leader服务器发出C2后就立即崩溃退出了，针对这种情况，ZAB协议就需要确保事务Proposal2最终能够在所有的服务器上都被提交成功，否则将出现不一致。&lt;/p&gt;
-
-&lt;p&gt;　　ZAB协议需要确保丢弃那些只在Leader服务器上被提出的事务。如果在崩溃恢复过程中出现一个需要被丢弃的提议，那么在崩溃恢复结束后需要跳过该事务Proposal，如下图所示&lt;/p&gt;
-
-&lt;p&gt;　　假设初始的Leader服务器Server1在提出一个事务Proposal3之后就崩溃退出了，从而导致集群中的其他服务器都没有收到这个事务Proposal，于是，当Server1恢复过来再次加入到集群中的时候，ZAB协议需要确保丢弃Proposal3这个事务。&lt;/p&gt;
-
-&lt;p&gt;　　在上述的崩溃恢复过程中需要处理的特殊情况，就决定了ZAB协议必须设计这样的Leader选举算法：能够确保提交已经被Leader提交的事务的Proposal，同时丢弃已经被跳过的事务Proposal。如果让Leader选举算法能够保证新选举出来的Leader服务器拥有集群中所有机器最高编号（ZXID最大）的事务Proposal，那么就可以保证这个新选举出来的Leader一定具有所有已经提交的提议，更为重要的是如果让具有最高编号事务的Proposal机器称为Leader，就可以省去Leader服务器查询Proposal的提交和丢弃工作这一步骤了。&lt;/p&gt;
-
-&lt;p&gt;　　④ 数据同步，完成Leader选举后，在正式开始工作前，Leader服务器首先会确认日志中的所有Proposal是否都已经被集群中的过半机器提交了，即是否完成了数据同步。Leader服务器需要确所有的Follower服务器都能够接收到每一条事务Proposal，并且能够正确地将所有已经提交了的事务Proposal应用到内存数据库中。Leader服务器会为每个Follower服务器维护一个队列，并将那些没有被各Follower服务器同步的事务以Proposal消息的形式逐个发送给Follower服务器，并在每一个Proposal消息后面紧接着再发送一个Commit消息，以表示该事务已经被提交，等到Follower服务器将所有其尚未同步的事务Proposal都从Leader服务器上同步过来并成功应用到本地数据库后，Leader服务器就会将该Follower服务器加入到真正的可用Follower列表并开始之后的其他流程。&lt;/p&gt;
-
-&lt;p&gt;　　下面分析ZAB协议如何处理需要丢弃的事务Proposal的，ZXID是一个64位的数字，其中32位可以看做是一个简单的单调递增的计数器，针对客户端的每一个事务请求，Leader服务器在产生一个新的事务Proposal时，都会对该计数器进行加1操作，而高32位则代表了Leader周期epoch的编号，每当选举产生一个新的Leader时，就会从这个Leader上取出其本地日志中最大事务Proposal的ZXID，并解析出epoch值，然后加1，之后以该编号作为新的epoch，低32位则置为0来开始生成新的ZXID，ZAB协议通过epoch号来区分Leader周期变化的策略，能够有效地避免不同的Leader服务器错误地使用不同的ZXID编号提出不一样的事务Proposal的异常情况。当一个包含了上一个Leader周期中尚未提交过的事务Proposal的服务器启动时，其肯定无法成为Leader，因为当前集群中一定包含了一个Quorum（过半）集合，该集合中的机器一定包含了更高epoch的事务的Proposal，因此这台机器的事务Proposal并非最高，也就无法成为Leader。&lt;/p&gt;
-
-&lt;p&gt;　　2.4 ZAB协议原理&lt;/p&gt;
-
-&lt;p&gt;　　ZAB主要包括消息广播和崩溃恢复两个过程，进一步可以分为三个阶段，分别是发现（Discovery）、同步（Synchronization）、广播（Broadcast）阶段。ZAB的每一个分布式进程会循环执行这三个阶段，称为主进程周期。&lt;/p&gt;
-
-&lt;p&gt;　　· 发现，选举产生PL(prospective leader)，PL收集Follower epoch(cepoch)，根据Follower的反馈，PL产生newepoch(每次选举产生新Leader的同时产生新epoch)。&lt;/p&gt;
-
-&lt;p&gt;　　· 同步，PL补齐相比Follower多数派缺失的状态、之后各Follower再补齐相比PL缺失的状态，PL和Follower完成状态同步后PL变为正式Leader(established leader)。&lt;/p&gt;
-
-&lt;p&gt;　　· 广播，Leader处理客户端的写操作，并将状态变更广播至Follower，Follower多数派通过之后Leader发起将状态变更落地(deliver/commit)。&lt;/p&gt;
-
-&lt;p&gt;　　在正常运行过程中，ZAB协议会一直运行于阶段三来反复进行消息广播流程，如果出现崩溃或其他原因导致Leader缺失，那么此时ZAB协议会再次进入发现阶段，选举新的Leader。&lt;/p&gt;
-
-&lt;p&gt;　　2.4.1 运行分析&lt;/p&gt;
-
-&lt;p&gt;　　每个进程都有可能处于如下三种状态之一&lt;/p&gt;
-
-&lt;p&gt;　　· LOOKING：Leader选举阶段。&lt;/p&gt;
-
-&lt;p&gt;　　· FOLLOWING：Follower服务器和Leader服务器保持同步状态。&lt;/p&gt;
-
-&lt;p&gt;　　· LEADING：Leader服务器作为主进程领导状态。&lt;/p&gt;
-
-&lt;p&gt;　　所有进程初始状态都是LOOKING状态，此时不存在Leader，此时，进程会试图选举出一个新的Leader，之后，如果进程发现已经选举出新的Leader了，那么它就会切换到FOLLOWING状态，并开始和Leader保持同步，处于FOLLOWING状态的进程称为Follower，LEADING状态的进程称为Leader，当Leader崩溃或放弃领导地位时，其余的Follower进程就会转换到LOOKING状态开始新一轮的Leader选举。&lt;/p&gt;
-
-&lt;p&gt;　　一个Follower只能和一个Leader保持同步，Leader进程和所有与所有的Follower进程之间都通过心跳检测机制来感知彼此的情况。若Leader能够在超时时间内正常收到心跳检测，那么Follower就会一直与该Leader保持连接，而如果在指定时间内Leader无法从过半的Follower进程那里接收到心跳检测，或者TCP连接断开，那么Leader会放弃当前周期的领导，比你转换到LOOKING状态，其他的Follower也会选择放弃这个Leader，同时转换到LOOKING状态，之后会进行新一轮的Leader选举，并在选举产生新的Leader之后开始新的一轮主进程周期。&lt;/p&gt;
-
-&lt;p&gt;　　2.5 ZAB与Paxos的联系和区别&lt;/p&gt;
-
-&lt;p&gt;　　联系：&lt;/p&gt;
-
-&lt;p&gt;　　① 都存在一个类似于Leader进程的角色，由其负责协调多个Follower进程的运行。&lt;/p&gt;
-
-&lt;p&gt;　　② Leader进程都会等待超过半数的Follower做出正确的反馈后，才会将一个提议进行提交。&lt;/p&gt;
-
-&lt;p&gt;　　③ 在ZAB协议中，每个Proposal中都包含了一个epoch值，用来代表当前的Leader周期，在Paxos算法中，同样存在这样的一个标识，名字为Ballot。&lt;/p&gt;
-
-&lt;p&gt;　　区别：&lt;/p&gt;
-
-&lt;p&gt;　　Paxos算法中，新选举产生的主进程会进行两个阶段的工作，第一阶段称为读阶段，新的主进程和其他进程通信来收集主进程提出的提议，并将它们提交。第二阶段称为写阶段，当前主进程开始提出自己的提议。&lt;/p&gt;
-
-&lt;p&gt;　　ZAB协议在Paxos基础上添加了同步阶段，此时，新的Leader会确保存在过半的Follower已经提交了之前的Leader周期中的所有事务Proposal。&lt;/p&gt;
-
-&lt;p&gt;　　ZAB协议主要用于构建一个高可用的分布式数据主备系统，而Paxos算法则用于构建一个分布式的一致性状态机系统。
-&lt;!-- more --&gt;
-Apache Zookeeper是由Apache Hadoop的子项目发展而来，于2010年11月正式成为Apache顶级项目。Zookeeper为分布式应用提供高效且可靠的分布式协调服务，提供了统一命名服务、配置管理、分布式锁等分布式的基础服务。Zookeeper并没有直接采用Paxos算法，而是采用了一种被称为ZAB(Zookeeper Atomic Broadcast)的一致性协议。&lt;/p&gt;
-
-&lt;p&gt;初识Zookeeper
-Zookeeper是一个开源的分布式协调服务，由Yahoo创建，是Google Chubby的开源实现。Zookeeper将那些复杂且容易出错的分布式一致性服务封装起来，构成一个高效可靠的原语集，并以一系列简单易用的接口提供给用户使用。&lt;/p&gt;
-
-&lt;p&gt;分布式应用程序可以基于Zookeeper实现例如数据发布/订阅、负载均衡、命名服务、协调通知、集群管理、Master选举、分布式锁、分布式队列等功能。Zookeeper可以保证如下分布式一致性特性。&lt;/p&gt;
-
-&lt;p&gt;1、顺序一致性：从同一个客户端发起的事务请求，最终将会严格地按照其发起顺序被应用到Zookeeper中；&lt;/p&gt;
-
-&lt;p&gt;2、原子性：所有事务的请求结果在整个集群中所有机器上的应用情况是一致的，也就是说，要么在整个集群中所有机器上都成功应用了某一个事务，要么都没有应用，没有中间状态；&lt;/p&gt;
-
-&lt;p&gt;3、单一视图：无论客户端连接的是哪个Zookeeper服务器，其看到的服务端数据模型都是一致的。&lt;/p&gt;
-
-&lt;p&gt;4、实时性：Zookeeper仅仅保证在一定的时间内，客户端最终一定能够从服务端上读到最终的数据状态。&lt;/p&gt;
-
-&lt;p&gt;Zookeeper的设计目标
-目标一：简单的数据模型&lt;/p&gt;
-
-&lt;p&gt;Zookeeper使得分布式程序能通过一个共享式的、树形结构的名字空间来进行相互协调。&lt;/p&gt;
-
-&lt;p&gt;树形结构的名字空间是指Zookeeper服务器内存中的一个数据模型，由一系列被称为ZNode的数据节点组成，类似一个文件系统。&lt;/p&gt;
-
-&lt;p&gt;目标二：可以构建集群&lt;/p&gt;
-
-&lt;p&gt;组成Zookeeper集群的每台机器都会在内存中维护当前服务器状态，并且每台机器都保持通讯。只要集群中超过一半机器能够正常工作，整个集群就能对外正常服务。&lt;/p&gt;
-
-&lt;p&gt;目标三：顺序访问&lt;/p&gt;
-
-&lt;p&gt;对于来自客户端的每个更新请求，Zookeeper都会分配一个全局唯一递增编号，这个编号反映了所有事物操作的先后顺序，应用程序可以使用Zookeeper的这个特性来实现更加高层的同步原语。&lt;/p&gt;
-
-&lt;p&gt;目标四：高性能&lt;/p&gt;
-
-&lt;p&gt;Zookeeper将全量数据存储在内存中直接对外服务(除事务请求)，尤其适合于读操作为主的应用场景。&lt;/p&gt;
-
-&lt;p&gt;Zookeeper基本概念&lt;/p&gt;
-
-&lt;p&gt;集群角色
-最典型的集群角色是Master/Slave模式，Master处理所有写操作，Slave提供读服务。&lt;/p&gt;
-
-&lt;p&gt;在Zookeeper中，有Leader、Follower、Observer三种角色。集群中所有机器通过一个Leader选举来决定一台机器作为Leader，Leader为客户端提供读和写服务。Follower和Observer都提供读服务，区别在于Observer机器不参与选举，也不参与写操作的“过半写成功”策略，因此Observe可以在不影响写性能的情况下提升集群的读性能。&lt;/p&gt;
-
-&lt;p&gt;会话
-客户端与Zookeeper是TCP长连接，默认对外端口是2181，通过这个连接，客户端保持和服务器的心跳以维护连接，也能向Zookeeper发送请求并响应，同时还可以接收到注册通知。&lt;/p&gt;
-
-&lt;p&gt;数据节点(ZNode)
-Zookeeper所有数据都在内存中，模型类似一颗文件树，ZNode Tree，每个ZNode节点都会保存自己的数据内容和一系列属性。&lt;/p&gt;
-
-&lt;p&gt;ZNode分为持久节点和临时节点，后者和客户端会话绑定。&lt;/p&gt;
-
-&lt;p&gt;版本
-每个ZNode，Zookeeper都会维护一个Stat数据结构记录这个ZNode的三个数据版本：当前ZNode版本version、当前ZNode子节点版本cversion、和当前Node的ACL版本aversion。&lt;/p&gt;
-
-&lt;p&gt;Watcher
-事件监听是Zookeeper的重要特性，他允许客户端在指定节点注册Watcher，并且在事件被触发后通知客户端。&lt;/p&gt;
-
-&lt;p&gt;ACL
-Access Control Lists，定义了5中权限：&lt;/p&gt;
-
-&lt;p&gt;Create、Read、Write、Delete、Admin&lt;/p&gt;
-
-&lt;p&gt;ZAB协议
-在ZooKeeper中所有的事务请求都由一个主服务器也就是Leader来处理，其他服务器为Follower，Leader将客户端的事务请求转换为事务Proposal，并且将Proposal分发给集群中其他所有的Follower，然后Leader等待Follwer反馈，当有过半数（&amp;gt;=N/2+1）的Follower反馈信息后，Leader将再次向集群内Follower广播Commit信息，Commit为将之前的Proposal提交。&lt;/p&gt;
-
-&lt;p&gt;ZAB协议中存在着三种状态，每个节点都属于以下三种中的一种：&lt;/p&gt;
-
-&lt;p&gt;1.Looking：系统刚启动时或者Leader崩溃后正处于选举状态&lt;/p&gt;
-
-&lt;p&gt;2.Following：Follower节点所处的状态，Follower与Leader处于数据同步阶段；&lt;/p&gt;
-
-&lt;p&gt;3.Leading：Leader所处状态，当前集群中有一个Leader为主进程；&lt;/p&gt;
-
-&lt;p&gt;ZooKeeper启动时所有节点初始状态为Looking，这时集群会尝试选举出一个Leader节点，选举出的Leader节点切换为Leading状态；当节点发现集群中已经选举出Leader则该节点会切换到Following状态，然后和Leader节点保持同步；当Follower节点与Leader失去联系时Follower节点则会切换到Looking状态，开始新一轮选举；在ZooKeeper的整个生命周期中每个节点都会在Looking、Following、Leading状态间不断转换；&lt;/p&gt;
-
-&lt;p&gt;选举出Leader节点后ZAB进入原子广播阶段，这时Leader为和自己同步的每个节点Follower创建一个操作序列，一个时期一个Follower只能和一个Leader保持同步，Leader节点与Follower节点使用心跳检测来感知对方的存在；当Leader节点在超时时间内收到来自Follower的心跳检测那Follower节点会一直与该节点保持连接；若超时时间内Leader没有接收到来自过半Follower节点的心跳检测或TCP连接断开，那Leader会结束当前周期的领导，切换到Looking状态，所有Follower节点也会放弃该Leader节点切换到Looking状态，然后开始新一轮选举。&lt;/p&gt;
-
-&lt;p&gt;ZAB协议定义了选举（election）、发现（discovery）、同步（sync）、广播(Broadcast)四个阶段；ZAB选举（election）时当Follower存在ZXID（事务ID）时判断所有Follower节点的事务日志，只有lastZXID的节点才有资格成为Leader，这种情况下选举出来的Leader总有最新的事务日志，基于这个原因所以ZooKeeper实现的时候把发现（discovery）与同步（sync）合并为恢复（recovery）阶段；&lt;/p&gt;
-
-&lt;p&gt;1.Election：在Looking状态中选举出Leader节点，Leader的lastZXID总是最新的；&lt;/p&gt;
-
-&lt;p&gt;2.Discovery：Follower节点向准Leader推送FOllOWERINFO，该信息中包含了上一周期的epoch，接受准Leader的NEWLEADER指令，检查newEpoch有效性，准Leader要确保Follower的epoch与ZXID小于或等于自身的；&lt;/p&gt;
-
-&lt;p&gt;3.sync：将Follower与Leader的数据进行同步，由Leader发起同步指令，最总保持集群数据的一致性；&lt;/p&gt;
-
-&lt;p&gt;4.Broadcast：Leader广播Proposal与Commit，Follower接受Proposal与Commit；&lt;/p&gt;
-
-&lt;p&gt;5.Recovery：在Election阶段选举出Leader后本阶段主要工作就是进行数据的同步，使Leader具有highestZXID，集群保持数据的一致性；&lt;/p&gt;
-
-&lt;p&gt;选举（Election）&lt;/p&gt;
-
-&lt;p&gt;election阶段必须确保选出的Leader具有highestZXID，否则在Recovery阶段没法保证数据的一致性，Recovery阶段Leader要求Follower向自己同步数据没有Follower要求Leader保持数据同步，所有选举出来的Leader要具有最新的ZXID；&lt;/p&gt;
-
-&lt;p&gt;在选举的过程中会对每个Follower节点的ZXID进行对比只有highestZXID的Follower才可能当选Leader；&lt;/p&gt;
-
-&lt;p&gt;选举流程：&lt;/p&gt;
-
-&lt;ol&gt;
-  &lt;li&gt;
-    &lt;p&gt;每个Follower都向其他节点发送选自身为Leader的Vote投票请求，等待回复；&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;Follower接受到的Vote如果比自身的大（ZXID更新）时则投票，并更新自身的Vote，否则拒绝投票；&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;每个Follower中维护着一个投票记录表，当某个节点收到过半的投票时，结束投票并把该Follower选为Leader，投票结束；&lt;/p&gt;
-  &lt;/li&gt;
-&lt;/ol&gt;
-
-&lt;p&gt;ZAB协议中使用ZXID作为事务编号，ZXID为64位数字，低32位为一个递增的计数器，每一个客户端的一个事务请求时Leader产生新的事务后该计数器都会加1，高32位为Leader周期epoch编号，当新选举出一个Leader节点时Leader会取出本地日志中最大事务Proposal的ZXID解析出对应的epoch把该值加1作为新的epoch，将低32位从0开始生成新的ZXID；ZAB使用epoch来区分不同的Leader周期；&lt;/p&gt;
-
-&lt;p&gt;恢复（Recovery）&lt;/p&gt;
-
-&lt;p&gt;在election阶段选举出来的Leader已经具有最新的ZXID，所有本阶段的主要工作是根据Leader的事务日志对Follower节点数据进行更新；&lt;/p&gt;
-
-&lt;p&gt;Leader：Leader生成新的ZXID与epoch，接收Follower发送过来的FOllOWERINFO（含有当前节点的LastZXID）然后往Follower发送NEWLEADER；Leader根据Follower发送过来的LastZXID根据数据更新策略向Follower发送更新指令；&lt;/p&gt;
-
-&lt;p&gt;同步策略：&lt;/p&gt;
-
-&lt;p&gt;1.SNAP：如果Follower数据太老，Leader将发送快照SNAP指令给Follower同步数据；&lt;/p&gt;
-
-&lt;p&gt;2.DIFF：Leader发送从Follolwer.lastZXID到Leader.lastZXID议案的DIFF指令给Follower同步数据；&lt;/p&gt;
-
-&lt;p&gt;3.TRUNC：当Follower.lastZXID比Leader.lastZXID大时，Leader发送从Leader.lastZXID到Follower.lastZXID的TRUNC指令让Follower丢弃该段数据；&lt;/p&gt;
-
-&lt;p&gt;Follower：往Leader发送FOLLOERINFO指令，Leader拒绝就转到Election阶段；接收Leader的NEWLEADER指令，如果该指令中epoch比当前Follower的epoch小那么Follower转到Election阶段；Follower还有主要工作是接收SNAP/DIFF/TRUNC指令同步数据与ZXID，同步成功后回复ACKNETLEADER，然后进入下一阶段；Follower将所有事务都同步完成后Leader会把该节点添加到可用Follower列表中；&lt;/p&gt;
-
-&lt;p&gt;SNAP与DIFF用于保证集群中Follower节点已经Committed的数据的一致性，TRUNC用于抛弃已经被处理但是没有Committed的数据；&lt;/p&gt;
-
-&lt;p&gt;广播(Broadcast)&lt;/p&gt;
-
-&lt;p&gt;客户端提交事务请求时Leader节点为每一个请求生成一个事务Proposal，将其发送给集群中所有的Follower节点，收到过半Follower的反馈后开始对事务进行提交，ZAB协议使用了原子广播协议；在ZAB协议中只需要得到过半的Follower节点反馈Ack就可以对事务进行提交，这也导致了Leader几点崩溃后可能会出现数据不一致的情况，ZAB使用了崩溃恢复来处理数字不一致问题；消息广播使用了TCP协议进行通讯所有保证了接受和发送事务的顺序性。广播消息时Leader节点为每个事务Proposal分配一个全局递增的ZXID（事务ID），每个事务Proposal都按照ZXID顺序来处理；&lt;/p&gt;
-
-&lt;p&gt;Leader节点为每一个Follower节点分配一个队列按事务ZXID顺序放入到队列中，且根据队列的规则FIFO来进行事务的发送。Follower节点收到事务Proposal后会将该事务以事务日志方式写入到本地磁盘中，成功后反馈Ack消息给Leader节点，Leader在接收到过半Follower节点的Ack反馈后就会进行事务的提交，以此同时向所有的Follower节点广播Commit消息，Follower节点收到Commit后开始对事务进行提交。&lt;/p&gt;
-
-&lt;p&gt;总的来说，ZAB主要是用来构建一个高可用的分布式数据主备系统，而Paxos则是构建一个分布式的一致性状态机系统。&lt;/p&gt;
-
-&lt;p&gt;&amp;lt;Google的Chubby，Apache的Zookeeper都是基于它的理论来实现的，Paxos还被认为是到目前为止唯一的分布式一致性算法，其它的算法都是Paxos的改进或简化。有个问题要提一下，Paxos有一个前提：没有拜占庭将军问题。就是说Paxos只有在一个可信的计算环境中才能成立，这个环境是不会被入侵所破坏的。&lt;/p&gt;
-
-&lt;p&gt;”&lt;/p&gt;
-
-&lt;p&gt;Paxos 这个算法是Leslie Lamport在1990年提出的一种基于消息传递的一致性算法.Paxos 算法解决的问题是一个分布式系统如何就某个值（决议）达成一致。&lt;/p&gt;
-
-&lt;p&gt;part-time parliament Paxos Made Simple里这样描述Paxos算法执行过程：&lt;/p&gt;
-
-&lt;p&gt;prepare 阶段：
-proposer 选择一个提案编号 n 并将 prepare 请求发送给 acceptors 中的一个多数派；
-acceptor 收到 prepare 消息后，如果提案的编号大于它已经回复的所有 prepare 消息，则 acceptor 将自己上次接受的提案回复给 proposer，并承诺不再回复小于 n 的提案；
-批准阶段：
-当一个 proposer 收到了多数 acceptors 对 prepare 的回复后，就进入批准阶段。它要向回复 prepare 请求的 acceptors 发送 accept 请求，包括编号 n 和根据 P2c 决定的 value（如果根据 P2c 没有已经接受的 value，那么它可以自由决定 value）。
-在不违背自己向其他 proposer 的承诺的前提下，acceptor 收到 accept 请求后即接受这个请求。
-wiki上是两个阶段，论文里却是说三阶段，而且默认就有了个proposer相当于leader。查资料有大侠列出了第三个阶段(http://www.wuzesheng.com/?p=2724)：&lt;/p&gt;
-
-&lt;ol&gt;
-  &lt;li&gt;Learn阶段:&lt;/li&gt;
-&lt;/ol&gt;
-
-&lt;p&gt;当各个Acceptor达到一致之后，需要将达到一致的结果通知给所有的Learner.&lt;/p&gt;
-
-&lt;p&gt;zookeeper采用org.apache.zookeeper.server.quorum.FastLeaderElection作为其缺省选举算法&lt;/p&gt;
-
-&lt;p&gt;这篇文章http://csrd.aliapp.com/?p=162&amp;amp;replytocom=782 直接用paxos实现作为标题，提到  zookeeper在选举leader的时候采用了paxos算法(主要是fast paxos)&lt;/p&gt;
-
-&lt;p&gt;偶然看到下边有人反驳：&lt;/p&gt;
-
-&lt;p&gt;魏讲文：“&lt;/p&gt;
-
-&lt;p&gt;FastLeaderElection根本不是Paxos，也不是Fast Paxos的实现。
-FastLeaderElection源码与Paxos的论文相去甚远。&lt;/p&gt;
-
-&lt;p&gt;Paxos与 FastPaxos算法中也有一个leader选举的问题。&lt;/p&gt;
-
-&lt;p&gt;FastLeaderElection对于zookeeper来讲，只是相当于Paxos中的leader选举。&lt;/p&gt;
-
-&lt;p&gt;”&lt;/p&gt;
-
-&lt;p&gt;二、资料证实&lt;/p&gt;
-
-&lt;p&gt;好的，查查资料，分析源码开始调研&lt;/p&gt;
-
-&lt;p&gt;首先是魏讲文的反驳 ：&lt;/p&gt;
-
-&lt;p&gt;There is a very common misunderstanding that the leader election algorithm in zookeeper is paxos or fast paxos. The leader election algorithm is not paxos or fast paxos, please consider the following facts:&lt;/p&gt;
-
-&lt;p&gt;There is no the concept of proposal number in the leader election in zookeeper. the proposal number is a key concept to paxos. Some one think the epoch is the proposal number, but different followers may produce proposal with the same epoch which is not allowed in paxos.&lt;/p&gt;
-
-&lt;p&gt;Fast paxos requires at least 3t + 1 acceptors, where t is the number of servers which are allowed to fail [3]. This is conflict with the fact that a zookeeper cluster with 3 servers works well even if one server failed.&lt;/p&gt;
-
-&lt;p&gt;The leader election algorithm must make sure P1. However paxos does provide such guarantee.&lt;/p&gt;
-
-&lt;p&gt;In paxos, a leader is also required to achieve progress. There are some similarities between the leader in paxos and the leader in zookeeper. Even if more than one servers believe they are the leader, the consistency is preserved both in zookeeper and in paxos. this is very clearly discussed in [1] and [2].&lt;/p&gt;
-
-&lt;p&gt;然后是作者三次对比&lt;/p&gt;
-
-&lt;p&gt;1）邮件列表&lt;/p&gt;
-
-&lt;p&gt;Our protocol instead, has only two phases, just like a two-phase 
-commit protocol. Of course, for Paxos, we can ignore the first phase in runs in 
-which we have a single proposer as we can run phase 1 for multiple instances at 
-a time, which is what Ben called previously Multi-Paxos, I believe. The trick 
-with skipping phase 1 is to deal with leader switching. 
-2）出书的访谈&lt;/p&gt;
-
-&lt;p&gt;We made a few interesting observations about Paxos when contrasting it to Zab, like problems you could run into if you just implemented Paxos alone. Not that Paxos is broken or anything, just that in our setting, there were some properties it was not giving us. Some people still like to map Zab to Paxos, and they are not completely off, but the way we see it, Zab matches a service like ZooKeeper well.&lt;/p&gt;
-
-&lt;p&gt;zk的分布式一致性算法有了个名称叫Zab&lt;/p&gt;
-
-&lt;p&gt;3）论文&lt;/p&gt;
-
-&lt;p&gt;We use an algorithm that shares some of the character- istics of Paxos, but that combines transaction logging needed for consensus with write-ahead logging needed for data tree recovery to enable an efficient implementa- tion.&lt;/p&gt;
-
-&lt;p&gt;三、leader选举分析&lt;/p&gt;
-
-&lt;p&gt;在我理解首先在选举时，并不能用到paxos算法，paxos里选总统也好，zk选leader也好，跟搞个提案让大部分人同意是有区别的。选主才能保证不会出现多proposer的并发提案冲突&lt;/p&gt;
-
-&lt;p&gt;谁去作为proposer发提案？是paxos算法进行下去的前提。而提出提案让大部分follower同意则可用到类似paxos的算法实现一致性。zookeeper使用的是Zab算法实现一致性。&lt;/p&gt;
-
-&lt;p&gt;zk的选主策略：&lt;/p&gt;
-
-&lt;p&gt;there can be at most one leader (proposer) at any time, and we guarantee this by making sure 
-that a quorum of replicas recognize the leader as a leader by committing to an 
-epoch change. This change in epoch also allows us to get unique zxids since the 
-epoch forms part of the zxid.&lt;/p&gt;
-
-&lt;p&gt;每个server有一个id，收到提交的事务时则有一个zxid，随更新数据的变动，事务编号递增，server id各不同。首先选zxid最大的作为leader，如果zxid比较不出来，则选server id最大的为leader&lt;/p&gt;
-
-&lt;p&gt;zxid包含一个epoch数字，epoch指示一个server作为leader的时期，随新的leader诞生而递增。&lt;/p&gt;
-
-&lt;p&gt;再看代码：&lt;/p&gt;
-
-&lt;p&gt;四、zookeeper数据更新原理分析&lt;/p&gt;
-
-&lt;p&gt;了解完选主的做法后，来了解下同步数据的做法，同步数据则采用Zab协议：Zookeeper Atomic broadcast protocol，是个类似两阶段提交的协议：&lt;/p&gt;
-
-&lt;p&gt;The leader sends a PROPOSAL message, p, to all followers.&lt;/p&gt;
-
-&lt;p&gt;Upon receiving p, a follower responds to the leader with an ACK, informing the&lt;/p&gt;
-
-&lt;p&gt;leader that it has accepted the proposal.&lt;/p&gt;
-
-&lt;p&gt;Uponreceivingacknowledgmentsfromaquorum(thequorumincludestheleader&lt;/p&gt;
-
-&lt;p&gt;itself), the leader sends a message informing the followers to COMMIT it.&lt;/p&gt;
-
-&lt;p&gt;跟paxos的区别是leaer发送给所有follower，而不是大多数，所有follower都要确认并通知leader，而不是大多数。&lt;/p&gt;
-
-&lt;p&gt;保证机制：按顺序广播的两个事务， T 和 Tʹ ，T在前则Tʹ 生效前必须提交T。如果有一个server 提交了T 和 Tʹ ，则所有其他server必须也在Tʹ前提交T。&lt;/p&gt;
-
-&lt;p&gt;五、leader的探活&lt;/p&gt;
-
-&lt;p&gt;为解决leader crash的问题，避免出现多个leader导致事务混乱，Zab算法保证：&lt;/p&gt;
-
-&lt;p&gt;1、新事务开启时，leader必须提交上个epoch期间提交的所有事务&lt;/p&gt;
-
-&lt;p&gt;2、任何时候都不会有两个leader同时获得足够多的支持者。&lt;/p&gt;
-
-&lt;p&gt;一个新leader的起始状态需要大多数server同意&lt;/p&gt;
-
-&lt;p&gt;六、observer&lt;/p&gt;
-
-&lt;p&gt;zk里的第三种角色，观察者和follower的区别就是没有选举权。它主要是1、为系统的读请求扩展性存在 2、满足多机房部署需求，中心机房部署leader、follower，其他机房部署observer，读取配置优先读本地。&lt;/p&gt;
-
-&lt;p&gt;七、总结&lt;/p&gt;
-
-&lt;p&gt;我认为zookeeper只能说是受paxos算法影响，角色划分类似，提案通过方式类似，实现更为简单直观。选主基于voteid(server-id)和zxid做大小优先级排序，信息同步则使用两阶段提交，leader获取follower的全部同意后才提交事务，更新状态。observer角色则是为了增加系统吞吐和满足跨机房部署。&lt;/p&gt;
-
-&lt;p&gt;参考文献&lt;/p&gt;
-
-&lt;p&gt;[1] Reed, B., &amp;amp; Junqueira, F. P. (2008). A simple totally ordered broadcast protocol. Second
-Workshop on Large-Scale Distributed Systems and Middleware (LADIS 2008). Yorktown
-Heights, NY: ACM. ISBN: 978-1-60558-296-2.
-[2] Lamport, L. Paxos made simple. ACM SIGACT News 32, 4 (Dec. 2001), 1825.
-[3] F. Junqueira, Y. Mao, and K. Marzullo. Classic paxos vs. fast paxos: caveat emptor. In
-Proceedings of the 3rd USENIX/IEEE/IFIP Workshop on Hot Topics in System Dependability
-(HotDep.07). Citeseer, 2007.&lt;/p&gt;
-
-&lt;p&gt;[4]O’Reilly.ZooKeeper.Distributed process coordination.2013&lt;/p&gt;
-
-&lt;p&gt;[5] http://agapple.iteye.com/blog/1184023  zookeeper项目使用几点小结
-1.1 基本定义
-算法中的参与者主要分为三个角色，同时每个参与者又可兼领多个角色:&lt;/p&gt;
-
-&lt;p&gt;⑴proposer 提出提案，提案信息包括提案编号和提议的value;&lt;/p&gt;
-
-&lt;p&gt;⑵acceptor 收到提案后可以接受(accept)提案;&lt;/p&gt;
-
-&lt;p&gt;⑶learner 只能”学习”被批准的提案;&lt;/p&gt;
-
-&lt;p&gt;算法保重一致性的基本语义:&lt;/p&gt;
-
-&lt;p&gt;⑴决议(value)只有在被proposers提出后才能被批准(未经批准的决议称为”提案(proposal)”);&lt;/p&gt;
-
-&lt;p&gt;⑵在一次Paxos算法的执行实例中，只批准(chosen)一个value;&lt;/p&gt;
-
-&lt;p&gt;⑶learners只能获得被批准(chosen)的value;&lt;/p&gt;
-
-&lt;p&gt;有上面的三个语义可演化为四个约束:&lt;/p&gt;
-
-&lt;p&gt;⑴P1:一个acceptor必须接受(accept)第一次收到的提案;&lt;/p&gt;
-
-&lt;p&gt;⑵P2a:一旦一个具有value v的提案被批准(chosen)，那么之后任何acceptor 再次接受(accept)的提案必须具有value v;&lt;/p&gt;
-
-&lt;p&gt;⑶P2b:一旦一个具有value v的提案被批准(chosen)，那么以后任何 proposer 提出的提案必须具有value v;&lt;/p&gt;
-
-&lt;p&gt;⑷P2c:如果一个编号为n的提案具有value v，那么存在一个多数派，要么他们中所有人都没有接受(accept)编号小于n的任何提案，要么他们已经接受(accpet)的所有编号小于n的提案中编号最大的那个提案具有value v;&lt;/p&gt;
-
-&lt;p&gt;1.2 基本算法(basic paxos)
-算法(决议的提出与批准)主要分为两个阶段:&lt;/p&gt;
-
-&lt;ol&gt;
-  &lt;li&gt;prepare阶段：&lt;/li&gt;
-&lt;/ol&gt;
-
-&lt;p&gt;(1). 当Porposer希望提出方案V1，首先发出prepare请求至大多数Acceptor。Prepare请求内容为序列号&lt;SN1&gt;;&lt;/SN1&gt;&lt;/p&gt;
-
-&lt;p&gt;(2). 当Acceptor接收到prepare请求&lt;SN1&gt;时，检查自身上次回复过的prepare请求&lt;SN2&gt;&lt;/SN2&gt;&lt;/SN1&gt;&lt;/p&gt;
-
-&lt;p&gt;a). 如果SN2&amp;gt;SN1，则忽略此请求，直接结束本次批准过程;&lt;/p&gt;
-
-&lt;p&gt;b). 否则检查上次批准的accept请求&amp;lt;SNx，Vx&amp;gt;，并且回复&amp;lt;SNx，Vx&amp;gt;；如果之前没有进行过批准，则简单回复&lt;OK&gt;;&lt;/OK&gt;&lt;/p&gt;
-
-&lt;ol&gt;
-  &lt;li&gt;accept批准阶段：&lt;/li&gt;
-&lt;/ol&gt;
-
-&lt;p&gt;(1a). 经过一段时间，收到一些Acceptor回复，回复可分为以下几种:&lt;/p&gt;
-
-&lt;p&gt;a). 回复数量满足多数派，并且所有的回复都是&lt;OK&gt;，则Porposer发出accept请求，请求内容为议案&amp;lt;SN1，V1&amp;gt;;&lt;/OK&gt;&lt;/p&gt;
-
-&lt;p&gt;b). 回复数量满足多数派，但有的回复为：&amp;lt;SN2，V2&amp;gt;，&amp;lt;SN3，V3&amp;gt;……则Porposer找到所有回复中超过半数的那个，假设为&amp;lt;SNx，Vx&amp;gt;，则发出accept请求，请求内容为议案&amp;lt;SN1，Vx&amp;gt;;&lt;/p&gt;
-
-&lt;p&gt;c). 回复数量不满足多数派，Proposer尝试增加序列号为SN1+，转1继续执行;&lt;/p&gt;
-
-&lt;pre&gt;&lt;code&gt;     (1b). 经过一段时间，收到一些Acceptor回复，回复可分为以下几种:
-&lt;/code&gt;&lt;/pre&gt;
-
-&lt;p&gt;a). 回复数量满足多数派，则确认V1被接受;&lt;/p&gt;
-
-&lt;p&gt;b). 回复数量不满足多数派，V1未被接受，Proposer增加序列号为SN1+，转1继续执行;&lt;/p&gt;
-
-&lt;p&gt;(2). 在不违背自己向其他proposer的承诺的前提下，acceptor收到accept 请求后即接受并回复这个请求。&lt;/p&gt;
-
-&lt;p&gt;1.3 算法优化(fast paxos)
-Paxos算法在出现竞争的情况下，其收敛速度很慢，甚至可能出现活锁的情况，例如当有三个及三个以上的proposer在发送prepare请求后，很难有一个proposer收到半数以上的回复而不断地执行第一阶段的协议。因此，为了避免竞争，加快收敛的速度，在算法中引入了一个Leader这个角色，在正常情况下同时应该最多只能有一个参与者扮演Leader角色，而其它的参与者则扮演Acceptor的角色，同时所有的人又都扮演Learner的角色。&lt;/p&gt;
-
-&lt;p&gt;在这种优化算法中，只有Leader可以提出议案，从而避免了竞争使得算法能够快速地收敛而趋于一致，此时的paxos算法在本质上就退变为两阶段提交协议。但在异常情况下，系统可能会出现多Leader的情况，但这并不会破坏算法对一致性的保证，此时多个Leader都可以提出自己的提案，优化的算法就退化成了原始的paxos算法。&lt;/p&gt;
-
-&lt;p&gt;一个Leader的工作流程主要有分为三个阶段：&lt;/p&gt;
-
-&lt;p&gt;(1).学习阶段 向其它的参与者学习自己不知道的数据(决议);&lt;/p&gt;
-
-&lt;p&gt;(2).同步阶段 让绝大多数参与者保持数据(决议)的一致性;&lt;/p&gt;
-
-&lt;p&gt;(3).服务阶段 为客户端服务，提议案;&lt;/p&gt;
-
-&lt;p&gt;1.3.1 学习阶段
-当一个参与者成为了Leader之后，它应该需要知道绝大多数的paxos实例，因此就会马上启动一个主动学习的过程。假设当前的新Leader早就知道了1-134、138和139的paxos实例，那么它会执行135-137和大于139的paxos实例的第一阶段。如果只检测到135和140的paxos实例有确定的值，那它最后就会知道1-135以及138-140的paxos实例。&lt;/p&gt;
-
-&lt;p&gt;1.3.2 同步阶段
-此时的Leader已经知道了1-135、138-140的paxos实例，那么它就会重新执行1-135的paxos实例，以保证绝大多数参与者在1-135的paxos实例上是保持一致的。至于139-140的paxos实例，它并不马上执行138-140的paxos实例，而是等到在服务阶段填充了136、137的paxos实例之后再执行。这里之所以要填充间隔，是为了避免以后的Leader总是要学习这些间隔中的paxos实例，而这些paxos实例又没有对应的确定值。&lt;/p&gt;
-
-&lt;p&gt;1.3.4 服务阶段
-Leader将用户的请求转化为对应的paxos实例，当然，它可以并发的执行多个paxos实例，当这个Leader出现异常之后，就很有可能造成paxos实例出现间断。&lt;/p&gt;
-
-&lt;p&gt;1.3.5 问题
-(1).Leader的选举原则&lt;/p&gt;
-
-&lt;p&gt;(2).Acceptor如何感知当前Leader的失败，客户如何知道当前的Leader&lt;/p&gt;
-
-&lt;p&gt;(3).当出现多Leader之后，如何kill掉多余的Leader&lt;/p&gt;
-
-&lt;p&gt;(4).如何动态的扩展Acceptor&lt;/p&gt;
-
-&lt;ol&gt;
-  &lt;li&gt;Zookeeper
-2.1 整体架构
-在Zookeeper集群中，主要分为三者角色，而每一个节点同时只能扮演一种角色，这三种角色分别是：&lt;/li&gt;
-&lt;/ol&gt;
-
-&lt;p&gt;(1). Leader 接受所有Follower的提案请求并统一协调发起提案的投票，负责与所有的Follower进行内部的数据交换(同步);&lt;/p&gt;
-
-&lt;p&gt;(2). Follower 直接为客户端服务并参与提案的投票，同时与Leader进行数据交换(同步);&lt;/p&gt;
-
-&lt;p&gt;(3). Observer 直接为客户端服务但并不参与提案的投票，同时也与Leader进行数据交换(同步);&lt;/p&gt;
-
-&lt;p&gt;2.2 QuorumPeer的基本设计&lt;/p&gt;
-
-&lt;p&gt;Zookeeper对于每个节点QuorumPeer的设计相当的灵活，QuorumPeer主要包括四个组件：客户端请求接收器(ServerCnxnFactory)、数据引擎(ZKDatabase)、选举器(Election)、核心功能组件(Leader/Follower/Observer)。其中：&lt;/p&gt;
-
-&lt;p&gt;(1). ServerCnxnFactory负责维护与客户端的连接(接收客户端的请求并发送相应的响应);&lt;/p&gt;
-
-&lt;p&gt;(2). ZKDatabase负责存储/加载/查找数据(基于目录树结构的KV+操作日志+客户端Session);&lt;/p&gt;
-
-&lt;p&gt;(3). Election负责选举集群的一个Leader节点;&lt;/p&gt;
-
-&lt;p&gt;(4). Leader/Follower/Observer一个QuorumPeer节点应该完成的核心职责;&lt;/p&gt;
-
-&lt;p&gt;2.3 QuorumPeer工作流程&lt;/p&gt;
-
-&lt;p&gt;2.3.1 Leader职责&lt;/p&gt;
-
-&lt;p&gt;Follower确认: 等待所有的Follower连接注册，若在规定的时间内收到合法的Follower注册数量，则确认成功；否则，确认失败。&lt;/p&gt;
-
-&lt;p&gt;2.3.2 Follower职责&lt;/p&gt;
-
-&lt;p&gt;2.4 选举算法
-2.4.1 LeaderElection选举算法&lt;/p&gt;
-
-&lt;p&gt;选举线程由当前Server发起选举的线程担任，他主要的功能对投票结果进行统计，并选出推荐的Server。选举线程首先向所有Server发起一次询问(包括自己)，被询问方，根据自己当前的状态作相应的回复，选举线程收到回复后，验证是否是自己发起的询问(验证xid 是否一致)，然后获取对方的id(myid)，并存储到当前询问对象列表中，最后获取对方提议 的&lt;/p&gt;
-
-&lt;p&gt;leader 相关信息(id,zxid)，并将这些 信息存储到当次选举的投票记录表中，当向所有Serve r&lt;/p&gt;
-
-&lt;p&gt;都询问完以后，对统计结果进行筛选并进行统计，计算出当次询问后获胜的是哪一个Server，并将当前zxid最大的Server 设置为当前Server要推荐的Server(有可能是自己，也有可以是其它的Server，根据投票结果而定，但是每一个Server在第一次投票时都会投自己)，如果此时获胜的Server获得n/2 + 1的Server票数，设置当前推荐的leader为获胜的Server。根据获胜的Server相关信息设置自己的状态。每一个Server都重复以上流程直到选举出Leader。&lt;/p&gt;
-
-&lt;p&gt;初始化选票(第一张选票): 每个quorum节点一开始都投给自己;&lt;/p&gt;
-
-&lt;p&gt;收集选票: 使用UDP协议尽量收集所有quorum节点当前的选票(单线程/同步方式)，超时设置200ms;&lt;/p&gt;
-
-&lt;p&gt;统计选票: 1).每个quorum节点的票数;&lt;/p&gt;
-
-&lt;pre&gt;&lt;code&gt;     2).为自己产生一张新选票(zxid、myid均最大);
-&lt;/code&gt;&lt;/pre&gt;
-
-&lt;p&gt;选举成功: 某一个quorum节点的票数超过半数;&lt;/p&gt;
-
-&lt;p&gt;更新选票: 在本轮选举失败的情况下，当前quorum节点会从收集的选票中选取合适的选票(zxid、myid均最大)作为自己下一轮选举的投票;&lt;/p&gt;
-
-&lt;p&gt;异常问题的处理&lt;/p&gt;
-
-&lt;p&gt;1). 选举过程中，Server的加入&lt;/p&gt;
-
-&lt;p&gt;当一个Server启动时它都会发起一次选举，此时由选举线程发起相关流程，那么每个 Serve r都会获得当前zxi d最大的哪个Serve r是谁，如果当次最大的Serve r没有获得n/2+1 个票数，那么下一次投票时，他将向zxid最大的Server投票，重复以上流程，最后一定能选举出一个Leader。&lt;/p&gt;
-
-&lt;p&gt;2). 选举过程中，Server的退出&lt;/p&gt;
-
-&lt;p&gt;只要保证n/2+1个Server存活就没有任何问题，如果少于n/2+1个Server 存活就没办法选出Leader。&lt;/p&gt;
-
-&lt;p&gt;3). 选举过程中，Leader死亡&lt;/p&gt;
-
-&lt;p&gt;当选举出Leader以后，此时每个Server应该是什么状态(FLLOWING)都已经确定，此时由于Leader已经死亡我们就不管它，其它的Fllower按正常的流程继续下去，当完成这个流程以后，所有的Fllower都会向Leader发送Ping消息，如果无法ping通，就改变自己的状为(FLLOWING ==&amp;gt; LOOKING)，发起新的一轮选举。&lt;/p&gt;
-
-&lt;p&gt;4). 选举完成以后，Leader死亡&lt;/p&gt;
-
-&lt;p&gt;处理过程同上。&lt;/p&gt;
-
-&lt;p&gt;5). 双主问题&lt;/p&gt;
-
-&lt;p&gt;Leader的选举是保证只产生一个公认的Leader的，而且Follower重新选举与旧Leader恢复并退出基本上是同时发生的，当Follower无法ping同Leader是就认为Leader已经出问题开始重新选举，Leader收到Follower的ping没有达到半数以上则要退出Leader重新选举。&lt;/p&gt;
-
-&lt;p&gt;2.4.2 FastLeaderElection选举算法
-FastLeaderElection是标准的fast paxos的实现，它首先向所有Server提议自己要成为leader，当其它Server收到提议以后，解决 epoch 和 zxid 的冲突，并接受对方的提议，然后向对方发送接受提议完成的消息。&lt;/p&gt;
-
-&lt;p&gt;FastLeaderElection算法通过异步的通信方式来收集其它节点的选票，同时在分析选票时又根据投票者的当前状态来作不同的处理，以加快Leader的选举进程。&lt;/p&gt;
-
-&lt;p&gt;每个Server都一个接收线程池和一个发送线程池, 在没有发起选举时，这两个线程池处于阻塞状态，直到有消息到来时才解除阻塞并处理消息，同时每个Serve r都有一个选举线程(可以发起选举的线程担任)。&lt;/p&gt;
-
-&lt;p&gt;1). 主动发起选举端(选举线程)的处理&lt;/p&gt;
-
-&lt;p&gt;首先自己的 logicalclock加1，然后生成notification消息，并将消息放入发送队列中， 系统中配置有几个Server就生成几条消息，保证每个Server都能收到此消息，如果当前Server 的状态是LOOKING就一直循环检查接收队列是否有消息，如果有消息，根据消息中对方的状态进行相应的处理。&lt;/p&gt;
-
-&lt;p&gt;2).主动发送消息端(发送线程池)的处理&lt;/p&gt;
-
-&lt;p&gt;将要发送的消息由Notification消息转换成ToSend消息，然后发送对方，并等待对方的回复。&lt;/p&gt;
-
-&lt;p&gt;3). 被动接收消息端(接收线程池)的处理&lt;/p&gt;
-
-&lt;p&gt;将收到的消息转换成Notification消息放入接收队列中，如果对方Server的epoch小于logicalclock则向其发送一个消息(让其更新epoch)；如果对方Server处于Looking状态，自己则处于Following或Leading状态，则也发送一个消息(当前Leader已产生，让其尽快收敛)。&lt;/p&gt;
-
-&lt;p&gt;2.4.3 AuthFastLeaderElection选举算法
-AuthFastLeaderElection算法同FastLeaderElection算法基本一致，只是在消息中加入了认证信息，该算法在最新的Zookeeper中也建议弃用。
-2.6 Zookeeper中的请求处理流程
-2.6.1 Follower节点处理用户的读写请求&lt;/p&gt;
-
-&lt;p&gt;2.6.2 Leader节点处理写请求&lt;/p&gt;
-
-&lt;pre&gt;&lt;code&gt;值得注意的是， Follower/Leader上的读操作时并行的，读写操作是串行的，当CommitRequestProcessor处理一个写请求时，会阻塞之后所有的读写请求。
-&lt;/code&gt;&lt;/pre&gt;
-
-</description>
-        <pubDate>Thu, 04 Jan 2018 00:00:00 +0800</pubDate>
-        <link>https://xiazemin.github.io/MyBlog/spark/2018/01/04/zookeeper.html</link>
-        <guid isPermaLink="true">https://xiazemin.github.io/MyBlog/spark/2018/01/04/zookeeper.html</guid>
         
         
         <category>spark</category>
