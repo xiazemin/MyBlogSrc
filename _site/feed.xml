@@ -5,9 +5,89 @@
     <description>夏泽民的个人主页，学习笔记。</description>
     <link>https://xiazemin.github.io/MyBlog/</link>
     <atom:link href="https://xiazemin.github.io/MyBlog/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Wed, 24 Jan 2018 18:47:23 +0800</pubDate>
-    <lastBuildDate>Wed, 24 Jan 2018 18:47:23 +0800</lastBuildDate>
+    <pubDate>Fri, 26 Jan 2018 15:34:19 +0800</pubDate>
+    <lastBuildDate>Fri, 26 Jan 2018 15:34:19 +0800</lastBuildDate>
     <generator>Jekyll v3.6.0.pre.beta1</generator>
+    
+      <item>
+        <title>zero copy</title>
+        <description>&lt;!-- more --&gt;
+&lt;p&gt;许多web应用都会向用户提供大量的静态内容，这意味着有很多data从硬盘读出之后，会原封不动的通过socket传输给用户。这种操作看起来可能不会怎么消耗CPU，但是实际上它是低效的：kernal把数据从disk读出来，然后把它传输给user级的application，然后application再次把同样的内容再传回给处于kernal级的socket。这种场景下，application实际上只是作为一种低效的中间介质，用来把disk file的data传给socket。&lt;/p&gt;
+
+&lt;p&gt;data每次穿过user-kernel boundary，都会被copy，这会消耗cpu，并且占用RAM的带宽。幸运的是，你可以用一种叫做Zero-Copy的技术来去掉这些无谓的copy。应用程序用zero copy来请求kernel直接把disk的data传输给socket，而不是通过应用程序传输。Zero copy大大提高了应用程序的性能，并且减少了kernel和user模式的上下文切换。&lt;/p&gt;
+
+&lt;p&gt;Java的libaries在linux和unix中支持zero copy，一个关键的api是java.nio.channel.FileChannel的transferTo()方法。我们可以用transferTo()来把bytes直接从调用它的channel传输到另一个writable byte channel，中间不会使data经过应用程序。本文首先描述传统的copy是怎样坑爹的，然后再展示zero-copy技术在性能上是多么的给力以及为什么给力。&lt;/p&gt;
+
+&lt;p&gt;Date transfer: The traditional approach&lt;/p&gt;
+
+&lt;p&gt;考虑一下这个场景，通过网络把一个文件传输给另一个程序。这个操作的核心代码就是下面的两个函数：&lt;/p&gt;
+
+&lt;p&gt;Listing 1. Copying bytes from a file to a socket&lt;/p&gt;
+
+&lt;p&gt;File.read(fileDesc, buf, len);
+Socket.send(socket, buf, len);
+尽管看起来很简单，但是在OS的内部，这个copy操作要经历四次user mode和kernel mode之间的上下文切换，甚至连数据都被拷贝了四次&lt;/p&gt;
+
+&lt;p&gt;read() 引入了一次从user mode到kernel mode的上下文切换。实际上调用了sys_read() 来从文件中读取data。第一次copy由DMA完成，将文件内容从disk读出，存储在kernel的buffer中。
+然后data被copy到user buffer中，此时read()成功返回。这是触发了第二次context switch: 从kernel到user。至此，数据存储在user的buffer中。
+send() socket call 带来了第三次context switch，这次是从user mode到kernel mode。同时，也发生了第三次copy：把data放到了kernel adress space中。当然，这次的kernel buffer和第一步的buffer是不同的两个buffer。
+最终 send() system call 返回了，同时也造成了第四次context switch。同时第四次copy发生，DMA将data从kernel buffer拷贝到protocol engine中。第四次copy是独立而且异步的。
+使用kernel buffer做中介(而不是直接把data传到user buffer中)看起来比较低效(多了一次copy)。然而实际上kernel buffer是用来提高性能的。在进行读操作的时候，kernel buffer起到了预读cache的作用。当写请求的data size比kernel buffer的size小的时候，这能够显著的提升性能。在进行写操作时，kernel buffer的存在可以使得写请求完全异步。&lt;/p&gt;
+
+&lt;p&gt;悲剧的是，当请求的data size远大于kernel buffer size的时候，这个方法本身变成了性能的瓶颈。因为data需要在disk，kernel buffer，user buffer之间拷贝很多次(每次写满整个buffer)。&lt;/p&gt;
+
+&lt;p&gt;而Zero copy正是通过消除这些多余的data copy来提升性能。&lt;/p&gt;
+
+&lt;p&gt;Data Transfer：The Zero Copy Approach&lt;/p&gt;
+
+&lt;p&gt;如果重新检查一遍traditional approach，你会注意到实际上第二次和第三次copy是毫无意义的。应用程序仅仅缓存了一下data就原封不动的把它发回给socket buffer。实际上，data应该直接在read buffer和socket buffer之间传输。transferTo()方法正是做了这样的操作。Listing 2是transferTo()的函数原型：&lt;/p&gt;
+
+&lt;p&gt;public void transferTo(long position, long count, WritableByteChannel target);
+transferTo()方法把data从file channel传输到指定的writable byte channel。它需要底层的操作系统支持zero copy。在UNIX和各种Linux中，会执行List 3中的系统调用sendfile()，该命令把data从一个文件描述符传输到另一个文件描述符(Linux中万物皆文件)：&lt;/p&gt;
+
+&lt;p&gt;#include &amp;lt;sys/socket.h&amp;gt;
+ssize_t sendfile(int out_fd, int in_fd, off_t *offset, size_t count);
+在List 1中的file.read()和socket.send()可以用一句transferTo()替代，如List 4：&lt;/p&gt;
+
+&lt;p&gt;transferTo(position, count, writableChannel);&lt;/p&gt;
+
+&lt;p&gt;在像Listing 4那样使用transferTo()之后，整个过程如下：&lt;/p&gt;
+
+&lt;p&gt;transferTo()方法使得文件内容被DMA engine直接copy到一个read buffer中。然后数据被kernel再次拷贝到和output socket相关联的那个kernel buffer中去。
+第三次拷贝由DMA engine完成，它把kernel buffer中的data拷贝到protocol engine中。
+这是一个很明显的进步：我们把context switch的次数从4次减少到了2次，同时也把data copy的次数从4次降低到了3次(而且其中只有一次占用了CPU，另外两次由DMA完成)。但是，要做到zero copy，这还差得远。如果网卡支持 gather operation，我们可以通过kernel进一步减少数据的拷贝操作。在2.4及以上版本的linux内核中，开发者修改了socket buffer descriptor来适应这一需求。这个方法不仅减少了context switch，还消除了和CPU有关的数据拷贝。user层面的使用方法没有变，但是内部原理却发生了变化：&lt;/p&gt;
+
+&lt;p&gt;transferTo()方法使得文件内容被copy到了kernel buffer，这一动作由DMA engine完成。
+没有data被copy到socket buffer。取而代之的是socket buffer被追加了一些descriptor的信息，包括data的位置和长度。然后DMA engine直接把data从kernel buffer传输到protocol engine，这样就消除了唯一的一次需要占用CPU的拷贝操作。
+Figure 5描述了新的transferTo()方法中的data copy:&lt;/p&gt;
+
+&lt;p&gt;Kafka在提高效率方面做了很大努力。Kafka的一个主要使用场景是处理网站活动日志，吞吐量是非常大的，每个页面都会产生好多次写操作。读方面，假设每个消息只被消费一次，读的量的也是很大的，Kafka也尽量使读的操作更轻量化。&lt;/p&gt;
+
+&lt;p&gt;我们之前讨论了磁盘的性能问题，线性读写的情况下影响磁盘性能问题大约有两个方面：太多的琐碎的I/O操作和太多的字节拷贝。I/O问题发生在客户端和服务端之间，也发生在服务端内部的持久化的操作中。
+消息集（message set）
+为了避免这些问题，Kafka建立了“消息集（message set）”的概念，将消息组织到一起，作为处理的单位。以消息集为单位处理消息，比以单个的消息为单位处理，会提升不少性能。Producer把消息集一块发送给服务端，而不是一条条的发送；服务端把消息集一次性的追加到日志文件中，这样减少了琐碎的I/O操作。consumer也可以一次性的请求一个消息集。
+另外一个性能优化是在字节拷贝方面。在低负载的情况下这不是问题，但是在高负载的情况下它的影响还是很大的。为了避免这个问题，Kafka使用了标准的二进制消息格式，这个格式可以在producer,broker和producer之间共享而无需做任何改动。
+zero copy
+Broker维护的消息日志仅仅是一些目录文件，消息集以固定队的格式写入到日志文件中，这个格式producer和consumer是共享的，这使得Kafka可以一个很重要的点进行优化：消息在网络上的传递。现代的unix操作系统提供了高性能的将数据从页面缓存发送到socket的系统函数，在linux中，这个函数是sendfile.
+为了更好的理解sendfile的好处，我们先来看下一般将数据从文件发送到socket的数据流向：&lt;/p&gt;
+
+&lt;p&gt;操作系统把数据从文件拷贝内核中的页缓存中
+应用程序从页缓存从把数据拷贝自己的内存缓存中
+应用程序将数据写入到内核中socket缓存中
+操作系统把数据从socket缓存中拷贝到网卡接口缓存，从这里发送到网络上。&lt;/p&gt;
+
+&lt;p&gt;这显然是低效率的，有4次拷贝和2次系统调用。Sendfile通过直接将数据从页面缓存发送网卡接口缓存，避免了重复拷贝，大大的优化了性能。
+在一个多consumers的场景里，数据仅仅被拷贝到页面缓存一次而不是每次消费消息的时候都重复的进行拷贝。这使得消息以近乎网络带宽的速率发送出去。这样在磁盘层面你几乎看不到任何的读操作，因为数据都是从页面缓存中直接发送到网络上去了。&lt;/p&gt;
+
+</description>
+        <pubDate>Fri, 26 Jan 2018 00:00:00 +0800</pubDate>
+        <link>https://xiazemin.github.io/MyBlog/linux/2018/01/26/zero_copy.html</link>
+        <guid isPermaLink="true">https://xiazemin.github.io/MyBlog/linux/2018/01/26/zero_copy.html</guid>
+        
+        
+        <category>linux</category>
+        
+      </item>
     
       <item>
         <title>进程在后台运行原理</title>
@@ -2771,169 +2851,6 @@ jars/scala-library-2.11.8.jar
         <pubDate>Fri, 12 Jan 2018 00:00:00 +0800</pubDate>
         <link>https://xiazemin.github.io/MyBlog/spark/2018/01/12/hive.html</link>
         <guid isPermaLink="true">https://xiazemin.github.io/MyBlog/spark/2018/01/12/hive.html</guid>
-        
-        
-        <category>spark</category>
-        
-      </item>
-    
-      <item>
-        <title>Eclipse+maven+scala+spark环境搭建</title>
-        <description>&lt;p&gt;1.安装Scala-IDE
-在Eclipse中开发Scala程序需要有scala插件，我们现在安装scala插件 
-2.安装m2e-scala插件
-m2e-scala用来支持scala开发中对maven的一些定制功能。通过eclipse的Install New Software安装。 
-安装过程 
-   1.Help-&amp;gt;Install New Software 
-   2.输入m2e-scala下载的url 
-具体URL为http://alchim31.free.fr/m2e-scala/update-site/
-	&lt;img src=&quot;https://xiazemin.github.io/MyBlog/img/m2e_scala.png&quot; /&gt;
-    3.安装完成后，可在Help-&amp;gt;Installation Details中查看 
-    4.添加远程的原型或模板目录
-    	&lt;img src=&quot;https://xiazemin.github.io/MyBlog/img/archetypes.png&quot; /&gt;
-    	Catalog file:http://repo1.maven.org/maven2/archetype-catalog.xml
-Description:Remote Catalog Scala
-    5、出现过mvn连不上公共库的问题;
-     解决方法：vi eclipse.ini
-      add : -vmargs -Djava.net.preferIPv4Stack=true&lt;/p&gt;
-
-&lt;p&gt;3.新建Eclipse+scala+maven工程
-新建maven工程
-此时的maven的Archetype需要设置为 org.scala-tools.archetypes 
-如果没有安装Scala-IDE的话，会找不到org.scala-tools.archetypes这个类别&lt;/p&gt;
-
-&lt;p&gt;新建Archetype，因为maven默认没有Group Id: net.alchim31.maven Artifact Id: scala-archetype-simple Version:1.6&lt;/p&gt;
-
-&lt;p&gt;　　Select New -&amp;gt; Project -&amp;gt; Other and then select Maven Project. On the next window, search forscala-archetype. Make sure you select the one in group net.alchim31.maven, and click Next。
-　　&lt;img src=&quot;https://xiazemin.github.io/MyBlog/img/configureScala.png&quot; /&gt;configure
-　　
-&lt;!-- more --&gt;&lt;/p&gt;
-&lt;plugin&gt;
-  &lt;groupId&gt;net.alchim31.maven&lt;/groupId&gt;
-  &lt;artifactId&gt;scala-maven-plugin&lt;/artifactId&gt;
-  &lt;version&gt;3.1.3&lt;/version&gt;
-  &lt;executions&gt;
-    &lt;execution&gt;
-      &lt;goals&gt;
-        &lt;goal&gt;compile&lt;/goal&gt;
-        &lt;goal&gt;testCompile&lt;/goal&gt;
-      &lt;/goals&gt;
-    &lt;/execution&gt;
-  &lt;/executions&gt;
-  
-  
-  scala的新版本对老版本的兼容似乎并不好。这里可以自己修正pom.xml文件，不过估计代码可能也要修改。从git上下载了一个现成的基于scala2.11.5的maven工程。
-git网址：https://github.com/scala/scala-module-dependency-sample
-使用git clone下来之后，在eclipse中导入maven工程（maven-sample
-
-或者直接编译scala-maven-plugin
-https://github.com/davidB/scala-maven-plugin
-
- 运行Maven是报错：No goals have been specified for this build
- pom.xml文件&lt;build&gt;标签后面加上&lt;defaultGoal&gt;compile&lt;/defaultGoal&gt;即可  
- 
- 一个错误示例，子项目引用了父项目，子项目parent标签处报错如下：
-Multiple annotations found at this line:
-- maven-enforcer-plugin (goal &quot;enforce&quot;) is ignored by m2e.
-- Plugin execution not covered by lifecycle configuration: org.codehaus.mojo:aspectj-maven-plugin:1.3.1:compile (execution: 
- default, phase: compile)
- 
-解决办法
-官网给出解释及解决办法：http://wiki.eclipse.org/M2E_plugin_execution_not_covered
-
-这里有人说下面这样也可以解决， 即 &lt;plugins&gt; 标签外再套一个 &lt;pluginManagement&gt; 标签，我试验是成功的：
-http://stackoverflow.com/questions/6352208/how-to-solve-plugin-execution-not-covered-by-lifecycle-configuration-for-sprin
-&lt;build&gt;
-    &lt;pluginManagement&gt;
-        &lt;plugins&gt;
-            &lt;plugin&gt; ... &lt;/plugin&gt;
-            &lt;plugin&gt; ... &lt;/plugin&gt;
-                  ....
-        &lt;/plugins&gt;
-    &lt;/pluginManagement&gt;
-&lt;/build&gt;
-
- 
- 
- scala配置
-很多时候我们希望可以使用java+scala混合开发模式，此时只需要在maven进行如下配置即可：
-
-&lt;dependencies&gt;
-    &lt;dependency&gt;
-      &lt;groupId&gt;org.scala-lang&lt;/groupId&gt;
-      &lt;artifactId&gt;scala-library&lt;/artifactId&gt;
-      &lt;version&gt;${scala.version}&lt;/version&gt;
-      &lt;scope&gt;compile&lt;/scope&gt;
-    &lt;/dependency&gt;
-&lt;/dependencies&gt;
-
-&lt;build&gt;
-    &lt;plugins&gt;
-      &lt;plugin&gt;
-        &lt;groupId&gt;org.scala-tools&lt;/groupId&gt;
-        &lt;artifactId&gt;maven-scala-plugin&lt;/artifactId&gt;
-        &lt;version&gt;2.15.2&lt;/version&gt;
-        &lt;executions&gt;
-          &lt;execution&gt;
-            &lt;id&gt;scala-compile-first&lt;/id&gt;
-            &lt;goals&gt;
-              &lt;goal&gt;compile&lt;/goal&gt;
-            &lt;/goals&gt;
-            &lt;configuration&gt;
-              &lt;includes&gt;
-                &lt;include&gt;**/*.scala&lt;/include&gt;
-              &lt;/includes&gt;
-            &lt;/configuration&gt;
-          &lt;/execution&gt;
-          &lt;execution&gt;
-            &lt;id&gt;scala-test-compile&lt;/id&gt;
-            &lt;goals&gt;
-              &lt;goal&gt;testCompile&lt;/goal&gt;
-            &lt;/goals&gt;
-          &lt;/execution&gt;
-        &lt;/executions&gt;
-      &lt;/plugin&gt;
-    &lt;/plugins&gt;   
-&lt;/build&gt; 
-
-可运行jar打包
-&lt;plugin&gt;
-                &lt;groupId&gt;org.apache.maven.plugins&lt;/groupId&gt;
-                &lt;artifactId&gt;maven-shade-plugin&lt;/artifactId&gt;
-                &lt;executions&gt;
-                    &lt;execution&gt;
-                        &lt;phase&gt;package&lt;/phase&gt;
-                        &lt;goals&gt;
-                            &lt;goal&gt;shade&lt;/goal&gt;
-                        &lt;/goals&gt;
-                        &lt;configuration&gt;
-                            &lt;transformers&gt;
-                                &lt;transformer implementation=&quot;org.apache.maven.plugins.shade.resource.ManifestResourceTransformer&quot;&gt;
-                                    &lt;mainClass&gt;{此处填写main主类}&lt;/mainClass&gt;
-                                &lt;/transformer&gt;
-                            &lt;/transformers&gt;
-                            &lt;filters&gt; 
-                                &lt;filter&gt;
-                                    &lt;artifact&gt;*:*&lt;/artifact&gt;
-                                    &lt;excludes&gt;
-                                        &lt;exclude&gt;META-INF/*.SF&lt;/exclude&gt;
-                                        &lt;exclude&gt;META-INF/*.DSA&lt;/exclude&gt;
-                                        &lt;exclude&gt;META-INF/*.RSA&lt;/exclude&gt;
-                                    &lt;/excludes&gt;
-                                &lt;/filter&gt;
-                            &lt;/filters&gt;
-                        &lt;/configuration&gt;
-                    &lt;/execution&gt;
-                &lt;/executions&gt;
-            &lt;/plugin&gt;
-            
-            
-     
-&lt;/pluginManagement&gt;&lt;/plugins&gt;&lt;/build&gt;&lt;/plugin&gt;
-</description>
-        <pubDate>Thu, 11 Jan 2018 00:00:00 +0800</pubDate>
-        <link>https://xiazemin.github.io/MyBlog/spark/2018/01/11/maven_scala_eclipse.html</link>
-        <guid isPermaLink="true">https://xiazemin.github.io/MyBlog/spark/2018/01/11/maven_scala_eclipse.html</guid>
         
         
         <category>spark</category>
