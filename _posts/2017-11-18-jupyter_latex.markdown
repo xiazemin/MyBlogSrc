@@ -1,7 +1,7 @@
 ---
 title: jupyter 数学公式
 layout: post
-category: saprk
+category: spark
 author: 夏泽民
 ---
 <div class="container">
