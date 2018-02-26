@@ -5,8 +5,8 @@
     <description>夏泽民的个人主页，学习笔记。</description>
     <link>https://xiazemin.github.io/MyBlog/</link>
     <atom:link href="https://xiazemin.github.io/MyBlog/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Mon, 26 Feb 2018 15:32:09 +0800</pubDate>
-    <lastBuildDate>Mon, 26 Feb 2018 15:32:09 +0800</lastBuildDate>
+    <pubDate>Mon, 26 Feb 2018 15:50:12 +0800</pubDate>
+    <lastBuildDate>Mon, 26 Feb 2018 15:50:12 +0800</lastBuildDate>
     <generator>Jekyll v3.6.0.pre.beta1</generator>
     
       <item>
@@ -56,6 +56,136 @@ Catchable fatal error: Argument 1 passed to demo() must be an instance of string
         <pubDate>Mon, 26 Feb 2018 00:00:00 +0800</pubDate>
         <link>https://xiazemin.github.io/MyBlog/web/2018/02/26/type_hinting.html</link>
         <guid isPermaLink="true">https://xiazemin.github.io/MyBlog/web/2018/02/26/type_hinting.html</guid>
+        
+        
+        <category>web</category>
+        
+      </item>
+    
+      <item>
+        <title>tsrm</title>
+        <description>&lt;!-- more --&gt;
+&lt;p&gt;名词解释：
+TSRM
+线程安全资源管理器(Thread Safe Resource Manager)，这是个尝尝被忽视，并很少被人说起的“层”(layer), 她在PHP源码的/TSRM目录下。一般的情况下，这个层只会在被指明需要的时候才会被启用(比如,Apache2+worker MPM,一个基于线程的MPM)，对于Win32下的Apache来说，是基于多线程的，所以这个层在Win32下总是被启用的。
+ZTS
+Zend线程安全(Zend Thread Safety)，当TSRM被启用的时候，就会定义这个名为ZTS的宏。
+tsrm_ls
+TSRM存储器(TSRM Local Storage)，这个是在扩展和Zend中真正被实际使用的指代TSRM存储的变量名。
+TSRMLS_??
+这是一族(4个)宏，用来根据ZTS宏被定义与否来实现TSRM。4个宏如下：&lt;/p&gt;
+
+&lt;p&gt;#define TSRMLS_C   tsrm_ls
+#define TSRMLS_D   void  &lt;em&gt;** tsrm_ls
+#define TSRMLS_CC  ,tsrm_ls
+#define TSRMLS_DS  ,void  **&lt;/em&gt;tsrm_ls   //注意有个逗号&lt;/p&gt;
+
+&lt;p&gt;我们都知道，在C或者PHP编程中，要在多个函数中访问同一个变量有俩种方式，一种是通过参数传递，比如下面的代码：&lt;/p&gt;
+
+&lt;pre&gt;&lt;code&gt;#include &amp;lt;stdio.h&amp;gt;
+ 
+void output_func(char *message)
+{
+    printf(&quot;%s\n&quot;, message);
+}
+ 
+int main(int argc, char *argv[])
+{
+    output_func(argv[0]);
+ 
+    return 0;
+}
+&lt;/code&gt;&lt;/pre&gt;
+
+&lt;p&gt;另外一种方式是，通过在函数的高一级作用域中存储这个变量(当然，对于PHP，要显示的指明Global变量(这个原因和PHP的作用域的实现－活动表有关系，本处不涉及，我会在将来的某篇文章中介绍她)，如：&lt;/p&gt;
+
+&lt;pre&gt;&lt;code&gt;#include &amp;lt;stdio.h&amp;gt;
+ 
+char *message;
+ 
+void output_func(void)
+{
+    printf(&quot;%s\n&quot;, message);
+}
+ 
+int main(int argv, char *argv[])
+{
+    message = argv[0];
+    output_func();
+ 
+    return 0; } 对于在PHP使用第二种方式来说，一般的单线 程模型比如PHP CLI方式，Apache1，或者Apache2+prefork MPM(也是一种多进程模型)，可以放心的被使用，也不会出错。全局变量在MINIT/RINIT的时候被创建，然后在整个进程运行时/请求处理期都能被 访问到，然后在MSHUTDOW/RSHUTDOWN的时候被释放。 但是在多线程的模型下，这种方式就不在安全了，比如Apache2+worker MPM和IIS。在这种情况下，所有的线程共享同一个进程的地址空间，也就说，多个线程共用一个全局变量，这个时候就会产生竞争。用C程序员的方式来说: 这个时候的全局变量是非线程安全的。 为了解决这个问题，并和单线程模式兼容，Zend使用了称作“Non_global Globals”的机制。这个机制的主要思想就是，对于多线程模型来说，每当一个新的线程被创建，就单独的分配一块内存，这块内存存储着一个全局变量的副 本。而这块内存会被一个Vector串起来，由Zend统一管理。为了说明这个方式，咱们看看如下的例子：
+
+typedef struct _zend_myextension_globals {
+    int foo;
+    char *bar;
+} zend_myextension_globals;
+ 
+#ifdef ZTS  //如果TSRM被启用
+int myextension_globals_id;
+#else
+zend_myextension_globals myextension_globals;
+#endif
+ 
+/* 当线程被创建的时候调用 */
+static void php_myextension_globals_ctor(zend_myextension_globals *myext_globals TSRMLS_DC)
+{
+    myext_globals-&amp;gt;foo = 0;
+    myext_globals-&amp;gt;bar = NULL;
+}
+ 
+/* 线程结束的时候被调用 */
+static void php_myextension_globals_dtor(zend_myextension_globals *myext_globals TSRMLS_DC)
+{
+    if (myext_globals-&amp;gt;bar) {
+        efree(myext_globals-&amp;gt;bar);
+    }
+}
+ 
+PHP_MINIT_FUNCTION(myextension)
+{
+#ifdef ZTS
+    ts_allocate_id(&amp;amp;myextension_globals_id, sizeof(zend_myextension_globals),
+                   php_myextension_globals_ctor, php_myextension_globals_dtor);
+#else
+    php_myextension_globals_ctor(&amp;amp;myextension_globals TSRMLS_CC);
+#endif
+ 
+    return SUCCESS;
+}
+ 
+PHP_MSHUTDOWN_FUNCTION(myextension)
+{
+#ifndef ZTS
+    php_myextension_globals_dtor(&amp;amp;myextension_globals TSRMLS_CC);
+#endif
+ 
+    return SUCCESS;
+} 这个例子开始的时候向TSRM层申明了一个全局变量” zend_myextension_globals”，
+
+    ts_allocate_id(&amp;amp;myextension_globals_id, sizeof(zend_myextension_globals),
+                   php_myextension_globals_ctor, php_myextension_globals_dtor); 他指明了要申请的全局变量的大小，创建器和析构器。并讲这个生成的全局变量在Vector中的偏移量(Index)保存在了myextension_globals_id中。而对于没有启用TSRM的情况，这个全局变量只是简单的被创建。 如果你问我“为什么在没有启用TSRM的情况下还会有TSRMLS_CC?”,那说明你现在还没有被我弄糊涂;)，恩，在ZTS没有被设置的情况下(没有启用TSRM)，TSRMLS_CC会被编译器替换为空，因为:
+
+ #ifdef ZTS
+          #define TRSMLS_CC  ,tsrm_ls   #else
+  #define TSRMLS_CC   #endif 在没有启用TSRM的情况下还指明TSRMLS_CC的原因仅仅是为了保持代码的一致性。
+&lt;/code&gt;&lt;/pre&gt;
+
+&lt;p&gt;恩，现在已经设置了全局变量，那么接下来的问题就是，我们如果去访问它呢？看看如下的代码：&lt;/p&gt;
+
+&lt;pre&gt;&lt;code&gt;#ifdef ZTS
+# define   MYEXTENSION_G(v)     \
+             (((zend_myextension_globals*)(*((void ***)tsrm_ls))[(myextension_globals_id)-1])-&amp;gt;v)
+#else
+# define   MYEXTENSION_G(v)     (myextension_globals.v)
+#endif
+&lt;/code&gt;&lt;/pre&gt;
+
+&lt;p&gt;呵呵，明白了吧？ 在ZTS没有被设置的情况下，宏MYEXTENSION_G(V)简单的被等价于全局变量myextension_globals.v，而对于启用了TSRM的情况，MYEXTENSION_G(V)会被转化成在Vector中根据my_extension_globals_id来查找到要访问的全局变量。
+现在，只要你在你的代码中，使用MYEXTENSION_G来访问你的全局变量，并在要使用这个全局变量的函数参数列表中添加上TSRMLS_CC，那么就能保证在单线程和多线程模型下的线程安全，和代码一致性&lt;/p&gt;
+</description>
+        <pubDate>Mon, 26 Feb 2018 00:00:00 +0800</pubDate>
+        <link>https://xiazemin.github.io/MyBlog/web/2018/02/26/tsrm.html</link>
+        <guid isPermaLink="true">https://xiazemin.github.io/MyBlog/web/2018/02/26/tsrm.html</guid>
         
         
         <category>web</category>
@@ -3805,95 +3935,6 @@ Tachyon是用Java开发实现的，因此提供的API也是Java函数。要使�
         
         
         <category>spark</category>
-        
-      </item>
-    
-      <item>
-        <title>crlf 攻击</title>
-        <description>&lt;p&gt;CRLF Injection很少遇见，这次被我逮住了。我看zone中（http://zone.wooyun.org/content/13323）还有一些同学对于这个漏洞不甚了解，甚至分不清它与CSRF，我详细说一下吧。&lt;/p&gt;
-
-&lt;p&gt;CRLF是”回车 + 换行”（\r\n）的简称。在HTTP协议中，HTTP Header与HTTP Body是用两个CRLF分隔的，浏览器就是根据这两个CRLF来取出HTTP 内容并显示出来。所以，一旦我们能够控制HTTP 消息头中的字符，注入一些恶意的换行，这样我们就能注入一些会话Cookie或者HTML代码，所以CRLF Injection又叫HTTP Response Splitting，简称HRS。&lt;/p&gt;
-
-&lt;p&gt;HRS是比XSS危害更大的安全问题，具体是为什么，我们往下看。&lt;/p&gt;
-
-&lt;p&gt;对于HRS最简单的利用方式是注入两个\r\n，之后在写入XSS代码，来构造一个xss。&lt;/p&gt;
-
-&lt;p&gt;举个例子，一般网站会在HTTP头中用Location: http://baidu.com这种方式来进行302跳转，所以我们能控制的内容就是Location:后面的XXX某个网址。&lt;/p&gt;
-
-&lt;p&gt;所以一个正常的302跳转包是这样：&lt;/p&gt;
-
-&lt;p&gt;HTTP/1.1 302 Moved Temporarily 
-Date: Fri, 27 Jun 2014 17:52:17 GMT 
-Content-Type: text/html 
-Content-Length: 154 
-Connection: close 
-Location: http://www.sina.com.cn
-但如果我们输入的是&lt;/p&gt;
-
-&lt;p&gt;http://www.sina.com.cn%0aSet-cookie:JSPSESSID%3Dwooyun
-注入了一个换行，此时的返回包就会变成这样：&lt;/p&gt;
-
-&lt;p&gt;HTTP/1.1 302 Moved Temporarily 
-Date: Fri, 27 Jun 2014 17:52:17 GMT 
-Content-Type: text/html 
-Content-Length: 154 
-Connection: close 
-Location: http://www.sina.com.cn 
-Set-cookie: JSPSESSID=wooyun
-这个时候这样我们就给访问者设置了一个SESSION，造成一个“会话固定漏洞”。&lt;/p&gt;
-
-&lt;p&gt;当然，HRS并不仅限于会话固定，通过注入两个CRLF就能造成一个无视浏览器Filter的反射型XSS。&lt;/p&gt;
-
-&lt;p&gt;比如一个网站接受url参数http://test.sina.com.cn/?url=xxx，xxx放在Location后面作为一个跳转。如果我们输入的是：&lt;/p&gt;
-
-&lt;p&gt;http://test.sina.com.cn/?url=%0d%0a%0d%0a&amp;lt;img src=1 onerror=alert(/xss/)&amp;gt;
-我们的返回包就会变成这样：&lt;/p&gt;
-
-&lt;p&gt;HTTP/1.1 302 Moved Temporarily 
-Date: Fri, 27 Jun 2014 17:52:17 GMT 
-Content-Type: text/html 
-Content-Length: 154 
-Connection: close 
-Location:&lt;/p&gt;
-
-&lt;p&gt;&amp;lt;img src=1 onerror=alert(/xss/)&amp;gt;
-之前说了浏览器会根据第一个CRLF把HTTP包分成头和体，然后将体显示出来。于是我们这里&lt;img /&gt;这个标签就会显示出来，造成一个XSS。&lt;/p&gt;
-
-&lt;p&gt;为什么说是无视浏览器filter的，这里涉及到另一个问题。&lt;/p&gt;
-
-&lt;p&gt;浏览器的Filter是浏览器应对一些反射型XSS做的保护策略，当url中含有XSS相关特征的时候就会过滤掉不显示在页面中，所以不能触发XSS。&lt;/p&gt;
-
-&lt;p&gt;怎样才能关掉filter？一般来说用户这边是不行的，只有数据包中http头含有X-XSS-Protection并且值为0的时候，浏览器才不会开启filter。&lt;/p&gt;
-
-&lt;p&gt;说到这里应该就很清楚了，HRS不正是注入HTTP头的一个漏洞吗，我们可以将X-XSS-Protection:0注入到数据包中，再用两个CRLF来注入XSS代码，这样就成功地绕过了浏览器filter，并且执行我们的反射型XSS。&lt;/p&gt;
-
-&lt;p&gt;所以说HRS的危害大于XSS，因为它能绕过一般XSS所绕不过的filter，并能产生会话固定漏洞。&lt;/p&gt;
-
-&lt;p&gt;我们来一个真实案例吧。&lt;/p&gt;
-
-&lt;p&gt;新浪某分站含有一个url跳转漏洞，危害并不大，于是我就想到了CRLF Injection，当我测试&lt;/p&gt;
-
-&lt;p&gt;http://xxx.sina.com.cn/?url=%0a%0d%0a%0d%3Cimg%20src=1%3E
-的时候，发现图片已经输出在页面中了，说明CRLF注入成功了：&lt;/p&gt;
-
-&lt;p&gt;那么我们试试XSS看看：&lt;/p&gt;
-
-&lt;p&gt;看控制台，果然被XSS Filter拦截了。&lt;/p&gt;
-
-&lt;p&gt;那么我们就注入一个X-XSS-Protection:0到数据包中，看看什么效果：&lt;/p&gt;
-
-&lt;p&gt;@mramydnei 还想到了一个利用字符编码来绕过XSS Filter的方法，当编码是is-2022-kr时浏览器会忽略%0f，这样我们在onerror后面加个%0f就能绕过filter，前提是注入一个&amp;lt;meta charset=ISO-2022-KR&amp;gt;：
-当然，在Location:这里注入只有webkit内核浏览器才能够利用，其他浏览器可能会跳转、出错。不过对于chrome的使用量来说，危害已经足够了。&lt;/p&gt;
-
-&lt;p&gt;如何修复HRS漏洞，当然是过滤\r 、\n之类的换行符，避免输入的数据污染到其他HTTP头。&lt;/p&gt;
-
-</description>
-        <pubDate>Tue, 06 Feb 2018 00:00:00 +0800</pubDate>
-        <link>https://xiazemin.github.io/MyBlog/web/2018/02/06/crlf.html</link>
-        <guid isPermaLink="true">https://xiazemin.github.io/MyBlog/web/2018/02/06/crlf.html</guid>
-        
-        
-        <category>web</category>
         
       </item>
     
