@@ -5,9 +5,1009 @@
     <description>夏泽民的个人主页，学习笔记。</description>
     <link>https://xiazemin.github.io/MyBlog/</link>
     <atom:link href="https://xiazemin.github.io/MyBlog/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Tue, 27 Feb 2018 21:28:43 +0800</pubDate>
-    <lastBuildDate>Tue, 27 Feb 2018 21:28:43 +0800</lastBuildDate>
-    <generator>Jekyll v3.6.0.pre.beta1</generator>
+    <pubDate>Wed, 28 Feb 2018 22:03:29 +0800</pubDate>
+    <lastBuildDate>Wed, 28 Feb 2018 22:03:29 +0800</lastBuildDate>
+    <generator>Jekyll v3.6.2</generator>
+    
+      <item>
+        <title>symbol_table</title>
+        <description>&lt;!-- more --&gt;
+&lt;p&gt;符号表在编译程序工作的过程中需要不断收集、记录和使用源程序中一些语法符号的类型和特征等相关信息。这些信息一般以表格形式存储于系统中。如常数表、变量名表、数组名表、过程名表、标号表等等，统称为符号表。对于符号表组织、构造和管理方法的好坏会直接影响编译系统的运行效率。&lt;/p&gt;
+
+&lt;p&gt;编译程序时放在符号表里的不光是内存地址和函数/变量的对应关系，还有很多在编译时要用到的信息。比如该节点的各种属性（类型，作用域，分配空间大小，（函数）的参数类型）等等。符号表与编译的各个阶段都有交互。对符号表的具体使用方法每个编译器都不同。&lt;/p&gt;
+
+&lt;p&gt;目标文件中的符号表用来输出函数/变量符号信息，供连接时给其他模块引用。这种符号表中主要包含函数/变量的名称和地址对应关系，其中的地址一般是位置无关码(PIC码)。&lt;/p&gt;
+
+&lt;p&gt;支持namespace、static method一样的东西，你就知道所有的东西都得用树来和scope组织。但是光用树和scope还不够，当你支持using namespace的时候你就知道麻烦了——这也是为什么80年代设计出来的C++的using namespace的语义这么垃圾，大概是因为以前内存太少了，没法使用复杂的组织方法。因此符号表只需要一个，然后每个语法树的节点都可以决定自己要不要创建scope，然后scope可以挂到符号表的一个节点上，也可以是匿名的，scope还是反向引用的。每个scope上面还要挂着一个额外的为using namespace优化的数据结构，这么弄下来就差不多了，所有的语言的特性都包括在里面了。&lt;/p&gt;
+
+&lt;p&gt;Symbol Table可以用链表、动态数组、hash、map等结构。Symbol Table的设计和Syntax Checking、Type checking、Property Access等都有关系。设计上的选择是多样的，比如可以把常量和变量放在两张表，在语义分析的过程中加一个判断，来决定操作哪张表；也可以放在一起，加上额外的toeken（其他的token包括type等信息）区分它们。抛开复杂功能不谈，最方便的理解方式是实现小型语言的解释器，操作Env（Environment）的过程中自然就是在和Symbol Table打交道：对Identifier的创建、查找、删除，Scope的嵌套、屏蔽等等，都反映在Env的创建、变化以及指向、包含等关系上&lt;/p&gt;
+
+&lt;p&gt;2.1编译预处理&lt;/p&gt;
+
+&lt;p&gt;在这个阶段主要是宏定义的展开，以及头文件的递归处理，即展开所有的以#开头的编译命令。&lt;/p&gt;
+
+&lt;p&gt;2.2编译阶段&lt;/p&gt;
+
+&lt;p&gt;将程序代码段按字符流格式进行切割，处理，主要是词法分析，语法分析，语义分析等阶段，编译完成后生成中间代码。&lt;/p&gt;
+
+&lt;p&gt;2.3汇编&lt;/p&gt;
+
+&lt;p&gt;将编译后的中间代码通过汇编器模块生成计算机能够识别的机器指令用以操控硬件设施生成目标代码（可重定位目标代码）。&lt;/p&gt;
+
+&lt;p&gt;2.4链接&lt;/p&gt;
+
+&lt;p&gt;通过链接器模块将各种目标代码以及库文件（&lt;em&gt;.lib文件），资源文件（&lt;/em&gt;,rec）进行链接处理最终生成可以执行的*.exe文件。&lt;/p&gt;
+
+&lt;p&gt;2.5重定位问题&lt;/p&gt;
+
+&lt;p&gt;通过一个例子来看：假如我们有两个头文件和两个源文件分别叫做function1.h和function2.h以及function1.cpp和function2.cpp文件其中function1.h内容如下&lt;/p&gt;
+
+&lt;p&gt;Function1.h&lt;/p&gt;
+
+&lt;p&gt;#ifndef   _FUNCTION1_H&lt;/p&gt;
+
+&lt;p&gt;#define   _FUNCTION1_H&lt;/p&gt;
+
+&lt;p&gt;Int g_val;&lt;/p&gt;
+
+&lt;p&gt;Int Add(int m, int n);&lt;/p&gt;
+
+&lt;p&gt;#endif&lt;/p&gt;
+
+&lt;p&gt;Function1.cpp&lt;/p&gt;
+
+&lt;p&gt;g_val=10;&lt;/p&gt;
+
+&lt;p&gt;Int Add(int m, int n)&lt;/p&gt;
+
+&lt;p&gt;{&lt;/p&gt;
+
+&lt;p&gt;Return m+n;&lt;/p&gt;
+
+&lt;p&gt;}&lt;/p&gt;
+
+&lt;p&gt;Function2.cpp其中包含了main函数内容如下&lt;/p&gt;
+
+&lt;p&gt;#include “function1.h”&lt;/p&gt;
+
+&lt;p&gt;Int main()&lt;/p&gt;
+
+&lt;p&gt;{&lt;/p&gt;
+
+&lt;p&gt;Int  l_valfri=3;&lt;/p&gt;
+
+&lt;p&gt;Int  l_valsec=4;&lt;/p&gt;
+
+&lt;p&gt;g_val=14;&lt;/p&gt;
+
+&lt;p&gt;Int result=Add(l_valfri,l_valsec);&lt;/p&gt;
+
+&lt;p&gt;Return 0;&lt;/p&gt;
+
+&lt;p&gt;}&lt;/p&gt;
+
+&lt;p&gt;对于这样的代码编译器在编译function2.cpp时对于外部符号g_val 和外部函数Add该如何决议呢，这里又会涉及到可重定位文件中的符号表问题。&lt;/p&gt;
+
+&lt;p&gt;其实在可重定位目标文件之中会存在一个用来放置变量和其入口地址的符号表，当编译过程中能够找到该符号的定义时就将该符号入口地址更新到符号表中否则就对该符号的地址不做任何决议一直保留到链接阶段处理。通过两个例子来看符号表的结构。&lt;/p&gt;
+
+&lt;p&gt;在编译过程中function1.cpp文件的可重定位目标文件中的符号表如下&lt;/p&gt;
+
+&lt;p&gt;变量名&lt;/p&gt;
+
+&lt;p&gt;内存地址&lt;/p&gt;
+
+&lt;p&gt;g_val&lt;/p&gt;
+
+&lt;p&gt;0x100&lt;/p&gt;
+
+&lt;p&gt;Add&lt;/p&gt;
+
+&lt;p&gt;0x200&lt;/p&gt;
+
+&lt;p&gt;为什么可以做到对于符号g_val和Add分配内存地址呢，因为在编译阶段就能够在function1.cpp文件中找到他们的定义，所以能够进行明确的内存地址分配。&lt;/p&gt;
+
+&lt;p&gt;再来看看function2.cpp所生成的可重定位目标文件的结构：&lt;/p&gt;
+
+&lt;p&gt;变量名&lt;/p&gt;
+
+&lt;p&gt;内存地址&lt;/p&gt;
+
+&lt;p&gt;g_val&lt;/p&gt;
+
+&lt;p&gt;0x00&lt;/p&gt;
+
+&lt;p&gt;Add&lt;/p&gt;
+
+&lt;p&gt;0x00&lt;/p&gt;
+
+&lt;p&gt;为什么会出现这样的状况。因为在编译阶段虽然可以看到这些符号变量的声明，但却找不到他们的定义所以编译器陷入了一个决而未决的境地。&lt;/p&gt;
+
+&lt;p&gt;将包含文件展开时，function2.cpp大概会是这个样子很明显只有符号变量的声明但是没有定义。&lt;/p&gt;
+
+&lt;p&gt;#ifndef   _FUNCTION1_H&lt;/p&gt;
+
+&lt;p&gt;#define   _FUNCTION1_H&lt;/p&gt;
+
+&lt;p&gt;Int g_val;&lt;/p&gt;
+
+&lt;p&gt;Int Add(int m, int n);&lt;/p&gt;
+
+&lt;p&gt;#endif&lt;/p&gt;
+
+&lt;p&gt;Int main()&lt;/p&gt;
+
+&lt;p&gt;{&lt;/p&gt;
+
+&lt;p&gt;Int  l_valfri=3;&lt;/p&gt;
+
+&lt;p&gt;Int  l_valsec=4;&lt;/p&gt;
+
+&lt;p&gt;g_val=14;&lt;/p&gt;
+
+&lt;p&gt;Int result=Add(l_valfri,l_valsec);&lt;/p&gt;
+
+&lt;p&gt;Return 0;&lt;/p&gt;
+
+&lt;p&gt;}&lt;/p&gt;
+
+&lt;p&gt;先将他们存放在符号表中但却不去为他们进行内存关联一直等到链接阶段在进行处理。&lt;/p&gt;
+
+&lt;p&gt;重定位发生于目标代码链接阶段，在链接阶段链接器就会查找符号表，当他发现了function2.cpp的符号表之中任然有没有决议的内存地址时，链接器就会查找所有的目标代码文件，一直到他找到了function1.cpp所生成的目标代码文件符号表时发现了这些没有决议的符号变量的真正内存地址，这是function2.cpp所生成的目标代码文件就会更新它的符号表，将这些尚未决议的符号变量的内存地址写进其符号表中。&lt;/p&gt;
+
+&lt;p&gt;更新之后的function2.obj文件符号表&lt;/p&gt;
+
+&lt;p&gt;变量名&lt;/p&gt;
+
+&lt;p&gt;内存地址&lt;/p&gt;
+
+&lt;p&gt;g_val&lt;/p&gt;
+
+&lt;p&gt;0x100&lt;/p&gt;
+
+&lt;p&gt;Add&lt;/p&gt;
+
+&lt;p&gt;0x200&lt;/p&gt;
+
+&lt;p&gt;当所有的符号变量都能够找到合法的内存地址时，链接阶段重定位完成。&lt;/p&gt;
+
+&lt;p&gt;有 些人写C/C++(以下假定为C++)程序，对unresolved external link或者duplicated external simbol的错误信息不知所措（因为这样的错误信息不能定位到某一行）。或者对语言的一些部分不知道为什么要（或者不要）这样那样设计。了解本文之后， 或许会有一些答案。 
+    首先看看我们是如何写一个程序的。如果你在使用某种IDE（Visual Studio，Elicpse，Dev C++等），你可能不会发现程序是如何组织起来的（很多人因此而反对初学者使用IDE）。因为使用IDE，你所做的事情，就是在一个项目里新建一系列 的.cpp和.h文件，编写好之后在菜单里点击“编译”，就万事大吉了。但其实以前，程序员写程序不是这样的。他们首先要打开一个编辑器，像编写文本文件 一样的写好代码，然后在命令行下敲 
+    cc 1.cpp -o 1.o 
+    cc 2.cpp -o 2.o 
+    cc 3.cpp -o 3.o 
+这里cc代表某个C/C++编译器，后面紧跟着要编译的cpp文件，并且以-o指定要输出的文件（请原谅我没有使用任何一个流行编译器作为例子）。这样当前目录下就会出现： 
+    1.o 2.o 3.o 
+最后，程序员还要键入 
+    link 1.o 2.o 3.o -o a.out 
+来生成最终的可执行文件a.out。现在的IDE，其实也同样遵照着这个步骤，只不过把一切都自动化了。 
+    让我们来分析上面的过程，看看能发现什么。 
+    首先，对源代码进行编译，是对各个cpp文件单独进行的。对于每一次编译，如果排除在cpp文件里include别的cpp文件的情况（这是C++代码编 写中极其错误的写法），那么编译器仅仅知道当前要编译的那一个cpp文件，对其他的cpp文件的存在完全不知情。 
+    其次，每个cpp文件编译后，产生的.o文件，要被一个链接器(link)所读入，才能最终生成可执行文件。 
+    好了，有了这些感性认识之后，让我们来看看C/C++程序是如何组织的。&lt;/p&gt;
+
+&lt;pre&gt;&lt;code&gt;首先要知道一些概念： 
+编译：编译器对源代码进行编译，是将以文本形式存在的源代码翻译为机器语言形式的目标文件的过程。 
+编译单元：对于C++来说，每一个cpp文件就是一个编译单元。从之前的编译过程的演示可以看出，各个编译单元之间是互相不可知的。 
+目标文件：由编译所生成的文件，以机器码的形式包含了编译单元里所有的代码和数据，以及一些其他的信息。 
+ 
+下面我们具体看看编译的过程。我们跳过语法分析等，直接来到目标文件的生成。假设我们有一个1.cpp文件 
+ int n = 1; 
+
+void f() 
+ { 
+    ++n; 
+} 
+
+它编译出来的目标文件1.o就会有一个区域（假定名称为2进制段），包含了以上数据／函数，其中有n, f，以文件偏移量的形式给出很可能就是： 
+偏移量    内容    长度 
+0x000    n    4 
+0x004    f     ?? 
+注意：这仅仅是猜测，不代表目标文件的真实布局。目标文件的各个数据不一定连续，也不一定按照这个顺序，当然也不一定从0x000开始。 
+现在我们看看从0x004开始f函数的内容（在0x86平台下的猜测）： 
+0x004 inc DWORD PTR [0x000] 
+0x00? ret 
+注意n++已经被翻译为：inc DWORD PTR [0x000]，也就是把本单元0x000位置上的一个DWORD(4字节)加1。 
+ 
+下面如果有另一个2.cpp，如下 
+extern int n; 
+void g() 
+{ 
+    ++n; 
+} 
+那么它的目标文件2.o的2进制段就应该是 
+偏移量    内容    长度 
+0x000    g     ?? 
+为什么这里没有n的空间（也就是n的定义），因为n被声明为extern，表明n的定义在别的编译单元里。别忘了编译的时候是不可能知道别的编译单元的情 况的，故编译器不知道n究竟在何处，所以这个时候g的二进制代码里没有办法填写inc DWORD PTR [???]中的？？？部分。怎么办呢？这个工作就只能交给后来的链接器去处理。为了让链接器知道哪些地方的地址是没有填好的，所以目标文件还要有一个“未 解决符号表”，也就是unresolved symbol table. 同样,提供n的定义的目标文件(也就是1.o)也要提供一个“导出符号表”，export symbol table, 来告诉链接器自己可以提供哪些地址。 
+让我们理一下思路：现在我们知道，每一个目标文件，除了拥有自己的数据和二进制代码之外，还要至少提供2个表：未解决符号表和导出符号表，分别告诉链接器 自己需要什么和能够提供什么。下面的问题是，如何在2个表之间建立对应关系。这里就有一个新的概念：符号。在C/C++中，每一个变量和函数都有自己的符 号。例如变量n的符号就是“n”。函数的符号要更加复杂，它需要结合函数名及其参数和调用惯例等，得到一个唯一的字符串。f的符号可能就是&quot;_f&quot;（根据 不同编译器可以有变化）。 
+所以，1.o的导出符号表就是 
+符号    地址 
+n    0x000 
+_f    0x004 
+而未解决符号表为空 
+2.o的导出符号表为 
+符号    地址 
+_g    0x000 
+未解决符号表为 
+符号    地址     
+n    0x001     
+这里0x001为从0x000开始的inc DWORD PTR [???]的二进制编码中存储???的起始地址(这里假设inc的机器码的第2－5字节为要+1的绝对地址，需要知道确切情况可查手册)。这个表告诉链接 器，在本编译单元0x001的位置上有一个地址，该地址值不明，但是具有符号n。 
+链接的时候，链接器在2.o里发现了未解决符号n，那么在查找所有编译单元的时候，在1.o中发现了导出符号n，那么链接器就会将n的地址0x000填写到2.o的0x001的位置上。 
+“打住”，可能你就会跳出来指责我了。如果这样做得话，岂不是g的内容就会变成inc DWORD PTR [0x000]，按照之前的理解，这是将本单元的0x000地址的4字节加1，而不是将1.o的对应位置加1。是的，因为每个编译单元的地址都是从0开始 的，所以最终拼接起来的时候地址会重复。所以链接器会在拼接的时候对各个单元的地址进行调整。这个例子中，假设2.o的0x00000000地址被定位在 可执行文件的0x00001000上，而1.o的0x00000000地址被定位在可执行文件的0x00002000上，那么实际上对链接器来说，1.o 的导出符号表其实 
+符号    地址 
+n    0x000 + 0x2000 
+_f    0x004 + 0x2000 
+而未解决符号表为空 
+2.o的导出符号表为 
+符号    地址 
+_g    0x000 + 0x1000 
+未解决符号表为 
+符号    地址             
+n    0x001 + 0x1000  所以最终g的代码会变为inc DWORD PTR [0x000 + 0x2000]。 
+最后还有一个漏洞，既然最后n的地址变为0x2000了，那么以前f的代码inc DWORD PTR [0x000]就是错误的了。所以目标文件为此还要提供一个表，叫做地址重定向表address redirect table。 
+对于1.o来说，它的重定向表为 
+地址 
+0x005 
+这个表不需要符号，当链接器处理这个表的时候，发现地址为0x005的位置上有一个地址需要重定向，那么直接在以0x005开始的4个字节上加上0x2000就可以了。 
+让我们总结一下：编译器把一个cpp编译为目标文件的时候，除了要在目标文件里写入cpp里包含的数据和代码，还要至少提供3个表：未解决符号表，导出符号表和地址重定向表。 
+未解决符号表提供了所有在该编译单元里引用但是定义并不在本编译单元里的符号及其出现的地址。 
+导出符号表提供了本编译单元具有定义，并且愿意提供给其他编译单元使用的符号及其地址。 
+地址重定向表提供了本编译单元所有对自身地址的引用的记录。 
+链接器进行链接的时候，首先决定各个目标文件在最终可执行文件里的位置。然后访问所有目标文件的地址重定向表，对其中记录的地址进行重定向（即加上该编译 单元实际在可执行文件里的起始地址）。然后遍历所有目标文件的未解决符号表，并且在所有的导出符号表里查找匹配的符号，并在未解决符号表中所记录的位置上 填写实际的地址（也要加上拥有该符号定义的编译单元实际在可执行文件里的起始地址）。最后把所有的目标文件的内容写在各自的位置上，再作一些别的工作，一 个可执行文件就出炉了。 
+最终link 1.o 2.o .... 所生成的可执行文件大概是 
+0x00000000  ????（别的一些信息） 
+.... 
+0x00001000  inc DWORD PTR [0x00002000]              //这里是2.o的开始，也就是g的定义 
+0x00001005  ret                                  //假设inc为5个字节，这里是g的结尾 
+.... 
+0x00002000  0x00000001                           //这里是1.o的开始，也是n的定义（初始化为1） 
+0x00002004  inc DWORD PTR [0x00002000]         //这里是f的开始 
+0x00002009  ret                                  //假设inc为5个字节，这里是f的结尾 
+... 
+... 
+实际链接的时候更为复杂，因为实际的目标文件里把数据／代码分为好几个区，重定向等要按区进行，但原理是一样的。 
+
+
+ 
+现在我们可以来看看几个经典的链接错误了： 
+unresolved external link.. 
+这个很显然，是链接器发现一个未解决符号，但是在导出符号表里没有找到对应的項。 
+解决方案么，当然就是在某个编译单元里提供这个符号的定义就行了。（注意，这个符号可以是一个变量，也可以是一个函数），也可以看看是不是有什么该链接的文件没有链接 
+duplicated external simbols... 
+这个则是导出符号表里出现了重复项，因此链接器无法确定应该使用哪一个。这可能是使用了重复的名称，也可能有别的原因。 
+
+
+我们再来看看C/C++语言里针对这一些而提供的特性： 
+extern:这是告诉编译器，这个符号在别的编译单元里定义，也就是要把这个符号放到未解决符号表里去。（外部链接） 
+ 
+static:如果该关键字位于全局函数或者变量的声明的前面，表明该编译单元不导出这个函数／变量的符号。因此无法在别的编译单元里使用。（内部链接）。如果是static局部变量，则该变量的存储方式和全局变量一样，但是仍然不导出符号。 
+ 
+默认链接属性：对于函数和变量，模认外部链接，对于const变量，默认内部链接。（可以通过添加extern和static改变链接属性） 
+
+外部链接的利弊：外部链接的符号，可以在整个程序范围内使用（因为导出了符号）。但是同时要求其他的编译单元不能导出相同的符号（不然就是duplicated external simbols) 
+
+内部链接的利弊：内部链接的符号，不能在别的编译单元内使用。但是不同的编译单元可以拥有同样名称的内部链接符号。 
+
+为什么头文件里一般只可以有声明不能有定义：头文件可以被多个编译单元包含，如果头文件里有定义，那么每个包含这个头文件的编译单元就都会对同一个符号 进行定义，如果该符号为外部链接，则会导致duplicated external simbols。因此如果头文件里要定义，必须保证定义的符号只能具有内部链接。 
+
+为什么常量默认为内部链接，而变量不是： 
+    这就是为了能够在头文件里如const int n = 0这样的定义常量。由于常量是只读的，因此即使每个编译单元都拥有一份定义也没有关系。如果一个定义于头文件里的变量拥有内部链接，那么如果出现多个编译 单元都定义该变量，则其中一个编译单元对该变量进行修改，不会影响其他单元的同一变量，会产生意想不到的后果。 
+
+为什么函数默认是外部链接： 
+    虽然函数是只读的，但是和变量不同，函数在代码编写的时候非常容易变化，如果函数默认具有内部链接，则人们会倾向于把函数定义在头文件里，那么一旦函数 被修改，所有包含了该头文件的编译单元都要被重新编译。另外，函数里定义的静态局部变量也将被定义在头文件里。 
+
+为什么类的静态变量不可以就地初始化：所谓就地初始化就是类似于这样的情况： 
+    class A 
+    { 
+        static char msg[] = &quot;aha&quot;; 
+    };  不允许这样做得原因是，由于class的声明通常是在头文件里，如果允许这样做，其实就相当于在头文件里定义了一个非const变量。 
+
+在C++里，头文件定义一个const对象会怎么样： 
+    一般不会怎么样，这个和C里的在头文件里定义const int一样，每一个包含了这个头文件的编译单元都会定义这个对象。但由于该对象是const的，所以没什么影响。但是：有2种情况可能破坏这个局面： 
+    1。如果涉及到对这个const对象取地址并且依赖于这个地址的唯一性，那么在不同的编译单元里，取到的地址可以不同。（但一般很少这么做） 
+    2。如果这个对象具有mutable的变量，某个编译单元对其进行修改，则同样不会影响到别的编译单元。 
+
+为什么类的静态常量也不可以就地初始化： 
+    因为这相当于在头文件里定义了const对象。作为例外，int/char等可以进行就地初始化，是因为这些变量可以直接被优化为立即数，就和宏一样。 
+
+内联函数： 
+    C++里的内联函数由于类似于一个宏，因此不存在链接属性问题。 
+
+为什么公共使用的内联函数要定义于头文件里： 
+    因为编译时编译单元之间互相不知道，如果内联函数被定义于.cpp文件中，编译其他使用该函数的编译单元的时候没有办法找到函数的定义，因此无法对函数进行展开。所以说如果内联函数定义于.cpp文件里，那么就只有这个cpp文件可以是用这个函数。 
+
+头文件里内联函数被拒绝会怎样： 
+    如果定义于头文件里的内联函数被拒绝，那么编译器会自动在每个包含了该头文件的编译单元里定义这个函数并且不导出符号。 
+
+如果被拒绝的内联函数里定义了静态局部变量，这个变量会被定义于何处： 
+    早期的编译器会在每个编译单元里定义一个，并因此产生错误的结果，较新的编译器会解决这个问题，手段未知。 
+
+为什么export关键字没人实现： 
+    export要求编译器跨编译单元查找函数定义，使得编译器实现非常困难。
+&lt;/code&gt;&lt;/pre&gt;
+
+</description>
+        <pubDate>Wed, 28 Feb 2018 00:00:00 +0800</pubDate>
+        <link>https://xiazemin.github.io/MyBlog/lang/2018/02/28/symbol_table.html</link>
+        <guid isPermaLink="true">https://xiazemin.github.io/MyBlog/lang/2018/02/28/symbol_table.html</guid>
+        
+        
+        <category>lang</category>
+        
+      </item>
+    
+      <item>
+        <title>re2c</title>
+        <description>&lt;p&gt;http://re2c.org/&lt;/p&gt;
+
+&lt;!-- more --&gt;
+&lt;p&gt;在PHP的实现过程中，包括PHP语言本身的词法分析，一共有多达8处的地方使用了re2c，如果我们常用的时间函数、pdo扩展等。对re2c的了解更能促进我们进PHP内核实现的认知。&lt;/p&gt;
+
+&lt;p&gt;本手册是re2c官网的manual.html文件翻译稿，仅适用于对re2c的初步了解，更多的资料见re2c项目中lessons目录和doc目录。&lt;/p&gt;
+
+&lt;p&gt;Name
+re2c – 将正则表达式转化成C/C++代码&lt;/p&gt;
+
+&lt;p&gt;Synopsisre2c [-bdDefFghisuvVw1] [-o output] [-c [-t header]] file
+Description
+re2c是一个将正则表达式转化成基于C语言标识的预处理器。&lt;/p&gt;
+
+&lt;p&gt;re2c的输入包含C/C++代码，并且以/*!re2c… */注释的格式将扫描标识交错嵌入到这些代码中。在它的输出中，这些注释将会被生成的代码替换掉，当执行时，它将会查找到下一个token，并且执行用户提供的针对该token的特定代码。
+如下示例：&lt;/p&gt;
+
+&lt;p&gt;char &lt;em&gt;scan(char *p)
+	{
+	/&lt;/em&gt;!re2c
+	        re2c:define:YYCTYPE  = “unsigned char”;
+	        re2c:define:YYCURSOR = p;
+	        re2c:yyfill:enable   = 0;
+	        re2c:yych:conversion = 1;
+	        re2c:indent:top      = 1;
+	        [0-9]+          {return p;}
+	        [^]             {return (char*)0;}
+	*/
+	}
+re2c将生成如下代码：&lt;/p&gt;
+
+&lt;p&gt;/* Generated by re2c on Sat Apr 16 11:40:58 1994 */
+	char *scan(char *p)
+	{
+	    {
+	        unsigned char yych;&lt;/p&gt;
+
+&lt;pre&gt;&lt;code&gt;       yych = (unsigned char)*p;
+        if(yych &amp;lt;= '/') goto yy4;
+        if(yych &amp;gt;= ':') goto yy4;
+        ++p;
+        yych = (unsigned char)*p;
+        goto yy7;
+yy3:
+        {return p;}
+yy4:
+        ++p;
+        yych = (unsigned char)*p;
+        {return char*)0;}
+yy6:
+        ++p;
+        yych = (unsigned char)*p;
+yy7:
+        if(yych &amp;lt;= '/') goto yy3;
+        if(yych &amp;lt;= '9') goto yy6;
+        goto yy3;
+    }
+ 
+} 你可以通过添加注释：/*!max:re2c/ 来输出一个宏定义 YYMAXFILL 来保存输入解析时字符的最大个数。如果使用了-1, YYMAXFILL 只能在最后的 /*!re2c/ 后触发一次。同时，你也可以使用 /*!ignore:re2c */ 来为扫描代码添加注释文档，它们被输出。
+&lt;/code&gt;&lt;/pre&gt;
+
+&lt;p&gt;Options
+re2c提供如下的选项：&lt;/p&gt;
+
+&lt;p&gt;-?
+-h 帮助
+-b 当指定-b参数时，-s参数也会被默认同时指定。 使用位向量尝试着从编译器捣鼓出更好的代码。它对于关键字比较多的规则很有用，比如大部分的编程语言。re2c的实现是通过生成256个ascii字符的映射表，直接判断对应的字符串是否应该跳转到下一个字符，从而实现优化。
+-c 支持类lex或flex的表达式
+-d 创建一个解析器用来打印当前位置的信息，这对于调试非常有用。如果你要使用它，你需要定义一个供解析器调用的YYDEBUG宏，它像一个函数一样，接受两个参数：void YYDEBUG(int state,char current)。第一个参数是state或者-1，第二个参数是当前所解析的代码位置。在每个++YYCURSOR、不同的goto跳转变化处，re2c自动添加YYDEBUG宏调用。如果在规则文件中没定义YYDEUBG宏，在编译C文件时会出错。
+-D 输出Graphviz dot 格式的数据，比如可以使用” dot -Tpng input.dot &amp;gt; output.png”来处理生成图片。注意扫描器中如果包含太多的状态可能会让dot程序崩溃
+-e 从ASCII平台交叉编译EBCDIC
+-f 生成带可存储状态的扫描器。更多详情见下面的可存储的扫描器小节。
+-F 部分支持flex语法。当-F标记有效时，flex的变量用大括号括起来，并且在定义时不需要等号，在结束时不需要用分号。否则，名字被认为是直接被引号的字符串。
+-g 使用GCC的goto特性生成扫描器。当决策复杂时re2c会生成决策跳转表，使用goto针对不同的情况做不同的跳转。仅适用于GCC编译器。注意，这里默认指定了-b参数。re2c的实现中，-g参数会生成yytarget决策跳转表，其实就是一个256个元素的一维数据，针对不同的字符，直接跳转，以优化扫描器。
+-i 不输出行信息，当你的用户从你的代码编译，而你又不要求他们拥有re2c环境，此时你可以使用CMS工具管理re2c的输出文件时，此参数就有用武之地了。-o参数指定输出文件。
+指在生成的.c文件中不使用#line宏。
+-r 允许扫描器在每个 ‘/!use:re2c’块后面重用定义的 ‘/!use:re2c’ 块。这些块可以包含适当的配置，特别是 ‘re2c:flags:w’和re2c:flags:u’。这种方法可能会为不同的字符类型，不同的输入机制或不同的输出机制多次创建相同的扫描器。’/!use:re2c’ 块也可以在 ‘/!rules:re2c’中的规则集中包含额外的规则。
+-s 为一些switch语句生成嵌套的if语句。许多编译器需要这个参数的辅助以便生成更好的代码。
+-t 生成一个类型定义的头文件，以支持类(f)lex条件，当需要使用-t参数时，需同时指定-c参数，-t参数后面接生成的头文件名称。如果只指定re2c会报错：re2c: error: Can only output a header file when using -c switch
+-u 生成一个支持Unicode编码的解析器。这意味着生成的代码能处理任何有效的Unicode字符，直到x10FFFF。当需要支持UTF-8或UTF-16时，你需要自己将输入的数据转化成UTF-32编码。
+-v 查看版本信息。如：re2c 0.13.6
+-V 以数字格式查看版本信息。如：001306
+-w 创建支持宽字符格式的解析器，默认指定-s参数，不能和-e参数共存。
+-1 强制一次生成，它不能和-f组合在一起使用，并且在re2c块结束之前不能禁用YYMAXFILL。
+–no-generation-date 禁止输出生成日志，所以只会输出re2c的版本信息。
+–case-insensitive 所有字符串不区分大小写，所以，双引号中的字符和单引号的意义一样。
+–case-inverted 颠倒单引号和双引号包含的字符中的意思，比如，有了这个开关，单引号内的字符串区分大小写，双引号内的字符串不区分大小写。
+Interface Code接口代码
+不像其他的扫描器程序，re2c 不会生成完整的扫描器：用户必须提供一些接口代码。用户必须定义下面的宏或者是其他相应的配置。&lt;/p&gt;
+
+&lt;p&gt;YYCONDTYPE 用-c 模式你可以使用-t参数来生成一个包含了会被作为条件使用的枚举类型的文件。枚举类型中的每个值都会在规则集合里面作为条件来使用。
+YYCTYPE 用来维持一个输入符号。通常是 char 或者unsigned char。
+YYCTXMARKER &lt;em&gt;YYCTYPE类型的表达式，生成的代码回溯信息的上下文会保存在
+YYCTXMARKER。如果扫描器规则需要使用上下文中的一个或多个正则表达式，则用户需要定义这个宏。
+YYCURSOR *YYCTYPE类型的表达式指针指向当前输入的符号，生成的代码作为符号相匹配，在开始的地方，YYCURSOR假定指向当前token的第一个字符。在结束时，YYCURSOR将会指向下一个token的第一个字符。
+YYDEBUG(state,current) 这个只有指定-d标记的时候才会需要。调用用户定义的函数时可以非常容易的调试生成的代码。
+这个函数应该有以下签名：void YYDEBUG(int state,char current)。第一个参数接受 state ，默认值为-1第二个参数接受输入的当前位置。
+YYFILL(n) 当缓冲器需要填充的时候，生成的代码将会调用YYFILL(n)：至少提供n个字符。YYFILL(n)将会根据需要调整YYCURSOR,YYLIMIT,YYMARKER 和 YYCTXMARKER。注意在典型的程序语言当中，n等于最长的关键词的长度加一。用户可以在/&lt;/em&gt;!max:re2c/一次定义YYMAXFILL来指定最长长度。如果使用了-1，YYMAXFILL将会在/&lt;em&gt;!re2c/之后调用一次阻塞。
+YYGETCONDITION() 如果使用了-c模式，这个定义将会在扫描器代码之前获取条件集。这个值必须初始化为枚举YYCONDTYPE的类型。
+YYGETSTATE() 如果指定了-f模式，用户就需要定义这个宏。此种情况下，扫描器在开始时为了获取保存的状态，生成的代码将会调用YYGETSTATE()。YYGETSTATE()必须返回一个有符号的整数，这个值如果是-1，告诉扫描器这是第一次执行，否则这个值等于以前YYSETSTATE(s) 保存的状态。否则，扫描器将会恢复操作之后立即调用YYFILL(n)。
+YYLIMIT 这是一个类型为&lt;/em&gt;YYCTYPE的表达式，它标记了缓冲器的结尾（YYLIMIT[-1]是缓冲区的最后一个字符）。生成的代码将会不断的比较YYCORSUR 和 YYLIMIT 以决定 什么时候填充缓冲区。
+YYSETCONDITION(c) 这个宏用来在转换规则中设置条件，它只有在指定-c模式和使用转换规则时有用。
+YYSETSTATE(s) 用户只需要在指定-f模式时定义这个宏，如果是这样，生成的代码将会在YYFILL(n)之前调用YYSETSTATE(s)，YYSETSTATE的参数是一个有符号整型，被称为唯一的标示特定的YYFILL(n)实例。
+YYMARKER 类型为*YYCTYPE的表达式，生成的代码保存回溯信息到YYMARKER。一些简单的扫描器可能用不到。
+解析器支持条件 当使用-c参数时，你可以使用正则表达式条件列表。这样re2c会为每个条件生成扫描块，在每一个生成的扫描器都有自己的先决条件。先决条件是定义YYGETCONDETION ，而且类型必须是YYCONDTYPE。
+YYSETSTATE(s) 用户只需要在指定-f模式时定义这个宏。在此种情况下，生成的代码将会在YYFILL(n)之前调用YYSETSTATE(s)，YYSETSTATE的参数是一个有符号整型，被称为唯一的标示特定的YYFILL(n)实例。如果用户希望保存扫描器的状态并用YYFILL(n) 将状态返回给调用 者，他所需要做的是在变量中保存这个唯一的标识。然后，当再次调用扫描器时，它将调用
+YYGETSTATE()并在恢复到之前离开的地方继续执行。即使禁用了 YYFILL(n) ，生成的代码也会包含YYSETSTATE(s)和YYGETSTATE。
+Scanner With Storable States可存储状态的扫描器
+当指定-f标记时，re2c会生成一个存储了它当前状态的扫描器，它能精确的恢复到之前离开的位置，并返回给调用者。&lt;/p&gt;
+
+&lt;p&gt;re2c的默认行为是拉模式，无论何时需要，它都可以要求额外的输入，然而，这种操作模式是基于扫描器可以控制解析循环这一前提的，而这个前提并不一定会存在。
+通常情况下，如果有一个预处理过程或其它相关的源程序数据在扫描器之前先执行，则扫描器无法再要求更多的数据，除非他们都在独立的线程之中。&lt;/p&gt;
+
+&lt;p&gt;-f标记刚好可以解决这个问题：它让用户设计的扫描器以拉模式工作，即数据一块一块的输入到扫描器中。当扫描器运行数据时，它仅存储它的状态，并返回给调用者。当更多的输入数据输入到扫描器时，它能很精确的恢复到之前离开的位置。&lt;/p&gt;
+
+&lt;p&gt;当re2c使用-f选项时，它不能接收标准输入，因为它必须做两次完整的全局扫描，而两次扫描就需要读取两次。这就意味着，如果不能打开输入两次或第一次输入影响第二次输入，re2c会执行失败。&lt;/p&gt;
+
+&lt;p&gt;相对于拉模式，可存储的扫描器有以下不同：&lt;/p&gt;
+
+&lt;p&gt;用户必须提供YYSETSTATE() 宏和YYGETSTATE(state)宏
+-f参数禁止了yych和yyaccept的声明。因此用户必须声明这些，并且必须能够保存和恢复他们。在example/push.re文件的示例中，这些都被声明为C++类的字段，因此他们不再需要明确的保存或恢复。对于C语言来说，我们可以通过宏，以参数传递的方式从结构体中获取这些字段。或者，可以将他们声明为局部变量，当它决定返回并将之作为函数的一个项保存在 YYFILL(n)中。此外， 使用YYFILL(n)保存的效率更高，因为可以无条件的调用YYSETSTATE(state)。然而，YYFILL(n) 并不能将state作为参数，因此，我们必须通过YYSETSTATE(state)将state保存到局部变量中。
+如果需要更多的输入，需要修改YYFILL(n) ，使之可以从调用它的函数处返回。
+修改调用者的逻辑，使其在需要更多的输入时做出相应的应答。
+生成的代码中将包含一个选择逻辑块，这个选择逻辑会被用来通过跳转到相应的YYFILL(n)调用处，以恢复最后的状态。这个代码块会在第一个 “/&lt;em&gt;!re2c */”块收尾的地方自动生成。通过放置 “/&lt;/em&gt;!getstate:re2c */”注释，可能会触发YYGETSTATE() 的生成操作。这对于被包含在循环中的扫描器非常有用。
+请查看 examples/push.re文件中的推模式示例扫描器。它生成的代码可以通过”state:abort”和”state:nextlabel”调整。&lt;/p&gt;
+
+&lt;p&gt;Scanner With Condition Support 可判断条件的扫描
+当使用-c参数时，你可以在正则表达式之前优先一系统的条件名。在这种情况下，re2c会针对每个条件生成扫描代码块。这些代码块都有它自己的前置条件，这此前置条件都是通过接口定义YYGETCONDITON实现，并且必须为YYCONDTYPE类型。&lt;/p&gt;
+
+&lt;p&gt;其中有两个特别的类型，一个是‘*’，它表示满足所有条件；另一个是空条件，它提供一个没有扫描内容的代码块，这意味着不需要任何正则表达式。这个特殊的块始终有一个固定的枚举值0。这些特殊的规则可以被用来初始化一个扫描器。这些特殊的规则并不是必须的，但是有时可以用它来声明一些没有初始化的状态。&lt;/p&gt;
+
+&lt;p&gt;非空规则允许指定新的条件，这些条件将导致规则的变化。它会生成定义的YYSETCONDTITION，除此之外再无其它。&lt;/p&gt;
+
+&lt;p&gt;还有另一种特殊的规则，它允许在所有的有规则和没有规则代码前添加代码。例如，它可以用来保存扫描的字符串的长度。这个特殊的规则以感叹号开始，后面可以接条件 &amp;lt;! condition, … &amp;gt; 或星号&amp;lt;!*&amp;gt;。当re2c为这个规则生成代码时，如果这个规则的状态没有起始规则或已经在在一个星号规则，那么这个代码将作为起始代码。&lt;/p&gt;
+
+&lt;p&gt;Scanner Specifications 扫描器规则
+每个扫描器规格都由 规则集、命名定义和配置构成。&lt;/p&gt;
+
+&lt;p&gt;规则由正则以及紧跟其后面的C/C++代码构成，当正则匹配时，其后的C/C++代码会被执行。你可以以大括号或：=开始代码。当用大括号开始代码时，re2c会根据大括号判断其尝试并自动结束代码的查找。如果不使用大括号开始代码，则re2c会在第一行不为空时停止查找。&lt;/p&gt;
+
+&lt;pre&gt;&lt;code&gt;regular-expression { C/C++ code }
+regular-expression := C/C++ code 如果指定-c参数，则每个正则前面都会有一系列的由逗号分隔的条件名称。除了正常命名的规则以外，有两种特殊的情况。一个规则可能包含一个单独的条件名称’*’和没有条件名称。对于没有条件名称的情况，其后面不能接正则表达式。非空规则可能会进一步指定新的条件。在这种情况下，re2c可能会自动生成必要的代码来改变条件。如上所示代码，其以大括号和’:=’开始代码。更进一步，更多的规则可以使用’:=&amp;gt;’快捷方式来自动生成代码，它不仅仅可以设置新的状态，还可以继续执行新的状态。一个快捷规则不应该在循环中使用，这些循环代码在循环开始和re2c块之间，除非用 re2c:cond:goto使之 ‘continue;’如果一段代码必须放在所有的规则之前，你可以使用&amp;lt;! 伪规则。
+
+&amp;lt;condition-list&amp;gt; regular-expression { C/C++ code }
+&amp;lt;condition-list&amp;gt; regular-expression := C/C++ code
+&amp;lt;condition-list&amp;gt; regular-expression =&amp;gt; condition { C/C++ code }
+&amp;lt;condition-list&amp;gt; regular-expression =&amp;gt; condition := C/C++ code
+&amp;lt;condition-list&amp;gt; regular-expression :=&amp;gt; condition
+&amp;lt;*&amp;gt; regular-expression { C/C++ code }
+&amp;lt;*&amp;gt; regular-expression := C/C++ code
+&amp;lt;*&amp;gt; regular-expression =&amp;gt; condition { C/C++ code }
+&amp;lt;*&amp;gt; regular-expression =&amp;gt; condition := C/C++ code
+&amp;lt;*&amp;gt; regular-expression :=&amp;gt; condition
+&amp;lt;&amp;gt; { C/C++ code }
+&amp;lt;&amp;gt; := C/C++ code
+&amp;lt;&amp;gt; =&amp;gt; condition { C/C++ code }
+&amp;lt;&amp;gt; =&amp;gt; condition := C/C++ code
+&amp;lt;&amp;gt; :=&amp;gt; condition
+&amp;lt;!condition-list&amp;gt; { C/C++ code }
+&amp;lt;!condition-list&amp;gt; := C/C++ code
+&amp;lt;!*&amp;gt; { C/C++ code }
+&amp;lt;!*&amp;gt; := C/C++ code 命名定义格式如下：
+&lt;/code&gt;&lt;/pre&gt;
+
+&lt;p&gt;name = regular-expression;
+如果使用了-F 模式，可以使用如下命名定义方法：&lt;/p&gt;
+
+&lt;p&gt;name regular-expression&amp;lt; /pre&amp;gt;
+以”re2c”开始的命名定义配置如下所示：&lt;/p&gt;
+&lt;pre lang=&quot;c&quot;&gt;re2c:name = value;
+re2c:name = &quot;value&quot;;
+Summary Of Re2c Regular-expressionsre2c正则表达式小结
+“foo” 字符串foo。可以使用ANSI-C转义序列。
+[xyz] 字符集；此种情况匹配字符x,y或z
+[abj-oZ] 包含区间的字符集，此种情况匹配a,b,j到o之间的任一字符，或z
+[^class] 字符集否定匹配，匹配没有在方括号中定义的字符。
+r\s 匹配非s的正则，r和s都必须是可以表示为字符集的正则表达式
+r* 零次或多次匹配，r是任一正则表达式
+r+ 一次或多次匹配（至少一次）
+r? 零次或一次匹配
+name 这里name就是在前面的定义段给出的名字
+(r) 匹配规则表达式r，圆括号可以提高其优先级。
+rs 匹配规则表达式r，其后紧跟着表达式s。这称为联接(concatenation)。
+r|s 或者匹配规则表达式r，或者匹配表达式s。
+r/s 匹配模式r，但是要求其后紧跟着模式s。s并不会参与文本的匹配。这种正则表达式的匹配称之为“尾部上下文”
+r{n} n次匹配
+r{n,} 至少n次匹配
+r{n,m} 至少n次，至多m次匹配；匹配除换行符外的任意字符
+def 当没有使用-F参数时，匹配的命名定义通过def定义。当-F参数指定时，def语名和双引号包含的效果一样，直接匹配def字符串。字符集和字符串可能包含有八进制或十六进制或如下的转义字符 (\n, \t, \v, \b, \r, \f, \a, \)。一个八进制字符由一个反斜杠和紧跟着它的三个八进制数字组成，一个十六进制字符由一个反斜杠，一个小写的x，以及两个十六进制数字组成，或由一个反斜杠，一个大写的X，以及四个十六进制数字组成。re2c进一步会支持更多的C/C++的unicode符号。这些unicode符号由一个反斜杠+u+四个十六进制数字或一个反斜杠+U+八个十六进制的数字组成。然后，仅当-u模式下才能处理这些uincode字符。
+在非unicode模式下，大于\X00FF的字符是无法直接匹配的，除非使用”万金油“类型的 (.|”\n”)和[^]正则表达式匹配所有的字符时，包含它们。
+
+如上所示的正则表达式列表按优先级分组，从最上面的最高优先级到最下面的最低优先级。这些组合之间的优先级相同。
+
+Inplace Configuration现场配置
+它可能在re2c块中配置并生成代码，如下所示为可用的配置项：
+
+re2c:condprefix = yyc_ ;
+允许指定条件标签的前缀。它将在生成的输出文件中的所有条件标签前添加指定的前缀。
+re2c:condenumprefix = yyc ;
+允许指定条件值的前缀。它将在生成的输出文件中的所有条件枚举值前添加指定的前缀。
+re2c:cond:divider = “/* *********************************** */” ;
+允许为条件块自定义分隔符。你可以使用’@@’输出条件的名字或使用
+re2c:cond:divider@cond = @@ ;
+指定即将被 re2c:cond:divider中的条件名替换的占位符。
+re2c:cond:goto = “goto @@;” ;
+允许使用 ‘:=&amp;gt;’ 规则自定义条件跳转语句。你可以使用’@@’输出条件的名字或使用re2c:cond:divider@cond自定义占位符，同时你也可以使用此语句继续下一个循环周期，这个循环周期包括循环开始到re2c块之间的任何代码。
+re2c:cond:goto@cond = @@ ;
+指定即将在 re2c:cond:goto语句中被替换的条件标签占位符
+re2c:indent:top = 0 ;
+指定最小的缩进，大于或等于0
+re2c:indent:string = “\t” ;
+指定缩进用的字符串。除非你想使用外部工具，否则就需要只包含空白字符串。最简单的方法就是用单引号或双引号包含它们。如果你不需要任何缩进，直接使用””即可。
+re2c:yych:conversion = 0 ;
+当此设置非零时，re2c会在读取yych时自动生成转换代码。此时的类型必须使用re2c:define:YYCTYPE定义。
+re2c:yych:emit = 1 ;
+设置为0可以禁止yych的生成。
+re2c:yybm:hex = 0 ;
+如果设置为0，则生成一个十进制表格，否则将生成一个十六进制表格
+re2c:yyfill:enable = 1 ;
+将此设置为0可以禁止YYFILL(n)的生成。当使用它时请确认生成的扫描器在输入之后不再读取。允许此行为将给你的程序引入服务安全问题。
+re2c:yyfill:check = 1 ;
+当YYLIMIT + max(YYFILL)一直可用时，把此设置为0可以禁止使用YYCURSOR和YYLIMIT的先决条件的输出。
+re2c:yyfill:parameter = 1 ;
+允许禁止YYFILL调用的参数传递。如果设置为0，将没有任何参数传递到YYFILL。然而，define:YYFILL@LEN允许指定一个字符串替换实际字符中的长度。如果设置为非0，除非设置re2c:define:YYFILL:naked，否则YYFILL将使用紧跟其后的大括号内的所要求的字符数。其它请参照：re2c:define:YYFILL:naked和re2c:define:YYFILL@LEN.
+re2c:startlabel = 0 ;如果设置为0的整数，即使没有扫描器本身，下一个扫描块的开始标签也会被生成。否则仅在需要的时候生成常规的yy0开始标签。如果设置为一个文本值，不管常规的开始标签生成是否，包含当前文本的标签都会被生成。在开始标签生成后，当前设置会被重置为0。
+re2c:labelprefix = yy ;
+允许修改数字标签的前缀，默认为yy，任何有效的标签都是可以的。
+re2c:state:abort = 0 ;
+当设置为非零，并且开启-f模式时，YYGETSTATE 块会包含一个默认的情况，初始化时设置为-1
+re2c:state:nextlabel = 0 ;
+当开启-f模式时，使用此设置可以控制是否在YYGETSTATE块后面接yyNext标签行。通常，你可以用startlabel配置强制指定开始标签或用默认的yy0作为开始标签，而不是用yyNext。通常我们通过放置”/*!getstate:re2c */” 注释来分隔实际扫描器的YYGETSTATE 代码，而不是专用的标签。
+re2c:cgoto:threshold = 9 ;
+当启用-g模式时，这个值指定生成的跳转表的复杂度阈值，而不是使用嵌套的if语句和决策位字段。
+re2c:yych:conversion = 0 ;
+当输入使用有符号字符时，并且开启-s和-b械时，re2c会自动将其转化为无符号类型。当设置为0时会禁用空字符串转化。设置为非零时，转化将在YYCTYPE处进行。如果这个值通过现场配置，则使用该值。否则，将会变成(YYCTYPE)，并且不能再修改成配置。当设置为一个字符串时，必须用括号括起来。现在，假设你的输入为char*并且使用上述的设置，你可以设置YYCTYPE为unsigned char，并且当前值设置为1或者”(unsigned char)”
+re2c:define:define:YYCONDTYPE = YYCONDTYPE ;枚举用于支持-c模式的条件
+re2c:define:YYCTXMARKER = YYCTXMARKER ;
+允许覆盖定义的YYCTXMARKER ，从而避免将其设置为实际所需的代码。
+re2c:define:YYCTYPE = YYCTYPE ;
+允许覆盖定义的YYCTYPE ，从而避免将其设置为实际所需的代码。
+re2c:define:YYCURSOR = YYCURSOR ;
+允许覆盖定义的YYCURSOR ，从而避免将其设置为实际所需的代码。
+re2c:define:YYDEBUG = YYDEBUG ;
+允许覆盖定义的YYDEBUG ，从而避免将其设置为实际所需的代码。
+re2c:define:YYFILL = YYFILL ;
+允许覆盖定义的YYFILL ，从而避免将其设置为实际所需的代码。
+re2c:define:YYFILL:naked = 0 ;
+当设置为1时，括号、参数、分号都会被发出。
+re2c:define:YYFILL@len = @@ ;
+当使用 re2c:define:YYFILL 时，并且re2c:yyfill:parameter 为0时，YYFILL 中的任何文本将会被新的实际的长度值替换。
+re2c:define:YYGETCONDITION = YYGETCONDITION ;
+允许覆盖定义的YYGETCONDITION
+re2c:define:YYGETCONDITION:naked = ;
+当设置为1时，括号、参数、分号都会被发出。
+re2c:define:YYGETSTATE = YYGETSTATE ;
+允许覆盖定义的YYGETSTATE ，从而避免将其设置为实际所需的代码。
+re2c:define:YYGETSTATE:naked = 0 ;
+当设置为1时，括号、参数、分号都会被发出。
+re2c:define:YYLIMIT = YYLIMIT ;
+允许覆盖定义的YYLIMIT ，从而避免将其设置为实际所需的代码。
+re2c:define:YYMARKER = YYMARKER ;
+允许覆盖定义YYMARKER，从而避免将其设置为实际所需的代码。
+re2c:define:YYSETCONDITION = YYSETCONDITION ;
+允许覆盖定义的YYSETCONDITION
+re2c:define:YYSETCONDITION@cond = @@ ;
+当使用 re2c:define:YYSETCONDITION时，YYSETCONDITION中的任何文本将会被新的实际的
+条件值替换。
+re2c:define:YYSETSTATE = YYSETSTATE ;
+允许覆盖定义的YYSETSTATE，从而避免将其设置为实际所需的代码。
+re2c:define:YYSETSTATE:naked = 0 ;
+当设置为1时，括号、参数、分号都会被发出。
+re2c:define:YYSETSTATE@state = @@ ;
+当使用re2c:define:YYSETSTATE时，YYSETCONDITION中的任何文本将会被新的实际的状态值替换
+re2c:label:yyFillLabel = yyFillLabel ;
+允许覆盖标签yyFillLabel，即可以自定义生成的yyFillLabel 变量名。
+re2c:label:yyNext = yyNext ;
+允许覆盖标签yyNext ，即可以自定义生成的yyNext变量名。
+re2c:variable:yyaccept = yyaccept ;
+允许覆盖变量yyaccept，即可以自定义生成的yyaccept变量名。
+re2c:variable:yybm = yybm ;
+允许覆盖变量yybm，即可以自定义生成的yybm变量名。
+re2c:variable:yych = yych ;
+允许覆盖变量yych，即可以自定义生成的yych变量名。
+re2c:variable:yyctable = yyctable ;
+当指定-c参数和-g参数时，re2c会使用此变量为YYGETCONDITION生成静态跳转表。
+re2c:variable:yystable = yystable ;
+当指定-f参数和-g参数时，re2c会使用此变量为YYGETSTATE生成静态跳转表。
+re2c:variable:yytarget = yytarget ;
+允许覆盖变量yytarget，即可以自定义生成的yytarget变量名。
+Understanding Re2c 理解re2c
+re2c的子目录中包含各种例子教你一步一步的如何开启re2c的世界，所有的例子都是可编译运行的。
+
+Features特点
+re2c不提供默认的动作：生成的代码假定输入包含一系列token。通常，可以通过添加一条规则实现，例如上面示例中的异常字符
+
+因为re2c不提供结束表达式，所以用户必须安排一个输入结束符并让一个规则匹配并捕获它。
+如果来源是一个以空字符串结尾的字符串，则匹配一个空字符串就可以了。如果来源是一个文件，你可以在文件后添加一个换行（或其它不会出现的标记）；通过识别这个字符，以检查这是否为一个标记点并执行相应的操作。同样，你也可以使用YYFILL(n)判断是否没有足够的字符可用时结束扫描。
+
+
+&lt;/pre&gt;
+</description>
+        <pubDate>Wed, 28 Feb 2018 00:00:00 +0800</pubDate>
+        <link>https://xiazemin.github.io/MyBlog/lang/2018/02/28/re2c.html</link>
+        <guid isPermaLink="true">https://xiazemin.github.io/MyBlog/lang/2018/02/28/re2c.html</guid>
+        
+        
+        <category>lang</category>
+        
+      </item>
+    
+      <item>
+        <title>Jekyll目录结构和运行机理</title>
+        <description>&lt;p&gt;https://github.com/xiazemin/jekyll-paginate-plugin
+&lt;!-- more --&gt;
+Jekyll使用Ruby脚本根据模板生成静态网页，实现了内容与排版的分离。模板以嵌入Liquid脚本的HTML格式存放。内容为markdown或者html。&lt;/p&gt;
+
+&lt;p&gt;正常的Jekyll工程包含以下几个目录：&lt;/p&gt;
+
+&lt;p&gt;_posts  博客内容
+_pages  其他需要生成的网页，如About页
+_layouts 网页排版模板
+_includes 被模板包含的HTML片段，可在_config.yml中修改位置
+assets 辅助资源 css布局 js脚本 图片等
+_data 动态数据
+_sites  最终生成的静态网页&lt;/p&gt;
+
+&lt;p&gt;在项目文件夹(含有_config.yml)中运行jekyll build 指令后，jekyll会依次做如下几件事&lt;/p&gt;
+
+&lt;p&gt;加载_layout文件夹内的所有模板，并将其中的%include html% 字段按照_includes文件夹内对应文件填入
+遍历_post文件夹及子文件夹，对所有命名符合yyyy-mm–dd-title.md 格式的博客文件放入site.posts 变量(按时间倒序)，并对其进行解析，根据Front Matter 头的内容套入layout生成对应title的博客
+遍历整个项目子目录，扫描所有含Front Matter 头的文件，放入site.pages 变量并根据permalink 字段指定的URL目标位置生成index.html
+在生成过程中，文件中包含的Liquid脚本&amp;lt;p&amp;gt;http://docs.php.net/manual/zh/features.gc.collecting-cycles.php#features.gc.collecting-cycles
+&lt;!-- more --&gt;
+传统上，像以前的 php 用到的引用计数内存机制，无法处理循环的引用内存泄漏。然而 5.3.0 PHP 使用文章» 引用计数系统中的同步周期回收(Concurrent Cycle Collection in Reference Counted Systems)中的同步算法，来处理这个内存泄漏问题。&amp;lt;/p&amp;gt;&lt;/p&gt;
+
+&lt;p&gt;对算法的完全说明有点超出这部分内容的范围，将只介绍其中基础部分。首先，我们先要建立一些基本规则，如果一个引用计数增加，它将继续被使用，当然就不再在垃圾中。如果引用计数减少到零，所在变量容器将被清除(free)。就是说，仅仅在引用计数减少到非零值时，才会产生垃圾周期(garbage cycle)。其次，在一个垃圾周期中，通过检查引用计数是否减1，并且检查哪些变量容器的引用次数是零，来发现哪部分是垃圾。
+&lt;img src=&quot;https://xiazemin.github.io/MyBlog/img/php.png&quot; /&gt;
+为避免不得不检查所有引用计数可能减少的垃圾周期，这个算法把所有可能根(possible roots 都是zval变量容器),放在根缓冲区(root buffer)中(用紫色来标记，称为疑似垃圾)，这样可以同时确保每个可能的垃圾根(possible garbage root)在缓冲区中只出现一次。仅仅在根缓冲区满了时，才对缓冲区内部所有不同的变量容器执行垃圾回收操作。看上图的步骤 A。&lt;/p&gt;
+
+&lt;p&gt;在步骤 B 中，模拟删除每个紫色变量。模拟删除时可能将不是紫色的普通变量引用数减”1”，如果某个普通变量引用计数变成0了，就对这个普通变量再做一次模拟删除。每个变量只能被模拟删除一次，模拟删除后标记为灰（原文说确保不会对同一个变量容器减两次”1”,不对的吧）。&lt;/p&gt;
+
+&lt;p&gt;在步骤 C 中，模拟恢复每个紫色变量。恢复是有条件的，当变量的引用计数大于0时才对其做模拟恢复。同样每个变量只能恢复一次，恢复后标记为黑，基本就是步骤 B 的逆运算。这样剩下的一堆没能恢复的就是该删除的蓝色节点了，在步骤 D 中遍历出来真的删除掉。&lt;/p&gt;
+
+&lt;p&gt;算法中都是模拟删除、模拟恢复、真的删除，都使用简单的遍历即可（最典型的深搜遍历）。复杂度为执行模拟操作的节点数正相关，不只是紫色的那些疑似垃圾变量。&lt;/p&gt;
+
+&lt;p&gt;现在，你已经对这个算法有了基本了解，我们回头来看这个如何与PHP集成。默认的，PHP的垃圾回收机制是打开的，然后有个 php.ini 设置允许你修改它：zend.enable_gc 。&lt;/p&gt;
+
+&lt;p&gt;当垃圾回收机制打开时，每当根缓存区存满时，就会执行上面描述的循环查找算法。根缓存区有固定的大小，可存10,000个可能根,当然你可以通过修改PHP源码文件Zend/zend_gc.c中的常量GC_ROOT_BUFFER_MAX_ENTRIES，然后重新编译PHP，来修改这个10,000值。当垃圾回收机制关闭时，循环查找算法永不执行，然而，可能根将一直存在根缓冲区中，不管在配置中垃圾回收机制是否激活。&lt;/p&gt;
+
+&lt;p&gt;当垃圾回收机制关闭时，如果根缓冲区存满了可能根，更多的可能根显然不会被记录。那些没被记录的可能根，将不会被这个算法来分析处理。如果他们是循环引用周期的一部分，将永不能被清除进而导致内存泄漏。&lt;/p&gt;
+
+&lt;p&gt;即使在垃圾回收机制不可用时，可能根也被记录的原因是，相对于每次找到可能根后检查垃圾回收机制是否打开而言，记录可能根的操作更快。不过垃圾回收和分析机制本身要耗不少时间。&lt;/p&gt;
+
+&lt;p&gt;除了修改配置zend.enable_gc ，也能通过分别调用gc_enable() 和 gc_disable()函数来打开和关闭垃圾回收机制。调用这些函数，与修改配置项来打开或关闭垃圾回收机制的效果是一样的。即使在可能根缓冲区还没满时，也能强制执行周期回收。你能调用gc_collect_cycles()函数达到这个目的。这个函数将返回使用这个算法回收的周期数。&lt;/p&gt;
+
+&lt;p&gt;允许打开和关闭垃圾回收机制并且允许自主的初始化的原因，是由于你的应用程序的某部分可能是高时效性的。在这种情况下，你可能不想使用垃圾回收机制。当然，对你的应用程序的某部分关闭垃圾回收机制，是在冒着可能内存泄漏的风险，因为一些可能根也许存不进有限的根缓冲区。因此，就在你调用gc_disable()函数释放内存之前，先调用gc_collect_cycles()函数可能比较明智。因为这将清除已存放在根缓冲区中的所有可能根，然后在垃圾回收机制被关闭时，可留下空缓冲区以有更多空间存储可能根。&lt;/p&gt;
+&lt;p&gt;会被解析并替换。Liquid指令 包括Object、Tag、Filter三类，其中object是变量，在解析过程中会被直接文本替换
+Tag是控制流，可以做判断和循环
+Filter用于对文本进一步处理
+.yml文件中，字段的冒号后面必须有空格！&lt;/p&gt;
+
+&lt;p&gt;为了添加除博客以外的页面集合(如Projects)，可将含有Front Matter头的文件放入除_posts之外的任意目录，便可被添入site.pages 变量中。为了与posts相区分，一般来说应该在网页头部添加一个变量，如type 并在对应生成循环中逐个判断。&lt;/p&gt;
+
+&lt;p&gt;首先说说jeykll , 它是一个静态博客系统，你也可以把jekyll当作是一个工具，它可以将特定格式，如markdown, 或者texttile语法格式编辑的文本文件直接转换成html , 当作网页显示。大家都知道使用markdown等语法来编辑发布博客是一件很轻松愉快的事情，比起直接写html或者jsp，自然轻松许多。 jeykll系统的运行依赖ruby运行时，说明jekyll是使用ruby语言开发的。jekyll 可以在本地环境下安装，使用jekyll –server可以在本地启动一个WebRick的HTTP服务器，浏览器访问localhost:4000便可以预览博客。更多关于jekyll系统生成的文件目录以及每个文件夹里文件的作用，可以查看jeykll的官方文档。其次我们再来说说octopress, 看了octopress的官方文档之后，你会发现他的目录结构和jekyll大同小异。这充分说明了octopress是基于jekyll开发的一套高定制化的静态博客系统，你可以把它理解成属于jekyll的二次开发，类似于android与miui, flyme之间的关系。Github pages在其中充当的角色，仅仅是提供了一个jekyll的运行环境，还有项目托管，让用户不仅仅能够使用jeykll来搭建一个静态博客，而且还能够使用Git的方式来更新和管理博客。最后说说使用octopress在github上搭建博客的基本原理: 关于一些如何安装jekyll，octopress，以及和github项目库的连接这些准备工作我就不啰嗦了，直接看下文。新建一篇文章命令行 执行rake new_title[“我的第一篇博客”]这时候会在source/_post目录下自动生成一个[时间][Title].markdown文件(文件名以及后缀可以自己设定)使用octopress可以用多项设置，你可以设置博客的Header, Footer, 已经每篇文章显示样式，字体大小。octopress默认还为用户添加了博客评论，收藏，分享到facebook, google plus , tw等，这也可以通过修改gemfile中的配置信息进行功能添加或者删除。我们还可以自己添加多个模块，例如中国的一些分享，评论插件。还可以自己定义独立页面。编辑完成后，使用rake generate 命令，octopress便会将.markdown文件自动转换成html文件，生成的文件会保存在sass目录下。当用户访问我们的网页时，便会加载各种css样式以及模板文件和配置信息。然后你可以使用rake preview命令在本地启动一个WebRick服务器预览你的博客，ctrl+c可以关闭服务器。最后使用rake deploy命令将本地生成的博客push到github上的远程库里。注意，在使用rake deploy命令后，octopress会首先将generate好的博客文件(包括html,css,js,img等)全部放到_deploy目录下。一般配置好octopress与你github上的repository后，其会自动为你新建一个分支，默认叫做source分支，主分支叫做master。master分支的内容不需要我们手动去pull和push，这些动作octopress会帮助我们完成。我们所有的修改全部是在source分支下完成的。&lt;/p&gt;
+
+&lt;p&gt;Bundle介绍：&lt;/p&gt;
+
+&lt;p&gt;Rails 3中引入Bundle来管理项目中所有gem依赖，该命令只能在一个含有Gemfile的目录下执行，如rails 3项目的根目录。&lt;/p&gt;
+
+&lt;p&gt;关于Gemfile和Gemfile.lock&lt;/p&gt;
+
+&lt;p&gt;所有Ruby项目的信赖包都在Gemfile中进行配置，不再像以往那样，通过require来查找。Rails 3中如果需要require某个gem包，必须通过修改Gemfile文件来管理。&lt;/p&gt;
+
+&lt;p&gt;Gemfile.lock则用来记录本机目前所有依赖的Ruby Gems及其版本。所以强烈建议将该文件放入版本控制器，从而保证大家基于同一环境下工作。&lt;/p&gt;
+
+&lt;p&gt;Bundle命令详解：&lt;/p&gt;
+
+&lt;h1 id=&quot;显示所有的依赖包&quot;&gt;显示所有的依赖包&lt;/h1&gt;
+&lt;p&gt;$ bundle show&lt;/p&gt;
+
+&lt;h1 id=&quot;显示指定gem包的安装位置&quot;&gt;显示指定gem包的安装位置&lt;/h1&gt;
+&lt;p&gt;$ bundle show [gemname]&lt;/p&gt;
+
+&lt;h1 id=&quot;检查系统中缺少那些项目以来的gem包&quot;&gt;检查系统中缺少那些项目以来的gem包&lt;/h1&gt;
+&lt;h1 id=&quot;注如果系统中存在所有项目以来的包则会输出the-gemfiles-dependencies-are-satisfied&quot;&gt;注：如果系统中存在所有项目以来的包，则会输出：The Gemfile’s dependencies are satisfied&lt;/h1&gt;
+&lt;p&gt;$ bundle check&lt;/p&gt;
+
+&lt;h1 id=&quot;安装项目依赖的所有gem包&quot;&gt;安装项目依赖的所有gem包&lt;/h1&gt;
+&lt;h1 id=&quot;注此命令会尝试更新系统中已存在的gem包&quot;&gt;注：此命令会尝试更新系统中已存在的gem包&lt;/h1&gt;
+&lt;p&gt;$ bundle install&lt;/p&gt;
+
+&lt;h1 id=&quot;安装指定的gem包&quot;&gt;安装指定的gem包&lt;/h1&gt;
+&lt;p&gt;$ bundle install [gemname]&lt;/p&gt;
+
+&lt;h1 id=&quot;更新系统中存在的项目依赖包并同时更新项目gemfilelock文件&quot;&gt;更新系统中存在的项目依赖包，并同时更新项目Gemfile.lock文件&lt;/h1&gt;
+&lt;p&gt;$ bundle update&lt;/p&gt;
+
+&lt;h1 id=&quot;更新系统中指定的gem包信息并同时更新项目gemfilelock中指定的包信息&quot;&gt;更新系统中指定的gem包信息，并同时更新项目Gemfile.lock中指定的包信息&lt;/h1&gt;
+&lt;p&gt;$ bundle update [gemname]&lt;/p&gt;
+
+&lt;h1 id=&quot;向项目中添加新的gem包引用&quot;&gt;向项目中添加新的gem包引用&lt;/h1&gt;
+&lt;p&gt;$ gem [gemname], [ver]&lt;/p&gt;
+
+&lt;h1 id=&quot;你还可以指定包依赖关系&quot;&gt;你还可以指定包依赖关系&lt;/h1&gt;
+&lt;p&gt;$ gem [gemname], :require =&amp;gt; [dependence_gemname]&lt;/p&gt;
+
+&lt;h1 id=&quot;你甚至还可以指定gem包的git源&quot;&gt;你甚至还可以指定gem包的git源&lt;/h1&gt;
+&lt;p&gt;$ gem [gemname], :git =&amp;gt; [git_source_url]&lt;/p&gt;
+
+&lt;h1 id=&quot;锁定当前环境&quot;&gt;锁定当前环境&lt;/h1&gt;
+&lt;h1 id=&quot;可以使用bundle-lock来锁定当前环境这样便不能通过bundle-update来更新依赖包的版本保证了统一的环境&quot;&gt;可以使用bundle lock来锁定当前环境，这样便不能通过bundle update来更新依赖包的版本，保证了统一的环境&lt;/h1&gt;
+&lt;p&gt;$ bundle lock&lt;/p&gt;
+
+&lt;h1 id=&quot;解除锁定&quot;&gt;解除锁定&lt;/h1&gt;
+&lt;p&gt;$ bundle unlock&lt;/p&gt;
+
+&lt;h1 id=&quot;打包当装环境&quot;&gt;打包当装环境&lt;/h1&gt;
+&lt;h1 id=&quot;bundle-package会把当前所有信赖的包都放到-vendorcache-目录下发布时可用来保证包版本的一致性&quot;&gt;bundle package会把当前所有信赖的包都放到 ./vendor/cache/ 目录下，发布时可用来保证包版本的一致性。&lt;/h1&gt;
+&lt;p&gt;$ bundle package&lt;/p&gt;
+
+&lt;p&gt;Make sure all dependencies in your Gemfile are available to your application.
+$ bundle install [–binstubs=PATH] [–clean] [–deployment] [–frozen]
+                 [–full-index] [–gemfile=FILE] [–local] [–no-cache]
+                 [–no-prune] [–path=PATH] [–quiet] [–shebang=STRING]
+                 [–standalone=ARRAY] [–system] [–without=GROUP GROUP]
+                 [–trust-policy=SECURITYLEVEL]
+Options:&lt;/p&gt;
+
+&lt;p&gt;–binstubs: Generate bin stubs for bundled gems to ./bin&lt;/p&gt;
+
+&lt;p&gt;–clean: Run bundle clean automatically after install&lt;/p&gt;
+
+&lt;p&gt;–deployment: Install using defaults tuned for deployment environments&lt;/p&gt;
+
+&lt;p&gt;–frozen: Do not allow the Gemfile.lock to be updated after this install&lt;/p&gt;
+
+&lt;p&gt;–full-index: Use the rubygems modern index instead of the API endpoint&lt;/p&gt;
+
+&lt;p&gt;–gemfile: Use the specified gemfile instead of Gemfile&lt;/p&gt;
+
+&lt;p&gt;–jobs: Install gems using parallel workers.&lt;/p&gt;
+
+&lt;p&gt;–local: Do not attempt to fetch gems remotely and use the gem cache instead&lt;/p&gt;
+
+&lt;p&gt;–no-cache: Don’t update the existing gem cache.&lt;/p&gt;
+
+&lt;p&gt;–no-prune: Don’t remove stale gems from the cache.&lt;/p&gt;
+
+&lt;p&gt;–path: Specify a different path than the system default ($BUNDLE_PATH or $GEM_HOME). Bundler will remember this value for future installs on this machine&lt;/p&gt;
+
+&lt;p&gt;–quiet: Only output warnings and errors.&lt;/p&gt;
+
+&lt;p&gt;–retry: Retry network and git requests that have failed.&lt;/p&gt;
+
+&lt;p&gt;–shebang: Specify a different shebang executable name than the default (usually ‘ruby’)&lt;/p&gt;
+
+&lt;p&gt;–standalone: Make a bundle that can work without the Bundler runtime&lt;/p&gt;
+
+&lt;p&gt;–system: Install to the system location ($BUNDLE_PATH or $GEM_HOME) even if the bundle was previously installed somewhere else for this application&lt;/p&gt;
+
+&lt;p&gt;–trust-policy: Sets level of security when dealing with signed gems. Accepts &lt;code&gt;LowSecurity&lt;/code&gt;, &lt;code&gt;MediumSecurity&lt;/code&gt; and &lt;code&gt;HighSecurity&lt;/code&gt; as values.&lt;/p&gt;
+
+&lt;p&gt;–without: Exclude gems that are part of the specified named group.&lt;/p&gt;
+
+&lt;p&gt;Gems will be installed to your default system location for gems. If your system gems are stored in a root-owned location (such as in Mac OSX), bundle will ask for your root password to install them there.&lt;/p&gt;
+
+&lt;p&gt;While installing gems, Bundler will check vendor/cache and then your system’s gems. If a gem isn’t cached or installed, Bundler will try to install it from the sources you have declared in your Gemfile.&lt;/p&gt;
+
+&lt;p&gt;The –system option is the default. Pass it to switch back after using the –path option as described below.&lt;/p&gt;
+
+&lt;p&gt;Install your dependencies, even gems that are already installed to your system gems, to a location other than your system’s gem repository. In this case, install them to vendor/bundle.
+$ bundle install –path vendor/bundle
+Further bundle commands or calls to Bundler.setup or Bundler.require will remember this location.
+Learn More: Bundler.setup
+Learn More: Bundler.require
+Install all dependencies except those in groups that are explicitly excluded.
+$ bundle install –without development test
+Learn More: Groups
+Install all dependencies on to a production server. Do not use this flag on a development machine.
+$ bundle install –deployment
+The –deployment flag activates a number of deployment-friendly conventions:&lt;/p&gt;
+
+&lt;p&gt;Isolate all gems into vendor/bundle
+Require an up-to-date Gemfile.lock
+If bundle package was run, do not fetch gems from rubygems.org. Instead, only use gems in the checked in vendor/cache
+Learn More: Deploying
+Install gems parallely by starting the number of workers specificed.
+$ bundle install –jobs 4
+Retry failed network or git requests.
+$ bundle install –retry 3&lt;/p&gt;
+
+&lt;p&gt;一、Ruby
+jekyll提供了很多现成的主题可以使用，里面有很多高大上的款式。&lt;/p&gt;
+
+&lt;p&gt;官网上面有专门一节是介绍安装的，不过在实际安装中还是会有一些问题。&lt;/p&gt;
+
+&lt;p&gt;需要有下载Ruby环境，选最新的那个版本即可，官网上面安装列中有一个RubyGems，但Ruby1.9.1 以后版本已经自带了，所以无需额外下载。&lt;/p&gt;
+
+&lt;p&gt;二、切换source源
+由于国内网络原因（你懂的），导致 rubygems.org 存放在 Amazon S3 上面的资源文件间歇性连接失败。&lt;/p&gt;
+
+&lt;p&gt;有两张方法，一种是切换到淘宝，另外一种是切换到ruby-china，网上大部分的教程都是用淘宝的。&lt;/p&gt;
+
+&lt;p&gt;在用淘宝的后老是会出现认证错误，后面上google查问题，发现淘宝的已经不维护了，详见《Ruby China的RubyGems 镜像上线》&lt;/p&gt;
+
+&lt;p&gt;我把两种方法都记录了一下，&lt;/p&gt;
+
+&lt;p&gt;1） ruby-china&lt;/p&gt;
+
+&lt;p&gt;将source改成“https://gems.ruby-china.org/”，在打开的页面中，会告诉你几个指令。&lt;/p&gt;
+
+&lt;p&gt;由于我先用了taobao的source，所以这里remove的是淘宝的。&lt;/p&gt;
+
+&lt;p&gt;ruby-china中说道：“如果遇到 SSL 证书问题，你又无法解决，请直接用 http://gems.ruby-china.org 避免 SSL 的问题。”&lt;/p&gt;
+
+&lt;p&gt;2） taobao&lt;/p&gt;
+
+&lt;p&gt;将source改成“https://ruby.taobao.org/”，在打开的页面中，会告诉你几个指令。&lt;/p&gt;
+
+&lt;p&gt;如果在输入指令出错的话，如下图所示，就是要让你下载下载证书文件。&lt;/p&gt;
+
+&lt;p&gt;然后放到某个位置，输入指令set，“D:\Ruby23-x64\cacert.pem”就是文件的具体路径&lt;/p&gt;
+
+&lt;p&gt;set SSL_CERT_FILE=D:\Ruby23-x64\cacert.pem&lt;/p&gt;
+
+&lt;p&gt;也可以将“SSL_CERT_FILE”设置为环境变量，这样就不用每次都要输入设置的指令。&lt;/p&gt;
+
+&lt;p&gt;不知为何，后面我加载包的时候，就是会出现问题，囧，也许是我做了什么操作导致的，额额额。&lt;/p&gt;
+
+&lt;p&gt;三、安装jekyll
+在输入安装指令后，就会看到默认安装了14个包。&lt;/p&gt;
+
+&lt;p&gt;gem install jekyll&lt;/p&gt;
+
+&lt;p&gt;四、启动
+从主题列表中选了两个，Minimal Mistakes和Jekyll Clean。前者页面比较全但相对比较复杂，后者页面少但很简洁。&lt;/p&gt;
+
+&lt;p&gt;输入指令，&lt;/p&gt;
+
+&lt;p&gt;jekyll serve –watch&lt;/p&gt;
+
+&lt;p&gt;在显示的文字中有一句让你安装“wdm”，会在下面介绍。&lt;/p&gt;
+
+&lt;p&gt;在页面中输入“http://localhost:4000/jekyll-clean/index.html”后就能看到页面了。&lt;/p&gt;
+
+&lt;p&gt;五、wdm
+从 v2.4.0 开始，Jekyll 本地部署时，会相当于以前版本加 –watch 一样，监听其源文件的变化。&lt;/p&gt;
+
+&lt;p&gt;而 Windows 似乎有时候并不会奏效，若你碰到，可安装 wdm (Windows Directory Monitor ) 来改善这个问题。&lt;/p&gt;
+
+&lt;p&gt;如果要安装“wdm”得要先安装“Devkit”，在打开的网站中下载后，会让你解压到某个文件夹，接下来就是进入到这个文件夹中。&lt;/p&gt;
+
+&lt;p&gt;执行指令“ruby dk.rb init”。&lt;/p&gt;
+
+&lt;p&gt;再执行指令“ruby dk.rb install”，不过提示我先去修改“config.yml”中的路径。&lt;/p&gt;
+
+&lt;p&gt;config.yml文件就在解压出来的文件中。&lt;/p&gt;
+
+&lt;p&gt;再执行install指令。&lt;/p&gt;
+
+&lt;p&gt;六、Gemfile文件
+Gemfile是一个用于描述gem之间依赖的文件。gem是一堆Ruby代码的集合，它能够为我们提供调用。&lt;/p&gt;
+
+&lt;p&gt;Gemfile是可通过Bundler创建。&lt;/p&gt;
+
+&lt;p&gt;gem install bundler
+bundle init
+bundle install
+Gemfile文件中设置的内容如下：&lt;/p&gt;
+
+&lt;p&gt;source “https://rubygems.org”&lt;/p&gt;
+
+&lt;p&gt;gem “jekyll-paginate”
+gem “kramdown”
+gem “jekyll-watch”
+gem “wdm”, “~&amp;gt; 0.1.0” if Gem.win_platform?&lt;/p&gt;
+
+&lt;p&gt;七、自动刷新页面
+1）修改Gemfile文件&lt;/p&gt;
+
+&lt;p&gt;gem ‘guard’
+gem ‘guard-jekyll-plus’
+gem ‘guard-livereload’
+要添加三个包，执行“bundle install”，如果执行出错，那就一个一个加吧。&lt;/p&gt;
+
+&lt;p&gt;2）创建guard配置文件&lt;/p&gt;
+
+&lt;p&gt;执行指令，将会生成一个Guardfile文件。&lt;/p&gt;
+
+&lt;p&gt;guard init
+生成的Guardfile文件内有一些代码，在代码的最后添加如下代码：&lt;/p&gt;
+
+&lt;p&gt;guard ‘jekyll-plus’, :serve =&amp;gt; true do
+  watch /.*/
+  ignore /^_site/
+end&lt;/p&gt;
+
+&lt;p&gt;guard ‘livereload’ do
+  watch /.*/
+end&lt;/p&gt;
+
+&lt;p&gt;3）添加livereload插件&lt;/p&gt;
+
+&lt;p&gt;安装Live Reload Extension，如果是chrome，就到Chrome Web Store下载。&lt;/p&gt;
+
+&lt;p&gt;安装成功后，在右上角可以看到一个小按钮&lt;/p&gt;
+
+&lt;p&gt;如果是运行状态，那么会自动添加一个js文件引用：&lt;/p&gt;
+
+&lt;p&gt;4）运行&lt;/p&gt;
+
+&lt;p&gt;执行运行指令：&lt;/p&gt;
+
+&lt;p&gt;bundle exec guard start
+这里注意一下，livereload要先关闭。&lt;/p&gt;
+
+&lt;p&gt;运行上面指令，当出现下面的内容后，再运行livereload。&lt;/p&gt;
+
+&lt;p&gt;然后会出现“connected”连接了，接下来修改内容就会自动刷新页面了。&lt;/p&gt;
+
+&lt;p&gt;试用后发现，有时候会刷新不成功，还是原来的样子，看来某些地方还需要改进。&lt;/p&gt;
+
+&lt;p&gt;demo下载：&lt;/p&gt;
+
+&lt;p&gt;http://download.csdn.net/detail/loneleaf1/9508074&lt;/p&gt;
+</description>
+        <pubDate>Wed, 28 Feb 2018 00:00:00 +0800</pubDate>
+        <link>https://xiazemin.github.io/MyBlog/jekyll/2018/02/28/jekyll_inside.html</link>
+        <guid isPermaLink="true">https://xiazemin.github.io/MyBlog/jekyll/2018/02/28/jekyll_inside.html</guid>
+        
+        
+        <category>jekyll</category>
+        
+      </item>
+    
+      <item>
+        <title>CollectingCycles</title>
+        <description>&lt;p&gt;http://docs.php.net/manual/zh/features.gc.collecting-cycles.php#features.gc.collecting-cycles
+&lt;!-- more --&gt;
+传统上，像以前的 php 用到的引用计数内存机制，无法处理循环的引用内存泄漏。然而 5.3.0 PHP 使用文章» 引用计数系统中的同步周期回收(Concurrent Cycle Collection in Reference Counted Systems)中的同步算法，来处理这个内存泄漏问题。&lt;/p&gt;
+
+&lt;p&gt;对算法的完全说明有点超出这部分内容的范围，将只介绍其中基础部分。首先，我们先要建立一些基本规则，如果一个引用计数增加，它将继续被使用，当然就不再在垃圾中。如果引用计数减少到零，所在变量容器将被清除(free)。就是说，仅仅在引用计数减少到非零值时，才会产生垃圾周期(garbage cycle)。其次，在一个垃圾周期中，通过检查引用计数是否减1，并且检查哪些变量容器的引用次数是零，来发现哪部分是垃圾。
+&lt;img src=&quot;https://xiazemin.github.io/MyBlog/img/php.png&quot; /&gt;
+为避免不得不检查所有引用计数可能减少的垃圾周期，这个算法把所有可能根(possible roots 都是zval变量容器),放在根缓冲区(root buffer)中(用紫色来标记，称为疑似垃圾)，这样可以同时确保每个可能的垃圾根(possible garbage root)在缓冲区中只出现一次。仅仅在根缓冲区满了时，才对缓冲区内部所有不同的变量容器执行垃圾回收操作。看上图的步骤 A。&lt;/p&gt;
+
+&lt;p&gt;在步骤 B 中，模拟删除每个紫色变量。模拟删除时可能将不是紫色的普通变量引用数减”1”，如果某个普通变量引用计数变成0了，就对这个普通变量再做一次模拟删除。每个变量只能被模拟删除一次，模拟删除后标记为灰（原文说确保不会对同一个变量容器减两次”1”,不对的吧）。&lt;/p&gt;
+
+&lt;p&gt;在步骤 C 中，模拟恢复每个紫色变量。恢复是有条件的，当变量的引用计数大于0时才对其做模拟恢复。同样每个变量只能恢复一次，恢复后标记为黑，基本就是步骤 B 的逆运算。这样剩下的一堆没能恢复的就是该删除的蓝色节点了，在步骤 D 中遍历出来真的删除掉。&lt;/p&gt;
+
+&lt;p&gt;算法中都是模拟删除、模拟恢复、真的删除，都使用简单的遍历即可（最典型的深搜遍历）。复杂度为执行模拟操作的节点数正相关，不只是紫色的那些疑似垃圾变量。&lt;/p&gt;
+
+&lt;p&gt;现在，你已经对这个算法有了基本了解，我们回头来看这个如何与PHP集成。默认的，PHP的垃圾回收机制是打开的，然后有个 php.ini 设置允许你修改它：zend.enable_gc 。&lt;/p&gt;
+
+&lt;p&gt;当垃圾回收机制打开时，每当根缓存区存满时，就会执行上面描述的循环查找算法。根缓存区有固定的大小，可存10,000个可能根,当然你可以通过修改PHP源码文件Zend/zend_gc.c中的常量GC_ROOT_BUFFER_MAX_ENTRIES，然后重新编译PHP，来修改这个10,000值。当垃圾回收机制关闭时，循环查找算法永不执行，然而，可能根将一直存在根缓冲区中，不管在配置中垃圾回收机制是否激活。&lt;/p&gt;
+
+&lt;p&gt;当垃圾回收机制关闭时，如果根缓冲区存满了可能根，更多的可能根显然不会被记录。那些没被记录的可能根，将不会被这个算法来分析处理。如果他们是循环引用周期的一部分，将永不能被清除进而导致内存泄漏。&lt;/p&gt;
+
+&lt;p&gt;即使在垃圾回收机制不可用时，可能根也被记录的原因是，相对于每次找到可能根后检查垃圾回收机制是否打开而言，记录可能根的操作更快。不过垃圾回收和分析机制本身要耗不少时间。&lt;/p&gt;
+
+&lt;p&gt;除了修改配置zend.enable_gc ，也能通过分别调用gc_enable() 和 gc_disable()函数来打开和关闭垃圾回收机制。调用这些函数，与修改配置项来打开或关闭垃圾回收机制的效果是一样的。即使在可能根缓冲区还没满时，也能强制执行周期回收。你能调用gc_collect_cycles()函数达到这个目的。这个函数将返回使用这个算法回收的周期数。&lt;/p&gt;
+
+&lt;p&gt;允许打开和关闭垃圾回收机制并且允许自主的初始化的原因，是由于你的应用程序的某部分可能是高时效性的。在这种情况下，你可能不想使用垃圾回收机制。当然，对你的应用程序的某部分关闭垃圾回收机制，是在冒着可能内存泄漏的风险，因为一些可能根也许存不进有限的根缓冲区。因此，就在你调用gc_disable()函数释放内存之前，先调用gc_collect_cycles()函数可能比较明智。因为这将清除已存放在根缓冲区中的所有可能根，然后在垃圾回收机制被关闭时，可留下空缓冲区以有更多空间存储可能根。&lt;/p&gt;
+</description>
+        <pubDate>Wed, 28 Feb 2018 00:00:00 +0800</pubDate>
+        <link>https://xiazemin.github.io/MyBlog/lang/2018/02/28/CollectingCycles.html</link>
+        <guid isPermaLink="true">https://xiazemin.github.io/MyBlog/lang/2018/02/28/CollectingCycles.html</guid>
+        
+        
+        <category>lang</category>
+        
+      </item>
     
       <item>
         <title>type_hinting</title>
@@ -1138,842 +2138,6 @@ scanner_init(const char *str, inl_yylex_extra *yyext)&lt;br /&gt;
         
         
         <category>lang</category>
-        
-      </item>
-    
-      <item>
-        <title>vld_dot_graphviz</title>
-        <description>&lt;!-- more --&gt;
-&lt;p&gt;PHP7.1下 vld扩展的安装使用
-PHP7.1下 vld扩展的安装使用
-原创 2017年03月29日 08:03:05 595
-1）git clone https://github.com/derickr/vld.git&lt;/p&gt;
-
-&lt;p&gt;2）cd vld&lt;/p&gt;
-
-&lt;p&gt;3）phpize&lt;/p&gt;
-
-&lt;p&gt;4）./configure&lt;/p&gt;
-
-&lt;p&gt;5）make &amp;amp;&amp;amp; make install&lt;/p&gt;
-
-&lt;p&gt;6）添加ext-vld.ini配置文件&lt;/p&gt;
-
-&lt;p&gt;7）重启fpm&lt;/p&gt;
-
-&lt;table&gt;
-  &lt;tbody&gt;
-    &lt;tr&gt;
-      &lt;td&gt;8）php -m&lt;/td&gt;
-      &lt;td&gt;grep vld 查看扩展&lt;/td&gt;
-    &lt;/tr&gt;
-  &lt;/tbody&gt;
-&lt;/table&gt;
-
-&lt;p&gt;9）php -dvld.active test.php 测试vld扩展&lt;/p&gt;
-
-&lt;p&gt;PHP7.1下 vld扩展的安装使用
-原创 2017年03月29日 08:03:05 595
-1）git clone https://github.com/derickr/vld.git&lt;/p&gt;
-
-&lt;p&gt;2）cd vld&lt;/p&gt;
-
-&lt;p&gt;3）phpize&lt;/p&gt;
-
-&lt;p&gt;4）./configure&lt;/p&gt;
-
-&lt;p&gt;5）make &amp;amp;&amp;amp; make install&lt;/p&gt;
-
-&lt;p&gt;6）添加ext-vld.ini配置文件&lt;/p&gt;
-
-&lt;p&gt;7）重启fpm&lt;/p&gt;
-
-&lt;table&gt;
-  &lt;tbody&gt;
-    &lt;tr&gt;
-      &lt;td&gt;8）php -m&lt;/td&gt;
-      &lt;td&gt;grep vld 查看扩展&lt;/td&gt;
-    &lt;/tr&gt;
-  &lt;/tbody&gt;
-&lt;/table&gt;
-
-&lt;p&gt;9）php -dvld.active test.php 测试vld扩展&lt;/p&gt;
-
-&lt;p&gt;关于VLD扩展显示信息的一点点解释&lt;/p&gt;
-
-&lt;p&gt;其中：&lt;/p&gt;
-
-&lt;p&gt;branch analysis from position 在分析数组时使用&lt;/p&gt;
-
-&lt;p&gt;return found是否返还&lt;/p&gt;
-
-&lt;p&gt;filename 分析的文件名&lt;/p&gt;
-
-&lt;p&gt;function name函数名&lt;/p&gt;
-
-&lt;p&gt;number of ops生成的操作数&lt;/p&gt;
-
-&lt;p&gt;compiled vars编译期间的变量，PHP5后添加，是一个缓存优化，在PHP源码中以IS_CV标记&lt;/p&gt;
-
-&lt;p&gt;op list生成的中间代码的变量列表&lt;/p&gt;
-
-&lt;p&gt;-dvld.active输出的是VLD的默认设置，使用-dvld.verbosity可以查看更加详细的内容&lt;/p&gt;
-
-&lt;p&gt;包含各个中间代码的操作数等&lt;/p&gt;
-
-&lt;p&gt;若只想看到输出的中间代码，并不想实际执行这段代码，可以使用-dvld.execute = 0来禁用代码的执行&lt;/p&gt;
-
-&lt;p&gt;php -dvld.active=1 -dvld.execute=0 test.php&lt;/p&gt;
-
-&lt;p&gt;它还可以支持输出.dot文件&lt;/p&gt;
-
-&lt;p&gt;php -dvld.active=1 -dvld.save_dir=’D:\tmp’ -dvld.save_paths=1 -dvld.dump_paths=1 t.php 会将生成的中间代码的信息输出再D:/tmp/path.dot中&lt;/p&gt;
-
-&lt;p&gt;-dvld.format是否以自定义的格式输出，默认为否，是指以-dvld.col_sep指定的参数间隔&lt;/p&gt;
-
-&lt;p&gt;-dvld.col_sep在-dvld.format参数启用时才会有效，默认为 \t&lt;/p&gt;
-
-&lt;p&gt;-dvld.verbosity是否显示更加详细的信息，默认为1，其值可以是0，1，2，3 或者小于0只是比1小的效果会喝0一样，负数的效果和3的效果一样&lt;/p&gt;
-
-&lt;p&gt;-dvld.save_dir指定文件的输出路径，默认/tmp&lt;/p&gt;
-
-&lt;p&gt;-dvld.save_path指定文件输出的路径，默认0表示不输出文件&lt;/p&gt;
-
-&lt;p&gt;-dvld.dump_paths控制输出的内容，0或1 默认1，即输出内容&lt;/p&gt;
-
-&lt;p&gt;2、linux下咋安装graphviz
-http://www.cnblogs.com/sld666666/archive/2010/06/25/1765510.html
-2.1）CentOS 下安装 graphviz&lt;/p&gt;
-
-&lt;p&gt;$ sudo yum install graphviz&lt;/p&gt;
-
-&lt;p&gt;Install 39 Package(s)&lt;/p&gt;
-
-&lt;p&gt;总下载量：13 M
-Installed size: 35 M
-确定吗？[y/N]：y&lt;/p&gt;
-
-&lt;p&gt;已安装:
-graphviz.i686 0:2.26.0-10.el6&lt;/p&gt;
-
-&lt;p&gt;完毕！&lt;/p&gt;
-
-&lt;p&gt;3、在Linux下如何使用&lt;/p&gt;
-
-&lt;p&gt;　　假设我们把上面的代码写到了一个叫做aa.gv的文本文件里面，那么我们执行如下命令就可以了：&lt;/p&gt;
-
-&lt;p&gt;　　$ dot -Tpng -ohehe.png aa.gv&lt;/p&gt;
-
-&lt;p&gt;　　这样就会在当前目录下生成一个叫做hehe.png的图片文件
-　　&lt;/p&gt;
-
-&lt;p&gt;mac&lt;/p&gt;
-
-&lt;p&gt;wget http://pecl.php.net/get/vld-0.14.0.tgz
-tar zxvf vld-0.14.0.tgz
-cd vld-0.14.0
-phpize
-locate php-config
-./configure –with-php-config=/usr/local/Cellar/php70/7.0.25_17/bin/php-config
- make &amp;amp;&amp;amp; make install
- php -r ‘phpinfo();’ |grep vld
- ls /usr/local/Cellar/php70/7.0.25_17/lib/php/extensions/no-debug-non-zts-20151012/vld.so
- vi  /usr/local/etc/php/7.0/php.ini
- php -r ‘phpinfo();’ |grep vld
- php -dvld.active=1 -dvld.execute=0 test.php
- php -dvld.active=1 -dvld.save_paths=1 test.php
- ls /tmp
- brew install graphviz
- dot -Tpng /tmp/paths.dot -o paths.png
-&lt;img src=&quot;https://xiazemin.github.io/MyBlog/img/paths.png&quot; /&gt;&lt;/p&gt;
-</description>
-        <pubDate>Mon, 12 Feb 2018 00:00:00 +0800</pubDate>
-        <link>https://xiazemin.github.io/MyBlog/web/2018/02/12/vld_dot_graphviz.html</link>
-        <guid isPermaLink="true">https://xiazemin.github.io/MyBlog/web/2018/02/12/vld_dot_graphviz.html</guid>
-        
-        
-        <category>web</category>
-        
-      </item>
-    
-      <item>
-        <title>phpvld</title>
-        <description>&lt;!-- more --&gt;
-&lt;p&gt;vld介绍&lt;/p&gt;
-
-&lt;p&gt;　　vld是PECL（PHP 扩展和应用仓库）的一个PHP扩展，现在最新版本是 0.14.0（2016-12-18），它的作用是：显示转储PHP脚本（opcode）的内部表示（来自PECL的vld简介）。简单来说，可以查看PHP程序的opcode。
-vld扩展的安装&lt;/p&gt;
-
-&lt;p&gt;　　1、下载官方插件安装压缩包&lt;/p&gt;
-
-&lt;p&gt;　　　　官方网址：http://pecl.php.net/package/vld
-　　　　下载命令：# wget http://pecl.php.net/get/vld-0.14.0.tgz&lt;/p&gt;
-
-&lt;p&gt;　　　　注：下载的URL是在相对的版本链接上，点击右键，复制链接即可&lt;/p&gt;
-
-&lt;p&gt;　　2、解包&lt;/p&gt;
-
-&lt;p&gt;　　　　解包命令：# tar zxvf vld-0.14.0.tgz&lt;/p&gt;
-
-&lt;p&gt;　　3、编译和安装&lt;/p&gt;
-
-&lt;p&gt;　　　　进入解压后的vld目录：# cd vld-0.14.0/&lt;/p&gt;
-
-&lt;p&gt;　　　　扩展php扩展模块:# phpize&lt;/p&gt;
-
-&lt;p&gt;　　　　使用locate找php-config路径：# locate php-config&lt;/p&gt;
-
-&lt;p&gt;　　　　　　注：locate命令没有的话可以使用命令：【# yum -y install mlocate 】 安装后使用 【#  updatedb】 更新数据后可以直接使用&lt;/p&gt;
-
-&lt;p&gt;　　　　　　找到的php-config如下：&lt;/p&gt;
-
-&lt;p&gt;　　　　　　&lt;/p&gt;
-
-&lt;p&gt;　　　　配置编译vld的php-config路径：#  ./configure –with-php-config=/usr/bin/php-config –enable-vld&lt;/p&gt;
-
-&lt;p&gt;　　　　编译安装：# make &amp;amp;&amp;amp; make install&lt;/p&gt;
-
-&lt;p&gt;　　4、重启服务器&lt;/p&gt;
-
-&lt;p&gt;　　　　重启Apache：# systemctl restart httpd.service&lt;/p&gt;
-
-&lt;p&gt;　　　　重启Nginx和PHP-fpm（如果有Nginx的话重启）：&lt;/p&gt;
-
-&lt;p&gt;　　　　　　# systemctl restart nginx.service&lt;/p&gt;
-
-&lt;p&gt;　　　　　　# systemctl restart php-fpm.service&lt;/p&gt;
-
-&lt;p&gt;　　　　注：systemctl是新版本的centos系统有的，没有该命令的可以使用下面三个命令代替&lt;/p&gt;
-
-&lt;p&gt;　　　　　　# service apachectl restart&lt;/p&gt;
-
-&lt;p&gt;　　　　　　# service nginx restart&lt;/p&gt;
-
-&lt;p&gt;　　　　　　# service php-fpm restart&lt;/p&gt;
-
-&lt;p&gt;vld扩展的测试&lt;/p&gt;
-
-&lt;p&gt;　　使用phpinfo()函数测试是否已成功安装，测试代码：&lt;/p&gt;
-
-&lt;?php 
-    phpinfo();
-?&gt;
-&lt;p&gt;　　　　1、使用网络访问结果如下（显示enabled）：
-　　　　2、使用命令测试（显示enabled）：&lt;/p&gt;
-
-&lt;p&gt;　　　　　　命令是:# php test.php | grep “vld”
-那么，vld怎么用捏？&lt;/p&gt;
-
-&lt;p&gt;　　vld不能单独使用，它需要和PHP命令一起。它主要有两个参数分别是 -dvld.active （等于1证明是使用vld扩展）和 -dvld.execute （等于1证明是需要执该PHP文件，默认是1）。&lt;/p&gt;
-
-&lt;p&gt;　　测试命令：# php -dvld.active=1 -dvld.execute=0 test.php&lt;/p&gt;
-
-&lt;p&gt;　　（就是指运行test.php的时候，使用vld插件，不执行，只显示opcode）&lt;/p&gt;
-
-&lt;p&gt;VLD(Vulcan Logic Dumper)是一个在Zend引擎中，以挂钩的方式实现的用于输出PHP脚本生成的中间代码（执行单元）的扩展。 它可以在一定程序上查看Zend引擎内部的一些实现原理，是我们学习PHP源码的必备良器。它的作者是Derick Rethans, 除了VLD扩展，我们常用的XDebug扩展的也有该牛人的身影。&lt;/p&gt;
-
-&lt;p&gt;VLD扩展是一个开源的项目，在这里可以下载到最新的版本，虽然最新版本的更新也是一年前的事了。 作者没有提供编译好的扩展，Win下使用VC6.0编译生成dll文件，可以看我之前写过的一篇文章(使用VC6.0生成VLD扩展)。 *nix系统下直接configue,make,make install生成。如果遇到问题，请自行Google之。&lt;/p&gt;
-
-&lt;p&gt;看一个简单的例子,假如存在t.php文件，其内容如下：&lt;/p&gt;
-
-&lt;p&gt;$a = 10;
-echo $a;
-在命令行下使用VLD扩展显示信息。&lt;/p&gt;
-
-&lt;p&gt;php -dvld.active=1 t.php
--dvld.active=1表示激活VLD扩展，使用VLD扩展输出中间代码，此命令在CMD中输出信息为：&lt;/p&gt;
-
-&lt;p&gt;Branch analysis from position: 0
-Return found
-filename:       D:\work\xampp\xampp\php\t.php
-function name:  (null)
-number of ops:  5
-compiled vars:  !0 = $a
-line     # *  op                           fetch          ext  return  operands
-———————————————————————————
-   2     0  &amp;gt;   EXT_STMT
-         1      ASSIGN                                                   !0, 10
-   3     2      EXT_STMT
-         3      ECHO                                                     !0
-   4     4    &amp;gt; RETURN                                                   1&lt;/p&gt;
-
-&lt;p&gt;branch: #  0; line:     2-    4; sop:     0; eop:     4
-path #1: 0,
-10
-如上为VLD输出的PHP代码生成的中间代码的信息，说明如下：&lt;/p&gt;
-
-&lt;p&gt;Branch analysis from position 这条信息多在分析数组时使用。
-Return found 是否返回，这个基本上有都有。
-filename 分析的文件名
-function name 函数名，针对每个函数VLD都会生成一段如上的独立的信息，这里显示当前函数的名称
-number of ops 生成的操作数
-compiled vars 编译期间的变量，这些变量是在PHP5后添加的，它是一个缓存优化。这样的变量在PHP源码中以IS_CV标记。
-op list 生成的中间代码的变量列表
-使用-dvld.active参数输出的是VLD默认设置，如果想看更加详细的内容。可以使用-dvld.verbosity参数。&lt;/p&gt;
-
-&lt;p&gt;php -dvld.active=1 -dvld.verbosity=3 t.php
--dvld.verbosity=3或更大的值的效果都是一样的，它们是VLD在当前版本可以显示的最详细的信息了，包括各个中间代码的操作数等。显示结果如下：&lt;/p&gt;
-
-&lt;p&gt;Finding entry points
-Branch analysis from position: 0
-Add 0
-Add 1
-Add 2
-Add 3
-Add 4
-Return found
-filename:       D:\work\xampp\xampp\php\t.php
-function name:  (null)
-number of ops:  5
-compiled vars:  !0 = $a
-line     # *  op                           fetch          ext  return  operands
-——————————————————————————–
--
-   2     0  &amp;gt;   EXT_STMT                                          RES[  IS_UNUSED  ]         OP1[  IS_UNUSED  ] OP2[  IS_UNUSED  ]
-         1      ASSIGN                                                    OP1[IS_CV !0 ] OP2[ ,  IS_CONST (0) 10 ]
-   3     2      EXT_STMT                                          RES[  IS_UNUSED  ]         OP1[  IS_UNUSED  ] OP2[  IS_UNUSED  ]
-         3      ECHO                                                      OP1[IS_CV !0 ]
-         4    &amp;gt; RETURN                                                    OP1[IS_CONST (0) 1 ]&lt;/p&gt;
-
-&lt;p&gt;branch: #  0; line:     2-    3; sop:     0; eop:     4
-path #1: 0,
-10
-以上的信息与没有加-dvld.verbosity=3的输出相比，多了Add 字段，还有中间代码的操作数的类型，如IS_CV,IS_CONST等。 PHP代码中的$a = 10; 其中10的类型为IS_CONST, $a作为一个编译期间的一个缓存变量存在，其类型为IS_CV。&lt;/p&gt;
-
-&lt;p&gt;如果我们只是想要看输出的中间代码，并不想执行这段PHP代码，可以使用-dvld.execute=0来禁用代码的执行。&lt;/p&gt;
-
-&lt;p&gt;php -dvld.active=1 -dvld.execute=0 t.php
-运行这个命令，你会发现这与最开始的输出有一点点不同，它没有输出10。 除了直接在屏幕上输出以外，VLD扩展还支持输出.dot文件，如下的命令：&lt;/p&gt;
-
-&lt;p&gt;php -dvld.active=1 -dvld.save_dir=’D:\tmp’ -dvld.save_paths=1 -dvld.dump_paths=1 t.php
-以上的命令的意思是将生成的中间代码的一些信息输出在D:/tmp/paths.dot文件中。 -dvld.save_dir指定文件输出的路径，-dvld.save_paths控制是否输出文件，-dvld.dump_paths控制输出的内容，现在只有0和1两种情况。 输出的文件名已经在程序中硬编码为paths.dot。这三个参数是相互依赖的关系，一般都会同时出现。&lt;/p&gt;
-
-&lt;p&gt;总结一下，VLD扩展的参数列表：&lt;/p&gt;
-
-&lt;p&gt;-dvld.active 是否在执行PHP时激活VLD挂钩，默认为0，表示禁用。可以使用-dvld.active=1启用。
--dvld.skip_prepend 是否跳过php.ini配置文件中auto_prepend_file指定的文件， 默认为0，即不跳过包含的文件，显示这些包含的文件中的代码所生成的中间代码。此参数生效有一个前提条件：-dvld.execute=0
--dvld.skip_append 是否跳过php.ini配置文件中auto_append_file指定的文件， 默认为0，即不跳过包含的文件，显示这些包含的文件中的代码所生成的中间代码。此参数生效有一个前提条件：-dvld.execute=0
--dvld.execute 是否执行这段PHP脚本，默认值为1，表示执行。可以使用-dvld.execute=0，表示只显示中间代码，不执行生成的中间代码。
--dvld.format 是否以自定义的格式显示，默认为0，表示否。可以使用-dvld.format=1，表示以自己定义的格式显示。这里自定义的格式输出是以-dvld.col_sep指定的参数间隔
--dvld.col_sep 在-dvld.format参数启用时此函数才会有效，默认为 “\t”。
--dvld.verbosity 是否显示更详细的信息，默认为1，其值可以为0,1,2,3 其实比0小的也可以，只是效果和0一样，比如0.1之类，但是负数除外，负数和效果和3的效果一样 比3大的值也是可以的，只是效果和3一样。
--dvld.save_dir 指定文件输出的路径，默认路径为/tmp。
--dvld.save_paths 控制是否输出文件，默认为0，表示不输出文件
--dvld.dump_paths 控制输出的内容，现在只有0和1两种情况，默认为1,输出内容&lt;/p&gt;
-
-&lt;p&gt;VLD(Vulcan Logic Dumper)的简介如下：&lt;/p&gt;
-
-&lt;p&gt;The Vulcan Logic Dumper hooks into the Zend Engine and dumps all the opcodes (execution units) of a script. It can be used to see what is going on in the Zend Engine.&lt;/p&gt;
-
-&lt;pre&gt;&lt;code&gt; 之前的文章 PHP解释器引擎执行流程 结尾处提到了VLD的原理，此扩展利用PHP对扩展模块提供的请求初始化钩子函数（PHP_RINIT_FUNCTION），在每此请求到来的时候将默认的编译函数指针zend_compile_file和执行函数指针zend_execute指向自己定义的vld_compile_file函数和vld_execute函数，这两个函数中，对原函数进行了封装，原编译函数能返回一个op_array的指针，所以在新的编译函数中可以截获这个op_array的指针，然后输出相关opcode信息。  
-
-关于PHP扩展模块的安装这里就不介绍了，网络上很多相关资料。
-
-那么让我们看看这个扩展安装后的实际效果，以下为一个非常简单的PHP脚本，test.php:
-&lt;/code&gt;&lt;/pre&gt;
-
-&lt;p&gt;[php] view plain copy
-&lt;?php  
-$a = &quot;Hello world&quot;;  
-echo $a;  
-?&gt;&lt;/p&gt;
-
-&lt;p&gt;在命令行下执行该脚本：&lt;/p&gt;
-
-&lt;p&gt;php -dvld.active=1 test.php&lt;/p&gt;
-
-&lt;p&gt;于是可以看到vld输出的内容:&lt;/p&gt;
-
-&lt;p&gt;希望看到跟详细的内容可以用以下方式：&lt;/p&gt;
-
-&lt;p&gt;php -dvld.active=1 -dvld.verbosity=3 test.php&lt;/p&gt;
-
-&lt;p&gt;这里简单的说说输出内容的含义：&lt;/p&gt;
-
-&lt;p&gt;这段代码一共有3个op分别是：&lt;/p&gt;
-
-&lt;p&gt;1：ASSIGN          // #define ZEND_ASSIGN                           38&lt;/p&gt;
-
-&lt;p&gt;2：ECHO             // #define ZEND_ECHO                             40&lt;/p&gt;
-
-&lt;p&gt;3：RETURN         //  #define ZEND_RETURN                          62&lt;/p&gt;
-
-&lt;p&gt;第1个op ASSIGN的操作句柄是将OP2的值赋值给OP1，对应的就是$a = “Hello world”这句代码，那么OP2就是”Hello world”的，OP1应该就是$a,但是实际上输出的内容中显示的是!0,实际上$a属于编译后的变量，!0就代表了$a,可以在输出op list的上一行看到&lt;/p&gt;
-
-&lt;p&gt;compiled vars:  !0 = $a&lt;/p&gt;
-
-&lt;p&gt;这样的优化可以避免每次查找变量$a都在变量符号表中去检索，起到一定的缓存的作用。在这条op执行结束之后，!0的值就等于”Hello world”了。&lt;/p&gt;
-
-&lt;p&gt;第2个op ECHO的操作句柄是将 OP1的内容送到标准输出，对应的就是echo $a这句代码，这样就把”Hello world”输出到终端了&lt;/p&gt;
-
-&lt;p&gt;第3个op RETURN 是在每个PHP文件结尾都会自动加上的，它的操作句柄是将OP1的常量值返回&lt;/p&gt;
-
-&lt;p&gt;这样我们就能很清晰的知道一段PHP代码会得到什么样的OP code,vld真的是一个不错的分析工具。&lt;/p&gt;
-
-&lt;p&gt;也许有人会问，你怎么知道每个op对应的执行句柄是什么呢，vld能输出这些信息吗？非常可惜，vld不能帮助我们输出OP对应的执行句柄信息。在默认以CALL方式执行op的模式下，每个op对应的handler都是一个函数，vld中截获的op中有这些handler的指针，但是无法通过这些指针知道相应的函数名，c语言没有一些更高级的语言那样的反射特性。所以如果想知道每个op对应的handler，就需要另外想办法了，目前为止，我只发现了两种方法可以得到这些信息。下面简单的介绍这两种方法。&lt;/p&gt;
-
-&lt;p&gt;方法一：&lt;/p&gt;
-
-&lt;pre&gt;&lt;code&gt;在之前的文章 PHP代码如何执行？中介绍过，op的handler都定义在{PHPSRC}/Zend/zend_vm_execute.h中，这是一个由PHP生成的极大的c源文件，其中有每个handler的函数定义以及op映射到handler的算法,在zend_init_opcodes_handlers函数中，初始化一个 static const opcode_handler_t labels[]数组，这个 labels数组就是handlers的一张表，这个表有近4000个项，每个项都是一个handler的函数指针，当然有大量的NULL指针，还有一些重复的指针。如果我们能有一个跟labels数组对应的数组handler_names,数组中的每一个项对应的是labels中相应项中函数指针的函数名，那么我们就可以通过现有的op到handler的映射算法从handler_names中得到该op的handler的函数名。但是事情没有想象的那么容易，我们如何正确生成这个拥有4000个项的数组handler_names，答案就在{PHPSRC}/Zend/zend_vm_gen.php,这个PHP文件是用来生成{PHPSRC}/Zend/zend_vm_execute.h，可以在其中找到生成labels数组的部分，只要添加相关代码通过类似方式生成handler_names数组就可以了。有兴趣的读者可以尝试生成这个handler_names数组文件，然后编译到vld扩展中，在输出op list的时候把每个op执行的句柄函数名也一并输出。
-&lt;/code&gt;&lt;/pre&gt;
-
-&lt;p&gt;方法二:&lt;/p&gt;
-
-&lt;p&gt;此方法是我目前经常用到的，相对来说比较方便，还是在{PHPSRC}/Zend/zend_vm_gen.php这个文件里面想办法。这个文件会生成每个op的handler，所以如果想办法在每个handler函数的代码中输出该handler名字，那么就知道哪些handler被调用。这个并不太难，在zend_vm_gen.php第380行左右可以看到类似以下PHP代码：&lt;/p&gt;
-
-&lt;p&gt;if (0 &amp;amp;&amp;amp; strpos($code, ‘{‘) === 0) {&lt;/p&gt;
-
-&lt;pre&gt;&lt;code&gt;...
-&lt;/code&gt;&lt;/pre&gt;
-
-&lt;p&gt;}&lt;/p&gt;
-
-&lt;p&gt;实际上这个条件中的代码就是在每个handler开始的一行中输出内容，但是因为条件永远无法满足，所以实际条件中的代码无法执行，可以将if中的条件改成true,然后大括号输出函数的名字就可以了，具体的代码如下：&lt;/p&gt;
-
-&lt;p&gt;[php] view plain copy
-if (1) {&lt;br /&gt;
-    $name = $name.($spec?”_SPEC”:””).$prefix[$op1].$prefix[$op2].”_HANDLER”;&lt;br /&gt;
-    $code = “{/n/tfprintf(stderr, /”$name//n/”);/n” . substr($code, 1);&lt;br /&gt;
-}&lt;br /&gt;
- 代码具体的原理就不介绍了。在修改好zend_vm_gen.php之后，在命令行下执行该脚本，就会生成一个新的zend_vm_execute.h( 同时会生成zend_vm_opcodes.h)，打开zend_vm_execute.h文件，可以看到很多函数开头都多出了这么一句:&lt;/p&gt;
-
-&lt;p&gt;fprintf(stderr, “ZEND_***/n”);&lt;/p&gt;
-
-&lt;p&gt;这样每个函数开始执行的时候就会把自己的名字输出到标准错误。下面的工作，就是重新编译Zend/zend_execute.lo，然后重新链接sapi/cli/php，如果你不知道如何单独完成这些操作，那么也可以更暴力一点重新安装整个PHP，需要注意的是修改后的PHP千万不要用在正式环境，因为会输出一大量不需要的信息，自己单独为试验安装一个PHP吧。 另外这个方法也会输出一些非直接的hanlder的函数名，有可能一个handler会调用另外一个函数，这样可能会输出这个handler的名字和那个被调用的函数的名字，所以实际输出的函数名字会多于op的数量。&lt;/p&gt;
-
-&lt;pre&gt;&lt;code&gt;我们用方法二来查看前面的test.php的op handler的名字，直接用修改后的php 执行test.php得到以下内容：
-&lt;/code&gt;&lt;/pre&gt;
-
-&lt;p&gt;ZEND_ASSIGN_SPEC_CV_CONST_HANDLER
-ZEND_ECHO_SPEC_CV_HANDLER
-Hello worldZEND_RETURN_SPEC_CONST_HANDLER
-zend_leave_helper_SPEC_HANDLER&lt;/p&gt;
-
-&lt;p&gt;可以看到一共输出了4个函数的名字，其中ZEND_ASSIGN_SPEC_CV_CONST_HANDLER函数就是ASSIGN的handler，ZEND_ECHO_SPEC_CV_HANDLER就是ECHO的handler,ZEND_RETURN_SPEC_CONST_HANDLER是RETURN的handler,这个handler会调用zend_leave_helper_SPEC_HANDLER函数，所以会输出4个函数的名字，知道了这些函数的名字，我们就能在zend_vm_execute.h中去找到其具体定义，这样就知道每个op到底是怎么在执行了。&lt;/p&gt;
-
-</description>
-        <pubDate>Mon, 12 Feb 2018 00:00:00 +0800</pubDate>
-        <link>https://xiazemin.github.io/MyBlog/jekyll/2018/02/12/phpvld.html</link>
-        <guid isPermaLink="true">https://xiazemin.github.io/MyBlog/jekyll/2018/02/12/phpvld.html</guid>
-        
-        
-        <category>jekyll</category>
-        
-      </item>
-    
-      <item>
-        <title>phpize</title>
-        <description>&lt;!-- more --&gt;
-&lt;p&gt;编译PHP扩展的工具，主要是根据系统信息生成对应的configure文件
-安装php（fastcgi模式）的时候，常常有这样一句命令：/usr/local/webserver/php/bin/phpize
-一、phpize是干嘛的？
-phpize是什么东西呢？php官方的说明：
-http://php.net/manual/en/install.pecl.phpize.php
-phpize是用来扩展php扩展模块的，通过phpize可以建立php的外挂模块
-比如你想在原来编译好的php中加入memcached或者ImageMagick等扩展模块，可以使用phpize，通过以下几步工作。
-二、如何使用phpize？
-当php编译完成后，php的bin目录下会有phpize这个脚本文件。在编译你要添加的扩展模块之前，执行以下phpize就可以了；
-比如现在想在php中加入memcache扩展模块：我们要做的只是如下几步
-————————————————————————
-tar zxvf memcache-2.2.5.tgz
-cd memcache-2.2.5/
-/usr/local/webserver/php/bin/phpize
-./configure –with-php-config=/usr/local/webserver/php/bin/php-config
-make
-make install
-————————————————————————
-注意./configure 后面可以指定的是php-config文件的路径
-这样编译就完成了，还需要做的是在php.ini文件中加入extension值
-extension = “memcache.so”&lt;/p&gt;
-
-</description>
-        <pubDate>Mon, 12 Feb 2018 00:00:00 +0800</pubDate>
-        <link>https://xiazemin.github.io/MyBlog/web/2018/02/12/phpize.html</link>
-        <guid isPermaLink="true">https://xiazemin.github.io/MyBlog/web/2018/02/12/phpize.html</guid>
-        
-        
-        <category>web</category>
-        
-      </item>
-    
-      <item>
-        <title>PHP 调试利器之 PHPDBG</title>
-        <description>&lt;!-- more --&gt;
-&lt;p&gt;PHPDBG是一个PHP的SAPI模块，可以在不用修改代码和不影响性能的情况下控制PHP的运行环境。&lt;/p&gt;
-
-&lt;p&gt;PHPDBG的目标是成为一个轻量级、强大、易用的PHP调试平台。可以在PHP5.4和之上版本中使用。在php5.6和之上版本将内部集成。&lt;/p&gt;
-
-&lt;p&gt;主要功能：
-– 单步调试&lt;/p&gt;
-
-&lt;p&gt;– 灵活的下断点方式（类方法、函数、文件:行、内存地址、opcode）&lt;/p&gt;
-
-&lt;p&gt;– 可直接调用php的eval&lt;/p&gt;
-
-&lt;p&gt;– 可以查看当前执行的代码&lt;/p&gt;
-
-&lt;p&gt;– 用户空间API（userland/user space）&lt;/p&gt;
-
-&lt;p&gt;– 方便集成&lt;/p&gt;
-
-&lt;p&gt;– 支持指定php配置文件&lt;/p&gt;
-
-&lt;p&gt;– JIT全局变量&lt;/p&gt;
-
-&lt;p&gt;– readline支持（可选），终端操作更方便&lt;/p&gt;
-
-&lt;p&gt;– 远程debug，使用java GUI&lt;/p&gt;
-
-&lt;p&gt;– 操作简便（具体看help）&lt;/p&gt;
-
-&lt;p&gt;安装
-为了使用phpdgb，你首先需要下载一个php的源码包。然后下载phpdgb的源码包，并放在php源码包的sapi目录下。最后，你就可以执行命令安装了。编译安装示例如下：
-假设我们已经下载php的源码包，并放在了/home/php目录下。&lt;/p&gt;
-
-&lt;p&gt;Shell&lt;/p&gt;
-
-&lt;p&gt;#cd /home/php/sapi
-#git clone https://github.com/krakjoe/phpdbg
-#cd ../
-#./buildconf –force
-#./config.nice
-#make -j8
-#make install-phpdbg&lt;/p&gt;
-
-&lt;p&gt;#cd /home/php/sapi
-#git clone https://github.com/krakjoe/phpdbg
-#cd ../
-#./buildconf –force
-#./config.nice
-#make -j8
-#make install-phpdbg
-注意：
-1、如果你的php版本是php5.6或者更高的版本，phpdbg已经集成在php的代码包中，无需单独下载了。
-2、编译参数中记得要加 –enable-phpdbg。
-3、编译时参数，–with-readline 可以选择性添加。如果不添加，phpdbg的history等功能无法使用。&lt;/p&gt;
-
-&lt;p&gt;基本使用
-参数介绍
-phpdbg是php的一个sapi，它可以以命令行的方式调试php。常用参数如下：&lt;/p&gt;
-
-&lt;p&gt;The following switches are implemented (just like cli SAPI):
--n ignore php ini
--c search for php ini in path
--z load zend extension
--d define php ini entry
-The following switches change the default behaviour of phpdbg:
--v disables quietness
--s enabled stepping
--e sets execution context
--b boring – disables use of colour on the console
--I ignore .phpdbginit (default init file)
--i override .phpgdbinit location (implies -I)
--O set oplog output file
--q do not print banner on startup
--r jump straight to run
--E enable step through eval()
-Note: passing -rr will cause phpdbg to quit after execution, rather than returning to the console&lt;/p&gt;
-
-&lt;p&gt;常用功能
-之前我们介绍过gdb工具。其实phpdbg和gdb功能有些地方非常相似。如，可以设置断点，可以单步执行，等。只是他们调试的语言不一样，gdb侧重于调试c或者c++语言，而phpdbg侧重于调试php语言。下面我们将对phpdbg的一些常用调试功能做下介绍。要调试的代码如下：
-文件test_phpdbg_inc.php源代码如下：&lt;/p&gt;
-
-&lt;p&gt;PHP&lt;/p&gt;
-
-&lt;?php 
-function phpdbg_inc_func()
-{     
-    echo &quot;phpdbg_inc_func \n&quot;; 
-} 
-?&gt;
-&lt;?php 
-function phpdbg_inc_func()
-{     
-    echo &quot;phpdbg_inc_func \n&quot;; 
-} 
-?&gt;
-&lt;p&gt;文件test_phpdgb.php的源代码如下：&lt;/p&gt;
-
-&lt;p&gt;PHP&lt;/p&gt;
-
-&lt;?php 
-    include(dirname(__FILE__).&quot;/test_phpdbg_inc.php&quot;); 
-    class demo{     
-        public function __construct(){
-             echo __METHOD__.&quot;:&quot;.__LINE__.&quot;\n&quot;;     
-        }
-        public function func($param){
-             $param++;
-             echo &quot;method func $param\n&quot;;
-        }
-        public function __destruct(){
-             echo __METHOD__.&quot;:&quot;.__LINE__.&quot;\n&quot;;
-        }
-    } 
-
-  function func(){     
-      $param = &quot;ali&quot;;
-      $param = $param + &quot;baba&quot;;
-      echo &quot;function func $param\n&quot;;
-  }
-
-  $demo = new demo();
-  $demo-&gt;func(1);
-  func();
-  phpdbg_inc_func();
-?&gt;
-&lt;?php 
-    include(dirname(__FILE__).&quot;/test_phpdbg_inc.php&quot;); 
-    class demo{     
-        public function __construct(){
-             echo __METHOD__.&quot;:&quot;.__LINE__.&quot;\n&quot;;     
-        }
-        public function func($param){
-             $param++;
-             echo &quot;method func $param\n&quot;;
-        }
-        public function __destruct(){
-             echo __METHOD__.&quot;:&quot;.__LINE__.&quot;\n&quot;;
-        }
-    } 
- 
-  function func(){     
-      $param = &quot;ali&quot;;
-      $param = $param + &quot;baba&quot;;
-      echo &quot;function func $param\n&quot;;
-  }
- 
-  $demo = new demo();
-  $demo-&gt;func(1);
-  func();
-  phpdbg_inc_func();
-?&gt;
-&lt;p&gt;启动phpdbg&lt;/p&gt;
-
-&lt;p&gt;phpdbg安装成功后，会在安装目录的bin目录下。进入bin目录，直接输入phpdbg即可。如下：&lt;/p&gt;
-
-&lt;p&gt;Shell&lt;/p&gt;
-
-&lt;p&gt;#phpdeg
-[Welcome to phpdbg, the interactive PHP debugger, v0.4.0]
-To get help using phpdbg type “help” and press enter
-[Please report bugs to &lt;a href=&quot;http://github.com/krakjoe/phpdbg/issues&quot;&gt;http://github.com/krakjoe/phpdbg/issues&lt;/a&gt;]
-prompt&amp;gt;&lt;/p&gt;
-
-&lt;p&gt;#phpdeg
-[Welcome to phpdbg, the interactive PHP debugger, v0.4.0]
-To get help using phpdbg type “help” and press enter
-[Please report bugs to &lt;a href=&quot;http://github.com/krakjoe/phpdbg/issues&quot;&gt;http://github.com/krakjoe/phpdbg/issues&lt;/a&gt;]
-prompt&amp;gt;
-要想加载要调试的php脚本，只需要执行exec命令即可。如下：&lt;/p&gt;
-
-&lt;p&gt;Shell&lt;/p&gt;
-
-&lt;p&gt;#phpdbg
-……
-prompt&amp;gt; exec ./test_phpdbg.php&lt;/p&gt;
-
-&lt;p&gt;#phpdbg
-……
-prompt&amp;gt; exec ./test_phpdbg.php
-当然我们也可以在启动phpdbg的时候，指定e参数。如下：&lt;/p&gt;
-
-&lt;p&gt;PHP&lt;/p&gt;
-
-&lt;p&gt;#phpdbg -e ./test_phpdbg.php
-#phpdbg -e ./test_phpdbg.php
-查看帮助信息&lt;/p&gt;
-
-&lt;p&gt;如果你之前使用过其他的调试工具，你会发现phpdbg和他们比较相似。但是，你使用初期，还是会经常需要获取帮助信息。通过help命令我们可以获取帮助信息。&lt;/p&gt;
-
-&lt;p&gt;PHP&lt;/p&gt;
-
-&lt;p&gt;……
-prompt&amp;gt; help&lt;/p&gt;
-
-&lt;p&gt;phpdbg is a lightweight, powerful and easy to use debugging platform for PHP5.4+
-It supports the following commands:&lt;/p&gt;
-
-&lt;p&gt;Information
-  list     list PHP source
-……
-……
-prompt&amp;gt; help&lt;/p&gt;
-
-&lt;p&gt;phpdbg is a lightweight, powerful and easy to use debugging platform for PHP5.4+
-It supports the following commands:&lt;/p&gt;
-
-&lt;p&gt;Information
-  list     list PHP source
-……
-设置断点&lt;/p&gt;
-
-&lt;p&gt;设置断点的命令和gdb一样。都是break，简写形式为b。不过具体的命令参数还是有所差异的。和gdb的断点命令相同之处，它们都可以“按文件名:行号” 或者 行号的方式设置断点。除此之外，phpdbg还提供了一些针对php特有的设置断点的方式。如，根据opline设置断点，根据opcode设置断点等。&lt;/p&gt;
-
-&lt;p&gt;众所周知，php代码最终是解析成opcode，然后由php内核一条条执行。一条php语句，可能会解析成多条opcode。如果可以按opcode设置断点，我们就可以更精确的跟踪程序执行过程。下面我们来看看phapdbg设置断点的具体示例。&lt;/p&gt;
-
-&lt;p&gt;按opline设置断点：
-这里所说的opline，就是以方法入口作为起点，当前代码的行号。如test_phpdgb.php文件中，第18行的代码“$param = $param + “baba”;”的opline就是 2。&lt;/p&gt;
-
-&lt;p&gt;PHP&lt;/p&gt;
-
-&lt;p&gt;……
-prompt&amp;gt; b func#2
-prompt&amp;gt; r
-demo::__construct:5
-method func 2
-[Breakpoint #0 resolved at func#2 (opline 0x7f5b230a2e38)]
-[Breakpoint #0 resolved at func#2 (opline 0x7f5b230a2e38)]
-[Breakpoint #0 resolved at func#2 (opline 0x7f5b230a2e38)]
-[Breakpoint #0 in func()#2 at ./test_phpdbg.php:18, hits: 1]&lt;/p&gt;
-&lt;blockquote&gt;
-  &lt;p&gt;00018:     $param = $param + “baba”;
- 00019:     echo “function func $param\n”;;
- 00020: }
-……
-……
-prompt&amp;gt; b func#2
-prompt&amp;gt; r
-demo::__construct:5
-method func 2
-[Breakpoint #0 resolved at func#2 (opline 0x7f5b230a2e38)]
-[Breakpoint #0 resolved at func#2 (opline 0x7f5b230a2e38)]
-[Breakpoint #0 resolved at func#2 (opline 0x7f5b230a2e38)]
-[Breakpoint #0 in func()#2 at ./test_phpdbg.php:18, hits: 1]
-00018:     $param = $param + “baba”;
- 00019:     echo “function func $param\n”;;
- 00020: }
-……
-查看断点&lt;/p&gt;
-&lt;/blockquote&gt;
-
-&lt;p&gt;和gdb一样，phpdbg也是使用info break命令查看断点。示例如下：&lt;/p&gt;
-
-&lt;p&gt;PHP&lt;/p&gt;
-
-&lt;p&gt;….
-prompt&amp;gt; info break
-————————————————
-File Breakpoints:
-#1      /home/hailong.xhl/test_phpdbg.php:10
-————————————————
-Opline Breakpoints:
-#0      7ff3219e1df0        (function breakpoint)
-————————————————
-Function opline Breakpoints:
-#0      func opline 2
-….
-….
-prompt&amp;gt; info break
-————————————————
-File Breakpoints:
-#1      /home/hailong.xhl/test_phpdbg.php:10
-————————————————
-Opline Breakpoints:
-#0      7ff3219e1df0        (function breakpoint)
-————————————————
-Function opline Breakpoints:
-#0      func opline 2
-….
-通过上面的显示，我们可以知道。info break的显示结果中会把断点的类型也给显示出来。#后面的数字是断点号。我们可以根据断点号删除断点。&lt;/p&gt;
-
-&lt;p&gt;删除断点&lt;/p&gt;
-
-&lt;p&gt;和gdb命令不一样。phpdbg的删除断点不是delete命令，而是break del 命令。示例如下：&lt;/p&gt;
-
-&lt;p&gt;PHP&lt;/p&gt;
-
-&lt;p&gt;……
-prompt&amp;gt; break del 1
-[Deleted breakpoint #1]
-prompt&amp;gt;
-……
-……
-prompt&amp;gt; break del 1
-[Deleted breakpoint #1]
-prompt&amp;gt;
-……
-break del 后面的数字1就是断点号。&lt;/p&gt;
-
-&lt;p&gt;查看代码&lt;/p&gt;
-
-&lt;p&gt;phpdbg查看代码的命令也是list。但是和gdb相比，使用的方式更多样一些。
-显示指定函数的代码：&lt;/p&gt;
-
-&lt;p&gt;Shell&lt;/p&gt;
-
-&lt;p&gt;……
-prompt&amp;gt; l f func
- 00017:     $param = “ali”;
- 00018:     $param = $param + “baba”;
- 00019:     echo “function func $param\n”;;
- 00020: }
- 00021:
-prompt&amp;gt;
-……
-……
-prompt&amp;gt; l f func
- 00017:     $param = “ali”;
- 00018:     $param = $param + “baba”;
- 00019:     echo “function func $param\n”;;
- 00020: }
- 00021:
-prompt&amp;gt;
-……
-单步执行&lt;/p&gt;
-
-&lt;p&gt;phpdbg的单步执行只有一个命令 step。和gdb的step命令差不多。都是一行一行的执行代码。注意，phpdbg是没有next命令的。&lt;/p&gt;
-
-&lt;p&gt;PHP&lt;/p&gt;
-
-&lt;p&gt;….
-prompt&amp;gt; s
-[Breakpoint #0 resolved at func#2 (opline 0x152ba40)]
-[L19           0x152ba70 ZEND_ADD_STRING          C2      @0    ./test_phpdbg.php]&lt;/p&gt;
-&lt;blockquote&gt;
-  &lt;p&gt;00019:     echo “function func $param\n”;;
- 00020: }
- 00021:
-….
-….
-prompt&amp;gt; s
-[Breakpoint #0 resolved at func#2 (opline 0x152ba40)]
-[L19           0x152ba70 ZEND_ADD_STRING          C2      @0    ./test_phpdbg.php]
-00019:     echo “function func $param\n”;;
- 00020: }
- 00021:
-….
-继续执行&lt;/p&gt;
-&lt;/blockquote&gt;
-
-&lt;p&gt;和gdb一样，phpdbg的继续执行命令也是continue，简写形式为c。&lt;/p&gt;
-
-&lt;p&gt;执行php代码&lt;/p&gt;
-
-&lt;p&gt;这个是phpdbg的一个特色。可以在调试的过程中使用ev命令执行任意的php代码。如：&lt;/p&gt;
-
-&lt;p&gt;Shell&lt;/p&gt;
-
-&lt;p&gt;……
-prompt&amp;gt; ev $var = “val”;
-val
-prompt&amp;gt; ev var_dump($var);
-string(3) “val”
-……
-……
-prompt&amp;gt; ev $var = “val”;
-val
-prompt&amp;gt; ev var_dump($var);
-string(3) “val”
-……
-可以通过这种方式，在调试过程中动态的修改变量值，查看执行效果。&lt;/p&gt;
-</description>
-        <pubDate>Mon, 12 Feb 2018 00:00:00 +0800</pubDate>
-        <link>https://xiazemin.github.io/MyBlog/web/2018/02/12/phpdbg.html</link>
-        <guid isPermaLink="true">https://xiazemin.github.io/MyBlog/web/2018/02/12/phpdbg.html</guid>
-        
-        
-        <category>web</category>
         
       </item>
     
