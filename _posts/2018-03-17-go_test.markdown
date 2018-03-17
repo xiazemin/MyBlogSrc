@@ -1,0 +1,61 @@
+---
+title: go test
+layout: post
+category: golang
+author: 夏泽民
+---
+<!-- more -->
+在包目录内，所有以_test.go为后缀名的源文件在执行go build时不会被构建成包的一部分，它们是go test测试的一部分。
+
+在*_test.go文件中，有三种类型的函数：测试函数、基准测试(benchmark)函数、示例函数。一个测试函数是以Test为函数名前缀的函数，用于测试程序的一些逻辑行为是否正确；go test命令会调用这些测试函数并报告测试结果是PASS或FAIL。基准测试函数是以Benchmark为函数名前缀的函数，它们用于衡量一些函数的性能；go test命令会多次运行基准函数以计算一个平均的执行时间。示例函数是以Example为函数名前缀的函数，提供一个由编译器保证正确性的示例文档。
+
+go test命令会遍历所有的*_test.go文件中符合上述命名规则的函数，生成一个临时的main包用于调用相应的测试函数，接着构建并运行、报告测试结果，最后清理测试中生成的临时文件。
+
+测试函数的名字必须以Test开头，可选的后缀名必须以大写字母开头：
+func TestSin(t *testing.T) { /* ... */ }
+其中t参数用于报告测试失败和附加的日志信息。
+相同包名 
+//word_test.go
+package word
+import "testing"
+go test命令如果没有参数指定包那么将默认采用当前目录对应的包（和go build命令一样）。
+
+参数-v可用于打印每个测试函数的名字和运行时间：
+参数-run对应一个正则表达式，只有测试函数名被它正确匹配的测试函数才会被go test测试命令运行：
+$ go test -v -run="French|Canal"
+
+启发式方法中，语句的覆盖率是最简单和最广泛使用的。语句的覆盖率是指在测试中至少被运行一次的代码占总代码数的比例。在本节中，我们使用go test命令中集成的测试覆盖率工具，来度量下面代码的测试覆盖率，帮助我们识别测试和我们期望间的差距。
+
+这个命令可以显示测试覆盖率工具的使用用法：
+
+$ go tool cover
+Usage of 'go tool cover':
+Given a coverage profile produced by 'go test':
+    go test -coverprofile=c.out
+
+Open a web browser displaying annotated source code:
+    go tool cover -html=c.out
+    
+go tool命令运行Go工具链的底层可执行程序。这些底层可执行程序放在$GOROOT/pkg/tool/${GOOS}_${GOARCH}目录。因为有go build命令的原因，我们很少直接调用这些底层工具。
+
+现在我们可以用-coverprofile标志参数重新运行测试：
+
+$ go test -run=Coverage -coverprofile=c.out gopl.io/ch7/eval
+ok      gopl.io/ch7/eval         0.032s      coverage: 68.5% of statements
+这个标志参数通过在测试代码中插入生成钩子来统计覆盖率数据。也就是说，在运行每个测试前，它将待测代码拷贝一份并做修改，在每个词法块都会设置一个布尔标志变量。当被修改后的被测试代码运行退出时，将统计日志数据写入c.out文件，并打印一部分执行的语句的一个总结。
+
+基准测试是测量一个程序在固定工作负载下的性能。在Go语言中，基准测试函数和普通测试函数写法类似，但是以Benchmark为前缀名，并且带有一个*testing.B类型的参数；*testing.B参数除了提供和*testing.T类似的方法，还有额外一些和性能测量相关的方法。它还提供了一个整数N，用于指定操作执行的循环次数。
+
+和普通测试不同的是，默认情况下不运行任何基准测试。我们需要通过-bench命令行标志参数手工指定要运行的基准测试函数。该参数是一个正则表达式，用于匹配要执行的基准测试函数的名字，默认值是空的。其中“.”模式将可以匹配所有基准测试函数，但因为这里只有一个基准测试函数，因此和-bench=IsPalindrome参数是等价的效果。
+
+$ go test -run=NONE -bench=ClientServerParallelTLS64 \
+    -cpuprofile=cpu.log net/http
+
+参数-text用于指定输出格式，在这里每行是一个函数，根据使用CPU的时间长短来排序。其中-nodecount=10参数限制了只输出前10行的结果。对于严重的性能问题，这个文本格式基本可以帮助查明原因了。
+
+这个概要文件告诉我们，HTTPS基准测试中crypto/elliptic.p256ReduceDegree函数占用了将近一半的CPU资源，对性能占很大比重。相比之下，如果一个概要文件中主要是runtime包的内存分配的函数，那么减少内存消耗可能是一个值得尝试的优化策略。
+
+对于一些更微妙的问题，你可能需要使用pprof的图形显示功能。这个需要安装GraphViz工具，可以从 http://www.graphviz.org 下载。参数-web用于生成函数的有向图，标注有CPU的使用和最热点的函数等信息。
+
+
+    
