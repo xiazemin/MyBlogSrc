@@ -1,7 +1,7 @@
 ---
 title: Merkle Patricia Tree
 layout: post
-category: web
+category: cryptology
 author: 夏泽民
 ---
 　Merkle Patricia Tree(简称MPT树，实际上是一种trie前缀树)是以太坊中的一种加密认证的数据结构，可以用来存储所有的(key，value)对。以太坊区块的头部包括一个区块头，一个交易的列表和一个uncle区块的列表。在区块头部包括了交易的hash树根，用来校验交易的列表。在p2p网络上传输的交易是一个简单的列表，它们被组装成一个叫做trie树的特殊数据结构，来计算根hash。值得注意的是，除了校验区块外，这个数据结构并不是必须的，一旦区块被验证正确，那么它在技术上是可以忽略的。但是，这意味着交易列表在本地以trie树的形式存储，发送给客户端的时候序列化成列表。客户端接收到交易列表后重新构建交易列表trie树来验证根hash。RLP(Recursive length prefix encoding,递归长度前缀编码)，用来对trie树种所有的条目进行编码(参考：http://www.cnblogs.com/fengzhiwu/p/5565559.html)。
