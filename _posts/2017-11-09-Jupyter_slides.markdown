@@ -49,3 +49,15 @@ gen
 jupyter-nbconvert --to slides Python_Share.ipynb --reveal-prefix '//cdn.bootcss.com/reveal.js/3.2.0' --output Python_Share
 server
 python -m SimpleHTTPServer 8000
+
+注意：
+由于cdn不一定可用，在github 下载 reveal.js
+https://github.com/hakimel/reveal.js/releases
+
+jupyter-nbconvert --to slides blockChain.ipynb --reveal-prefix './reveal.js-3.6.0' --output Python_Share
+
+注意生成文件不要移动位置
+
+安装 nodejs   npm install http-server 
+直接 http-server 命令就行了
+
