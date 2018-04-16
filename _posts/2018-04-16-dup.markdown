@@ -1,0 +1,82 @@
+---
+title: dup dup2 
+layout: post
+category: linux 
+author: 夏泽民
+---
+<!-- more -->
+有时我们希望把标准输入重定向到一个文件，或者把标准输出重定向到一个网络连接。
+dup()与dup2()能对输入文件描述符进行重定向。
+int dup(int oldfd);
+int dup2(int oldfd, intnewfd);
+dup函数创建一个新的文件描述符，该新文件描述符和原有文件描述符oldfd指向相同的文件、管道或者网络连接。
+并且dup返回的文件描述符总是取系统当前可用的最小整数值。dup2和dup类似，不过它将返回第一个不小于oldfd的整数值。dup和dup2失败时返回-1并设置errno。
+
+下面两个函数都可用来复制一个现存的文件描述符：
+ #include<unistd.h>
+int dup(int filedes);
+int dup2(int filedes,int filedes2);                                                                                     两函数的返回值：若成功则返回新的文件描述符，若出错则返回-1
+由dup返回的新文件描述符一定是当前可用文件描述符中的最小值。用dup2则可以用filedes2参数指定新描述符的数值。如果filedes2已经打开，则现将其关闭。如若filedes等于filedes2，则dup2返回filedes2，而不关闭它。
+这些函数返回的新文件描述符与参数filedes共享同一文件表项。如图所示，我们假定执行了：
+newfd=dup(1); 
+<img src="{{site.url}}{{site.baseurl}}/img/dup.png"/> 
+当此函数开始执行时，假定下一个可用的描述符是3（这是非常可能的，因为0，1和2由shell打开）。因为两个描述符指向同一文件表项，所以它们共享同一文件状态标志（读、写、添加等）以及同一当前文件偏移量。
+每个文件描述符都有它自己的一套文件描述符标志。
+复制一个描述符的另一种方式是使用fcntl函数，实际上，可调用：
+dup(filedes);
+等效于
+fcntl(filedes,F_DUPFD,0);
+而调用
+dup2(filedes,filedes2);
+等效于
+close(filedes2);
+fcntl(filedes,F_DUPFD,filedes2);
+在后一种情况下，dup2并不完全等效于close加上fcntl。它们之间的区别是：
+1）dup2是一个原子操作，而close及fcntl则包括两个函数调用，有可能在close和fcntl之间插入执行信号捕获函数，它可能修改文件描述符。
+2）dup2和fcntl有某些不同的errno。
+<img src="{{site.url}}{{site.baseurl}}/img/dup2.png"/> 
+重点解释两个地方：
+第3幅图，要执行dup2(fd, 1);，文件描述符1原本指向tty，现在要指向新的文件somefile，就把原来的关闭了，但是tty这个文件原本有两个引用计数，还有文件描述符save_fd也指向它，所以只是将引用计数减1，并不真的关闭文件。
+第5幅图，要执行dup2(save_fd, 1);，文件描述符1原本指向somefile，现在要指向新的文件tty，就把原来的关闭了，somefile原本只有一个引用计数，所以这次减到0，是真的关闭了。
+
+1.dup()和dup2()函数格式如下：
+ #include<unistd.h>
+   int dup(int oldfd);
+   int dup2(int oldfd, int newfd);
+
+    dup() uses the lowest-numbered unused descriptor for the new descriptor.
+    dup2() makes newfd be the copy of oldfd, closing newfd first ifnecessary, but note the following:
+   *If oldfd is not a valid file descriptor, then the call fails, and newfd is not closed.
+        *If oldfd is a valid file descriptor, and newfd has the same value as oldfd, then dup2() does nothing, and returns newfd.
+
+   1）这两个函数我们可以用来复制文件描述符。
+   2）其中oldfd和newfd分别是复制前文件描述符和复制后的文件描述符。
+   3）这两个函数的调用都将复制文件描述符oldfd，且他们的返回值都为新的文件描述符。
+    4）不同点是：dup()的返回值是最小的未用文件描述符；dup2()的返回值是预先制定的文件描述符newfd。
+    5）对于dup2()，如果文件描述符newfd正在被使用，则先关闭newfd；如果newfd同oldfd，则不关闭该文件正常返回。
+    PS：这是我自己对书上的话进行的分类。
+
+
+2.首先要弄懂的话，还要对文件描述符了解的清晰：
+       关系：进程---(拥有)--->（若干个）文件描述符()---（对应）--->文件
+                            |--->文件秒素符(0)
+                            |--->文件描述符(1)--->文件(1)
+         某进程(n)--|--->文件描述符(2)
+                            |--->文件描述符(3)--->文件(3)
+                            |.
+                            |.
+                            |.
+                            |--->文件描述符(1023)--->文件(...)
+      PS1：由一次open()函数打开的文件是可以有很多个描述符与之相连的；
+      PS2：Linux中每个进程可以有1024个文件描述符；
+      PS3：文件描述符前三位0、1、2分别对应：
+            STDIN_FILENO         0     标准输入文件
+            STDOUT_FILENO     1     标准输出文件
+            STDERR_FILENO     2     标准错误输出文件
+  因此就可以较好的开始理解dup(int oldfd)和dup2(int oldfd, int newfd)函数是如何工作的：
+      dup()比较好了解：
+        系统分配一个新的、未用过的、值为最小的文件描述符指向dup()函数内的参数oldfd所指向的文件，并返回该值。
+      dup2()比较难理解：
+        1)dup2()先看看oldfd是不是一个有效的文件描述符，如果不是则调用失败，newfd文件描述符也不关闭；
+        2)如果oldfd是一个有效的文件描述符，则检测newfd是否被使用，如在使用，则将其关闭，并将newfd指向oldfd所指向的文件，并返回newfd;
+        3)如果newfd同oldfd，则不关闭该文件正常返回。
