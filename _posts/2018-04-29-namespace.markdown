@@ -1,5 +1,5 @@
 ---
-title:linux namespace
+title: linux namespace
 layout: post
 category: linux
 author: 夏泽民
