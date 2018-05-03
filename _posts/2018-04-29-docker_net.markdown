@@ -1,7 +1,7 @@
 ---
 title: docker_net
 layout: post
-category: linux
+category: docker
 author: 夏泽民
 ---
 由于Boot2Docker的存在，造成了三层Mac->VirtualBox->Docker网络,由VirtualBox到Docker的映射可以通过run容器的时候指定-p参数实现，而从宿主机到VirtualBox端口映射需要通过下述方法实现:
