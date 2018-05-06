@@ -231,10 +231,10 @@ sudo iptables -t nat -A POSTROUTING -s 172.17.2.0/24 ! -d 172.17.0.0/16 -j MASQU
 测试，v1，v2创建容器test1，test2
 ＃v1
 docker run --rm --name test1 -i -t base:latest bin/bash
-docker inspect --format '{{.NetworkSettings.IPAddress}}' test1
+docker inspect --format '\{\{.NetworkSettings.IPAddress\}\}' test1
  #172.17.1.1
 v2
 docker run --rm --name test2 -i -t base:latest bin/bash
-docker inspect --format '{{.NetworkSettings.IPAddress}}' test2
+docker inspect --format '\{\{.NetworkSettings.IPAddress\}\}' test2
  #172.17.2.1
 主机上可以ping通对方容器ip，至此也就ok了。
