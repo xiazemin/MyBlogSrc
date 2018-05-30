@@ -1,0 +1,835 @@
+---
+title: zebra
+layout: post
+category: linux
+author: 夏泽民
+---
+
+Zebra是一个路由软件包，提供基于TCP/IP路由服务，支持RIPv1, RIPv2, RIPng, OSPFv2, OSPFv3, BGP- 4, 
+
+和 BGP-4+等众多路由协议。Zebra还支持BGP特性路由反射器（Route Reflector）。除了传统的 IPv4路由协议
+
+，Zebra也支持IPv6路由协议。如果运行的SNMP守护进程（需要ucd-snmp）支持SMUX协 议，Zebra还能支持路由
+
+协议MIBs。
+
+由以上可见，Zebra的确是一个很不错的路由系统，但比起真正的路由器就简直是小儿科，所以网络高手 就当
+
+这文章是小孩子过家家吧，而对于象我这样的初学者（特别是没有真实设备或足够设备进行实验） 也不失为一
+
+个学习和熟悉路由配置、路由协议的好工具。我没有实际的配置经验，对路由的技术细节也 不是十分清晰，完
+
+全是在扔破砖头。希望路由高手指正概念错误。
+
+安装
+
+Zebra目前最新的版本是0.92a，它的安装非常简单，我们只需从http://www.zebra.org/下载zebra-
+
+0.92a.tar.gz，然后执行以下命令安装（本文环境是RedHat7.2）：
+
+shell> tar xzf zebra-0.92a.tar.gz
+shell> cd zebra-0.92a
+shell> ./configure
+shell> make
+shell> make install
+
+这样Zebra就安装好了，安装的执行文件：
+
+shell> ls /usr/local/sbin
+bgpd  ospfd  ripd  zebra
+
+配置文件：
+
+shell> ls /usr/local/etc
+bgpd.conf.sample   ospfd.conf.sample  zebra.conf.sample
+bgpd.conf.sample2  ripd.conf.sample
+
+运行
+
+编译安装完Zebra后，可以看到有4个可执行文件和5个配置样本文件，我们就使用它的配置样本文件：
+
+shell> cd /usr/local/etc
+shell> cp zebra.conf.sample zebra.conf
+
+Zebra的各进程有各自的终端接口或VTY，如果我们需要给连接到它们的端口设置别名的话，在/etc/ services
+
+文件添加如下内容：
+
+zebrasrv      2600/tcp   # zebra service
+zebra         2601/tcp   # zebra vty
+ripd          2602/tcp   # RIPd vty
+ripngd        2603/tcp   # RIPngd vty
+ospfd         2604/tcp   # OSPFd vty
+bgpd          2605/tcp   # BGPd vty
+ospf6d        2606/tcp   # OSPF6d vty
+
+然后就可以启动Zebra了：
+
+shell> zebra -d
+
+这样，Zebra就以守护进程启动了，其它的参数请参考zebra -h。
+
+基本路由配置命令
+
+直接用telnet连接：
+
+shell> telnet localhost 2601
+Trying 127.0.0.1...
+Connected to localhost.
+Escape character is '^]'.
+
+Hello, this is zebra (version 0.92a).
+Copyright 1996-2001 Kunihiro Ishiguro.
+
+
+User Access Verification
+
+Password:
+
+Zebra会提示输入口令，我们通过/usr/local/etc/zebra.conf可以看到口令是zebra，enable口令也是zebra。
+
+输 入口令zebra，得到路由器用户模式提示符：
+
+Router>
+
+进入特权模式：
+
+Router> en
+Password:
+Router#
+
+输入一个问号，看看Zebra提供了多少路由命令：
+
+Router# ?
+  configure  Configuration from vty interface
+  copy       Copy configuration
+  debug      Debugging functions (see also 'undebug')
+  disable    Turn off privileged mode command
+  end        End current mode and change to enable mode.
+  exit       Exit current mode and down to previous mode
+  help       Description of the interactive help system
+  list       Print command list
+  no         Negate a command or set its defaults
+  quit       Exit current mode and down to previous mode
+  show       Show running system information
+  terminal   Set terminal line parameters
+  who        Display who is on vty
+  write      Write running configuration to memory, network, or terminal
+
+提供的命令很少，实际路由器好多命令都没有，我们只能用有限的命令投入到无限的实验中去。
+
+Router# sh run
+
+Current configuration:
+!
+hostname Router
+password zebra
+enable password zebra
+!
+interface lo
+!
+interface eth0
+!
+line vty
+!
+end
+
+Zebra把操作系统的网络接口当做路由器的接口，所以在做比较复杂的路由实验，会需要比较多的网卡。
+
+进入全局模式，尽可能把实际可用的配置命令都实验一遍：
+
+Router# conf t
+Router(config)#
+
+自己取一个路由器名字：
+
+Router(config)# hostname r1
+r1(config)#
+
+Zebra比较简单，登陆口令不是在line下修改，而是直接在全局模式下用password修改
+
+r1(config)# password {password}
+
+Zebra不支持enable secret {password}这种MD5加密口令，只能使用enable password {password}来修改 
+
+enable口令：
+
+r1# conf t
+r1(config)# enable password {password}
+
+在路由器配置中加密所有的口令：
+
+r1(config)# service password-encryption
+
+回到特权模式：
+
+r1(config)# exit
+r1# sh run
+
+Current configuration:
+!
+hostname r1
+password 8 alA5.vcyMAwXQ
+enable password 8 ksbxOFN8xcFMc
+service password-encryption
+!
+interface lo
+!
+interface eth0
+!
+line vty
+!
+end
+
+我们看到刚才的明文密码都进行加密了，给我们的实验机也提高安全性。Zebra有一点比较恶心，如果我 们先
+
+设置了service password-encryption，然后再修改口令，sh run就发现口令又都是明文的了，但是由 于有
+
+service password-encryption，所以就无法登陆了。
+
+去掉会话超时，免得10分钟没有动作，就把我们给踢了。但是在实际的路由器配置中，为安全起见我们 最好还
+
+是设上会话超时。
+
+r1# conf t
+r1(config)# line vty
+r1(config-line)# exec-timeout 0 0
+
+设置日志记录，Zebra可以把日志记录到标准输出、syslog、以及指定输出文件：
+
+r1(config-line)# exit
+r1(config)# log stdout
+r1(config)# no log stdout
+r1(config)# log syslog
+r1(config)# no log syslog
+r1(config)# log file /usr/local/etc/zebra.log
+
+配置接口IP地址：
+
+r1(config)# int lo
+r1(config-if)# ip address 127.0.0.1/8
+r1(config-if)# exit
+r1(config)# int eth0
+r1(config-if)# ip address 192.168.5.121/24
+
+Zebra比较奇怪，不能使用ip address 192.168.5.121 255.255.255.0这种形式设置IP。测试一下，就设置成 
+
+和Linux中使用的一样。
+
+保存我们刚才的配置：
+
+r1(config-if)# exit
+r1(config)# exit
+r1# copy run start
+Configuration saved to /usr/local/etc/zebra.conf
+r1#
+
+
+2、用Zebra做简单的RIP实验
+
+RIP是应用较早、使用较普遍的IGP，适用于小型同类网络，是典型的距离向量(distance-vector)协 议。RIP通
+
+过广播UDP报文来交换路由信息，每30秒发送一次路由信息更新。RIP提供跳跃计数(hop count)作为尺度来衡量
+
+路由距离，跳跃计数是一个包到达目标所必须经过的路由器的数目。如果到相同 目标有二个不等速或不同带宽
+
+的路由器，但跳跃计数相同，则RIP认为两个路由是等距离的。RIP最多支 持的跳数为15，即在源和目的网间所
+
+要经过的最多路由器的数目为15，跳数16表示不可达。RIPv2支持 验证、密钥管理、路由汇总、无类域间路由
+
+(CIDR)和变长子网掩码(VLSMs)。
+
+Zebra支持RIPv2，使用ripd程序实现RIP路由功能，但ripd程序需要在zebra程序读取接口信息，所以zebra 一
+
+定要在ripd之前启动。由于条件所限，下面的RIP实验是在两台单网卡的RedHat7.2下做的，所以只是 最简单的
+
+演示。
+
+按照上面基本配置的方法初始化第一台机器：
+
+shell_1> cd /usr/local/etc
+shell_1> cp zebra.conf.sample zebra.conf
+shell_1> cp ripd.conf.sample ripd.conf
+shell_1> zebra -d
+
+进入zebra设置IP
+
+shell_1> telnet localhost 2601
+Password:
+Router> en
+Password:
+Router# conf t
+Router(config)# hostname r1
+r1(config)# int eth0
+r1(config-if)# ip address 192.168.5.121/24
+r1(config-if)# ctrl+z
+r1# copy run start
+
+进入第一台机器的rip设置
+
+shell_1> ripd -d
+shell_1> telnet localhost 2602
+Password:
+ripd> en
+ripd# conf t
+ripd(config)# hostname r1_ripd !改个名字好辨认
+r1_ripd(config)# router rip !启动rip
+r1_ripd(config-router)# network 192.168.5.0/24 !RIPv1是有类别路由协议，RIPv2是无类别路由协议，
+
+Zebra 默认支持RIPv2，指定网络需要子网掩码。
+
+r1的RIP简单配置这样就可用了，下面来检验一下：
+
+r1_ripd# sh ip protocols
+Routing Protocol is "rip"
+  Sending updates every 30 seconds with +/-50%, next due in 3 seconds
+  Timeout after 180 seconds, garbage collect after 120 seconds
+  Outgoing update filter list for all interface is not set
+  Incoming update filter list for all interface is not set
+  Default redistribution metric is 1
+  Redistributing:
+  Default version control: send version 2, receive version 2
+    Interface        Send  Recv   Key-chain
+    eth0             2     2
+  Routing for Networks:
+    192.168.5.0/24
+  Routing Information Sources:
+    Gateway          BadPackets BadRoutes  Distance Last Update
+  Distance: (default is 120)
+
+我们看到RIP已经起来了，是RIPv2。
+
+r1_ripd# sh ip rip
+Codes: R - RIP, C - connected, O - OSPF, B - BGP
+
+   Network            Next Hop         Metric From            Time
+
+由于就两个接口直连，没有其它网络，所以sh ip rip看不到什么。
+
+Zebra对log处理可能有些问题，使用log stdout不能显示各种debug信息，所以只能记录到文件，在shell下 用
+
+tail命令查看。
+
+r1_ripd# debug rip events
+r1_ripd# debug rip packet
+r1_ripd(config)# log file /usr/local/etc/ripd.log
+
+然后我们在shell下查看debug信息
+
+shell_1> tail -f /usr/local/etc/ripd.log
+--------------------------------8<---------------------------------------
+2002/04/28 22:17:44 RIP: update timer fire!
+2002/04/28 22:17:44 RIP: SEND UPDATE to eth0 ifindex 2
+2002/04/28 22:17:44 RIP: multicast announce on eth0
+2002/04/28 22:17:44 RIP: update routes on interface eth0 ifindex 2
+2002/04/28 22:18:23 RIP: update timer fire!
+2002/04/28 22:18:23 RIP: SEND UPDATE to eth0 ifindex 2
+2002/04/28 22:18:23 RIP: multicast announce on eth0
+2002/04/28 22:18:23 RIP: update routes on interface eth0 ifindex 2
+2002/04/28 22:19:04 RIP: update timer fire!
+2002/04/28 22:19:04 RIP: SEND UPDATE to eth0 ifindex 2
+2002/04/28 22:19:04 RIP: multicast announce on eth0
+2002/04/28 22:19:04 RIP: update routes on interface eth0 ifindex 2
+--------------------------------8<---------------------------------------
+
+RIP每隔30秒发送一次更新，在sh ip prot可以看到Sending updates every 30 seconds with +/-50%
+
+第二台机器的设置
+
+前面的初始化和第一台一样，不过这里名字设成r2便于辨认，IP设成了192.168.5.123/24。
+
+进入第二台机器的rip设置
+
+shell_2> ripd -d
+shell_2> telnet localhost 2602
+Password:
+ripd> en
+ripd# conf t
+ripd(config)# hostname r2_ripd
+r2_ripd(config)# router rip
+r2_ripd(config-router)# network 192.168.5.0/24
+
+执行完network命令，我们看到第一台机器的tail -f /usr/local/etc/ripd.log输出下面的信息：
+
+--------------------------------8<---------------------------------------
+2002/04/28 22:19:15 RIP: RECV packet from 192.168.5.123 port 520 on eth0
+2002/04/28 22:19:15 RIP: RECV REQUEST version 2 packet size 24
+2002/04/28 22:19:15 RIP:   0.0.0.0/0 -> 0.0.0.0 family 0 tag 0 metric 16
+2002/04/28 22:19:15 RIP: update routes to neighbor 192.168.5.123
+2002/04/28 22:19:35 RIP: update timer fire!
+2002/04/28 22:19:35 RIP: SEND UPDATE to eth0 ifindex 2
+2002/04/28 22:19:35 RIP: multicast announce on eth0
+2002/04/28 22:19:35 RIP: update routes on interface eth0 ifindex 2
+--------------------------------8<---------------------------------------
+
+r1通过UDP广播接收到192.168.5.123的更新包，并且把192.168.5.123设为neighbor。
+
+保存一下配置
+
+r1_ripd# copy run start
+Configuration saved to /usr/local/etc/ripd.conf
+r2_ripd# copy run start
+Configuration saved to /usr/local/etc/ripd.conf
+
+Zebra还支持很多RIP功能，如果Filtering RIP Routes, RIP route-map, RIP Authentication等，有条件有时
+
+间 的话可以做更复杂的实验。
+
+3、用Zebra做OSPF实验
+
+OSPF（开放最短路径优先）路由协议是一项链路状态型技术，是目前IGP中应用最广、性能最优的一个 协议，
+
+解决了RIP不能解决的大型、可扩展的网络需求而写的，适用于大规模的网络。
+
+Zebra支持OSPFv2和OSPFv3（用于IPv6的OSPF，CISCO还未对其封装），由于条件所限，下面的OSPF实 验同样是
+
+在两台单网卡的RedHat7.2下做的。
+
+Zebra使用ospfd程序实现OSPF路由功能，但ospfd需要从zebra程序获得接口信息，所以zebra程序必须在 ospfd
+
+程序之前运行。ospfd不支持多个OSPF进程，我们不能指定OSPF进程号。
+
+初始化第一台机器：
+
+shell_1> cd /usr/local/etc
+shell_1> cp zebra.conf.sample zebra.conf
+shell_1> cp ospfd.conf.sample ospfd.conf
+shell_1> zebra -d
+
+进入zebra设置IP
+
+shell_1> telnet localhost 2601
+Password:
+Router> en
+Password:
+Router# conf t
+Router(config)# hostname r1
+r1(config)# int eth0
+r1(config-if)# ip address 192.168.5.121/24
+r1(config-if)# ctrl+z
+r1# copy run start
+
+进入第一台机器的ospf设置
+
+shell_1> ospfd -d
+shell_1> telnet localhost 2604
+Password:
+ospfd> en
+ospfd# conf t
+ospfd(config)# hostname r1_ospfd !改个名字好辨认
+r1_ospfd(config)# router ospf !启动ospf
+r1_ospfd(config-router)# ospf router-id 192.168.5.121 !设置router-id
+r1_ospfd(config-router)# network 192.168.5.0/24 area 0
+!最关键的，来标识路由器上哪些IP网络号是OSPF的一部分，对于每个网络，我们必须标识该网络所属 的区域
+
+。由于我们只有两台机器，当然只有一个网络，所以只需执行一个network命令就够了。
+
+对于我们的小网络，ospf就算配好了，下面来检验一下：
+
+r1_ospfd(config-router)# ctrl+z
+r1_ospfd# sh ip ospf route
+============ OSPF network routing table ============
+N    192.168.5.0/24        [10] area: 0.0.0.0
+                           directly attached to eth0
+
+============ OSPF router routing table =============
+
+============ OSPF external routing table ===========
+
+r1_ospfd# sh ip ospf database
+
+       OSPF Router with ID (192.168.5.121)
+
+                Router Link States (Area 0.0.0.0)
+
+Link ID         ADV Router      Age  Seq#       CkSum  Link count
+192.168.5.121   192.168.5.121    126 0x80000002 0x8584 1
+
+r1_ospfd# sh ip ospf int eth0
+eth0 is up, line protocol is up
+
+  Internet Address 192.168.5.121/24, Area 0.0.0.0
+  Router ID 192.168.5.121, Network Type BROADCAST, Cost: 10
+  Transmit Delay is 1 sec, State DR, Priority 1
+  Designated Router (ID) 192.168.5.121, Interface Address 192.168.5.121
+  No backup designated router on this network
+  Timer intarvals configured, Hello 10, Dead 40, Wait 40, Retransmit 5
+    Hello due in 00:00:07
+  Neighbor Count is 0, Adjacent neighbor count is 0
+
+由于网络里没有其它的路由器，r1就把自己选为DR（指定路由器）了。Zebra对log处理可能有些问题，使 用
+
+log stdout不能显示各种debug信息，所以只能记录到文件，在shell下用tail命令查看。而且debug命令和 实
+
+际路由器也有不同。
+
+r1_ospfd# debug ospf event
+r1_ospfd(config)# log file /usr/local/etc/ospfd.log
+
+然后我们在shell下查看debug信息
+
+shell_1> tail -f /usr/local/etc/ospfd.log
+--------------------------------8<---------------------------------------
+2002/04/28 14:24:27 OSPF: make_hello: options: 2, int: eth0:192.168.5.121
+2002/04/28 14:24:37 OSPF: make_hello: options: 2, int: eth0:192.168.5.121
+2002/04/28 14:24:47 OSPF: make_hello: options: 2, int: eth0:192.168.5.121
+2002/04/28 14:24:57 OSPF: make_hello: options: 2, int: eth0:192.168.5.121
+2002/04/28 14:25:07 OSPF: make_hello: options: 2, int: eth0:192.168.5.121
+--------------------------------8<---------------------------------------
+
+我们错过了最开始的信息，看到路由器每隔10秒发送一个hello数据包。hello数据包通过多目组播地址 
+
+224.0.0.5被发送出去，如果我们打开debug ospf packet all就能很清楚的看到。
+
+第二台机器的设置
+
+前面的初始化和第一台一样，不过这里名字设成r2便于辨认，IP设成了192.168.5.123/24。
+
+进入第二台机器的ospf设置
+
+shell_2> ospfd -d
+shell_2> telnet localhost 2604
+Password:
+ospfd> en
+ospfd# conf t
+ospfd(config)# hostname r2_ospfd
+r2_ospfd(config)# router ospf
+r2_ospfd(config-router)# ospf router-id 192.168.5.123
+r2_ospfd(config-router)# network 192.168.5.0/24 area 0
+
+执行完network命令，我们看到第一台机器的tail -f /usr/local/etc/ospfd.log输出下面的信息：
+
+--------------------------------8<---------------------------------------
+2002/04/28 14:25:51 OSPF: Packet 192.168.5.123 [Hello:RECV]: Options *|*|-|-|-|-|E|*
+2002/04/28 14:25:51 OSPF: NSM[eth0:192.168.5.121:0.0.0.0]: start
+2002/04/28 14:25:52 OSPF: make_hello: options: 2, int: eth0:192.168.5.121
+2002/04/28 14:25:52 OSPF: couldn't find any VL to associate the packet with
+2002/04/28 14:25:52 OSPF: DR-Election[1st]: Backup 192.168.5.123
+2002/04/28 14:25:52 OSPF: DR-Election[1st]: DR     192.168.5.121
+2002/04/28 14:25:52 OSPF: Packet[DD]: Negotiation done (Slave).
+--------------------------------8<---------------------------------------
+
+r1收到r2(192.168.5.123)发过来的hello数据包，交换信息后选举DR，由于本身192.168.5.121是DR了，所以 
+
+只选举了BDR就好了。这时在r1上就能看到r2了。
+
+r1_ospfd# sh ip ospf neig
+
+Neighbor ID     Pri   State           Dead Time   Address         Interface              RXmtL 
+
+RqstL DBsmL
+192.168.5.123     1   Full/Backup     00:00:37    192.168.5.123   eth0:192.168.5.121     0     0  
+
+   0
+
+检验其它信息
+
+r1_ospfd# sh ip ospf database
+
+       OSPF Router with ID (192.168.5.121)
+
+                Router Link States (Area 0.0.0.0)
+
+Link ID         ADV Router      Age  Seq#       CkSum  Link count
+192.168.5.121   192.168.5.121   1259 0x80000008 0x534e 1
+192.168.5.123   192.168.5.123   1265 0x80000006 0x534a 1
+
+                Net Link States (Area 0.0.0.0)
+
+Link ID         ADV Router      Age  Seq#       CkSum
+192.168.5.123   192.168.5.123   1265 0x80000001 0x5a5a
+
+r1_ospfd# sh ip ospf int eth0
+eth0 is up, line protocol is up
+
+  Internet Address 192.168.5.121/24, Area 0.0.0.0
+  Router ID 192.168.5.121, Network Type BROADCAST, Cost: 10
+  Transmit Delay is 1 sec, State DR, Priority 1
+  Designated Router (ID) 192.168.5.121, Interface Address 192.168.5.121
+  Backup Designated Router (ID) 192.168.5.123, Interface Address 192.168.5.123
+  Timer intarvals configured, Hello 10, Dead 40, Wait 40, Retransmit 5
+    Hello due in 00:00:01
+  Neighbor Count is 1, Adjacent neighbor count is 1
+
+和前面的输出信息相比，发生了很多变化，两台路由器已经相互识别了。OSPF不象RIP一样，每隔30秒 给所有
+
+的邻居广播一次完整的路由表，而是通过IP多目组播地址224.0.0.5每隔10秒发送一个很小的hello 数据包来维
+
+护邻居关系，当链路发生变化的时候，才重新计算。
+
+拔掉两台机器连接的网线，看ospfd.log的记录：
+
+--------------------------------8<---------------------------------------
+2002/04/28 16:25:53 OSPF: make_hello: options: 2, int: eth0:192.168.5.121
+2002/04/28 16:25:57 OSPF: Packet 192.168.5.123 [Hello:RECV]: Options *|*|-|-|-|-|E|*
+2002/04/28 16:26:03 OSPF: make_hello: options: 2, int: eth0:192.168.5.121
+2002/04/28 16:26:13 OSPF: make_hello: options: 2, int: eth0:192.168.5.121
+2002/04/28 16:26:23 OSPF: make_hello: options: 2, int: eth0:192.168.5.121
+2002/04/28 16:26:33 OSPF: make_hello: options: 2, int: eth0:192.168.5.121
+2002/04/28 16:26:37 OSPF: ospf_check_abr_status(): Start
+2002/04/28 16:26:37 OSPF: ospf_check_abr_status(): looked through areas
+2002/04/28 16:26:37 OSPF: ospf_check_abr_status(): bb_configured: 1
+2002/04/28 16:26:37 OSPF: ospf_check_abr_status(): bb_act_attached: 1
+2002/04/28 16:26:37 OSPF: ospf_check_abr_status(): areas_configured: 1
+2002/04/28 16:26:37 OSPF: ospf_check_abr_status(): areas_act_attached: 1
+2002/04/28 16:26:37 OSPF: nsm_change_status(): scheduling new router-LSA origination
+2002/04/28 16:26:37 OSPF: DR-Election[1nd]: Backup 0.0.0.0
+2002/04/28 16:26:37 OSPF: DR-Election[1nd]: DR     192.168.5.121
+2002/04/28 16:26:37 OSPF: ospf_check_abr_status(): Start
+2002/04/28 16:26:37 OSPF: ospf_check_abr_status(): looked through areas
+2002/04/28 16:26:37 OSPF: ospf_check_abr_status(): bb_configured: 1
+2002/04/28 16:26:37 OSPF: ospf_check_abr_status(): bb_act_attached: 1
+2002/04/28 16:26:37 OSPF: ospf_check_abr_status(): areas_configured: 1
+2002/04/28 16:26:37 OSPF: ospf_check_abr_status(): areas_act_attached: 1
+2002/04/28 16:26:37 OSPF: Timer[router-LSA]: (router-LSA Refresh expire)
+2002/04/28 16:26:37 OSPF: counting fully adjacent virtual neighbors in area 0.0.0.0
+2002/04/28 16:26:37 OSPF: there are 0 of them
+2002/04/28 16:26:37 OSPF: SPF: calculation timer scheduled
+2002/04/28 16:26:37 OSPF: SPF: calculation timer delay = 5
+2002/04/28 16:26:37 OSPF: ospf_flood_through_interface(): considering int eth0:192.168.5.121
+2002/04/28 16:26:37 OSPF: ospf_flood_through_interface(): considering nbr 192.168.5.121
+2002/04/28 16:26:42 OSPF: SPF: Timer (SPF calculation expire)
+2002/04/28 16:26:42 OSPF: ospf_spf_calculate: Start
+2002/04/28 16:26:42 OSPF: ospf_spf_calculate: running Dijkstra for area 0.0.0.0
+2002/04/28 16:26:42 OSPF: SPF Result: 0 [R] 192.168.5.121
+2002/04/28 16:26:42 OSPF: ========== OSPF routing table ==========
+2002/04/28 16:26:42 OSPF: ========================================
+2002/04/28 16:26:42 OSPF: ospf_process_stub():processing stubs for area 0.0.0.0
+2002/04/28 16:26:42 OSPF: ospf_process_stub():processing router LSA, id: 192.168.5.121
+2002/04/28 16:26:42 OSPF: ospf_process_stub(): we have 1 links to process
+2002/04/28 16:26:42 OSPF: ospf_intra_add_stub(): Start
+2002/04/28 16:26:42 OSPF: ospf_intra_add_stub(): processing route to 192.168.5.0/24
+2002/04/28 16:26:42 OSPF: ospf_intra_add_stub(): calculated cost is 0 + 10 = 10
+2002/04/28 16:26:42 OSPF: ospf_intra_add_stub(): installing new route
+2002/04/28 16:26:42 OSPF: ospf_intra_add_stub(): this network is on this router
+2002/04/28 16:26:42 OSPF: ospf_intra_add_stub(): the interface is eth0:192.168.5.121
+2002/04/28 16:26:42 OSPF: ospf_intra_add_stub(): Stop
+2002/04/28 16:26:42 OSPF: children of V:
+2002/04/28 16:26:42 OSPF: ospf_spf_calculate: Stop
+2002/04/28 16:26:42 OSPF: ospf_ia_routing():start
+2002/04/28 16:26:42 OSPF: ospf_ia_routing():not ABR, considering all areas
+2002/04/28 16:26:42 OSPF: Pruning unreachable networks
+2002/04/28 16:26:42 OSPF: Pruning unreachable routers
+2002/04/28 16:26:42 OSPF: Route: Router Routing Table free
+2002/04/28 16:26:42 OSPF: SPF: calculation complete
+--------------------------------8<---------------------------------------
+
+我们看到r1生成一个LSA包，通知其它路由器，由于网络里只有自己了，又选自己为DR。r2也是一样。 我们再
+
+插上网线，查看ospfd.log：
+
+--------------------------------8<---------------------------------------
+2002/04/28 16:52:08 OSPF: Packet 192.168.5.123 [Hello:RECV]: Options *|*|-|-|-|-|E|*
+2002/04/28 16:52:08 OSPF: NSM[eth0:192.168.5.121:0.0.0.0]: start
+2002/04/28 16:52:08 OSPF: DR-Election[1st]: Backup 192.168.5.123
+2002/04/28 16:52:08 OSPF: DR-Election[1st]: DR     192.168.5.121
+2002/04/28 16:52:08 OSPF: DR-Election[1st]: Backup 0.0.0.0
+2002/04/28 16:52:08 OSPF: DR-Election[1st]: DR     192.168.5.123
+2002/04/28 16:52:08 OSPF: DR-Election[2nd]: Backup 192.168.5.121
+2002/04/28 16:52:08 OSPF: DR-Election[2nd]: DR     192.168.5.123
+--------------------------------8<---------------------------------------
+
+由于拔了网线，r1和r2都把自己选为DR，一个网络只能有一个DR，所以恢复连接后它们重新进行了DR选 举，由
+
+于192.168.5.123的router id大，所以它被选为DR。
+
+保存一下配置
+
+r1_ospfd# copy run start
+Configuration saved to /usr/local/etc/ospfd.conf
+r2_ospfd# copy run start
+Configuration saved to /usr/local/etc/ospfd.conf
+
+以上只是演示了最简单的OSPF的配置，而OSPF在大型网络才广泛的使用，配置也复杂多很多。即使是 Zebra，
+
+也还可用做复杂的多的OSPF实验。
+
+4、用Zebra做BGP实验
+
+RIP和OSPF都是内部网关协议（IGP），BGP属于外部网关协议（EGP）。BGP广泛用于Internet以连接 ISP，并将
+
+企业与ISP互连。
+
+当BGP的影响被完全了解，并且至少下列情况之一存在时，在AS中使用BGP才是最恰当的：
+  1 AS允许数据包穿过它到达其它自治系统（例如，某个服务提供商）。
+  2 AS有到其它自治系统的多条连接。
+  3 必须对进入和离开AS的数据流进行控制。
+
+对于互连的自治系统来说，BGP并不总是恰当的解决方案，如果有如下情况中的一个或多个时，不要使 用BGP：
+  1 只有到Internet或另一AS的单一连接。
+  2 无需考虑路由策略或路由选择。
+  3 路由器缺乏经常性的BGP更新的内存或处理器。
+  4 对路由过滤和BGP路径选择过程的了解十分有限。
+  5 在自治系统间的带宽较低。
+在这些情况下，应该使用静态路由。
+
+Zebra支持BGP-4和BGP-4+，下面实验只是演示BGP的基本命令，以及debug的一些信息。一个比较复杂 的用
+
+Zebra做BGP实验见http://www.unixreview.com/print/documentID=15977，有条件可以做一下。
+
+Zebra使用bgpd程序实现BGP路由功能，但bgpd需要从zebra程序获得接口信息，所以zebra程序必须在 bgpd程序
+
+之前运行。
+
+初始化第一台机器：
+
+shell_1> cd /usr/local/etc
+shell_1> cp zebra.conf.sample zebra.conf
+shell_1> cp bgpd.conf.sample bgpd.conf
+shell_1> zebra -d
+
+还有一个bgpd.conf.sample2配置样例是用于IPv6的。
+
+进入zebra设置IP
+
+shell_1> telnet localhost 2601
+Password:
+Router> en
+Password:
+Router# conf t
+Router(config)# hostname r1
+r1(config)# int eth0
+r1(config-if)# ip address 192.168.5.121/24
+r1(config-if)# ctrl+z
+r1# copy run start
+
+进入第一台机器的bgp设置
+
+shell_1> bgpd -d
+
+启动bgpd，我们看到TCP端口179已经打开。两台BGP路由器相互间建立一条TCP连接，交换消息以打开 和确认连
+
+接参数。这两台路由器被称为对等路由器，或者邻居。
+
+shell_1> telnet localhost 2605
+Password:
+bgpd> en
+bgpd# conf t
+bgpd(config)# hostname r1_bgpd
+r1_bgpd(config)# router bgp 7675
+
+配置样例里已经指定了AS为7675，我们懒的改就拿来用。AS是一个16bit的数字，其范围从1到 65535。RFC 
+
+1930给出了AS编号使用指南。从64512到65535的AS编号范围是留作私用的，类似私有IP。
+
+r1_bgpd(config-router)# network 192.168.5.0/24
+r1_bgpd(config-router)# neighbor 192.168.5.121 remote-as 7676
+
+查看bgp信息：
+
+r1_bgpd# sh ip bgp
+BGP table version is 0, local router ID is 192.168.5.123
+Status codes: s suppressed, d damped, h history, * valid, > best, i - internal
+Origin codes: i - IGP, e - EGP, ? - incomplete
+
+   Network          Next Hop            Metric LocPrf Weight Path
+*> 192.168.5.0      0.0.0.0                            32768 i
+
+Total number of prefixes 1
+
+把log记录到文件：
+
+r1_bgpd# conf t
+r1_bgpd(config)# log file /usr/local/etc/bgpd.log
+
+打开debug选项：
+
+r1_bgpd(config)# exit
+r1_bgpd debug bgp events
+r1_bgpd debug bgp keepalives
+r1_bgpd debug bgp updates
+
+然后在shell下用tail查看log记录：
+
+shell_1> tail -f /usr/local/etc/bgpd.log
+--------------------------------8<---------------------------------------
+2002/04/29 19:13:08 BGP: 192.168.5.121 [Event] Connect start to 192.168.5.121 fd 10
+2002/04/29 19:13:11 BGP: 192.168.5.121 [Event] Connect failed (Operation now in progress)
+--------------------------------8<---------------------------------------
+
+r1不能连接邻居192.168.5.121。
+
+第二台机器的设置
+
+前面的初始化和第一台一样，不过这里名字设成r2便于辨认，IP设成了192.168.5.123/24。
+
+进入第二台机器的bgp设置
+
+shell_2> bgpd -d
+shell_2> telnet localhost 2605
+Password:
+bgpd> en
+bgpd# conf t
+bgpd(config)# hostname r2_bgpd
+
+AS要设成不一样，所以修改一下：
+
+r2_bgpd(config)# no router bgp 7675
+r2_bgpd(config)# router bgp 7676
+r2_bgpd(config-router)# network 192.168.5.0/24
+r2_bgpd(config-router)# neighbor 192.168.5.123 remote-as 7675
+
+这时第一台机器的log出现如下信息：
+
+--------------------------------8<---------------------------------------
+2002/04/29 19:16:35 BGP: [Event] BGP connection from host 192.168.5.121
+2002/04/29 19:16:35 BGP: [Event] Make dummy peer structure until read Open packet
+2002/04/29 19:16:35 BGP: 192.168.5.121 [Event] Transfer temporary BGP peer to existing one
+2002/04/29 19:16:35 BGP: 192.168.5.121 [Event] Accepting BGP peer delete
+2002/04/29 19:16:35 BGP: 192.168.5.121 send UPDATE 192.168.5.0/24 nexthop 192.168.5.123, origin 
+
+i, path
+2002/04/29 19:16:35 BGP: 192.168.5.121 rcvd UPDATE w/ attr: nexthop 192.168.5.121, origin i, path 
+
+7676
+2002/04/29 19:16:35 BGP: 192.168.5.121 rcvd 192.168.5.0/24
+--------------------------------8<---------------------------------------
+
+两台bgp已经互连了。再看一下第一台机器的bgp信息：
+
+r1_bgpd# sh ip bgp
+BGP table version is 0, local router ID is 192.168.5.123
+Status codes: s suppressed, d damped, h history, * valid, > best, i - internal
+Origin codes: i - IGP, e - EGP, ? - incomplete
+
+   Network          Next Hop            Metric LocPrf Weight Path
+*  192.168.5.0      192.168.5.121                          0 7676 i
+*>                  0.0.0.0                            32768 i
+
+Total number of prefixes 1
+
+r1_bgpd# sh ip bgp neighbors
+BGP neighbor is 192.168.5.121, remote AS 7676, local AS 7675, external link
+  BGP version 4, remote router ID 192.168.5.121
+  BGP state = Established, up for 00:01:13
+  Last read 00:00:13, hold time is 180, keepalive interval is 60 seconds
+  Neighbor capabilities:
+    Route refresh: advertised and received (old and new)
+    Address family IPv4 Unicast: advertised and received
+  Received 98 messages, 0 notifications, 0 in queue
+  Sent 103 messages, 0 notifications, 0 in queue
+  Route refresh request: received 0, sent 0
+  Minimum time between advertisement runs is 0 seconds
+
+For address family: IPv4 Unicast
+  Community attribute sent to this neighbor (both)
+  1 accepted prefixes
+
+  Connections established 2; dropped 1
+Local host: 192.168.5.123, Local port: 179
+Foreign host: 192.168.5.121, Foreign port: 1029
+Nexthop: 192.168.5.123
+Read thread: on  Write thread: off
+
+Zebra还支持很多BGP的特性，请参考GNU Zebra Manual，有条件的可以做一下那些实验。
+
+Zebra的Mailing List比较活跃，有许多人在那里讨论Zebra的开发和配置等等，有问题的话，在那里应该 能得
+
+到解答。
+
+Reference
+
+GNU Zebra Manual
+http://www.pointless.net/~jasper/zebra-html/zebra_toc.html#SEC_Contents
+组建可扩展的Cisco网络
+http://www.unixreview.com/print/documentID=15977]
