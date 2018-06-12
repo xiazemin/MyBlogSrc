@@ -1,0 +1,343 @@
+---
+title: samba
+layout: post
+category: linux
+author: 夏泽民
+---
+<!-- more -->
+利用samba解决。  在mac机上直接远程连接这个开发机（可以略过跳板机的限制）：Finder中，command+k，添加服务器地址，协议使用smb://hostname。
+然后在phpstorm上，打开这个远程开发机上的项目。
+直接在mac的IDE上搞运行环境上的代码，不用vi，不用再手动上传到开发机，甚至不用保存（ctrl+s等操作不必，因为更改的直接就是远程机器的代码），效率很不错。
+分享一段samba配置文件中，怎么分享某个文件夹。
+[myshare]
+   ;comment = my share directory
+   path = /home/work/xxx
+   valid users = work
+   write list = work
+   force user = work
+   force group = work
+   public = yes
+   writable = yes
+   printable = no
+   create mask = 0644
+当然可以配置多个分享文件夹[xxx] ，只要复制这段配置即可。
+值得一提的是，force user 和 force group这个选项比较重要，如果你很在意更改文件后，这个文件的owner和group的话。
+
+因为没有这两个配置，那么当你通过samba新建或者更改文件时，会默认更改这个文件的所有者和所数组为root。这个需要注意。
+
+同理create mask也是新建文件时的默认权限。
+创建samba用户名密码(添加work用户）
+ # smbpasswd -a work 
+ 
+ samba简介
+samba，是一个基于GPL协议的自由软件。它重新实现了SMB/CIFS协议，可以在各个平台共享文件和打印机。
+
+1991年，还是大学生的Andrew Tridgwell，有三台机器，分别是Microsoft的DOS系统、DEC的Digital Unix系统、以及Sun的Unix系统。当时的技术无法让三者共享文件。为此，他开发了samba并将其开源。
+
+本来改名为smbserver，但是一家商业公司注册了SMBServer商标。他被告知不能使用。于是执行了grep -i '^s.*m.*b' /usr/share/dict/words，从中选择了samba这个词。
+
+前辈们的技术罗曼史，总是令人心潮澎湃啊！
+
+Linux配置
+安装samba
+我的远程Linux服务器用的是Ubutu系统，包管理器是apt，以此为例。
+
+sudo apt-get install samba
+安装samba及其所有依赖。
+
+共享文件夹
+先创建一个需要共享的文件夹，这里用shared_directory。如果已经有，直接执行chmod改变它的权限。
+
+mkdir /home/USER_NAME/shared_directory
+sudo chmod 777 /home/USER_NAME/shared_directory
+USER_NAME就是你的用户名。
+
+配置samba.conf
+可以直接修改/etc/samba/smb.conf，在文件末尾添加：
+
+[share]
+      path = /home/USER_NAME/shared_directory
+      available = yes
+      browseable = yes
+      public = yes
+      writable = yes
+每一行的意义，其英文都很明白。关键path要指定为你需要的文件夹。
+添加samba账户
+sudo touch /etc/samba/smbpasswd
+sudo smbpasswd -a USER_NAME
+USER_NAME就是你需要添加的用户名。然后会提示输入两次密码。
+在Mac上连接
+打开Finder（或在桌面），CMD + k，可以得到以下页面：
+在`smb://`后面，输入你的服务器地址或域名
+输入前面的`USER_NAME`和刚设置的密码
+然后，就可以在Mac的Finder下，管理远程Linux服务器的那个文件夹下的所有内容啦!
+.DS_Store安全隐患
+由于Finder自带的.DS_Store包含了太多信息，如果在服务器产生.DS_Store会造成安全隐患。如果没有特殊配置，你用Finder管理远程的文件夹会自动产生.DS_Store。
+在云端检查你的共享文件夹，如果发现.DS_Store，立即删除！
+ls -a /home/USER_NAME/shared_directory
+如何让Finder不在远程连接时产生.DS_Store？
+打开Mac的Terminal，输入
+defaults write com.apple.desktopservices DSDontWriteNetworkStores true
+然后重启Mac，再试试远程连接。
+
+samba是一个实现不同操作系统之间文件共享和打印机共享的一种SMB协议的免费软件。
+samba软件结构：
+/etc/samba/smb.conf   　　　　　　 　　　　　　　　　#samba服务的主要配置文件
+
+/etc/samba/lmhosts     　　　　　　　　　　　　　　   #samba服务的域名设定，主要设置IP地址对应的域名，类似linux系统的/etc/hosts
+/etc/samba/smbusers    　　　　　　　　　　　　　　 #samba服务设置samba虚拟用户的配置文件
+/var/log/samba         　　　　　　　　　　　　　　　　#samab服务存放日志文件
+/var/lib/samba/private/{passdb.tdb,secrets.tdb}  　　　　#存放samba的用户账号和密码数据库文档
+Samba在线安装
+
+ 
+
+[root@VMredhat6 ~]# yum -y install samba*                    #yum在线安装samba
+
+ 
+
+[root@VMredhat6 ~]# rpm -qa | grep samba                    #检查samba安装情况
+
+samba-client-3.6.23-41.el6.x86_64
+
+samba-winbind-clients-3.6.23-41.el6.x86_64
+
+samba-3.6.23-41.el6.x86_64
+
+samba4-libs-4.0.0-58.el6.rc4.x86_64
+
+samba-common-3.6.23-41.el6.x86_64
+
+samba-winbind-3.6.23-41.el6.x86_64
+标注：Samab服务开启之前需要关闭两个服务，iptables防火墙（如果你熟悉可以不关闭，放行smb的端口即可，SAMBA服务TCP端口139,445  UDP端口 137,138）；selinux服务。
+关闭防火墙：
+
+[root@VMredhat6 ~]# /etc/init.d/iptables stop                         #关闭防火墙
+
+[root@VMredhat6 ~]# chkconfig --list iptables                       #查看防火墙启动状态
+
+[root@VMredhat6 ~]# chkconfig iptables off                          #关闭防火墙开机自动启动
+关闭selinux：
+[root@VMredhat6 ~]# vim /etc/selinux/config                      #永久关闭selinux
+
+set SELINUX=disabled       #SELINUX=enforcing改为SELINUX=disabled
+标注：smb.conf配置文件分为两大类，一个全局设置参数，一个是文件共享设置参数：
+ #全局设置参数
+[global]
+config file = /etc/samba/smb.conf.%U                                                           #可以让你使用另一个配置文件来覆盖缺省的配置文件。如果文件 不存在，则该项无效。
+workgroup = WORKGROUP               　　　　　　　　　　　　　　　　    #工作组名称
+server string = Samba Server Version %v    　　　　　　　　　　　　　　 #主机的简易说明
+netbios name = MYSERVER             　　　　　　　　　　　　　　             #主机的netBIOS名称，如果不填写则默认服务器DNS的一部分，workgroup和netbios name名字不要设置成一样
+interfaces = lo eth0 192.168.12.2/24 192.168.13.2/24                                  #设置samba服务器监听网卡，可以写网卡名称或IP地址，默认注释
+hosts allow = 127. 192.168.12. 192.168.13.                                                  #设置允许连接到samba服务器的客户端，默认注释
+hosts deny =192.168.12.0/255.255.255.0                                                     #设置不允许连接到samba服务器的客户端，默认注释
+log level =1                                                                                                    #日志文件安全级别，0~10级别，默认0
+log file = /var/log/samba/%m  　　　　　　　　　　　　　　　　　　　　 #产生日志文件的命名，默认以访问者IP地址命名
+max log size = 50   　　　　　　　　　　　　　　　　　　　　　　　　　#日志文件最大容量50，默认50，单位为KB，0表示不限制
+security = share   　　　　　　　　　　　　　　　　　　　　　　　　　#设置用户访问samba服务器的验证方式 ，一共四种验证方式。
+
+1. share：用户访问Samba Server不需要提供用户名和口令, 安全性能较低。
+
+2. user：Samba Server共享目录只能被授权的用户访问,由Samba Server负责检查账号和密码的正确性。账号和密码要在本Samba Server中建立。
+
+3. server：依靠其他Windows NT/2000或Samba Server来验证用户的账号和密码,是一种代理验证。此种安全模式下,系统管理员可以把所有的Windows用户
+
+和口令集中到一个NT系统上,使用Windows NT进行Samba认证, 远程服务器可以自动认证全部用户和口令,如果认证失败,Samba将使用用户级安全模式作为替代的方式。
+
+4. domain：域安全级别,使用主域控制器(PDC)来完成认证。
+passdb backend = tdbsam   　　　　　　　　　　　　　　　　　　　　　　#定义用户后台类型
+
+1、smbpasswd:使用SMB服务的smbpasswd命令给系统用户设置SMB密码
+
+2、tdbsam:创建数据库文件并使用pdbedit建立SMB独立用户，smbpasswd –a username建立samba用户并设置密码，不过建立samba用户
+
+必须先建立系统用户，也可以使用pdbedit命令来建立samba用户：
+
+pdbedit –a username：新建Samba账户。
+
+pdbedit –x username：删除Samba账户。
+
+pdbedit –L：列出Samba用户列表，读取passdb.tdb数据库文件。
+
+pdbedit –Lv：列出Samba用户列表的详细信息。
+
+pdbedit –c “[D]” –u username：暂停该Samba用户的账号。
+
+pdbedit –c “[]” –u username：恢复该Samba用户的账号。
+
+3、ldapsam:基于LDAP服务进行账户验证
+username map = /etc/samba/smbusers   #配合/etc/samba/smbusers文件设置虚拟用户
+ #共享文件设置参数
+[share]         　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　   #自定义共享名称
+comment =  This is share software       　　　　　　　　　　　　　　　　　　     #共享描述
+path  =  /home/testfile                                              　　　　　　　　　　　　　　#共享目录路径
+browseable  =  yes/no                      　　　　　　　　　　　　　　　　                 #设置共享是否可浏览，如果no就表示隐藏，需要通过IP+共享名称进行访问
+writable  =  yes/no  　　　　　　　　　　　　　　　　　　　　　　　　　　　　 #设置共享是否具有可写权限
+read only  =  yes/no  　　　　　　　　　　　　　　　　　　　　　　　　　　　　#设置共享是否具有只读权限
+admin users  =  root 　　　　　　　　　　　　　　　　　　　　　　　　　　　　#设置共享的管理员，如果security =share 时，引项无效，多用户中间使用逗号隔开，例如admin users = root,user1,user2
+valid users  =  username  　　　　　　　　　　　　　　　　　　　　　　　　　   #设置允许访问共享的用户，例如valid users = user1,user2,@group1,@group2（多用户或组使用逗号隔开，@group表示group用户组）
+invalid users  =  username     　　　　　　　　　　　　　　　　　　　　　　　　 #设置不允许访问共享的用户
+write list  =  username   　　　　　　　　　　　　　　　　　　　　　　　　　　  #设置在共享具有写入权限的用户，例如例如write list  = user1,user2,@group1,@group2（多用户或组使用逗号隔开，@group表示group用户组）
+public  =  yes/no   　　　　　　　　　　　　　　　　　　　　　　　　　　　　   #设置共享是否允许guest账户访问
+guest  ok  =  yes/no  　　　　　　　　　　　　　　　　　　　　　　　　　　　　 #功能同public 一样
+create mask = 0700                  　　　　　　　　　　　　　　　　　　　　　　　 #创建的文件权限为700
+directory mode = 0700               　　　　　　　　　　　　　　　　　　　　　　　 #创建的文件目录为 700
+一、不需要账号密码访问的共享(security  =  share )
+[root@VMredhat6 samba]# /etc/init.d/smb  start      　　　　　　　　　　 　　#启动samba服务
+
+[root@VMredhat6 samba]# ls -ld /home/smbuser/       　　　　　　　　　　　#查看共享文件权限
+
+[root@VMredhat6 samba]# chmod 777 /home/smbuser/  　　　　　　　　　　#分配共享文件最大权限
+
+[root@VMredhat6 samba]# testparm                  　　　　　　　　　　　　　　#检查smb.conf配置文件是否有语法错误
+
+[root@VMredhat6 samba]# netstat -tlnp | grep mbd      　　　　　　　　　　　 #查看samba端口，TCP端口139,445  UDP端口 137,138
+[root@VMredhat6 samba]# vim /etc/samba/smb.conf    　　　　　　　　　　 #设置smb.conf配置文件
+
+[global]
+
+workgroup = WORKGROUP                　　　　　　　　　　　　　　　　　　 #设置主机工作组
+
+server string = Samba Server Version %v     　　　　　　　　　　　　　　　 #samba服务注释
+log level = 1                             　　　　　　　　　　　　　　　　　　　　　　#设置日志文件安全级别为1
+
+log file = /var/log/samba/%m               　　　　　　　　　　　　　　　　　　　#设置日志文件名称，%m以IP地址为名称
+
+max log size = 50                        　　　　　　　　　　　　　　　　　　　　　 #设置日志文件最大容量50KB，0表示不限制
+security = share                          　　　　　　　　　　　　　　　　　　　　    #以share验证方式访问
+
+passdb backend = tdbsam                  　　　　　　　　　　　　　　　　　　   #定义用户后台类型
+load printers = no                        　　　　　　　　　　　　　　　　　　　　     #关闭打印共享功能
+
+cups options = raw                       　　　　　　　　　　　　　　　　　　　　    #打印机选项
+[usershare]
+
+comment  =  Home Directories                　　　　　　　　　　　　　　　　　　#共享文件描述
+
+path  =  /home/shareuser                    　　　　　　　　　　　　　　　　　　　#共享路径
+
+browseable  =  yes                          　　　　　　　　　　　　　　　　　　　　#共享文件可以浏览
+
+writable  =  yes                             　　　　　　　　　　　　　　　　　　　　　#共享文件可写
+
+; read only  =  yes                           　　　　　　　　　　　　　　　　　　　　#共享文件可读，不能与writable共用
+
+guest ok =  yes                             　　　　　　　　　　　　　　　　　　　　　#允许guest用户访问
+[root@VMredhat6 samba]# /etc/init.d/smb  restart       　　　　　　　　　　　　#重启samba服务
+测试：
+
+Windows系统操作：
+
+在win 7系统打开运行输入 \\192.168.10.150 直接访问，不需要输入任何用户和密码
+
+在linux操作需要进行挂载：
+
+[root@VMredhat6 ~]# yum -y install samba-client   　　　　　　 　　　　　　　　#在线安装samba-client才能使用smbclient命令
+
+[root@VMredhat6 ~]# smbclient -L //192.168.10.150    　　　　　　　　　　　　　　#查看samba服务器共享目录
+
+[root@VMredhat6 ~]# mount -t cifs //192.168.10.150/usershare /mnt/share   　　　　#挂载
+二、需要输入账号和密码访问的共享(security  =  user)
+标注：创建samba用户之前必须先创建系统用户，系统用户和samba用户名一样，但密码可以设置成不一样
+[root@VMredhat6 samba]# useradd test01                    　　　　　　　　　　　　   #创建系统用户test01
+
+[root@VMredhat6 samba]# useradd test02       　　　　　　　　　　　　　　　     #创建系统用户test02
+
+[root@VMredhat6 samba]# passwd test01         　　　　　　　　　　　　　　　    #设置系统用户test01密码
+
+[root@VMredhat6 samba]# passwd test01        　　　　　　　　　　　　　　　　  #设置系统用户test02密码
+
+[root@VMredhat6 samba]# smbpasswd -a test01   　　　　　　　　　　　　　　　 #把系统用户test01添加为samba用户并设置samba用户登录密码
+
+[root@VMredhat6 samba]# smbpasswd -a test02    　　　　　　　　　　　　　　　 #把系统用户test02添加为samba用户并设置samba用户登录密码
+
+[root@VMredhat6 samba]# pdbedit –L             　　　　　　　　　　　　　　　　　　#查看samba用户
+
+[root@VMredhat6 samba]# mkdir /home/{smbadmin01,smbuser01}  　　　　　　　　#home创建两个共享目录
+
+[root@VMredhat6 samba]# chmod 777 /home/{smbadmin01,smbuser01}  　　　　　　#目录分配最高权限
+
+ 
+
+[root@VMredhat6 ~]# vim /etc/samba/smb.conf          　　　　　　　　　　　　　　　 #设置smb.conf配置文件
+
+ 
+
+[global]
+
+workgroup = WORKGROUP                 #设置主机工作组
+
+server string = Samba Server Version %v      #samba服务注释
+
+ 
+
+log level = 1                            　　　　　　　　　　　　　　　　　　　　　　　　      #设置日志文件安全级别为1
+
+log file = /var/log/samba/%m               　　　　　　　　　　　　　　　　　　　　　　  #设置日志文件名称，%m以IP地址为名称
+
+max log size = 50                        　　　　　　　　　　　　　　　　　　　　　　　　    #设置日志文件最大容量50KB，0表示不限制
+
+ 
+
+security = user                         　　　　　　　　　　　　　　　　　　　　　　　　         #以user验证方式访问
+
+passdb backend = tdbsam                   　　　　　　　　　　　　　　　　　　　　　　    #定义用户后台类型
+load printers = no                         　　　　　　　　　　　　　　　　　　　　　　　　　　#关闭打印共享功能
+
+cups options = raw                        　　　　　　　　　　　　　　　　　　　　　　　　　　#打印机选项
+[usershare]
+
+comment  =  Home Directories                　　　　　　　　　　　　　　　　　　　　　　  #共享文件描述
+
+path  =  /home/smbuser01                 　　　　　　　　　　　　　　　　　　　　　　　　  #共享路径
+
+browseable  =  yes                        　　　　　　　　　　　　　　　　　　　　　　　　　　 #共享文件可以浏览
+
+read only  =  yes                          　　　　　　　　　　　　　　　　　　　　　　　　　　 #共享文件可读，不能与writable共用
+
+valid users  =  test01,test02                　　　　　　　　　　　　　　　　　　　　　　　　  #设置允许访问共享用户
+[adminshare]
+
+comment  =  Home Directories                　　　　　　　　　　　　　　　　　　　　　　　　#共享文件描述
+
+path  =  /home/smbadmin01                 　　　　　　　　　　　　　　　　　　　　　　　　   #共享路径
+
+browseable  =  yes                         　　　　　　　　　　　　　　　　　　　　　　　　　　　 #共享文件可以浏览
+
+writable  =  yes                           　　　　　　　　　　　　　　　　　　　　　　　　　　　　  #共享文件可写
+
+create  make  =  0664                      　　　　　　　　　　　　　　　　　　　　　　　　　　#设置用户创建文件权限0664
+
+directory  make  =  0775                   　　　　　　　　　　　　　　　　　　　　　　　　　　#设置用户创建目录权限0775
+write  list   =   test01                   　　　　　　　　　　　　　　　　　　　　　　　　　　　　  #设置允许访问共享具有写入权限的用户
+[root@VMredhat6 samba]# /etc/init.d/smb  restart       　　　　　　　　　　　　　　　　　　#重启samba服务
+测试：
+Windows系统操作：
+在win 7系统打开运行输入 \\192.168.10.150 直接访问，输入test01用户和密码
+在linux操作需要进行挂载：
+[root@VMredhat6 ~]# yum -y install samba-client    　　　　　　　　　　　　　　　　　#在线安装samba-client才能使用smbclient命令
+
+[root@VMredhat6 ~]# smbclient -L //192.168.10.150    　　　　　　　　　　　　　　　　#查看samba服务器共享目录
+
+[root@VMredhat6 ~]# mount -t cifs //192.168.10.150/usershare /mnt/share   　　　　　　#挂载
+三、特殊操作：(samba用户映射，又称作虚拟用户)
+　     上述操作是创建系统用户再分配对应的samab用户，通过samba用户就能知道你的系统用户，缺乏一定的安全性。不过，
+
+samba提供了一种方法，就是把samba用户映射成虚拟用户。比如linux系统创建了一个用户user，samba把user添加为samba用户，
+
+samba再把user用户虚拟成user01,user02等用户，一个samba用户可以虚拟成一个或多个虚拟用户。这样就可以保证系统用户安全性。
+操作跟上述操作一样，只是修改一些地方即可：
+[root@VMredhat6 ~]# vim /etc/samba/smb.conf           　　　　　　　　　　#设置smb.conf配置文件
+security = user                        　　　　　　　　　　　　　　　　　　　　   #以user验证方式访问
+
+passdb backend = tdbsam                 　　　　　　　　　　　　　　　　　　#定义用户后台类型
+
+username map = /etc/samba/smbusers   　　　　　　　　　　　　　　　　  #添加这行配置，开启samba虚拟用户配置功能
+[root@VMredhat6 samba]# vim /etc/samba/smbusers   　　　　　　　　　　　　 #添加samba虚拟用户
+ # Unix_name = SMB_name1 SMB_name2 ...
+root = administrator admin
+nobody = guest  pcguest  smbguest
+test01 = user01  user02  user03
+[root@VMredhat6 samba]# /etc/init.d/smb  restart       　　　　　　　　　　　　#重启samba服务
+
+ 
