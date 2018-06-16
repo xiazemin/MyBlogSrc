@@ -4,6 +4,7 @@ layout: post
 category: web
 author: 夏泽民
 ---
+使用:  ~/gitEditHis.sh file code
 <!-- more -->
 {% highlight bash linenos %}
  #!/bin/bash
