@@ -9,6 +9,16 @@ author: 夏泽民
 <img src="{{site.url}}{{site.baseurl}}/img/Logstash_elk.jpeg"/>
  logstash 的服务器端从redis/kafka/rabbitmq等（broker）消息队列获取数据。一条数据一条数据的清洗。清洗完成后发送给elasticsearch集群。再在kibana上显示。
 
+logstash三种启动方式，-e sting类型启动，-f 指定配置文件启动，服务启动。
+1，logstash -e 'input{ stdin{} } output{ stdout{} }'
+2，logstash -f logstash.conf
+3，service logstash start
+
+检查配置文件是否正确
+logstash -f file.conf -t
+Configuration OK
+
+
   对于logstash而言，他的所有功能都是基于插件来完成的。input,filter,output等等都是这样。
 
 输入插件：
@@ -95,3 +105,22 @@ output {
 }
 output插件：
      这一般是把数据存储下来的，有email，csv。当然还有大名鼎鼎的 Elasticsearch
+
+output {
+  elasticsearch {
+  if [type] == "sql"{
+                elasticsearch { 
+                         hosts => ["http://192.168.33.10:9200"]
+                         index => "common-sql-%{+YYYY.MM.dd}"
+                }
+       }
+    ｝
+ ｝
+
+
+查看是否成功
+http://localhost:9200/_cat/indices
+yellow open common-transaction-2015.05.07          E7KztRgjRsWXIJS4shl0Ig 5 1      5   0 126.7kb 126.7kb
+yellow open logstash-common-transaction-2015.05.07 NeqyUy0HQkeE8tMsytm6mA 5 1      1   0    25kb    25kb
+yellow open logstash-common-transaction-2018.06.07 KjQydnOxTFGY9NYOSFIFnQ 5 1      3   0  72.7kb  72.7kb
+
