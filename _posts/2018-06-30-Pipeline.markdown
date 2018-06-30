@@ -1,0 +1,35 @@
+---
+title: Pipeline
+layout: post
+category: storage
+author: 夏泽民
+---
+1.1 为什么会出现Pipeline
+
+Redis本身是基于Request/Response协议的，正常情况下，客户端发送一个命令，等待Redis应答，Redis在接收到命令，处理后应答。在这种情况下，如果同时需要执行大量的命令，那就是等待上一条命令应答后再执行，这中间不仅仅多了RTT（Round Time Trip），而且还频繁的调用系统IO，发送网络请求
+为了提升效率，这时候Pipeline出现了，它允许客户端可以一次发送多条命令，而不等待上一条命令执行的结果，这和网络的Nagel算法有点像（TCP_NODELAY选项）。不仅减少了RTT，同时也减少了IO调用次数（IO调用涉及到用户态到内核态之间的切换）。
+客户端这边首先将执行的命令写入到缓冲中，最后再一次性发送Redis。但是有一种情况就是，缓冲区的大小是有限制的，比如Jedis，限制为8192，超过了，则刷缓存，发送到Redis，但是不去处理Redis的应答，如上图所示那样。
+
+1.2 实现原理
+
+要支持Pipeline，其实既要服务端的支持，也要客户端支持。对于服务端来说，所需要的是能够处理一个客户端通过同一个TCP连接发来的多个命令，可以理解为，这里将多个命令切分，和处理单个命令一样（之前老生常谈的黏包现象），Redis就是这样处理的。而客户端，则是要将多个命令缓存起来，缓冲区满了就发送，然后再写缓冲，最后才处理Redis的应答，如Jedis。
+
+1.3 从哪个方面提升性能
+
+正如上面所说的，一个是RTT，节省往返时间，但是另一个原因也很重要，就是IO系统调用。一个read系统调用，需要从用户态，切换到内核态。
+
+1.4 注意点
+
+Redis的Pipeline和Transaction不同，Transaction会存储客户端的命令，最后一次性执行，而Pipeline则是处理一条，响应一条，但是这里却有一点，就是客户端会并不会调用read去读取socket里面的缓冲数据，这也就造就了，如果Redis应答的数据填满了该接收缓冲（SO_RECVBUF），那么客户端会通过ACK，WIN=0（接收窗口）来控制服务端不能再发送数据，那样子，数据就会缓冲在Redis的客户端应答列表里面。所以需要注意控制Pipeline的大小
+2. Codis Pipeline
+
+在一般情况下，都会在Redis前面使用一个代理，来作负载以及高可用。这里在公司里面使用的是Codis，以Codis 3.2版本为例（3.2版本是支持Pipeline的）。
+
+Codis在接收到客户端请求后，首先根据Key来计算出一个hash，映射到对应slots，然后转发请求到slots对应的Redis。在这过程中，一个客户端的多个请求，有可能会对应多个Redis，这个时候就需要保证请求的有序性（不能乱序），Codis采用了一个Tasks队列，将请求依次放入队列，然后loopWriter从里面取，如果Task请求没有应答，则等待（这里和Java的Future是类似的）。内部BackenRedis是通过channel来进行通信的，dispatcher将Request通过channel发送到BackenRedis，然后BackenRedis处理完该请求，则将值填充到该Request里面。最后loopWriter等待到了值，则返回给客户端
+3. 总结
+
+Pipeline减少了RTT，也减少了IO调用次数（IO调用涉及到用户态到内核态之间的切换）
+
+需要控制Pipeline的大小，否则会消耗Redis的内存
+
+Codis 3.2 Pipeline默认10K，3.1则是1024Jedis客户端缓存是8192，超过该大小则刷新缓存，或者直接发送
