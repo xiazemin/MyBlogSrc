@@ -29,3 +29,8 @@ Existing Gradle Project
 
 参考：https://github.com/davenkin/gradle-learning
 https://www.w3cschool.cn/gradle/34zp1huk.html
+
+
+点击eclipse Package Explorer 右上角的倒三角
+点击 Fliters 
+Deselect All  就显示所有文件了，否则只显示没有被选中的文件
