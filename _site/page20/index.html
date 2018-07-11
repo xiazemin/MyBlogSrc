@@ -144,6 +144,100 @@
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
+						<a class="post-link" href="/MyBlog/linux/2018/05/28/napi.html">NAPI 技术在 Linux 网络驱动上的应用</a>
+					</h2>
+					<div class="author" style="margin-top: -10px;">Posted by
+						<i class="fa fa-user"></i>
+						<a href="/MyBlog/linux/2018/05/28/napi.html"> 夏泽民</a>
+						<span class="post-meta"><i class="fa fa-calendar"></i> 
+							May 28, 2018
+						</span>
+					</div>
+					<div class="excerpt"><p>NAPI是Linux新的网卡数据处理API，据说是由于找不到更好的名字，所以就叫NAPI(New API)，在2.5之后引入。简单来说，NAPI是综合中断方式与轮询方式的技术。中断的好处是响应及时，如果数据量较小，则不会占用太多的CPU事件；缺点是数据量大时，会产生过多中断，而每个中断都要消耗不少的CPU时间，从而导致效率反而不如轮询高。轮询方式与中断方式相反，它更适合处理大量数据，因为每次轮询不需要消耗过多的CPU时间；缺点是即使只接收很少数据或不接收数据时，也要占用CPU时间。
+NAPI是两者的结合，数据量低时采用中断，数据量高时采用轮询。平时是中断方式，当有数据到达时，会触发中断
+处理函数执行，中断处理函数关闭中断开始处理。如果此时有数据到达，则没必要再触发中断了，因为中断处理函
+数中会轮询处理数据，直到没有新数据时才打开中断。
+很明显，数据量很低与很高时，NAPI可以发挥中断与轮询方式的优点，性能较好。如果数据量不稳定，且说高不高
+说低不低，则NAPI则会在两种方式切换上消耗不少时间，效率反而较低一些。
+来看下NAPI和非NAPI的区别：
+(1) 支持NAPI的网卡驱动必须提供轮询方法poll()。
+(2) 非NAPI的内核接口为netif_rx()，NAPI的内核接口为napi_schedule()。
+(3) 非NAPI使用共享的CPU队列softnet_data-&gt;input_pkt_queue，NAPI使用设备内存(或者
+设备驱动程序的接收环)。
+(1) NAPI设备结构
+/* Structure for NAPI scheduling similar to tasklet but with weighting */</p>
+
+<p>struct napi_struct {<br />
+    /* The poll_list must only be managed by the entity which changes the 
+     * state of the NAPI_STATE_SCHED bit. This means whoever atomically 
+     * sets that bit can add this napi_struct to the per-cpu poll_list, and 
+     * whoever clears that bit can remove from the list right before clearing the bit. 
+     <em>/<br />
+    struct list_head poll_list; /</em> 用于加入处于轮询状态的设备队列 <em>/<br />
+    unsigned long state; /</em> 设备的状态 <em>/<br />
+    int weight; /</em> 每次处理的最大数量，非NAPI默认为64 <em>/<br />
+    int (</em>poll) (struct napi_struct <em>, int); /</em> 此设备的轮询方法，非NAPI为process_backlog() <em>/ <br />
+ #ifdef CONFIG_NETPOLL<br />
+    …<br />
+ #endif<br />
+    unsigned int gro_count;<br />
+    struct net_device *dev;<br />
+    struct list_head dev_list;<br />
+    struct sk_buff *gro_list;<br />
+    struct sk_buff *skb;<br />
+};<br />
+(2) 初始化
+初始napi_struct实例。
+void netif_napi_add(struct net_device *dev, struct napi_struct *napi,<br />
+        int (</em>poll) (struct napi_struct <em>, int), int weight)<br />
+{<br />
+    INIT_LIST_HEAD(&amp;napi-&gt;poll_list);<br />
+    napi-&gt;gro_count = 0;<br />
+    napi-&gt;gro_list = NULL;<br />
+    napi-&gt;skb = NULL;<br />
+    napi-&gt;poll = poll; /</em> 设备的poll函数 <em>/<br />
+    napi-&gt;weight = weight; /</em> 设备每次poll能处理的数据包个数上限 */</p>
+
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code>list_add(&amp;napi-&gt;dev_list, &amp;dev-&gt;napi_list); /* 加入设备的napi_list */  
+napi-&gt;dev = dev; /* 所属设备 */     #ifdef CONFIG_NETPOLL  
+spin_lock_init(&amp;napi-&gt;poll_lock);  
+napi-&gt;poll_owner = -1;    #endif  
+set_bit(NAPI_STATE_SCHED, &amp;napi-&gt;state); /* 设置NAPI标志位 */   }   (3) 调度 在网卡驱动的中断处理函数中调用napi_schedule()来使用NAPI。 /**   * napi_schedule - schedule NAPI poll   * @n: napi context   * Schedule NAPI poll routine to be called if it is not already running.   */    static inline void napi_schedule(struct napi_struct *n)   {  
+/* 判断是否可以调度NAPI */  
+if (napi_schedule_prep(n))  
+    __napi_schedule(n);   }   判断NAPI是否可以调度。如果NAPI没有被禁止，且不存在已被调度的NAPI， 则允许调度NAPI，因为同一时刻只允许有一个NAPI poll instance。 /**   * napi_schedule_prep - check if napi can be scheduled   * @n: napi context   * Test if NAPI routine is already running, and if not mark it as running.   * This is used as a condition variable insure only one NAPI poll instance runs.   * We also make sure there is no pending NAPI disable.   */  
+</code></pre></div></div>
+
+<p>static inline int napi_schedule_prep(struct napi_struct *n)<br />
+{<br />
+    return !napi_disable_pending(n) &amp;&amp; !test_and_set_bit(NAPI_STATE_SCHED, &amp;n-&gt;state);<br />
+}</p>
+
+<p>static inline int napi_disable_pending(struct napi_struct *n)<br />
+{<br />
+    return test_bit(NAPI_STATE_DISABLE, &amp;n-&gt;state);<br />
+}</p>
+
+<p>enum {<br />
+    NAPI_STATE_SCHED, /* Poll is scheduled <em>/<br />
+    NAPI_STATE_DISABLE, /</em> Disable pending <em>/<br />
+    NAPI_STATE_NPSVC, /</em> Netpoll - don’t dequeue from poll_list */<br />
+};<br />
+NAPI的调度函数。把设备的napi_struct实例添加到当前CPU的softnet_data的poll_list中，</p>
+
+</div>
+					<div class="readmore" style="float: right;">
+						
+							<a href="/MyBlog/linux/2018/05/28/napi.html" style="color:green">阅读全文</a>
+						
+					</div>								
+			</div>
+			<br/>
+			<hr/>
+			<div class="post-list" style="list-style-type: none;">			
+				 	
+					<h2>
+						<img class="title-image" src="/MyBlog/img/dna.png"/>
 						<a class="post-link" href="/MyBlog/linux/2018/05/28/ethereal.html">ethereal</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
@@ -234,31 +328,6 @@
 					<div class="readmore" style="float: right;">
 						
 							<a href="/MyBlog/linux/2018/05/24/fsnotify.html" style="color:green">阅读全文</a>
-						
-					</div>								
-			</div>
-			<br/>
-			<hr/>
-			<div class="post-list" style="list-style-type: none;">			
-				 	
-					<h2>
-						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/golang/2018/05/18/PostForm.html">PostForm</a>
-					</h2>
-					<div class="author" style="margin-top: -10px;">Posted by
-						<i class="fa fa-user"></i>
-						<a href="/MyBlog/golang/2018/05/18/PostForm.html"> 夏泽民</a>
-						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							May 18, 2018
-						</span>
-					</div>
-					<div class="excerpt"><!-- more -->
-<p>golang http.request的三个属性Form、PostForm、MultipartForm</p>
-
-</div>
-					<div class="readmore" style="float: right;">
-						
-							<a href="/MyBlog/golang/2018/05/18/PostForm.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -1002,6 +1071,14 @@
 							var searchIndex={
 							"code" : 0 ,
 							"data" : [
+							
+							{
+							"title" : "php_kafka - ",
+							"url" : "/MyBlog/web/2018/07/11/php_kafka.html"
+							}
+							
+							,
+							
 							
 							{
 							"title" : "KM算法 - ",
@@ -4035,7 +4112,7 @@
 								
 								
 									<a class="bold" href="/MyBlog/category/web">
-										web (67)
+										web (68)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -4222,6 +4299,10 @@
 								<ul style="display:none;width:250px;height:250px;">
 								     
 								   <li>
+										<a href="/MyBlog/web/2018/07/11/php_kafka.html" style="font-size:40px;"> php_kafka</a>
+									</li>
+									  
+								   <li>
 										<a href="/MyBlog/algorithm/2018/07/10/km.html" style="font-size:40px;"> KM算法</a>
 									</li>
 									  
@@ -4376,10 +4457,6 @@
 								   <li>
 										<a href="/MyBlog/elasticsearch/2018/06/29/index.html" style="font-size:40px;"> index</a>
 									</li>
-									  
-								   <li>
-										<a href="/MyBlog/elasticsearch/2018/06/29/ik.html" style="font-size:40px;"> ik</a>
-									</li>
 									
 								</ul>
 							</div>
@@ -4392,6 +4469,12 @@
                 <div class="well">
                 	<h4>Recent posts</h4>
                 		<ul class="posts" span="recent">  
+							  
+							   <li>  
+								   <span>11 Jul 2018</span>
+								   <a href="/MyBlog/web/2018/07/11/php_kafka.html">  
+								   php_kafka</a>  
+							   </li>  
 							  
 							   <li>  
 								   <span>10 Jul 2018</span>
@@ -4415,12 +4498,6 @@
 								   <span>10 Jul 2018</span>
 								   <a href="/MyBlog/algorithm/2018/07/10/bipartite_graph_match.html">  
 								   bipartite_graph_match</a>  
-							   </li>  
-							  
-							   <li>  
-								   <span>10 Jul 2018</span>
-								   <a href="/MyBlog/algorithm/2018/07/10/bipartite_graph.html">  
-								   bipartite_graph 二分图</a>  
 							   </li>  
 							  
 						</ul>
