@@ -1,7 +1,7 @@
 ---
 title: jekyll config
 layout: post
-category: jekyll
+category: algorithm
 author: 夏泽民
 ---
 <!-- more -->
