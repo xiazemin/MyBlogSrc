@@ -1,0 +1,67 @@
+---
+title: SQL Hints (SQL 优化器)
+layout: post
+category: storage
+author: 夏泽民
+---
+https://php.golaravel.com/mysqlnd-ms.quickstart.sqlhints.html
+
+SQL 优化器可以强行指定连接池中特定的链接。可以给定插件一个优化器去使用特定的服务器连接， 这样可以解决由于链接切换引起的链接状态变化问题。
+
+SQL hints 是基于 SQL 语句的。因为 SQL 注释会被 SQL 执行器忽略， 他并不会妨碍 MySQL 服务器、MySQL proxy 或者任何防火墙的工作。
+
+插件支持 SQL hints，MYSQLND_MS_MASTER_SWITCH hints 可以指定语句在 master 上运行，MYSQLND_MS_SLAVE_SWITCH 可以指定在 slave 上运行，MYSQLND_MS_LAST_USED_SWITCH 可以指定语句在上一条语句执行的 slave 上运行。
+
+插件会扫描语句的内容，查询是否有 SQL hints。他只能在语句的开头被识别。
+<!-- more -->
+1 配置一个 master 和一个 slave 的插件
+
+{
+    "myapp": {
+        "master": {
+            "master_0": {
+                "host": "localhost",
+                "socket": "\/tmp\/mysql.sock"
+            }
+        },
+        "slave": {
+            "slave_0": {
+                "host": "192.168.2.27",
+                "port": "3306"
+            }
+        }
+    }
+}
+
+2 SQL hints 禁止连接切换
+
+<?php
+$mysqli = new mysqli("myapp", "username", "password", "database");
+if (mysqli_connect_errno())
+  /* Of course, your error handling is nicer... */
+  die(sprintf("[%d] %s\n", mysqli_connect_errno(), mysqli_connect_error()));
+
+/* 连接 1：设置一个 SQL 用户变量，没有 SELECT 所以运行在 master 上 */
+if (!$mysqli->query("SET @myrole='master'")) {
+ printf("[%d] %s\n", $mysqli->errno, $mysqli->error);
+}
+
+/* 连接 1：因为指定了 SQL hint */
+if (!($res = $mysqli->query(sprintf("/*%s*/SELECT @myrole AS _role", MYSQLND_MS_LAST_USED_SWITCH)))) {
+ printf("[%d] %s\n", $mysqli->errno, $mysqli->error);
+} else {
+ $row = $res->fetch_assoc();
+ $res->close();
+ printf("@myrole = '%s'\n", $row['_role']);
+}
+$mysqli->close();
+?>
+以上例程会输出：
+
+@myrole = 'master'
+上面的范例使用 MYSQLND_MS_LASTER_USED_SWITCH 来防止在 master 和 slave 之间进行切换，即使运行了 SELECT 开头的语句。
+
+SQL hints 也可以用于在 master 上运行 SELECT 语句。 这经常发生于 slave 中的数据落后于 master，但是希望获取当前数据的时候。
+
+在 1.2.0 版本中，引入了服务级别的概念，用于处理即时数据获取的问题。 使用服务级别，可以降低对这个问题的关注，替代 SQL hints 的使用。 可以在服务级别和一致性的章节中找到更多的说明。
+
