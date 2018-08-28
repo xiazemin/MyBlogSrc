@@ -1,0 +1,34 @@
+---
+title: 自适应hash
+layout: post
+category: algorithm
+author: 夏泽民
+---
+<!-- more -->
+哈希（hash）是一种非常快的查找方法，一般情况下查找的时间复杂度为O（1）。常用于连接（join）操作，如SQL Server和Oracle中的哈希连接（hash join）。但是SQL Server和Oracle等常见的数据库并不支持哈希索引（hash index）。MySQL的Heap存储引擎默认的索引类型为哈希，而InnoDB存储引擎提出了另一种实现方法，自适应哈希索引（adaptive hash index）。
+
+InnoDB存储引擎会监控对表上索引的查找，如果观察到建立哈希索引可以带来速度的提升，则建立哈希索引，所以称之为自适应（adaptive） 的。自适应哈希索引通过缓冲池的B+树构造而来，因此建立的速度很快。而且不需要将整个表都建哈希索引，InnoDB存储引擎会自动根据访问的频率和模式 来为某些页建立哈希索引。
+
+根据InnoDB的官方文档显示，启用自适应哈希索引后，读取和写入速度可以提高2倍；对于辅助索引的连接操作，性能可以提高5倍。在我看来，自适应哈希索引是非常好的优化模式，其设计思想是数据库自优化（self-tuning），即无需DBA对数据库进行调整。
+
+通过命令SHOW ENGINE INNODB STATUS可以看到当前自适应哈希索引的使用状况，如下所示：
+
+mysql> show engine innodb status\G;  
+*************************** 1. row ***************************  
+Status:   
+=====================================  
+090922 11:52:51 INNODB MONITOR OUTPUT 
+=====================================  
+Per second averages calculated from the last 15 seconds  
+......  
+-------------------------------------  
+INSERT BUFFER AND ADAPTIVE HASH INDEX  
+-------------------------------------  
+Ibuf: size 2249, free list len 3346, seg size 5596,  
+374650 inserts, 51897 merged recs, 14300 merges  
+Hash table size 4980499, node heap has 1246 buffer(s)  
+1640.60 hash searches/s, 3709.46 non-hash searches/s  
+...... 
+现在可以看到自适应哈希索引的使用信息了，包括自适应哈希索引的大小、使用情况、每秒使用自适应哈希索引搜索的情况。值得注意的是，哈希索引只能用 来搜索等值的查询，如select * from table where index_col = 'xxx'，而对于其他查找类型，如范围查找，是不能使用的。因此，这里出现了non-hash searches/s的情况。用hash searches : non-hash searches命令可以大概了解使用哈希索引后的效率。
+
+由于自适应哈希索引是由InnoDB存储引擎控制的，所以这里的信息只供我们参考。不过我们可以通过参数innodb_adaptive_hash_index来禁用或启动此特性，默认为开启。

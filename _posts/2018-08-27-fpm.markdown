@@ -262,3 +262,28 @@ Nginx 0.8.46+PHP 5.2.14(FastCGI)服务器在3万并发连接下，开启的10个
 正是因为这个机制，在高并发的站点中，经常导致 502 错误，我猜测原因是 PHP-FPM 对从 NGINX 过来的请求队列没处理好。不过我目前用的还是 PHP 5.3.2，不知道在 PHP 5.3.3 中是否还存在这个问题。
 
 目前我们的解决方法是，把这个值尽量设置大些，尽可能减少 PHP-CGI 重新 SPAWN 的次数，同时也能提高总体性能。在我们自己实际的生产环境中发现，内存泄漏并不明显，因此我们将这个值设置得非常大（204800）。大家要根据自己的实际情况设置这个值，不能盲目地加大
+
+运行原理
+php-fpm采用master/worker架构设计，前面简单地描述master和worker进程模块的功能。下面将详细讲解这两个模块的运行原理。
+
+master进程
+master进程工作流程分为4个阶段，如下图： 
+这里写图片描述 
+1. cgi初始化阶段：分别调用fcgi_init()和 sapi_startup()函数，注册进程信号以及初始化sapi_globals全局变量。 
+2. php环境初始化阶段：由cgi_sapi_module.startup 触发。实际调用php_cgi_startup函数，而php_cgi_startup内部又调用php_module_startup执行。 php_module_startup主要功能：a).加载和解析php配置；b).加载php模块并记入函数符号表(function_table)；c).加载zend扩展 ; d).设置禁用函数和类库配置；e).注册回收内存方法； 
+3. php-fpm初始化阶段：执行fpm_init()函数。负责解析php-fpm.conf文件配置，获取进程相关参数（允许进程打开的最大文件数等）,初始化进程池及事件模型等操作。 
+4. php-fpm运行阶段：执行fpm_run() 函数，运行后主进程发生阻塞。该阶段分为两部分：fork子进程 和 循环事件。fork子进程部分交由fpm_children_create_initial函数处理（ 注：ondemand模式在fpm_pctl_on_socket_accept函数创建）。循环事件部分通过fpm_event_loop函数处理，其内部是一个死循环，负责事件的收集工作。
+
+worker进程
+worker进程分为 接收客户端请求、处理请求、请求结束三个阶段。 
+这里写图片描述 
+1. 接收客户端请求：执行fcgi_accept_request函数，其内部通过调用accept 函数获取客户端请求。
+
+//请求锁
+FCGI_LOCK(req->listen_socket);
+req->fd = accept(listen_socket, (struct sockaddr *)&sa, &len);
+//释放锁
+FCGI_UNLOCK(req->listen_socket);
+从上面的代码，可以注意到accept之前有一个请求锁的操作，这么设计是为了避免请求出现“惊群”的现象。当然，这是一个可选的选项，可以取消该功能。 
+2. 处理请求阶段：首先，分别调用fpm_request_info、php_request_startup获取请求内容及注册全局变量($_GET、$_POST、$_SERVER、$_ENV、$_FILES)；然后根据请求信息调用php_fopen_primary_script访问脚本文件；最后交给php_execute_script执行。php_execute_script内部调用zend_execute_scripts方法将脚本交给zend引擎处理。 
+3. 请求结束阶段：执行php_request_shutdown函数。此时 回调register_shutdown_function注册的函数及__destruct()方法，发送响应内容、释放内存等操作。
