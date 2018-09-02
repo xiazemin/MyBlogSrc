@@ -1,0 +1,106 @@
+---
+title: splice
+layout: post
+category: linux
+author: 夏泽民
+---
+1. splice函数
+ #include <fcntl.h>
+ssize_t splice(int fd_in, loff_t *off_in, int fd_out, loff_t *off_out, size_t len, unsigned int flags);
+
+splice用于在两个文件描述符之间移动数据， 也是零拷贝。
+fd_in参数是待输入描述符。如果它是一个管道文件描述符，则off_in必须设置为NULL；否则off_in表示从输入数据流的何处开始读取，此时若为NULL，则从输入数据流的当前偏移位置读入。
+
+fd_out/off_out与上述相同，不过是用于输出。
+
+len参数指定移动数据的长度。
+
+flags参数则控制数据如何移动：
+
+SPLICE_F_NONBLOCK：splice 操作不会被阻塞。然而，如果文件描述符没有被设置为不可被阻塞方式的 I/O ，那么调用 splice 有可能仍然被阻塞。
+SPLICE_F_MORE：告知操作系统内核下一个 splice 系统调用将会有更多的数据传来。
+SPLICE_F_MOVE：如果输出是文件，这个值则会使得操作系统内核尝试从输入管道缓冲区直接将数据读入到输出地址空间，这个数据传输过程没有任何数据拷贝操作发生。
+2. 使用splice时， fd_in和fd_out中必须至少有一个是管道文件描述符。
+
+调用成功时返回移动的字节数量；它可能返回0,表示没有数据需要移动，这通常发生在从管道中读数据时而该管道没有被写入的时候。
+
+失败时返回-1，并设置errno
+3. 代码：通过splice将客户端的内容读入到管道中， 再从管道中读出到客户端，从而实现高效简单的回显服务。整个过程未执行recv/send，因此也未涉及用户空间到内核空间的数据拷贝。
+
+//使用splice实现的回显服务器
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <assert.h>
+#include <errno.h>
+#include <string.h>
+#include <fcntl.h>
+ 
+ 
+int main(int argc, char **argv)
+{
+ 
+	if (argc <= 2) {
+		printf("usage: %s ip port\n", basename(argv[0]));
+		return 1;
+	}
+	
+	const char *ip = argv[1];
+	int port = atoi(argv[2]);
+ 
+	struct sockaddr_in address;
+	bzero(&address, sizeof(address));
+	address.sin_family = AF_INET;
+	address.sin_port = htons(port);
+	inet_pton(AF_INET, ip, &address.sin_addr);
+ 
+	int sock = socket(PF_INET, SOCK_STREAM, 0);
+	assert(sock >= 0);
+	
+	int reuse = 1;
+	setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
+ 
+	int ret = bind(sock, (struct sockaddr*)&address, sizeof(address));
+	assert(ret != -1);
+ 
+	ret = listen(sock, 5);
+	assert(ret != -1);
+	
+	struct sockaddr_in client;
+	socklen_t client_addrlength = sizeof(client);
+	
+	int connfd = accept(sock, (struct sockaddr*)&client, &client_addrlength);
+	if (connfd < 0) {
+		printf("errno is: %s\n", strerror(errno));
+	}
+	else {
+		int pipefd[2];
+				
+		ret = pipe(pipefd);  //创建管道
+		assert(ret != -1);
+		
+                //将connfd上的客户端数据定向到管道中
+		ret = splice(connfd, NULL, pipefd[1], NULL,
+						32768, SPLICE_F_MORE | SPLICE_F_MOVE);
+		assert(ret != -1);
+		
+                //将管道的输出定向到connfd上
+		ret = splice(pipefd[0], NULL, connfd, NULL,
+						32768, SPLICE_F_MORE | SPLICE_F_MOVE);
+		assert(ret != -1);				
+		
+		close(connfd);
+	}
+ 
+	
+	close(sock);
+ 
+ 
+ 
+ 
+	return 0;
+
+<!-- more -->
