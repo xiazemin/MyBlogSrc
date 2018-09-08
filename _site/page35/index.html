@@ -144,6 +144,230 @@
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
+						<a class="post-link" href="/MyBlog/docker/2018/05/06/docker_bridge.html">docker_bridge 容器桥接到物理网络</a>
+					</h2>
+					<div class="author" style="margin-top: -10px;">Posted by
+						<i class="fa fa-user"></i>
+						<a href="/MyBlog/docker/2018/05/06/docker_bridge.html"> 夏泽民</a>
+						<span class="post-meta"><i class="fa fa-calendar"></i> 
+							May 6, 2018
+						</span>
+					</div>
+					<div class="excerpt"><p>在5台物理主机上的虚拟机中都装了Docker，每台中都有3个容器，现在要解决容器跨主机通信，五种方案：
+一、利用OpenVSwitch
+二、利用Weave
+三、Docker在1.9之后支持的Overlay network（这个好像是官方的做法）
+四、将多个物理机的容器组到一个物理网络来
+        1.创建自己的网桥br0
+        2.将docker默认网桥绑定到br0
+五、修改主机docker默认的虚拟网段，然后在各自主机上分别把对方的docker网段加入到路由表中，配合iptables即可实现docker容器跨主机通信
+<!-- more -->
+跨主机容器通信大致有以下几种方式：</p>
+<ol>
+  <li>NAT方式
+NAT就是传统的docker网络，利用宿主机的IP和Iptables来达到容器，主机之间的通信。容器对外IP都是宿主机的IP。只要宿主机之间三层可达，容器之间就可以通信。</li>
+  <li>Tunnel（overlay）方式
+VPN，ipip，VXLAN等都是tunnel技术，简单讲就是在容器的数据包间封装一层或多层其他的数据协议头，达到连通的效果。
+Docker的Libnetwork就支持vxlan的overlay方式，weave也支持UDP和Vxlan的overlay模式，flannel，calico等都支持overlay模式。
+•      Overlay一般通过vSwitch来实现，比如OVS
+•      一般需要一个全局的KV
+store（sdn controller、etcd、consul）来保存控制信息。</li>
+  <li>Routing方式
+路由方案主要是通过路由设置的方式让容器对容器，容器对宿主机之间相通信。例如：calico的BGP路由方案</li>
+  <li>“大二层”方式
+大二层就是将物理网卡和容器网络桥接到同一个linux bridge。容器网络可以直接接入该linux bridge，也可以将容器网络接入容器网桥docker0，再把docker0桥接到linux bridge上。目的是使得容器网络和宿主机网络在同一个二层网络。
+docker 默认的桥接网卡是docker0,它只会在本机桥接所有的容器网卡，举例来说容器的虚拟网卡在主机上看一般叫做veth<em>**  而docker只是把所有这些网卡桥接在一起,这样就可以把这个网络看成是一个私有的网络，通过nat 连接外网，如果要让外网连接到容器中，就需要做端口映射，即-p参数
+ 当rocker启动时，会在主机上创建一个docker0的虚拟网卡。他随机挑选RFC1918私有网络中的一段地址给docker0。比如172.17.42.1/16,16位掩码的网段可以拥有65534个地址可以使用，这对主机和容器来说应该足够了。docker0 不是普通的网卡，他是桥接到其他网卡的虚拟网卡，容器使用它来和主机相互通信。当创建一个docker容器的时候，它就创建了一个对接口，当数据包发送到一个接口时，另外一个接口也可以收到相同的数据包，它们是绑在一起一对孪生接口。这对接口在容器中的那个的名字是eth0，主机上的接口会指定一个唯一的名字，比如vethAQI2QT这样的名字，这种接口名字不再主机的命名空间中。所有的veth</em>的接口都会桥接到docker0，这样docker就创建了在主机和所有容器之间一个虚拟共享网络。
+如果在企业内部应用，或则做多个物理主机的集群，可能需要将多个物理主机的容器组到一个物理网络中来，那么就需要将这个网桥桥接到我们指定的网卡上。下面以ubuntu为例创建多个主机的容器联网。
+第一步：创建自己的网桥
+编辑/etc/network/interface文件
+auro br0
+iface bro inet static
+address
+netmask
+gateway
+bridge_ports em1
+bridge_stp off
+dns-nameservers 8.8.8.8 
+将docker的默认网桥绑定到这个新建的br0上面，这样就将这台机器上容器绑定到em1这个网卡所对应的物理网络上了。ubuntu修改/etc/default/docker文件 添加最后一行内容
+DOCKER_OPTS=”-b=br0”
+这改变默认的docker网卡绑定，你也可以创建多个网桥绑定到多个物理网卡上，在启动docker的时候 使用-b参数 绑定到多个不同的物理网络上。
+重启docker服务后，再进入容器可以看到它已经绑定到你的物理网络上了，这样就直接把容器暴露到你的物理网络上了，多台物理主机的容器也可以相互联网了。需要注意的是，这样就需要自己来保证容器的网络安全了。
+Docker发布了1.9版本，实现了原本实验性的Networking组件的支持。用户可以在Swarm中使用它或者将其作为Compose 工具。创建虚拟网络并将其连接到容器上，可实现多个主机上容器相互通信，并且实现不同的应用程序或者应用程序不同部分能够相互隔离。互联子系统设计为可插拔式，兼容VXLAN或者IPVLAN等技术。
+Docker 容器实现跨主机通讯主要通过几种方式：自带overlay network插件，第三方插件如weave、ovs等，docker swarm（虽然也是通过key value service进行调用）。在这里主要介绍直接使用自带插件，以及通过docker swarm的两种实现方式。
+直接使用自带插件实现容器跨主机访问
+测试环境为ubuntu14.04。根据docker建议要求，将内核升级到3.19.如果内核版本过低，将会出现overlay network创建失败或加入失败等一系列问题。
+内核升级
+ #apt-get install linux-generic-lts-vivid
+升级完成，重启主机。
+ # uname -a
+Linux ukub09 3.19.0-33-generic #38~14.04.1-Ubuntu SMP Fri Nov 6 18:17:28 UTC 2015 x86_64 x86_64 x86_64 GNU/Linux
+启动key value service
+可以选择使用zookeeper、etcd、consul等多种组件。本例使用额外一台虚拟机，启用和官方文档相一致的consul镜像。
+docker $(docker-machine config consul2) run -d \
+-p “8501:8500” \
+-h “consul” \
+progrium/consul -server -bootstrap
+此时可以通过ip:8501对consul服务进行访问。
+将key value service信息加入docker daemon
+修改希望加入docker overlay network的所有主机上docker daemon服务。
+#vi /etc/dafault/docker
+DOCKER_OPTS=’
+-H tcp://0.0.0.0:2376
+-H unix:///var/run/docker.sock
+–cluster-store=consul://172.25.2.43:8501
+–cluster-advertise=eth0:2376’
+通过修改以下两个参数实现
+–cluster-store= 参数指向docker daemon所使用key value service的地址
+–cluster-advertise= 参数决定了所使用网卡以及docker daemon端口信息
+重启docker服务。
+#service docker restart
+docker 网络的创建与操作
+此时可以通过docker network create创建-d overlay属性的驱动。
+#docker network create -d overlay over
+列出当前网络
+root@ukub10:~# docker network ls
+NETWORK ID          NAME                DRIVER
+b95efb2ab985        over                overlay           <br />
+0a4a123fc278        bridge              bridge            <br />
+2da9ecadf108        none                null              <br />
+5ca3275ec2a9        host                host      <br />
+在另一台已加入key value service指向的主机上同样可以看到这个网络
+root@ukub09:~# docker network ls
+NETWORK ID          NAME                DRIVER
+b95efb2ab985        over                overlay           <br />
+b5f9713c9f2b        bridge              bridge            <br />
+16e1cdf30f97        none                null              <br />
+cf257529463c        host                host
+docker网络的连接方式
+可以在两台主机上分别创建容器，互相进行ping或ssh访问。官方文档例子创建一个nginx容器，并在另一个容器内抓取其状态进行验证。这里不再详述。
+创建容器接入指定网络
+#docker run -itd –name=testcontainer –net=over  nginx
+将容器从指定网络中退出
+#docker network disconnect over testcontainer 
+重新连入指定网络
+#docker network connect over testcontainer
+连接与断开将会是实时的。在连接之后，即可通过容器名访问本网络中所有容器。
+使用Swarm创建docker cluster实现跨主机管理和网络访问
+根据官方文档，需要搭建起基于swarm的cluster，来实现Docker overlay network。为部署整套Docker cluster，需要安装docker machine/compose/swarm等组件。
+使用第三方网络插件实现跨主机容器通讯也变得更容易了。
+安装docker machine
+docker machine用来进行docker的推送安装，可以在许多driver上安装部署docker：
+amazonec2 azure digitalocean exoscale generic google none
+openstack rackspace softlayer virtualbox vmwarevcloudair
+vmwarevsphere
+首先需要安装好docker engine，之后下载并将docker machine的库文件移动到bin下。
+#curl -L https://github.com/docker/machine/releases/download/v0.5.0/docker-machine_linux-amd64.zip &gt;machine.zip &amp;&amp; \
+unzip machine.zip &amp;&amp; \
+rm machine.zip &amp;&amp; \
+mv docker-machine* /usr/local/bin
+验证安装
+    <h1 id="docker-machine--v">docker-machine -v</h1>
+    <p>docker-machine version 0.5.0 (04cfa58)
+docker-machine ls
+NAME   ACTIVE   DRIVER   STATE   URL   SWARM
+官方文档的使用virtualbox进行各种角色主机的启用。本篇文档则在已有的虚拟机环境中进行。
+使用docker-machine进行推送安装
+首先需要拥有一台linux系统，并使docker-machine主机可以无密码访问到这台系统。
+#ssh-copy-id -i /root/.ssh/id_rsa.pub root@172.25.2.43
+之后即可通过docker-machine进行安装。
+安装通过internet下载相关包，并通过docker-machine进行设置安装的。必须保证网络畅通，否则可能安装失败。
+#docker-machine create -d generic –generic-ip-address=172.25.2.43 –generic-ssh-user=root test5
+安装后，可以查看所有被docker-machine安装控制后的主机状态</p>
+    <h1 id="docker-machine-ls">docker-machine ls</h1>
+    <p>NAME        ACTIVE   DRIVER    STATE     URL                      SWARM
+c0-master   -        generic   Running   tcp://172.25.2.44:2376   c0-master (master)
+c0-n1       -        generic   Running   tcp://172.25.2.45:2376   c0-master
+c0-n2       -        generic   Running   tcp://172.25.2.46:2376   c0-master
+dm01        -        generic   Running   tcp://172.25.2.43:2376 <br />
+local       -        generic   Running   tcp://172.25.2.34:2376
+可以查看相应主机的环境变量
+#docker-machine env local 
+把当前操作环境变更为指定主机
+#eval “$(docker-machine env local)”
+在docker-machine主机上操纵host
+ #docker $(docker-machine config local) run -tid ubuntu /bin/bash
+通过ssh连接到相应主机
+ # docker-machine ssh dm01
+Docker Compose安装
+docker compose用于同时启动多个容器，构成同一组应用环境，在这里用于支持swarm的安装。
+curl -L https://github.com/docker/comp … ose-X 10X- uname -m &gt; /usr/local/bin/docker-compose
+chmod +x /usr/local/bin/docker-compose
+ Docker Swarm集群安装
+启用一台主机安装key value service，用于节点、主机发现等工作。
+本例使用了consul的镜像，也可以使用如etcd、zookeeper等组件。
+在dm01上启动一个consul服务：
+docker $(docker-machine config dm01) run -d \
+-p “8500:8500” \
+-h “consul” \
+progrium/consul -server -bootstrap
+创建swarm集群可以通过key value服务，也可以使用swarm cluster ID字符串创建。
+创建swarm manager
+docker-machine create \
+-d generic –generic-ip-address=172.25.2.44 –generic-ssh-user=root\
+–swarm \
+–swarm-master \
+–swarm-discovery=”consul://$(docker-machine ip dm01):8500” \
+–engine-opt=”cluster-store=consul://$(docker-machine ip dm01):8500” \
+–engine-opt=”cluster-advertise=eth0:2376” \
+c0-master
+创建swarm node
+docker-machine create \
+-d generic –generic-ip-address=172.25.2.45 –generic-ssh-user=root \
+–swarm \
+–swarm-discovery=”consul://$(docker-machine ip dm01):8500” \
+–engine-opt=”cluster-store=consul://$(docker-machine ip dm01):8500” \
+–engine-opt=”cluster-advertise=eth0:2376” \
+c0-n1
+docker-machine create \
+-d generic –generic-ip-address=172.25.2.46 –generic-ssh-user=root \
+–swarm \
+–swarm-discovery=”consul://$(docker-machine ip dm01):8500” \
+–engine-opt=”cluster-store=consul://$(docker-machine ip dm01):8500” \
+–engine-opt=”cluster-advertise=eth0:2376” \
+c0-n2
+Overlay Network创建
+设置环境变量
+ #eval “$(docker-machine env –swarm c0-master)”
+可以用docker info看到现在的集群状况
+ #docker network create -d overlay myStack1
+root@local:~# docker network ls
+NETWORK ID          NAME                DRIVER
+685ed9e9f701        myStack1            overlay           <br />
+4c88e7c52a7c        c0-n1/bridge        bridge            <br />
+7fd49a4f6a64        c0-n1/none          null              <br />
+8b2372139902        c0-n2/host          host              <br />
+d998a91dcfea        c0-n2/bridge        bridge            <br />
+afd7a1190fb4        c0-n2/none          null              <br />
+0f2b5dae67f7        c0-n1/host          host              <br />
+a45b8049f8e6        c0-master/bridge    bridge            <br />
+d13eed83f250        c0-master/none      null              <br />
+364a592ae9ae        c0-master/host      host<br />
+测试
+在c0-n1上启动一个nginx，并加入myStack1网络
+ #docker run -itd –name=web –net=myStack1 –env=”constraint:node==c0-n1” nginx
+在c0-n2上启动一个shell，同样加入myStack1网络
+ #docker run -ti –name=webtest –net=myStack1 –env=”constraint:node==c0-n2” ubuntu /bin/bash
+在shell中将可以通过容器名或ip获取到web容器的状态
+{{{#apt-get install wget
+wget -O- http://web }}}
+docker在官方文档上主推以swarm的方式创建cluster，相对比较复杂，但提供了整体Cluster的解决方案，可以将容器进行整体管理、推送、使用。</p>
+  </li>
+</ol>
+
+</div>
+					<div class="readmore" style="float: right;">
+						
+							<a href="/MyBlog/docker/2018/05/06/docker_bridge.html" style="color:green">阅读全文</a>
+						
+					</div>								
+			</div>
+			<br/>
+			<hr/>
+			<div class="post-list" style="list-style-type: none;">			
+				 	
+					<h2>
+						<img class="title-image" src="/MyBlog/img/dna.png"/>
 						<a class="post-link" href="/MyBlog/net/2018/05/06/default_gateway.html">default_gateway 默认网关</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
@@ -301,101 +525,6 @@ Metric：度量值，表示每条可能路由的代价，度量值最小的路�
 					<div class="readmore" style="float: right;">
 						
 							<a href="/MyBlog/net/2018/05/05/routing_table.html" style="color:green">阅读全文</a>
-						
-					</div>								
-			</div>
-			<br/>
-			<hr/>
-			<div class="post-list" style="list-style-type: none;">			
-				 	
-					<h2>
-						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/net/2018/05/05/routing_protocol.html">routing_protocol 路由协议</a>
-					</h2>
-					<div class="author" style="margin-top: -10px;">Posted by
-						<i class="fa fa-user"></i>
-						<a href="/MyBlog/net/2018/05/05/routing_protocol.html"> 夏泽民</a>
-						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							May 5, 2018
-						</span>
-					</div>
-					<div class="excerpt"><p>常见路由协议介绍
-常见的路由协议有RIP、IGRP（Cisco私有协议）、EIGRP（Cisco私有协议）、OSPF、IS-IS、BGP等。
-RIP、IGRP、EIGRP、OSPF、IS-IS是内部网关协议(IGP)，适用于单个ISP的统一路由协议的运行，一般由一个ISP运营的网络位于一个AS（自治系统）内，有统一的AS number（自治系统号）。BGP是自治系统间的路由协议，是一种外部网关协议，多用于不同ISP之间交换路由信息，以及大型企业、政府等具有较大规模的私有网络。
-RIP
-RIP“路由信息协议(Route Information Protocol)”的简写，主要传递路由信息，通过每隔30秒广播一次路由表，维护相邻路由器的位置关系，同时根据收到的路由表信息计算自己的路由表信 息。RIP是一个距离矢量路由协议,最大跳数为16跳,16跳以及超过16跳的网络则认为目标网络不可达。此协议通常用在网络架构较为简单的小型网络环境.现在分为RIPv1和RIPv2两个版本,后者支持VLSM技术以及一系列技术上的改进。RIP的收敛速度较慢。
-PS：路由收敛指网络的拓扑结构发生变化后，路由表重新建立到发送再到学习直至稳定，并通告网络中所有相关路由器都得知该变化的过程。也就是网络拓扑变化引起的通过重新计算路由而发现替代路由的行为。
-OSPF
-OSPF协议是“开放式最短路径优先(Open Shortest Path First)”的缩写，属于链路状态路由协议。OSPF提出了“区域（area）”的概念，每个区域中所有路由器维护着一个相同的链路状态数据库 （LSDB）。区域又分为骨干区域（骨干区域的编号必须为0）和非骨干区域（非0编号区域），如果一个运行OSPF的网络只存在单一区域，则该区域可以是 骨干区域或者非骨干区域。如果该网络存在多个区域，那么必须存在骨干区域，并且所有非骨干区域必须和骨干区域直接相连。OSPF利用所维护的链路状态数据 库，通过最短生成树算法（SPF算法）计算得到路由表。OSPF的收敛速度较快。由于其特有的开放性以及良好的扩展性，目前OSPF协议在各种网络中广泛部署。
-IS-IS
-IS-IS协议是Intermediate system to intermediate system（中间系统到中间系统）的缩写，属于链路状态路由协议。标准IS-IS协议是由国际标准化组织制定的ISO/IEC 10589:2002 所定义的，标准IS-IS不适合用于IP网络，因此IETF制 定了适用于IP网络的集成化IS-IS协议（Integrated IS-IS）。和OSPF相同，IS-IS也使用了“区域”的概念，同样也维护着一份链路状态数据库，通过最短生成树算法（SPF）计算出最佳路径。 IS-IS的收敛速度较快。集成化IS-IS协议是ISP骨干网上最常用的IGP协议。
-IGRP
-IGRP协议是“内部网关路由协议（Interior Gateway Routing Protool）”的缩写，由Cisco于 二十世纪八十年代独立开发，属于Cisco私有协议。IGRP和RIP一样，同属距离矢量路由协议，因此在诸多方面有着相似点，如IGRP也是周期性的广 播路由表，也存在最大跳数（默认为100跳，达到或超过100跳则认为目标网络不可达）。IGRP最大的特点是使用了混合度量值，同时考虑了链路的带宽、 延迟、负载、MTU、可靠性5个方面来计算路由的度量值，而不像其他IGP协议单纯的考虑某一个方面来计算度量值。目前IGRP已经被Cisco独立开发的EIGRP协议所取代，版本号为12.3及其以上的Cisco IOS（Internetwork Operating System）已经不支持该协议，现在已经罕有运行IGRP协议的网络。EIGRP
-由于IGRP协议的种种缺陷以及不足，Cisco开发了EIGRP协议（增强型内部网关路由协议）来取代IGRP协议。EIGRP属于高级距离矢量 路由协议（又称混合型路由协议），继承了IGRP的混合度量值，最大特点在于引入了非等价负载均衡技术，并拥有极快的收敛速度。EIGRP协议在 Cisco设备网络环境中广泛部署。
-BGP
-为了维护各个ISP的独立利益，标准化组织制定了ISP间的路由协议BGP。 BGP是“边界网关协议(Border Gateway Protocol)”的缩写，处理各ISP之间的路由传递。但是BGP运行在相对核心的地位，需要用户对网络的结构有相当的了解，否则可能会造成较大损失。
-<!-- more -->
-路由器是一种具有多个输入端口和多个输出端口的专用计算机，其任务是转发分组。
-路由选择部分的核心是路由处理机，路由处理机可以根据选定的路由协议构造出路由表，同时经常或定期和相邻路由器交换路由信息来更新和维护自身的路由表。
-分组转发部分包括一组输入端口、交换结构和一组输出端口。交换结构又称交换组织，它的作用就是根据转发表把收到的IP数据报从路由器合适的端口转发出去。交换结构可看成一个在路由器中的网络
-WMN的动态性，多跳性使得传统的路由协议不能够很好的处理无线网状网中拓扑结构和链路状态的快速变化。
-WMN由Ad hoc网络发展而来，Ad hoc网络重点在移动，而WMN重点在无线。目前主流的WMN路由协议也是从Ad hoc网络路由协议发展而来。主要包括三种类型的路由协议：先验式路由协议、反应式路由协议、混合式路由协议。
-在先验式路由协议中，无论是否有通信需求，每个节点采用周期性的路由分组广播维护一张包含到达其他节点的路由信息的路由表，当检测到网络拓扑结构变化的时候，节点在网络中交换并更新路由表。源节点一旦要送分组，可以立即获得指向目的节点的路由。
-这类的路由协议通常是通过修改现有的有线路由协议来适应 Ad Hoc无线网络要求，如通过修改路由信息协议(RIP)得到的目的节点序列距离矢量协议(DSDV)。 因此这种路由协议的时延较小，但是协议需要大量的路由控制报文路由,协议的开销较大。 常用的先验式路由协议有 DSDV,HSR,GSR,WRP等。
-DSDV协议
-DSDV协议的基本原理是：每一个节点维持一个到其它节点的路由表，表的内容为路由的“下一跳”节点。DSDV创新之处是为每一条路由设置一个序列号，序列号大的路由为优选路由，序列号相同时，跳数少的路由为优选路由。正常情况下，节点广播的序列号是单调递增的偶数，当节点B发现到节点D的路由(路由序列号为s)中断后，节点B就广播一个路由信息，告知该路由的序列号变为s+l，并把跳数设置为无穷大，这样，任何一个通过B发送信息的节点A的路由表中就包括一个无穷大的距离，这一过程直到A收到一个到达D的有效路由(路由序列号为s+1-1)为止。
-使用分层次的路由选择方法，可将因特网的路由协议划分为：
-内部网关协议IGPI（nterior Gateway Protocol）：具体的协议有多种，如：RIP和OSPF等。
-外部网关协议EGP（External Gateway Protocol）：目前使用的协议就是BGP
-下面我们分别介绍：
-路由信息协议RIP（RoutingInformation Protocol）
-RIP采用距离向量算法，最大优点是简单。在实际使用中已经较少适用。RIP协议允许一条路径最多只能包含15个路由器。因此，“距离”等于16时即相当于不可达。可见RIP只适用于小型互联网。对于规模较大的网络应当使用OSPF协议。RIP不能在两个网络之间同时使用多条路由。RIP选择一条具有最少路由器的路由（即最短路由），哪怕还存在另一条高速（低时延）但路由器较多的路由。RIP进程使用UDP的520端口来发送和接收RIP分组。RIP分组每隔30s以广播的形式发送一次，为了防止出现“广播风暴”，其后续的的分组将做随机延时后发送。在RIP中，如果一个路由在180s内未被刷，则相应的距离就被设定成无穷大，并从路由表中删除该表项。RIP分组分为两种：请求分组和响应分组。
-RIP协议的特点是：
-仅和相邻路由器交换信息
-路由器交换的信息是当前本路由器所知道的全部信息，即自己的路由表
-按照固定的时间间隔交换路由信息
-RIP协议存在的一个问题是：当网络出现故障时，要经过比较长的时间才能将此信息传送到所有的路由器。
-开放最短路径优先OSPF(OpenShortest Path First)
-OSPF原理简单，实现复杂，使用了Dijkstra提出的最短路径算法SPF。
-OSPF最主要特征是使用分布式链路状态协议，而不是像RIP那样的距离向量协议。和RIP协议相比，OSPF的三个要点和RIP都不一样。
-1、 向本自治系统中所有路由器发送信息。这里使用的方法是洪泛法（Flooding）
-洪泛法（Flooding）
-在OSPF协议中，当链路状态发生变化时要用Flooding向所有路由器发送信息。
-例如，源节点希望发送一段数据给目标节点。源节点首先通过网络将数据副本传送给它的每个邻居节点，每个邻居节点再将数据传送给各自的除发送数据来的节点之外的其他。如此继续下去，直到数据传送目标节点或者数据设定的生存期限为0为止。
-2、 发送的信息就是与本路由器相邻的所有路由器的链路状态，但这只是路由器所知道的部分信息，“链路状态”包括本路由器和哪些路由器相邻，以及链路的一些度量信息。而RIP协议发送的是到所有路由器的距离和下一跳路由器。
-3、 只有当链路状态发生变化时，路由器才向所有路由器用洪泛法发送此信息。
-由于各路由器之间频繁的交换路由信息，因此所有路由器最终都能建立一个链路状态数据库，这个数据库实际上就是全网的拓扑结构图。RIP协议中的每一个路由器虽然知道所有网络的距离以及下一跳路由器，但却不知道全网的拓扑结构（只有到了下一跳路由器，才能知道再下一跳应当怎样走）。
-OSPF的更新过程收敛的快是其重要优点。（“收敛”就是在自治系统中所有的节点都得到正确的路由选择信息的过程）
-OSPF不用UDP而是直接用IP数据报传送（其IP数据报首部的协议字段值为89）
-OSPF共有以下5种分组类型：
-1、问候（Hello）分组，用来发现和维持邻站的可达性。
-2、数据库描述（Database Description）分组，向邻站发出自己链路状态数据库中所有链路状态项目的摘要信息。
-3、链路状态请求（Link State Request）分组，像对方请求发送某些链路状态项目的详细信息。
-4、链路状态更新（Link State Update）分组，用洪泛法对全网更新链路状态。
-5、链路状态确认（Link State Acknowledgment）分组，对链路更新分组的确认。
-为了使OSPF能够用于规模很大的网络，OSPF将一个自治系统再划分为若干个更小的范围，叫做区域。下图表示一个自治系统划分为4个区域。每个区域都有一个32位的区域标志符（用点分十进制表示）
-当然，一个区域也不能太大，一个区域内的路由器最好不超过200个。
-划分区域的好处就是把利用洪泛法交换链路状态信息的范围局限于每一个区域而不是整个自治系统，这就减少了整个网络上的通信量。
-外部网关协议BGP
-BGP是不同AS（Area System）的路由器之间交换路由信息的协议。
-边界网关协议BGP只能是力求寻找一条能够到达目的网络且比较好的路由（不能兜圈子），而并非要寻找一条最佳路由。BGP采用了路径向量路由选择协议。
-一般说来，两个BGP发言人都是通过一个共享网络连接起来的。一个BGP发言人要与其他自治系统的BGP发言人交换路由信息，就要先建立TCP连接（端口号为179），然后在此连接上交换BGP报文以建立BGP会话，利用BGP会话交换路由信息。
-在RFC4271中规定了BGP-4的4种报文：
-1、OPEN（打开）报文，用来与相邻的另一个BGP发言人建立关系，使通信初始化。
-2、UPDATE（更新）报文，用来通告某一路由的信息，以及列出要撤销的多条路由。
-3、KEEPALIVE（保活报文），用来周期性的证实邻站的连通性。
-4、NOTIFICATION（通知）报文，用来发送检测到的差错。
-在RFC2918中增加了ROUTER—REQUEST报文，用来请求对等端重新通告。
-反应式路由协议
-反应式路由协议又称为随选型路由协议或者按需路由协议。是专门针对移动自组织网络工作组MANET（Mobile Ad-hoc NETworks）环境提出来的。与表驱动路由协议相反，该类协议并不事先生成路由，而是仅在源节点需要时才这样做。因此，路由表信息是按需建立的，它可能仅仅是整个拓扑结构信息的一部分。
-节点并不保存整个网络的及时准确的路由信息。当源节点要向目的节点发送报文时，源节点在网络中发起路由查找过程，找到相应的路由后，才开始发送报文。为了提高效率，节点可以将找到的路由保存在缓存中供后续发送使用。反应式路由协议按需路由的特点可以较好地适应节点移动较为频繁的无线网络环境，节点发生移动后，只需要更新需要发送数据的相关路径的路由信息即可。 
-混合式路由协议 
-混合式路由是将先验式路由协议和反应式路由协议两种路由方式的组合，在局部范围内使用先验式路由协议，维护准确的路由信息，并可以缩小路由控制消息传播的范围。当目标节点较远时，则使用反应式路由协议查找发现路由。ZRP协议就是混合式路由协议的代表。
-ZRP协议是一种专为多变的通信环境(如可重构无线网络，RwN)设计的平铺式路由协议。在每个节点定义一个区域，此区域包含一些节点，这些节点的距离(也就是跳数)在一个限定的范围之内。这个距离被成为区域半径rzone。每一个节点只需要知道它的路由区域内的拓扑结构，而且其路由信息随着区域内的拓扑更新而更新。这样，尽管网络很大，但更新仅仅在局部区域进行。由于距离大于1，这样区域就有大量重叠。</p>
-</div>
-					<div class="readmore" style="float: right;">
-						
-							<a href="/MyBlog/net/2018/05/05/routing_protocol.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -1247,6 +1376,14 @@ ZRP协议是一种专为多变的通信环境(如可重构无线网络，RwN)设
 							var searchIndex={
 							"code" : 0 ,
 							"data" : [
+							
+							{
+							"title" : "spinlock 自旋锁 - ",
+							"url" : "/MyBlog/linux/2018/09/08/spinlock.html"
+							}
+							
+							,
+							
 							
 							{
 							"title" : "异步io - ",
@@ -4813,7 +4950,7 @@ ZRP协议是一种专为多变的通信环境(如可重构无线网络，RwN)设
 								
 								
 									<a class="bold" href="/MyBlog/category/linux">
-										linux (85)
+										linux (86)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -4963,6 +5100,10 @@ ZRP协议是一种专为多变的通信环境(如可重构无线网络，RwN)设
 							<div id="tags">
 								<ul style="display:none;width:250px;height:250px;">
 								     
+								   <li>
+										<a href="/MyBlog/linux/2018/09/08/spinlock.html" style="font-size:40px;"> spinlock 自旋锁</a>
+									</li>
+									  
 								   <li>
 										<a href="/MyBlog/linux/2018/09/05/aio.html" style="font-size:40px;"> 异步io</a>
 									</li>
@@ -5118,10 +5259,6 @@ ZRP协议是一种专为多变的通信环境(如可重构无线网络，RwN)设
 								   <li>
 										<a href="/MyBlog/storage/2018/08/20/hint.html" style="font-size:40px;"> hint</a>
 									</li>
-									  
-								   <li>
-										<a href="/MyBlog/linux/2018/08/14/ifconfig.html" style="font-size:40px;"> ifconfig</a>
-									</li>
 									
 								</ul>
 							</div>
@@ -5134,6 +5271,12 @@ ZRP协议是一种专为多变的通信环境(如可重构无线网络，RwN)设
                 <div class="well">
                 	<h4>Recent posts</h4>
                 		<ul class="posts" span="recent">  
+							  
+							   <li>  
+								   <span>08 Sep 2018</span>
+								   <a href="/MyBlog/linux/2018/09/08/spinlock.html">  
+								   spinlock 自旋锁</a>  
+							   </li>  
 							  
 							   <li>  
 								   <span>05 Sep 2018</span>
@@ -5157,12 +5300,6 @@ ZRP协议是一种专为多变的通信环境(如可重构无线网络，RwN)设
 								   <span>02 Sep 2018</span>
 								   <a href="/MyBlog/linux/2018/09/02/tee.html">  
 								   零拷贝之splice( )函数和tee( )函数</a>  
-							   </li>  
-							  
-							   <li>  
-								   <span>02 Sep 2018</span>
-								   <a href="/MyBlog/linux/2018/09/02/splice_sendfile.html">  
-								   splice_sendfile</a>  
 							   </li>  
 							  
 						</ul>
