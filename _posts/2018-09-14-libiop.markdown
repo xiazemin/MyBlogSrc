@@ -1,0 +1,412 @@
+---
+title: libiop
+layout: post
+category: web
+author: 夏泽民
+---
+https://github.com/wangzhione/libiop
+一个c语言开发的跨平台网络IO库
+
+功能特性：
+
+1：c/c++ api, 底层支持epoll,select,poll等io模型
+
+2：异步事件模型
+
+3：任务池模型，跨平台线程接口
+
+4：跨平台(Linux/windows)
+
+5:日志服务
+
+6：稳定，支持7*24小时无间断运行，自动处理异常状态
+
+7：高并发与快速响应
+
+8：API简洁， 学习成本底
+<!-- more -->
+iop_def.h, 这里面定义了常用的数据结构
+
+ 
+
+ tag_iop_base_t 主要用于管理所有事件，每个事件是一个iop_t,
+
+maxio表示最大的文件描述符，
+
+free_list_head 表示可用的空闲列表头部id，一般用iops + free_list_head
+
+取出iop_t 的元素
+
+同理free_list_tail，最后一个可用iop,
+
+iop_op_t 是封装了几个函数指针的结构体,
+
+包括网络模型的名字，事件的添加，事件的删除，事件的更改，事件的派发
+
+剩下的如注释所示
+
+struct tag_iop_base_t
+{
+    iop_t *iops;        /*所有iop*/
+    int maxio;            /*最大并发io数,包括定时器在内*/
+    int maxbuf;            /*单个发送或接收缓存的最大值*/
+    int free_list_head;    /*可用iop列表*/
+    int free_list_tail; /*最后一个可用iop*/
+    int io_list_head;    /*已用io类型的iop列表*/
+    int timer_list_head;    /*已用timer类型的iop列表*/
+    int connect_list_head;  /*异步连接的iop列表*/
+    volatile int exit_flag;    /*退出标志*/
+
+    int dispatch_interval;        /*高度的间隔时间*/
+    iop_op_t op_imp;           /*事件模型的内部实现*/
+    void *model_data;         /*事件模型特定的数据*/
+
+    iop_time_t cur_time;        /*当前调度时间*/
+    iop_time_t last_time;        /*上次调度时间*/
+    iop_time_t last_keepalive_time; /*上次检查keepalive的时间*/
+
+    _list_node_t * tcp_protocol_list_head;    /*use for advance tcp server model.*/
+};
+ 
+
+看一下iop_t结构体，id是从0开始到n的数,这个是在tag_iop_base_t 中初始化队列时做的，
+
+io_handle_t是这个结构存储的socket id, iop_type分三种0表示释放，1表示io读写，2表示
+
+定时器事件， iop_event_cb表示事件回调函数指针，每一个iop_t绑定了不同的回调函数，
+
+比如accept，比如read，比如write，但是这些回调函数要封装成iop_event_cb类型，
+
+dbuf_t 是作者封装的一个管理发送和接受数据的结构
+
+/*
+*tag_iop_t:iop结构，每一个iop对象都会对应一个tag_iop_t结构
+*/
+struct tag_iop_t
+{
+    int id;                    /*对应的id*/
+    io_handle_t handle;        /*关联的句柄*/
+    int iop_type;            /*对象类型：0：free,1:io,2:timer*/
+    int prev;                /*上一个对象*/
+    int next;                /*下一个对象*/
+    unsigned int events;                /*关注的事件*/
+    int timeout;            /*超时值*/
+    iop_event_cb evcb;        /*事件回调*/
+    void *arg;                /*用户指定的参数,由用户负责释放资源*/
+    void *sys_arg;            /*系统指定的参数，系统自动释放资源*/
+    /*以下字段对定时器无用*/
+    dbuf_t *sbuf;        /*发送缓存区*/
+    dbuf_t *rbuf;        /*接收缓存区*/
+    iop_time_t last_dispatch_time;    /*上次调度的时间*/
+};
+ 
+
+iop_event_cb 定义如下
+
+/*事件回调函数,返回-1代表要删除对象,返回0代表正常*/
+typedef int (*iop_event_cb)(iop_base_t *,int,unsigned int,void *);
+ 
+
+dbuf_t结构如下
+
+struct tag_dbuf
+{
+    unsigned int capacity;
+    unsigned int size;
+    void *data;
+};
+至于dbuf_t如何开辟空间释放空间，读写偏移的都不做赘述
+
+ 
+
+iop_base_t中iop_op_t 结构很重要，是事件调度的核心
+
+结构如下
+
+struct tag_iop_op_t
+{
+    const char *name;                               //模型名称
+    void (*base_free)(iop_base_t *);        //资源释放的接口
+    int (*base_dispatch)(iop_base_t *, int);  //模型调度接口
+    //添加事件
+    int (*base_add)(iop_base_t *, int, io_handle_t, unsigned int);
+    //删除事件
+    int (*base_del)(iop_base_t *, int,io_handle_t);
+    //修改事件
+    int (*base_mod)(iop_base_t *, int, io_handle_t, unsigned int);
+};
+因为对应不同的平台，我们要应用不同的网络模型，比如epoll,select,iocp等等。
+
+但是对于异步通信IO我们采取事件回调机制，也就是说提前绑定好读事件，写事件等，
+
+在循环中调用base_dispatch函数指针，就可以实现对于不同模型的派发。
+
+ 
+
+上面就是libiop模型的基本结构和框架
+
+我们看下epoll模型的封装
+
+tag_epoll_data 是封装的epoll基本结构，
+
+这个结构存在iop_base_t的model_data里
+
+struct tag_epoll_data {
+    struct epoll_event *events; //监听的epoll_events 队列
+    int nevents; //epoll_events 事件大小
+    int epfd; //epoll_create 产生的epoll表句柄
+};
+两个函数，iop_t应用层的读写宏
+
+EV_TYPE_READ和
+EV_TYPE_WRITE
+epoll的读写宏
+EPOLLIN和EPOLLOUT互相转换
+static uint32_t to_epoll_events(uint32_t what)
+{
+    uint32_t events=0;
+    if(what & EV_TYPE_READ)    
+    {
+        events = EPOLLIN;
+    }
+    if(what & EV_TYPE_WRITE)    
+    {
+        events |= EPOLLOUT;
+    }
+    return events;
+}
+
+static uint32_t from_epoll_events(uint32_t events)
+{
+    uint32_t what=0;
+    if(events & (EPOLLHUP|EPOLLERR))
+    {
+        what = EV_TYPE_READ | EV_TYPE_WRITE;
+    }
+    else
+    {
+        if(events & EPOLLIN){what |= EV_TYPE_READ;}
+        if(events & EPOLLOUT){what |= EV_TYPE_WRITE;}
+    }
+    return what;            
+}
+ 
+
+初始化epoll结构和数据
+
+int iop_init_epoll(void *iop_base, int maxev)
+{
+    iop_base_t *base = (iop_base_t *)iop_base;
+    //iop_base  事 件 操作结构体
+
+    //iop_base_t中op_imp取出模型抽象的结构体
+    iop_op_t *iop_op = &(base->op_imp);
+    //开辟epoll_data空间
+    iop_epoll_data_t *iop_data = (iop_epoll_data_t *)(malloc(sizeof(iop_epoll_data_t)));
+    if(!iop_data)
+    {
+        return -1;
+    }
+    //监听的队列大小为maxev
+    iop_data->nevents = maxev;
+    //为epll_data里监听事件队列开辟连续空间
+    iop_data->events = (struct epoll_event *)(malloc(sizeof(struct epoll_event) * maxev));
+    if(!iop_data)
+    {
+        free(iop_data);
+        return -1;
+    }
+
+    //模型内部实现，不同模型不同的函数指针和名字
+    iop_op->name = "epoll";
+    iop_op->base_free = epoll_free;
+    iop_op->base_dispatch = epoll_dispatch;
+    iop_op->base_add = epoll_add;
+    iop_op->base_del = epoll_del;
+    iop_op->base_mod = epoll_mod;
+    
+    //1024 is not the max events limit.
+    //创建epoll表句柄
+    int epfd = epoll_create(1024);
+    if(epfd < 0)
+    {
+        free(iop_data->events);
+        free(iop_data);
+        free(iop_op);
+        return -1;
+    }
+    iop_data->epfd = epfd;
+
+
+    //iop_epoll_data_t类型的数据存在base的model_data里
+    //方便回调
+    base->model_data = iop_data;
+    
+    return 0;
+}
+ 
+
+对应的释放epoll开辟的空间和数据
+
+//epoll 释放
+static void epoll_free(iop_base_t *base)
+{
+    //model_data里存放了epoll数据的指针
+    iop_epoll_data_t *iop_data = (iop_epoll_data_t *)(base->model_data);
+    if(!iop_data){return;}
+    //释放events队列
+    if(iop_data->events)
+    {
+        free(iop_data->events);
+    }
+    //关闭iop_data->epfd
+    if(iop_data->epfd >= 0)
+    {
+        close(iop_data->epfd);
+    }
+    free(iop_data);
+    base->model_data = (void *)0;
+}
+ 
+
+epoll 添加事件
+
+//epoll添加事件
+//base 为iop_base回传指针
+//id为iop的id
+//io_handle_t 为socket
+//events 为事件类型（EV_TYPE_READ或者EV_TYPE_WRITE）
+static int epoll_add(iop_base_t *base, int id, io_handle_t handle, unsigned int events)
+{
+    iop_epoll_data_t *iop_data = (iop_epoll_data_t *)(base->model_data);
+    struct epoll_event ev;
+    ev.data.u32 = id; 
+    //转换为EPOLLIN或者EPOLLOUT
+    ev.events = to_epoll_events(events);
+    //iop_set_nonblock(handle);
+    return epoll_ctl(iop_data->epfd, EPOLL_CTL_ADD, (int)handle, &ev);                
+}
+ 
+
+epoll删除事件
+
+//epoll删除事件
+//base 为iop_base回传指针
+//id为iop的id
+//io_handle_t 为socket
+static int epoll_del(iop_base_t *base, int id,io_handle_t handle)
+{
+    iop_epoll_data_t *iop_data = (iop_epoll_data_t *)(base->model_data);
+    struct epoll_event ev;
+    ev.data.u32 = id;  
+    ev.events = 0;
+    //ev回传进去，删除epoll_events中socket为handle的注册事件
+    return epoll_ctl(iop_data->epfd, EPOLL_CTL_DEL, (int)handle, &ev);                
+}
+ 
+
+epoll事件更改
+
+//epoll 模式更改(读写更改)
+static int epoll_mod(iop_base_t *base, int id, io_handle_t handle, unsigned int events)
+{
+    iop_epoll_data_t *iop_data = (iop_epoll_data_t *)(base->model_data);
+    struct epoll_event ev;
+    ev.data.u32 = id;  
+    ev.events = to_epoll_events(events);
+    return epoll_ctl(iop_data->epfd, EPOLL_CTL_MOD, (int)handle, &ev);                
+}
+ 
+
+epoll事件派发
+
+//epoll 事件派发
+static int epoll_dispatch(iop_base_t * base, int timeout)
+{
+    int i;
+    int id = 0;
+    iop_t *iop = NULL;
+    //iop_base中取出模型数据
+    iop_epoll_data_t *iop_data = (iop_epoll_data_t *)(base->model_data);
+    int n = 0;
+    do{
+        n = epoll_wait(iop_data->epfd, iop_data->events, iop_data->nevents, timeout);    
+    }while((n < 0) && (errno == EINTR));
+    base->cur_time = time(NULL);
+    for(i = 0; i < n; i++)
+    {
+        //取出iop的id
+        id = (int)((iop_data->events)[i].data.u32);
+        if(id >= 0 && id < base->maxio)
+        {
+            iop = (base->iops)+id;
+            //这个宏是调用绑定在iop的事件回调函数（accept,read,write等）
+            IOP_CB(base,iop,from_epoll_events(iop_data->events[i].events));
+        }
+    }
+    return n;
+}
+以上就是libiop事件驱动的核心结构和设计，做个简单的总结，如果我们要设计一个多路复用的事件驱动
+
+基本结构是这样的
+
+//eventEle是应用层管理的最小单元
+
+int (*WRAFuc  )(eventLoop* eventLoopP, int id, int mask, ...);
+ 
+
+//mask为应用层自己定义的读写标记
+
+struct eventEle
+
+{
+
+   int socket; //关联的socket
+
+   WRAFuc  mPfunc;  //读写接受等功能回调的函数
+
+   //读写缓冲区可自己封装
+
+   char  readBuf[];   //读缓冲区
+
+   char writeBuff[];  //写缓冲区
+
+};
+ 
+
+ //事件轮询的基本结构
+
+struct eventLoop
+
+{
+
+   eventEle * eventList;
+
+   int maxfd;
+
+   int lastActiveTime;
+
+   iop_op_t op_imp;    /*事件模型的内部实现*/
+
+   void * model_data;  /*void 指针指向开辟的不同模型的数据*/
+
+};
+ 
+
+ 不同模型的操作进行封装成一个结构体，
+
+结构体里面有添加，删除，更改，派发，释放的函数指针
+
+struct tag_iop_op_t
+{
+const char *name; //模型名称
+void (*base_free)(iop_base_t *); //资源释放的接口
+int (*base_dispatch)(iop_base_t *, int); //模型调度接口
+//添加事件
+int (*base_add)(iop_base_t *, int, io_handle_t, unsigned int);
+//删除事件
+int (*base_del)(iop_base_t *, int,io_handle_t);
+//修改事件
+int (*base_mod)(iop_base_t *, int, io_handle_t, unsigned int);
+};
+这就是设计一个基本的事件驱动网络库的基本思路，
