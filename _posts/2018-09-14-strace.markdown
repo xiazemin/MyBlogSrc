@@ -1,0 +1,106 @@
+---
+title: strace 原理
+layout: post
+category: linux
+author: 夏泽民
+---
+<!-- more -->
+1.在Linux系统中，进程状态除了我们所熟知的TASK_RUNNING，TASK_INTERRUPTIBLE，TASK_STOPPED等，还有一个TASK_TRACED。这表明这个进程处于什么状态？
+2.strace可以方便的帮助我们记录进程所执行的系统调用，它是如何跟踪到进程执行的？
+3.gdb是我们调试程序的利器，可以设置断点，单步跟踪程序。它的实现原理又是什么？
+
+
+所有这一切的背后都隐藏着Linux所提供的一个强大的系统调用ptrace().
+
+
+1.ptrace系统调用
+ptrace系统调从名字上看是用于进程跟踪的，它提供了父进程可以观察和控制其子进程执行的能力，并允许父进程检查和替换子进程的内核镜像(包括寄存器)的值。其基本原理是: 当使用了ptrace跟踪后，所有发送给被跟踪的子进程的信号(除了SIGKILL)，都会被转发给父进程，而子进程则会被阻塞，这时子进程的状态就会被系统标注为TASK_TRACED。而父进程收到信号后，就可以对停止下来的子进程进行检查和修改，然后让子进程继续运行。    
+    其原型为：    
+    #include <sys/ptrace.h>
+    long ptrace(enum __ptrace_request request, pid_t pid, void *addr, void *data);
+    ptrace有四个参数: 
+    1). enum __ptrace_request request：指示了ptrace要执行的命令。
+    2). pid_t pid: 指示ptrace要跟踪的进程。
+    3). void *addr: 指示要监控的内存地址。
+    4). void *data: 存放读取出的或者要写入的数据。
+ptrace是如此的强大，以至于有很多大家所常用的工具都基于ptrace来实现，如strace和gdb。接下来，我们借由对strace和gdb的实现，来看看ptrace是如何使用的。
+
+
+2. strace的实现
+strace常常被用来拦截和记录进程所执行的系统调用，以及进程所收到的信号。如有这么一段程序：
+HelloWorld.c:
+#include <stdio.h>
+int main(){
+    printf("Hello World!/n");
+    return 0;
+}
+编译后，用strace跟踪： strace ./HelloWorld
+可以看到形如:
+execve("./HelloWorld", ["./HelloWorld"], [/* 67 vars */]) = 0
+brk(0)                                  = 0x804a000
+mmap2(NULL, 4096, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0xb7f18000
+access("/etc/ld.so.preload", R_OK)      = -1 ENOENT (No such file or directory)
+open("/home/supperman/WorkSpace/lib/tls/i686/sse2/libc.so.6", O_RDONLY) = -1 ENOENT (No such file or directory)
+...
+的一段输出，这就是在执行HelloWorld中，系统所执行的系统调用，以及他们的返回值。
+
+
+下面我们用ptrace来研究一下它是怎么实现的。
+...
+    switch(pid = fork())
+    {
+    case -1:
+        return -1;
+    case 0: //子进程
+        ptrace(PTRACE_TRACEME,0,NULL,NULL);
+        execl("./HelloWorld", "HelloWorld", NULL);
+    default: //父进程
+        wait(&val); //等待并记录execve
+        if(WIFEXITED(val))
+            return 0;
+        syscallID=ptrace(PTRACE_PEEKUSER, pid, ORIG_EAX*4, NULL);
+        printf("Process executed system call ID = %ld/n",syscallID);
+        ptrace(PTRACE_SYSCALL,pid,NULL,NULL);
+        while(1)
+        {
+            wait(&val); //等待信号
+            if(WIFEXITED(val)) //判断子进程是否退出
+                return 0;
+            if(flag==0) //第一次(进入系统调用)，获取系统调用的参数
+            {
+                syscallID=ptrace(PTRACE_PEEKUSER, pid, ORIG_EAX*4, NULL);
+                printf("Process executed system call ID = %ld ",syscallID);
+                flag=1;
+            }
+            else //第二次(退出系统调用)，获取系统调用的返回值
+            {
+                returnValue=ptrace(PTRACE_PEEKUSER, pid, EAX*4, NULL);
+                printf("with return value= %ld/n", returnValue);
+                flag=0;
+            }
+            ptrace(PTRACE_SYSCALL,pid,NULL,NULL);
+        }
+    }
+...
+
+
+在上面的程序中，fork出的子进程先调用了ptrace(PTRACE_TRACEME)表示子进程让父进程跟踪自己。然后子进程调用execl加载执行了HelloWorld。而在父进程中则使用wait系统调用等待子进程的状态改变。子进程因为设置了PTRACE_TRACEME而在执行系统调用被系统停止(设置为TASK_TRACED)，这时父进程被唤醒，使用ptrace(PTRACE_PEEKUSER,pid,...)分别去读取子进程执行的系统调用ID(放在ORIG_EAX中)以及系统调用返回时的值(放在EAX中)。然后使用ptrace(PTRACE_SYSCALL,pid,...)指示子进程运行到下一次执行系统调用的时候(进入或者退出)，直到子进程退出为止。
+
+
+程序的执行结果如下:
+Process executed system call ID = 11
+Process executed system call ID = 45 with return value= 134520832
+Process executed system call ID = 192 with return value= -1208934400
+Process executed system call ID = 33 with return value= -2
+Process executed system call ID = 5 with return value= -2
+...
+其中，11号系统调用就是execve，45号是brk,192是mmap2,33是access,5是open...经过比对可以发现，和strace的输出结果一样。当然strace进行了更详尽和完善的处理，我们这里只是揭示其原理，感兴趣的同学可以去研究一下strace的实现。
+
+
+PS: 
+    1). 在系统调用执行的时候，会执行pushl %eax # 保存系统调用号ORIG_EAX在程序用户栈中。
+    2). 在系统调用返回的时候，会执行movl %eax,EAX(%esp)将系统调用的返回值放入寄存器%eax中。
+    3). WIFEXITED()宏用来判断子进程是否为正常退出的，如果是，它会返回一个非零值。
+    4). 被跟踪的程序在进入或者退出某次系统调用的时候都会触发一个SIGTRAP信号，而被父进程捕获。
+    5). execve()系统调用执行成功的时候并没有返回值，因为它开始执行一段新的程序，并没有"返回"的概念。失败的时候会返回-1。
+    6). 在父进程进行进行操作的时候，用ps查看，可以看到子进程的状态为T,表示子进程处于TASK_TRACED状态。当然为了更具操作性，你可以在父进程中加入sleep()。
