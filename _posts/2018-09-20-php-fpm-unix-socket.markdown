@@ -1,5 +1,5 @@
 ---
-title:nginx php-fpm unix-socket  通信
+title: nginx php-fpm unix-socket
 layout: post
 category: web
 author: 夏泽民
