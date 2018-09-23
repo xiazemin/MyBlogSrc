@@ -4,6 +4,10 @@ layout: post
 category: web
 author: 夏泽民
 ---
+tcpdump 无法抓unix socket
+There's another way that needs you to find the process id attached to the socket, then find with lsof the file descriptor of the socket and then tap the file descriptor using strace.
+
+
 首先就是找php-fpm的配置文件修改配置，我用的php是7.1.4
 
 在php-fpm.conf里面找不到lister=127.0.0.1:9000的配置，然后找到末尾发现有个inclue
