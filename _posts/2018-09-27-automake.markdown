@@ -332,3 +332,104 @@ apple$(EXEEXT): $(apple_OBJECTS) $(apple_DEPENDENCIES)
     @rm -f apple$(EXEEXT)
 #$(LINK) $(apple_LDFLAGS) $(apple_OBJECTS) $(apple_LDADD) $(LIBS)
 …….
+
+
+在GNU的世界里，存在Automake这样的工具进行自动生成Makefile文件，automake是由Perl语言编写的，必须与GNU autoconf一并使用，具体的生成过程请参看GNU automake的wikipedia中的右下角的图，地址如下：http://en.wikipedia.org/wiki/Automake，由此图可看到使用自动生成Makefile的工具使用的流程，步骤主要如下：
+
+1、autoscan 
+2、修改生成的configure.scan为configure.in 
+3、aclocal
+4、autoheader
+5、autoconf
+6、创建Makefile.am并进行具体内容的写入
+7、automake
+8、automake
+9、./configure生成Makefile
+10、make得到可执行程序
+光空说太抽象了，那么来一个简单的例子吧，
+0、创建一个printf("Hello world!\n")的小程序，创建目录hello后创建hello.c，
+ufo@ufo:~/hello$ ls
+hello.c
+那么下一步即可开始automake的工作了，
+1、使用autoscan生成configure.scan
+ufo@ufo:~/hello$ autoscan 
+ufo@ufo:~/hello$ ls
+autoscan.log  configure.scan  hello.c
+ufo@ufo:~/hello$ aclocal
+aclocal: `configure.ac' or `configure.in' is required
+2、在上一步中直接执行aclocal时出现以上的提示，那么就要将生成的configure.scan修改为configure.ac或configure.in再进行aclocal的执行；
+ufo@ufo:~/hello$ mv configure.scan configure.in 
+ufo@ufo:~/hello$ ls
+autoscan.log  configure.in  hello.c
+3、执行aclocal
+ufo@ufo:~/hello$ aclocal
+ufo@ufo:~/hello$ ls
+autom4te.cache  autoscan.log  configure.in  hello.c
+4、执行autoheader
+ufo@ufo:~/hello$ ls
+autom4te.cache  autoscan.log  config.h.in  configure.in  hello.c
+5、执行autoconf
+ufo@ufo:~/hello$ autoconf 
+ufo@ufo:~/hello$ ls
+autom4te.cache  autoscan.log  config.h.in  configure  configure.in  hello.c
+6、创建Makefile.am
+ufo@ufo:~/hello$ vim Makefile.am 
+ufo@ufo:~/hello$ cat Makefile.am 
+bin_PROGRAMS=hello
+hello_SOURCES=hello.c
+关于Makefile.am中的具体内容的意思是说生成的可执行文件的名称为hello,对应的源代码为hello.c。
+7、执行automake
+ufo@ufo:~/hello$ automake
+configure.in: no proper invocation of AM_INIT_AUTOMAKE was found.
+configure.in: You should verify that configure.in invokes AM_INIT_AUTOMAKE,
+configure.in: that aclocal.m4 is present in the top-level directory,
+configure.in: and that aclocal.m4 was recently regenerated (using aclocal).
+automake: no `Makefile.am' found for any configure output
+automake: Did you forget AC_CONFIG_FILES([Makefile]) in configure.in?
+这时出错了，是说configure.in文件中的AM_INIT_AUTOMAKE没有找到，只有修改configure.in文件后再从第三步进行重新执行，configure.in中的AC_INIT行下添加AM_INIT_AUTOMAKE(hello,1.0)，格式为AM_INIT_AUTOMAKE(package,version)，再修改AC_OUTPUT为AC_OUTPUT(Makefile)；
+修改完configure.in文件后，再次执行2～7;
+8、执行automake
+ufo@ufo:~/hello$ automake
+configure.in:6: required file `./install-sh' not found
+configure.in:6:   `automake --add-missing' can install `install-sh'
+configure.in:6: required file `./missing' not found
+configure.in:6:   `automake --add-missing' can install `missing'
+Makefile.am: required file `./INSTALL' not found
+Makefile.am:   `automake --add-missing' can install `INSTALL'
+Makefile.am: required file `./NEWS' not found
+Makefile.am: required file `./README' not found
+Makefile.am: required file `./AUTHORS' not found
+Makefile.am: required file `./ChangeLog' not found
+Makefile.am: required file `./COPYING' not found
+Makefile.am:   `automake --add-missing' can install `COPYING'
+Makefile.am: required file `./depcomp' not found
+Makefile.am:   `automake --add-missing' can install `depcomp'
+按照提示创建缺少的文件,
+ufo@ufo:~/hello$ touch NEWS README AUTHORS ChangeLog
+再执行: ufo@ufo:~/hello$ automake --add-missing
+没有出错的情况下再次执行automake;
+ufo@ufo:~/hello$ ls
+aclocal.m4      ChangeLog     configure.in  INSTALL      missing
+AUTHORS         config.h.in   COPYING       install-sh   NEWS
+autom4te.cache  config.h.in~  depcomp       Makefile.am  README
+autoscan.log    configure     hello.c       Makefile.in
+此时已经生成了生成Makefile文件的cinfigure脚本；
+9、./configure生成Makefile
+ufo@ufo:~/hello$ ls Makefile
+Makefile
+10、make得到可执行程序
+ufo@ufo:~/hello$ make
+make  all-am
+make[1]: 正在进入目录 `/home/ufo/hello'
+gcc -DHAVE_CONFIG_H -I.     -g -O2 -MT hello.o -MD -MP -MF .deps/hello.Tpo -c -o hello.o hello.c
+mv -f .deps/hello.Tpo .deps/hello.Po
+gcc  -g -O2   -o hello hello.o  
+make[1]:正在离开目录 `/home/ufo/hello'
+ufo@ufo:~/hello$ ls
+aclocal.m4      config.h       configure     hello.c     Makefile.am  stamp-h1
+AUTHORS         config.h.in    configure.in  hello.o     Makefile.in
+autom4te.cache  config.h.in~   COPYING       INSTALL     missing
+autoscan.log    config.log     depcomp       install-sh  NEWS
+ChangeLog       config.status  hello         Makefile    README
+ufo@ufo:~/hello$ ./hello 
+Hello World!
