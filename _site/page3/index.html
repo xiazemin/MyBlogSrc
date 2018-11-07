@@ -144,6 +144,53 @@
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
+						<a class="post-link" href="/MyBlog/storage/2018/10/21/tcmalloc.html">ptmalloc、tcmalloc和jemalloc</a>
+					</h2>
+					<div class="author" style="margin-top: -10px;">Posted by
+						<i class="fa fa-user"></i>
+						<a href="/MyBlog/storage/2018/10/21/tcmalloc.html"> 夏泽民</a>
+						<span class="post-meta"><i class="fa fa-calendar"></i> 
+							Oct 21, 2018
+						</span>
+					</div>
+					<div class="excerpt"><p>内存管理可以分为三个层次，自底向上分别是：
+操作系统内核的内存管理
+glibc层使用系统调用维护的内存管理算法
+应用程序从glibc动态分配内存后，根据应用程序本身的程序特性进行优化， 比如使用引用计数std::shared_ptr，apache的内存池方式等等。
+应具有以下特性:
+额外的空间损耗尽量少
+分配速度尽可能快
+尽量避免内存碎片
+缓存本地化友好
+通用性，兼容性，可移植性，易调试
+目前大部分服务端程序使用glibc提供的malloc/free系列函数，而glibc使用的ptmalloc2在性能上远远弱后于google的tcmalloc和facebook的jemalloc。 而且后两者只需要使用LD_PRELOAD环境变量启动程序即可，甚至并不需要重新编译。
+<!-- more -->
+glibc ptmalloc2
+ptmalloc2即是我们当前使用的glibc malloc版本。
+ptmalloc原理
+ x86_64 下 Linux 进程的默认地址空间, 对 heap 的操作, 操作系统提供了brk()系统调用，设置了Heap的上边界； 对 mmap 映射区域的操作,操作系 统 供了 mmap()和 munmap()函数。
+因为系统调用的代价很高，不可能每次申请内存都从内核分配空间，尤其是对于小内存分配。 而且因为mmap的区域容易被munmap释放，所以一般大内存采用mmap()，小内存使用brk()。
+多线程支持
+Ptmalloc2有一个主分配区(main arena)， 有多个非主分配区。 非主分配区只能使用mmap向操作系统批发申请HEAP_MAX_SIZE（64位系统为64MB）大小的虚拟内存。 当某个线程调用malloc的时候，会先查看线程私有变量中是否已经存在一个分配区，如果存在则尝试加锁，如果加锁失败则遍历arena链表试图获取一个没加锁的arena， 如果依然获取不到则创建一个新的非主分配区。
+free()的时候也要获取锁。分配小块内存容易产生碎片，ptmalloc在整理合并的时候也要对arena做加锁操作。在线程多的时候，锁的开销就会增大。
+ptmalloc内存管理
+用户请求分配的内存在ptmalloc中使用chunk表示， 每个chunk至少需要8个字节额外的开销。 用户free掉的内存不会马上归还操作系统，ptmalloc会统一管理heap和mmap区域的空闲chunk，避免了频繁的系统调用。
+ptmalloc 将相似大小的 chunk 用双向链表链接起来, 这样的一个链表被称为一个 bin。Ptmalloc 一共 维护了 128 个 bin,并使用一个数组来存储这些 bin
+数组中的第一个为 unsorted bin, 数组中从 2 开始编号的前 64 个 bin 称为 small bins, 同一个small bin中的chunk具有相同的大小。small bins后面的bin被称作large bins。</p>
+
+</div>
+					<div class="readmore" style="float: right;">
+						
+							<a href="/MyBlog/storage/2018/10/21/tcmalloc.html" style="color:green">阅读全文</a>
+						
+					</div>								
+			</div>
+			<br/>
+			<hr/>
+			<div class="post-list" style="list-style-type: none;">			
+				 	
+					<h2>
+						<img class="title-image" src="/MyBlog/img/dna.png"/>
 						<a class="post-link" href="/MyBlog/storage/2018/10/21/rowstorage.html">列式存储</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
@@ -262,38 +309,6 @@
 					<div class="readmore" style="float: right;">
 						
 							<a href="/MyBlog/storage/2018/10/21/lsmwal.html" style="color:green">阅读全文</a>
-						
-					</div>								
-			</div>
-			<br/>
-			<hr/>
-			<div class="post-list" style="list-style-type: none;">			
-				 	
-					<h2>
-						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/linux/2018/10/21/fileread.html">文件读取流程</a>
-					</h2>
-					<div class="author" style="margin-top: -10px;">Posted by
-						<i class="fa fa-user"></i>
-						<a href="/MyBlog/linux/2018/10/21/fileread.html"> 夏泽民</a>
-						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Oct 21, 2018
-						</span>
-					</div>
-					<div class="excerpt"><p>使用df -aT命令，发现根目录/对应的文件系统为ext3
-<!-- more -->
-Ext3文件系统结构与Ext2相似。用工具格式化磁盘或分区时， 会选择使用什么文件系统来格式化。若选用Ext2来格式化磁盘或分区， 则磁盘或分区的大部分空间被格式化成了许多个Inode和block两个数据结构。block有3种大小选项1K，2K，4K，可在格式化之前选择。Inode的大小固定为128bytes。每个文件都仅会占用一个Inode，Inode主要用来记录文件相关属性，比如权限、文件大小、修改时间等。block用来记录文件的数据，一个Inode可以关联多个block，且Inode记录一个block号码需要4byte。如果文件非常大的话，则Inode无法直接记录文件所包含的所有block号码。所以Ext2采用12个直接、1个间接、1个双间接、和1个三间接记录区，共需60bytes。
-	<img src="https://xiazemin.github.io/MyBlog/img/ext2inode.webp" />
-	12个直接记录区直接指向带有文件数据的block。1个间接记录区指向一个无真实文件数据的block，此block充当Inode的扩展记录区，此block直接指向带有数据的block。若此扩展block为1K，那么它可记录256个block号码。双间接和三间接类似。</p>
-
-<p>文件读取流程
-1)通过挂载点信息找到/dev/sda2的inode号码为2，对应根目录/
-2） 经过上个步骤，由于owner root有r,w,x权限，可从inode取得根目录/的block，然后再从block中取得etc/目录的inode为3303105。这里etc/相当于根目录/的数据。</p>
-
-</div>
-					<div class="readmore" style="float: right;">
-						
-							<a href="/MyBlog/linux/2018/10/21/fileread.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -697,6 +712,10 @@ Ext3文件系统结构与Ext2相似。用工具格式化磁盘或分区时， �
 			  
 			    
 			      <a href="/MyBlog/page97/">97</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page98/">98</a>
 			    
 			  
 
@@ -1213,6 +1232,11 @@ Ext3文件系统结构与Ext2相似。用工具格式化磁盘或分区时， �
 						  
 						
 
+						  
+							<li><a href="/MyBlog/page98">98</a></li>
+						  
+						
+
 						
 						  <li><a href="/MyBlog/page4">Next</a></li>
 						
@@ -1244,6 +1268,14 @@ Ext3文件系统结构与Ext2相似。用工具格式化磁盘或分区时， �
 							var searchIndex={
 							"code" : 0 ,
 							"data" : [
+							
+							{
+							"title" : "kafka shell - ",
+							"url" : "/MyBlog/storage/2018/11/07/kafka.html"
+							}
+							
+							,
+							
 							
 							{
 							"title" : "presto - ",
@@ -5338,7 +5370,7 @@ Ext3文件系统结构与Ext2相似。用工具格式化磁盘或分区时， �
 								
 								
 									<a class="bold" href="/MyBlog/category/storage">
-										storage (40)
+										storage (41)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -5416,6 +5448,10 @@ Ext3文件系统结构与Ext2相似。用工具格式化磁盘或分区时， �
 							<div id="tags">
 								<ul style="display:none;width:250px;height:250px;">
 								     
+								   <li>
+										<a href="/MyBlog/storage/2018/11/07/kafka.html" style="font-size:40px;"> kafka shell</a>
+									</li>
+									  
 								   <li>
 										<a href="/MyBlog/storage/2018/11/02/presto.html" style="font-size:40px;"> presto</a>
 									</li>
@@ -5571,10 +5607,6 @@ Ext3文件系统结构与Ext2相似。用工具格式化磁盘或分区时， �
 								   <li>
 										<a href="/MyBlog/linux/2018/09/21/LD_PRELOAD.html" style="font-size:40px;"> LD_PRELOAD/DYLD_INSERT_LIBRARIES libc hook</a>
 									</li>
-									  
-								   <li>
-										<a href="/MyBlog/web/2018/09/20/php-fpm-unix-socket.html" style="font-size:40px;"> nginx php-fpm unix-socket</a>
-									</li>
 									
 								</ul>
 							</div>
@@ -5587,6 +5619,12 @@ Ext3文件系统结构与Ext2相似。用工具格式化磁盘或分区时， �
                 <div class="well">
                 	<h4>Recent posts</h4>
                 		<ul class="posts" span="recent">  
+							  
+							   <li>  
+								   <span>07 Nov 2018</span>
+								   <a href="/MyBlog/storage/2018/11/07/kafka.html">  
+								   kafka shell</a>  
+							   </li>  
 							  
 							   <li>  
 								   <span>02 Nov 2018</span>
@@ -5610,12 +5648,6 @@ Ext3文件系统结构与Ext2相似。用工具格式化磁盘或分区时， �
 								   <span>31 Oct 2018</span>
 								   <a href="/MyBlog/storage/2018/10/31/binlog_kafka.html">  
 								   binlog同步kafka方案</a>  
-							   </li>  
-							  
-							   <li>  
-								   <span>29 Oct 2018</span>
-								   <a href="/MyBlog/storage/2018/10/29/maxwell.html">  
-								   maxwell+kafka+Spark Streaming构建MySQL Binlog日志采集实时处理方案</a>  
 							   </li>  
 							  
 						</ul>
