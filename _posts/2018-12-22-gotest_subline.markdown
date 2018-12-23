@@ -4,6 +4,18 @@ layout: post
 category: golang
 author: 夏泽民
 ---
+方式1:命令行
+#!/bin/bash
+cd shell/
+~/goLang/bin/gotests -all -w ./
+#生成测试文件,添加测试用例
+go test -coverprofile=coverage.out
+#生成coverage.out
+go tool cover -html=coverage.out
+#弹出页面
+#file:///var/folders/r9/35q9g3d56_d9g0v59w9x2l9w0000gn/T/cover915348153/coverage.html#file0
+
+方式2:subline 插件
 subline text 3 注册码
 ----- BEGIN LICENSE -----
 sgbteam
