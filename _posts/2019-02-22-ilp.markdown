@@ -1,0 +1,124 @@
+---
+title: ilp 整数线性规划
+layout: post
+category: algorithm
+author: 夏泽民
+---
+基于整数线性规划(ILP)方法
+将摘要看做一个带约束的优化问题
+基于ILP进行求解，可采用现成的ILP求解工具
+同时进行句子抽取与冗余去除 
+python下ILP求解工具学习：
+使用流程
+　　我们解决线性规划问题一般是通过以下三个步骤。
+1.列出约束条件及目标函数
+2.画出约束条件所表示的可行域
+<!-- more -->
+使用pulp工具包，我们只需要做第一步即可，使用pulp提供的API提供目标函数及约束条件就可以直接求解，非常方便。 
+　
+
+1.常用的API
+1. LpProblem类
+LpProblem(name='NoName', sense=LpMinimize)
+构造函数，用来构造一个LP问题实例，其中name指定问题名（输出信息用)，
+sense值是LpMinimize或LpMaximize中的一个，用来指定目标函数是求极大值还是极小值。
+solve(solver=None, **kwargs)
+在对LpProblem添加完约束条件后，调用该函数进行求解，如果不是求解特定的整数规划问题，solver一般使用默认即可。
+2. LpVariable类
+LpVariable(name, lowBound=None, upBound=None, cat='Continuous', e=None)
+构造函数，用来构造LP问题中的变量，name指定变量名，lowBound和upBound是下界和上界，
+默认分别是负无穷到正无穷,cat用来指定变量是离散(Integer,Binary)还是连续(Continuous)。
+dicts(name, indexs, lowBound=None, upBound=None, cat='Continuous', indexStart=[])
+用来构造变量字典，可以让我们不用一个个地创建Lp变量实例。name指定所有变量的前缀,
+index是列表，其中的元素会被用来构成变量名，后面三个参数和LbVariable中的一样。
+3. lpSum(vector)
+计算一个序列的值，使用lpSum求解比普通的sum函数要快得多。
+2. 实例
+　　官网上给出了三个实例，这里采用第一个实例，配料分配的问题，这是一个经典的动态规划问题。 
+　　有家公司要生产猫粮，猫粮的配料有chicken, beef, mutton,rice, wheat，gel。它们的成本分别是$0.013, $0.008,$0.010,$0.002, $0.005, $0.001为了满足营养标准，每100g成品必须至少有8gProtein，6gfat，但是不超过2g的fibre以及0.4g的salt。下面是营养成分表。 
+
+
+define:
+x1:100g猫粮中chicken的含量
+x2:100g猫粮中beef的含量
+x3:100g猫粮中mutton的含量
+x4:100g猫粮中rice的含量
+x5:100g猫粮中wheat的含量
+x6:100g猫粮中gel的含量
+ 
+objective:
+min(0.013*x1+0.008*x2+0.01*x3+0.002*x4+0.005*x5+0.001*x6)
+ 
+s.t.
+x1,x2,x3,x4,x5,x6 >= 0
+0.100*x1+0.200*x2+0.150*x3+0.000*x4+0.040*x5+0.000*x6 >= 8.0
+0.080*x1+0.100*x2+0.110*x3+0.010*x4+0.010*x5+0.000*x6 >= 6.0
+0.001*x1+0.005*x2+0.003*x3+0.100*x4+0.150*x5+0.000*x6 <= 2.0
+0.002*x1+0.005*x2+0.007*x3+0.002*x4+0.008*x5+0.000*x6 <= 2.0
+用pulp解决该问题的代码如下
+
+#-*- coding:utf-8 -*-
+from pulp import *
+ 
+Ingredients = ['CHICKEN', 'BEEF', 'MUTTON', 'RICE', 'WHEAT', 'GEL']
+costs = {'CHICKEN': 0.013, 
+         'BEEF': 0.008, 
+         'MUTTON': 0.010, 
+         'RICE': 0.002, 
+         'WHEAT': 0.005, 
+         'GEL': 0.001}
+ 
+proteinPercent = {'CHICKEN': 0.100, 
+                  'BEEF': 0.200, 
+                  'MUTTON': 0.150, 
+                  'RICE': 0.000, 
+                  'WHEAT': 0.040, 
+                  'GEL': 0.000}
+ 
+fatPercent = {'CHICKEN': 0.080, 
+              'BEEF': 0.100, 
+              'MUTTON': 0.110, 
+              'RICE': 0.010, 
+              'WHEAT': 0.010, 
+              'GEL': 0.000}
+ 
+fibrePercent = {'CHICKEN': 0.001, 
+                'BEEF': 0.005, 
+                'MUTTON': 0.003, 
+                'RICE': 0.100, 
+                'WHEAT': 0.150, 
+                'GEL': 0.000}
+ 
+saltPercent = {'CHICKEN': 0.002, 
+               'BEEF': 0.005, 
+               'MUTTON': 0.007, 
+               'RICE': 0.002, 
+               'WHEAT': 0.008, 
+               'GEL': 0.000}
+ 
+#创建问题实例，求最小极值
+prob = LpProblem("The Whiskas Problem", LpMinimize)
+ 
+#构建Lp变量字典，变量名以Ingr开头，如Ingr_CHICKEN，下界是0
+ingredient_vars = LpVariable.dicts("Ingr",Ingredients,0)
+ 
+#添加目标方程
+prob += lpSum([costs[i]*ingredient_vars[i] for i in Ingredients])
+ 
+#添加约束条件
+prob += lpSum([ingredient_vars[i] for i in Ingredients]) == 100
+prob += lpSum([proteinPercent[i] * ingredient_vars[i] for i in Ingredients]) >= 8.0
+prob += lpSum([fatPercent[i] * ingredient_vars[i] for i in Ingredients]) >= 6.0
+prob += lpSum([fibrePercent[i] * ingredient_vars[i] for i in Ingredients]) <= 2.0
+prob += lpSum([saltPercent[i] * ingredient_vars[i] for i in Ingredients]) <= 0.4
+ 
+#求解
+prob.solve()
+#查看解的状态
+print("Status:", LpStatus[prob.status])
+#查看解
+for v in prob.variables():
+    print(v.name, "=", v.varValue)
+#另外一种查看解的方式
+# for i in Ingredients:
+#print(ingredient_vars[i],"=",ingredient_vars[i].value())
