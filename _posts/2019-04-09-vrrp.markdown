@@ -1,0 +1,119 @@
+---
+title: vrrp keepalived
+layout: post
+category: web
+author: 夏泽民
+---
+VRRP：Virtual Router Redundancy Protocol，虚拟路由冗余协议。VRRP说白了就是实现地址漂移的，是一种容错协议，在提高可靠性的同时，简化了主机的配置。该协议能够实现将可以承担网关功能的一组路由器加入到备份组中，形成一台虚拟路由器，由VRRP的选举机制决定哪台路由器承担转发任务，局域网内的主机只需将虚拟路由器配置为缺省网关。
+
+keepalived可以将多个无状态的单点通过虚拟IP(以下称为VIP)漂移的方式搭建成一个高可用服务，常用组合比如 keepalived+nginx，lvs，haproxy和memcached等。它的实现基础是VRRP协议，包括核心的MASTER竞选机制都是在VRRP协议所约定的。
+
+一、配置说明：
+keepalived的配置位于/etc/keepalived/keepalived.conf，配置文件格式包含多个必填/可选的配置段，部分重要配置含义如下：
+global_defs: 全局定义块，定义主从切换时通知邮件的SMTP配置。
+vrrp_instance: vrrp实例配置。
+vrrp_script: 健康检查脚本配置。
+
+细分下去，vrrp_instance配置段包括：
+state: 实例角色。分为一个MASTER和一(多)个BACKUP。
+virtual_router_id: 标识该虚拟路由器的ID，有效范围为0-255。
+priority: 优先级初始值，竞选MASTER用到，有效范围为0-255。
+advert_int: VRRP协议通告间隔。
+interface: VIP所绑定的网卡，指定处理VRRP多播协议包的网卡。
+mcast_src_ip: 指定发送VRRP协议通告的本机IP地址。
+authentication: 认证方式。
+virtual_ipaddress: VIP。
+track_script: 健康检查脚本。
+
+vrrp_script配置段包括：
+script: 一句指令或者一个脚本文件，需返回0(成功)或非0(失败)，keepalived以此为依据判断其监控的服务状态。
+interval: 健康检查周期。
+weight: 优先级变化幅度。
+fall: 判定服务异常的检查次数。
+rise: 判定服务正常的检查次数。
+
+这里有MASTER和BACKUP的参考配置。
+
+二、选举算法
+keepalived中优先级高的节点为MASTER。MASTER其中一个职责就是响应VIP的arp包，将VIP和mac地址映射关系告诉局域网内其 他主机，同时，它还会以多播的形式（目的地址224.0.0.18）向局域网中发送VRRP通告，告知自己的优先级。网络中的所有BACKUP节点只负责 处理MASTER发出的多播包，当发现MASTER的优先级没自己高，或者没收到MASTER的VRRP通告时，BACKUP将自己切换到MASTER状 态，然后做MASTER该做的事：1.响应arp包，2.发送VRRP通告。
+
+MASTER和BACKUP节点的优先级如何调整？
+首先，每个节点有一个初始优先级，由配置文件中的priority配置项指定，MASTER节点的priority应比BAKCUP高。运行过程中keepalived根据vrrp_script的weight设定，增加或减小节点优先级。规则如下：
+
+1. 当weight > 0时，vrrp_script script脚本执行返回0(成功)时优先级为priority + weight, 否则为priority。当BACKUP发现自己的优先级大于MASTER通告的优先级时，进行主从切换。
+2. 当weight < 0时，vrrp_script script脚本执行返回非0(失败)时优先级为priority + weight, 否则为priority。当BACKUP发现自己的优先级大于MASTER通告的优先级时，进行主从切换。 3. 当两个节点的优先级相同时，以节点发送VRRP通告的IP作为比较对象，IP较大者为MASTER。 以上文中的配置为例： HOST1: 10.15.8.100, priority=91, MASTER(default) HOST2: 10.15.8.101, priority=90, BACKUP VIP: 10.15.8.102 weight = 2 抓包命令: tcpdump -nn vrrp 示例一：HOST1和HOST2上keepalived和nginx均正常。
+16:33:07.697281 IP 10.15.8.100 > 224.0.0.18: VRRPv2, Advertisement, vrid 102, 
+prio 93, authtype simple, intvl 1s, length 20
+16:33:08.697588 IP 10.15.8.100 > 224.0.0.18: VRRPv2, Advertisement, vrid 102, 
+prio 93, authtype simple, intvl 1s, length 20
+此时HOST1优先级为priority + weight = 93，HOST2优先级为priority + weight = 92，HOST1仍为MASTER。
+
+示例二：关闭HOST1上的nginx。
+16:33:09.697928 IP 10.15.8.100 > 224.0.0.18: VRRPv2, Advertisement, vrid 102, 
+prio 93, authtype simple, intvl 1s, length 20
+16:33:10.698285 IP 10.15.8.100 > 224.0.0.18: VRRPv2, Advertisement, vrid 102, 
+prio 91, authtype simple, intvl 1s, length 20
+16:33:10.698482 IP 10.15.8.101 > 224.0.0.18: VRRPv2, Advertisement, vrid 102, 
+prio 92, authtype simple, intvl 1s, length 20
+16:33:11.699441 IP 10.15.8.101 > 224.0.0.18: VRRPv2, Advertisement, vrid 102, 
+prio 92, authtype simple, intvl 1s, length 20
+HOST1上的nginx关闭后，killall -0 nginx返回非0，HOST1通告的优先级为priority = 91，HOST2的优先级为priority + weight = 92，HOST2抢占成功，被选举为MASTER。相关日志可tail /var/log/messages。
+
+由此可见，主从的优先级初始值priority和变化量weight设置非常关键，配错的话会导致无法进行主从切换。比如，当MASTER初始值定 得太高，即使script脚本执行失败，也比BACKUP的priority + weight大，就没法进行VIP漂移了。所以priority和weight值的设定应遵循: abs(MASTER priority - BAKCUP priority) < abs(weight)。 另外，当网络中不支持多播(例如某些云环境)，或者出现网络分区的情况，keepalived BACKUP节点收不到MASTER的VRRP通告，就会出现脑裂(split brain)现象，此时集群中会存在多个MASTER节点。
+<!-- more -->
+之所以说keepalived是轻量级的，是相对于corosync + ldirectord来说的。keepalived也可以实现高可用集群，而且配置起来比corosync + ldirectord简单方便很多，keepalived与corosync的工作机制相差很多。corosync + ldirectord实现的功能虽然强大，但配置起来比较麻烦，而keepalived功能虽然简单，但配置起来比较容易。也就是说keepalived可实现corosync + ldirectord实现的功能，只不过前者没有后者功能强大而已。
+ 
+ 通常，同一网段内的所有主机都设置一条相同的、以网关为下一跳的缺省路由。主机发往其他网段的报文将通过缺省路由发往网关，再由网关进行转发，从而实现主机与外部网络的通信。当网关发生故障时，本网段内所有以网关为缺省路由的主机将无法与外部网络通信，仅能实现内部主机间通信。缺省路由为用户的配置操作提供了方便，但是对缺省网关设备提出了很高的稳定性要求。增加出口网关是提高系统可靠性的常见方法，此时如何在多个出口之间进行选路就成为需要解决的问题。而VRRP正好解决了此问题。
+VRRP：Virtual Router Redundancy Protocol，虚拟路由冗余协议。VRRP说白了就是实现地址漂移的，是一种容错协议，在提高可靠性的同时，简化了主机的配置。该协议能够实现将可以承担网关功能的一组路由器加入到备份组中，形成一台虚拟路由器，由VRRP的选举机制决定哪台路由器承担转发任务，局域网内的主机只需将虚拟路由器配置为缺省网关。
+在VRRP协议出现之前，为了不让单个路由器成为本地与外部通信的瓶颈，我们需要有多个路由，在此种模式下，我们内部的主机就需要将自己的网关指向不同的路由器，这样的配置对我们的网关管理员来说是很麻烦的，且不容易实现。在VRRP协议出现后，为了不让单个路由器成为本地与外部通信的瓶颈，我们仍需要有多个路由，但可以使用同一个缺省网关，我们只需将内部主机指定一个缺省网关即可。VRRP协议会根据优先级来选择一个正常的路由作为主路由器实现与外部的通信，而其他路由则作为备份路由不参与转发。在此模式下，多个路由器组成虚拟路由器组，物理上是多个路由器组成，但在逻辑上却是表现为只有一个路由
+Router A、Router B和Router C组成一个虚拟路由器。各虚拟路由器都有自己的IP地址。局域网内的主机将虚拟路由器设置为缺省网关。Router A、Router B和Router C中优先级最高的路由器作为Master路由器，承担网关的功能。其余两台路由器作为Backup路由器。当master路由器出故障后，backup路由器会根据优先级重新选举新的master路由器承担网关功能。Master 路由器周期性地发送VRRP 报文，在虚拟路由器中公布其配置信息（优先级等）和工作状况。Backup路由器通过接收到VRRP 报文的情况来判断Master 路由器是否工作正常。
+VRRP根据优先级来确定备份组中每台路由器的角色（Master 路由器或Backup 路由器）。优先级越高，则越有可能成为Master 路由器。VRRP优先级的可配置的取值范围为1 到254。
+为了防止非法用户构造报文攻击备份组，VRRP通过在VRRP报文中增加认证字的方式，验证接收到的VRRP报文。VRRP提供了两种认证方式：
+simple：简单字符认证。发送VRRP 报文的路由器将认证字填入到VRRP 报文中，而收到VRRP 报文的路由器会将收到的VRRP 报文中的认证字和本地配置的认证字进行比较。如果认证字相同，则认为接收到的报文是真实、合法的VRRP 报文；否则认为接收到的报文是一个非法报文。
+md5：MD5 认证。发送VRRP 报文的路由器利用认证字和MD5 算法对VRRP 报文进行摘要运算，运算结果保存在Authentication Header（认证头）中。收到VRRP 报文的路由器会利用认证字和MD5 算法进行同样的运算，并将运算结果与认证头的内容进行比较。如果相同，则认为接收到的报文是真实、合法的VRRP 报文；否则认为接收到的报文是一个非法报文。
+在有多个路由器组成的虚拟路由中，当我们的内部主机很多时，如果所有主机都使用同一个master路由，会使得其他路由器很清闲，很浪费资源，我们期望我们本地的内部主机平分到各个路由器上，即让我们的内部主机的缺省网关指向不同的路由，从而减轻因只有一个master路由而造成网络带宽拥堵的负担。这就是负载分担VRRP。
+有三个备份组存在：
+备份组1：对应虚拟路由器1。Router A作为Master路由器，Router B和Router C作为Backup路由器。
+备份组2：对应虚拟路由器2。Router B作为Master路由器，Router A和Router C作为Backup路由器。
+备份组3：对应虚拟路由器3。Router C作为Master路由器，Router A和Router B作为Backup路由器。
+为了实现业务流量在Router A、Router B和Router C之间进行负载分担，需要将局域网内的主机的缺省网关分别设置为虚拟路由器1、2和3。在配置优先级时，需要确保三个备份组中各路由器的VRRP优先级形成交叉对应。为了便于理解，我们假定有三个路由设备Router A、B、C和三台主机Host A、B、C，列举有在不同的虚拟路由组中。对路由器A来说，因在虚拟路由组1中Router A的优先级高于另外两个，因此，Router A 作为 Master 路由器，Router B 和Router C 作为 Backup路由器；同样，对路由器B来说，因在虚拟路由器组2中Router B的优先级高于另外两个，因此，Router B 作为 Master 路由器，Router A 和Router C 作为 Backup路由器；对路由器C来说，因在虚拟路由器组3中Router C的优先级高于另外两个，因此，Router C 作为 Master 路由器，Router A 和Router B 作为 Backup路由器。对不同的主机来说，一旦其master路由器出故障后，会在另外正常的路由器中根据优先级重新选定master路由。如这里假定Host A的默认网关指向Router A，即Host A指向虚拟路由器组1的默认网关，对主机A来说，如果其master路由出现故障，即Router A出现故障，则会从另外两个正常的备份虚拟路由中根据各自的优先级选取高优先级的作为新的master路由，这里就是选取Router B作为其master路由来完成网关功能。
+  一、配置说明
+keepalived的配置位于/etc/keepalived/keepalived.conf，配置文件格式包含多个必填/可选的配置段，部分重要配置含义如下：
+
+global_defs: 全局定义块，定义主从切换时通知邮件的SMTP配置。
+vrrp_instance: vrrp实例配置。
+vrrp_script: 健康检查脚本配置。
+细分下去，vrrp_instance配置段包括：
+
+state: 实例角色。分为一个MASTER和一(多)个BACKUP。
+virtual_router_id: 标识该虚拟路由器的ID，有效范围为0-255。
+priority: 优先级初始值，竞选MASTER用到，有效范围为0-255。
+advert_int: VRRP协议通告间隔。
+interface: VIP所绑定的网卡，指定处理VRRP多播协议包的网卡。
+mcast_src_ip: 指定发送VRRP协议通告的本机IP地址。
+authentication: 认证方式。
+virtual_ipaddress: VIP。
+track_script: 健康检查脚本。
+vrrp_script配置段包括：
+
+script: 一句指令或者一个脚本文件，需返回0(成功)或非0(失败)，keepalived以此为依据判断其监控的服务状态。
+interval: 健康检查周期。
+weight: 优先级变化幅度。
+fall: 判定服务异常的检查次数。
+rise: 判定服务正常的检查次数。
+二、选举算法
+keepalived中优先级高的节点为MASTER。MASTER其中一个职责就是响应VIP的arp包，将VIP和mac地址映射关系告诉局域网内其他主机，同时，它还会以多播的形式（目的地址224.0.0.18）向局域网中发送VRRP通告，告知自己的优先级。网络中的所有BACKUP节点只负责处理MASTER发出的多播包，当发现MASTER的优先级没自己高，或者没收到MASTER的VRRP通告时，BACKUP将自己切换到MASTER状态，然后做MASTER该做的事：1.响应arp包，2.发送VRRP通告。
+
+MASTER和BACKUP节点的优先级如何调整？
+
+首先，每个节点有一个初始优先级，由配置文件中的priority配置项指定，MASTER节点的priority应比BAKCUP高。运行过程中keepalived根据vrrp_script的weight设定，增加或减小节点优先级。规则如下：
+
+1. 当weight > 0时，vrrp_script script脚本执行返回0(成功)时优先级为priority + weight, 否则为priority。当BACKUP发现自己的优先级大于MASTER通告的优先级时，进行主从切换。
+
+2. 当weight < 0时，vrrp_script script脚本执行返回非0(失败)时优先级为priority + weight, 否则为priority。当BACKUP发现自己的优先级大于MASTER通告的优先级时，进行主从切换。
+
+3. 当两个节点的优先级相同时，以节点发送VRRP通告的IP作为比较对象，IP较大者为MASTER。
+
+主从的优先级初始值priority和变化量weight设置非常关键，配错的话会导致无法进行主从切换。比如，当MASTER初始值定得太高，即使script脚本执行失败，也比BACKUP的priority + weight大，就没法进行VIP漂移了。所以priority和weight值的设定应遵循: abs(MASTER priority – BAKCUP priority) < abs(weight)。
+
+另外，当网络中不支持多播(例如某些云环境)，或者出现网络分区的情况，keepalived BACKUP节点收不到MASTER的VRRP通告，就会出现脑裂(split brain)现象，此时集群中会存在多个MASTER节点。
