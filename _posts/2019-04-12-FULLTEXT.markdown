@@ -1,0 +1,59 @@
+---
+title: FULLTEXT 全文索引
+layout: post
+category: storage
+author: 夏泽民
+---
+InnoDB引擎对FULLTEXT索引的支持是MySQL5.6新引入的特性，之前只有MyISAM引擎支持FULLTEXT索引。对于FULLTEXT索引的内容可以使用MATCH()…AGAINST语法进行查询。
+
+为了在InnoDB驱动的表中使用FULLTEXT索引MySQL5.6引入了一些新的配置选项和INFORMATION_SCHEMA表。比如，为了监视一个FULLTEXT索引中文本处理过程的某一方面可以查询INNODB_FT_CONFIG，INNODB_FT_INDEX_TABLE，INNODB_FT_INDEX_CACHE,INNODB_FT_DEFAULT_STOPWORD，INNODB_FT_DELETED和INNODB_FT_BEING_DELETED这些表。可以通过innodb_ft_num_word_optimize和innodb_optimize_fulltext_only选项控制OPTIMIZETABLE命令对InnoDB FULLTEXT索引的更新
+<!-- more -->
+什么是全文检索？
+我们生活中的数据总体分为两种：结构化数据和非结构化数据。
+
+* 结构化数据：指具有固定格式或有限长度的数据，如数据库，元数据等。
+* 非结构化数据：指不定长或无固定格式的数据，如邮件，word文档等。
+当然有的地方还会提到第三种，半结构化数据，如XML，HTML等，当根据需要可按结构化数据来处理，也可抽取出纯文本按非结构化数据来处理。
+非结构化数据又一种叫法叫全文数据。
+
+按照数据的分类，搜索也分为两种：
+
+* 对结构化数据的搜索：如对数据库的搜索，用SQL语句。再如对元数据的搜索，如利用windows搜索对文件名，类型，修改时间进行搜索等。
+* 对非结构化数据的搜索：如利用windows的搜索也可以搜索文件内容，Linux下的grep命令，再如用Google和百度可以搜索大量内容数据。
+非结构化数据搜索方法
+顺序扫描法(Serial Scanning)
+所谓顺序扫描，比如要找内容包含某一个字符串的文件，就是一个文档一个文档的看，对于每一个文档，从头看到尾，如果此文档包含此字符串，则此文档为我们要找的文件，接着看下一个文件，直到扫描完所有的文件。
+如利用windows的搜索也可以搜索文件内容，只是相当的慢。如果你有一个80G硬盘，如果想在上面找到一个内容包含某字符串的文件，不花他几个小时，怕是做不到。
+Linux下的grep命令也是这一种方式。大家可能觉得这种方法比较原始，但对于小数据量的文件，这种方法还是最直接，最方便的。但是对于大量的文件，这种方法就很慢了。
+
+全文索引
+全文检索的基本思路：将非结构化数据中的一部分信息提取出来，重新组织，使其变得有一定结构，然后对此有一定结构的数据进行搜索，从而达到搜索相对较快的目的。
+这部分从非结构化数据中提取出的然后重新组织的信息，我们称之索引。
+这种先建立索引，再对索引进行搜索的过程就叫全文检索(Full-text Search)。
+
+1.使用Mysql全文检索fulltext的先决条件
+    表的类型必须是MyISAM
+建立全文检索的字段类型必须是char,varchar,text
+
+2.建立全文检索先期配置
+由于Mysql的默认配置是索引的词的长度是4,所以要支持中文单字的话,首先更改这个.
+*Unix用户要修改my.cnf,一般此文件在/etc/my.cnf,如果没有找到,先查找一下find / -name 'my.cnf'
+在 [mysqld] 位置内加入:  
+       ft_min_word_len     = 2 
+其它属性还有
+       ft_wordlist_charset = gbk 
+       ft_wordlist_file = /home/soft/mysql/share/mysql/wordlist-gbk.txt 
+       ft_stopword_file = /home/soft/mysql/share/mysql/stopwords-gbk.txt 
+稍微解释一下: 
+       ft_wordlist_charset 表示词典的字符集, 目前支持良好的有(UTF-8, gbk, gb2312, big5) 
+       ft_wordlist_file 是词表文件, 每行包括一个词及其词频(用若干制表符或空格分开,消岐专用) 
+       ft_stopword_file 表示过滤掉不索引的词表, 一行一个. 
+       ft_min_word_len     加入索引的词的最小长度, 缺省是 4, 为了支持中文单字故改为 2 
+
+3.建立全文检索
+在建表中用FullText关键字标识字段,已存在的表用 ALTER TABLE (或 CREATE INDEX) 创建索引
+CREATE fulltext INDEX index_name ON table_name(colum_name);
+
+4.使用全文检索
+    在SELECT的WHERE字句中用MATCH函数,索引的关键词用AGAINST标识,IN BOOLEAN MODE是只有含有关键字就行,不用在乎位置,是不是起启位置.
+SELECT * FROM articles WHERE MATCH (tags) AGAINST ('旅游' IN BOOLEAN MODE);
