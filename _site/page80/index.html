@@ -144,6 +144,235 @@
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
+						<a class="post-link" href="/MyBlog/linux/2018/04/29/veth.html">veth</a>
+					</h2>
+					<div class="author" style="margin-top: -10px;">Posted by
+						<i class="fa fa-user"></i>
+						<a href="/MyBlog/linux/2018/04/29/veth.html"> 夏泽民</a>
+						<span class="post-meta"><i class="fa fa-calendar"></i> 
+							Apr 29, 2018
+						</span>
+					</div>
+					<div class="excerpt"><p>Linux container 中用到一个叫做veth的东西，这是一种新的设备，专门为 container 所建。veth 从名字上来看是 Virtual ETHernet 的缩写，它的作用很简单，就是要把从一个 network namespace 发出的数据包转发到另一个 namespace。veth 设备是成对的，一个是 container 之中，另一个在 container 之外，即在真实机器上能看到的。 
+  VETH设备总是成对出现，送到一端请求发送的数据总是从另一端以请求接受的形式出现。创建并配置正确后，向其一端输入数据，VETH会改变数据的方向并将其送入内核网络子系统，完成数据的注入，而在另一端则能读到此数据。（Namespace，其中往veth设备上任意一端上RX到的数据，都会在另一端上以TX的方式发送出去）veth工作在L2数据链路层，veth-pair设备在转发数据包过程中并不串改数据包内容。 
+<!-- more -->
+  显然，仅有veth-pair设备，容器是无法访问网络的。因为容器发出的数据包，实质上直接进入了veth1设备的协议栈里。如果容器需要访问网络，需要使用bridge等技术，将veth1接收到的数据包通过某种方式转发出去 
+创建veth的命令如下：
+ip link add name veth0 type veth0 peer name veth1
+veth设备特点
+veth和其它的网络设备都一样，一端连接的是内核协议栈
+veth设备是成对出现的，另一端两个设备彼此相连
+一个设备收到协议栈的数据发送请求后，会将数据发送到另一个设备上去
+常用命令
+创建network namespace
+ # ip netns add sunldnamespace01
+ # ip netns list
+sunldnamespace01
+创建veth
+ # ip link add sunldveth01 type veth peer name sunldveth02
+ # ip link list
+显示信息如下：
+1: lo: &lt;LOOPBACK,UP,LOWER_UP&gt; mtu 65536 qdisc noqueue state UNKNOWN mode DEFAULT group default 
+    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
+2: eth0: &lt;BROADCAST,MULTICAST,UP,LOWER_UP&gt; mtu 1500 qdisc pfifo_fast state UP mode DEFAULT group default qlen 1000
+    link/ether 00:0c:29:2d:d4:23 brd ff:ff:ff:ff:ff:ff
+20: sunldveth02: &lt;BROADCAST,MULTICAST&gt; mtu 1500 qdisc noop state DOWN mode DEFAULT group default qlen 1000
+    link/ether c6:bb:c0:d0:54:71 brd ff:ff:ff:ff:ff:ff
+21: sunldveth01: &lt;BROADCAST,MULTICAST&gt; mtu 1500 qdisc noop state DOWN mode DEFAULT group default qlen 1000
+    link/ether da:a1:36:d1:3b:36 brd ff:ff:ff:ff:ff:ff
+添加网卡到namespace
+ # ip link set sunldveth01 netns sunldnamespace01
+查看当前namespace中的veth，只有sunldveth02
+ # ip link list
+显示信息如下
+1: lo: &lt;LOOPBACK,UP,LOWER_UP&gt; mtu 65536 qdisc noqueue state UNKNOWN mode DEFAULT group default 
+    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
+2: eth0: &lt;BROADCAST,MULTICAST,UP,LOWER_UP&gt; mtu 1500 qdisc pfifo_fast state UP mode DEFAULT group default qlen 1000
+    link/ether 00:0c:29:2d:d4:23 brd ff:ff:ff:ff:ff:ff
+3: virbr0: &lt;NO-CARRIER,BROADCAST,MULTICAST,UP&gt; mtu 1500 qdisc noqueue state DOWN mode DEFAULT group default 
+    link/ether ba:d9:d4:48:55:65 brd ff:ff:ff:ff:ff:ff
+20: sunldveth02: &lt;BROADCAST,MULTICAST&gt; mtu 1500 qdisc noop state DOWN mode DEFAULT group default qlen 1000
+    link/ether c6:bb:c0:d0:54:71 brd ff:ff:ff:ff:ff:ff
+通过命令查看sunldnamespace01中的veth
+ # ip netns exec sunldnamespace01 ip link list
+显示信息如下
+1: lo: <LOOPBACK> mtu 65536 qdisc noop state DOWN mode DEFAULT group default 
+    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
+21: sunldveth01: &lt;BROADCAST,MULTICAST&gt; mtu 1500 qdisc noop state DOWN mode DEFAULT group default qlen 1000
+    link/ether da:a1:36:d1:3b:36 brd ff:ff:ff:ff:ff:ff
+配置network namespace的网口
+ # ip netns exec sunldnamespace01 ifconfig sunldveth01 100.2.96.2/16 up
+ # ip netns exec sunldnamespace01 ip addr list
+显示信息如下
+1: lo: <LOOPBACK> mtu 65536 qdisc noop state DOWN group default 
+    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
+21: sunldveth01: &lt;NO-CARRIER,BROADCAST,MULTICAST,UP&gt; mtu 1500 qdisc pfifo_fast state DOWN group default qlen 1000
+    link/ether da:a1:36:d1:3b:36 brd ff:ff:ff:ff:ff:ff
+    inet 100.2.96.2/16 brd 100.2.255.255 scope global sunldveth01
+       valid_lft forever preferred_lft forever
+开启空间脚本
+ #可以使用这条命令开启一个 ns0 的 shell 
+ip netns exec ns0 sh
+network namespace
+创建network namespace
+ # ip netns add blue
+ # ip netns list
+blue
+添加网口到namespace
+先创建veth
+ # ip link add veth0 type veth peer name veth1
+在当前namespace可以看到veth0和veth1
+ # ip link list
+1: lo: &lt;LOOPBACK,UP,LOWER_UP&gt; mtu 65536 qdisc noqueue state UNKNOWN
+    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
+2: eth0: &lt;BROADCAST,MULTICAST,UP,LOWER_UP&gt; mtu 1500 qdisc pfifo_fast state UP qlen 1000
+    link/ether 00:0c:29:b2:cf:72 brd ff:ff:ff:ff:ff:ff
+3: veth1: &lt;BROADCAST,MULTICAST&gt; mtu 1500 qdisc noop state DOWN qlen 1000
+    link/ether ae:0d:00:e1:11:38 brd ff:ff:ff:ff:ff:ff
+4: veth0: &lt;BROADCAST,MULTICAST&gt; mtu 1500 qdisc noop state DOWN qlen 1000
+    link/ether 42:e7:50:d4:bb:c5 brd ff:ff:ff:ff:ff:ff
+将veth1加到namespace “blue”
+ # ip link set veth1 netns blue
+此时，当前namepapce只能看到veth0。
+通过如下命令可以查看blue namespace的网口
+ # ip netns exec blue ip link list
+配置network namespace的网口
+通过ip netns exec可以配置namespace的网口
+ # ip netns exec blue ifconfig veth1 172.17.42.2/16 up
+network namespace的网口与物理网卡的通信通过bridge来实现。
+ # add the namespaces
+ip netns add ns1
+ip netns add ns2
+ # create the veth pair
+ip link add tap1 type veth peer name tap2
+ # move the interfaces to the namespaces
+ip link set tap1 netns ns1
+ip link set tap2 netns ns2
+ # bring up the links
+ip netns exec ns1 ip link set dev tap1 up
+ip netns exec ns2 ip link set dev tap2 up</LOOPBACK></LOOPBACK></p>
+
+</div>
+					<div class="readmore" style="float: right;">
+						
+							<a href="/MyBlog/linux/2018/04/29/veth.html" style="color:green">阅读全文</a>
+						
+					</div>								
+			</div>
+			<br/>
+			<hr/>
+			<div class="post-list" style="list-style-type: none;">			
+				 	
+					<h2>
+						<img class="title-image" src="/MyBlog/img/dna.png"/>
+						<a class="post-link" href="/MyBlog/linux/2018/04/29/namespace.html">linux namespace</a>
+					</h2>
+					<div class="author" style="margin-top: -10px;">Posted by
+						<i class="fa fa-user"></i>
+						<a href="/MyBlog/linux/2018/04/29/namespace.html"> 夏泽民</a>
+						<span class="post-meta"><i class="fa fa-calendar"></i> 
+							Apr 29, 2018
+						</span>
+					</div>
+					<div class="excerpt"><p>Linux Namespace是Linux提供的一种内核级别环境隔离的方法。不知道你是否还记得很早以前的Unix有一个叫chroot的系统调用（通过修改根目录把用户jail到一个特定目录下），chroot提供了一种简单的隔离模式：chroot内部的文件系统无法访问外部的内容。Linux Namespace在此基础上，提供了对UTS、IPC、mount、PID、network、User等的隔离机制。
+举个例子，我们都知道，Linux下的超级父亲进程的PID是1，所以，同chroot一样，如果我们可以把用户的进程空间jail到某个进程分支下，并像chroot那样让其下面的进程 看到的那个超级父进程的PID为1，于是就可以达到资源隔离的效果了（不同的PID namespace中的进程无法看到彼此）
+Linux Namespace 有如下种类，官方文档在这里《Namespace in Operation》
+分类	系统调用参数	相关内核版本
+Mount namespaces	CLONE_NEWNS	Linux 2.4.19
+UTS namespaces	CLONE_NEWUTS	Linux 2.6.19
+IPC namespaces	CLONE_NEWIPC	Linux 2.6.19
+PID namespaces	CLONE_NEWPID	Linux 2.6.24
+Network namespaces	CLONE_NEWNET	始于Linux 2.6.24 完成于 Linux 2.6.29
+User namespaces	CLONE_NEWUSER	始于 Linux 2.6.23 完成于 Linux 3.8)
+主要是三个系统调用
+clone() – 实现线程的系统调用，用来创建一个新的进程，并可以通过设计上述参数达到隔离。
+unshare() – 使某进程脱离某个namespace
+setns() – 把某进程加入到某个namespace
+User Namespace主要是用了CLONE_NEWUSER的参数。使用了这个参数后，内部看到的UID和GID已经与外部不同了，默认显示为65534。那是因为容器找不到其真正的UID所以，设置上了最大的UID（其设置定义在/proc/sys/kernel/overflowuid）。
+要把容器中的uid和真实系统的uid给映射在一起，需要修改 /proc/<pid>/uid_map 和 /proc/<pid>/gid_map 这两个文件。这两个文件的格式为：
+ID-inside-ns ID-outside-ns length
+其中：
+第一个字段ID-inside-ns表示在容器显示的UID或GID，
+第二个字段ID-outside-ns表示容器外映射的真实的UID或GID。
+第三个字段表示映射的范围，一般填1，表示一一对应。
+比如，把真实的uid=1000映射成容器内的uid=0
+$ cat /proc/2465/uid_map
+         0       1000          1
+再比如下面的示例：表示把namespace内部从0开始的uid映射到外部从0开始的uid，其最大范围是无符号32位整形
+$ cat /proc/$$/uid_map
+         0          0          4294967295
+另外，需要注意的是：
+写这两个文件的进程需要这个namespace中的CAP_SETUID (CAP_SETGID)权限（可参看Capabilities）
+写入的进程必须是此user namespace的父或子的user namespace进程。
+另外需要满如下条件之一：1）父进程将effective uid/gid映射到子进程的user namespace中，2）父进程如果有CAP_SETUID/CAP_SETGID权限，那么它将可以映射到父进程中的任一uid/gid。
+<!-- more -->
+当你启动一个Docker容器后，你可以使用ip link show或ip addr show来查看当前宿主机的网络情况（我们可以看到有一个docker0，还有一个veth22a38e6的虚拟网卡——给容器用的） 
+ # 把容器里的 veth-ns1改名为 eth0 （容器外会冲突，容器内就不会了）
+ip netns exec ns1  ip link set dev veth-ns1 name eth0 
+ # 为容器中的网卡分配一个IP地址，并激活它
+ip netns exec ns1 ifconfig eth0 192.168.10.11/24 up
+ # 上面我们把veth-ns1这个网卡按到了容器中，然后我们要把lxcbr0.1添加上网桥上
+brctl addif lxcbr0 lxcbr0.1
+ # 为容器增加一个路由规则，让容器可以访问外面的网络
+ip netns exec ns1     ip route add default via 192.168.10.1
+ # 在/etc/netns下创建network namespce名称为ns1的目录，
+ # 然后为这个namespace设置resolv.conf，这样，容器内就可以访问域名了
+mkdir -p /etc/netns/ns1
+echo "nameserver 8.8.8.8" &gt; /etc/netns/ns1/resolv.conf
+上面基本上就是docker网络的原理了，只不过，
+Docker的resolv.conf没有用这样的方式，而是用了Mount Namesapce的那种方式
+另外，docker是用进程的PID来做Network Namespace的名称的。</pid></pid></p>
+
+</div>
+					<div class="readmore" style="float: right;">
+						
+							<a href="/MyBlog/linux/2018/04/29/namespace.html" style="color:green">阅读全文</a>
+						
+					</div>								
+			</div>
+			<br/>
+			<hr/>
+			<div class="post-list" style="list-style-type: none;">			
+				 	
+					<h2>
+						<img class="title-image" src="/MyBlog/img/dna.png"/>
+						<a class="post-link" href="/MyBlog/docker/2018/04/29/docker_net.html">docker_net</a>
+					</h2>
+					<div class="author" style="margin-top: -10px;">Posted by
+						<i class="fa fa-user"></i>
+						<a href="/MyBlog/docker/2018/04/29/docker_net.html"> 夏泽民</a>
+						<span class="post-meta"><i class="fa fa-calendar"></i> 
+							Apr 29, 2018
+						</span>
+					</div>
+					<div class="excerpt"><p>由于Boot2Docker的存在，造成了三层Mac-&gt;VirtualBox-&gt;Docker网络,由VirtualBox到Docker的映射可以通过run容器的时候指定-p参数实现，而从宿主机到VirtualBox端口映射需要通过下述方法实现:
+查询虚拟机网络： 
+VBoxManagelistvms查询虚拟机网络状态，默认虚拟机名为′default′ VBoxManage showvminfo “default” | grep NIC 
+2.关闭运行中的虚拟机 
+由于Boot2Docker会自动运行VirtualBox中的虚拟机，所以在设置网络映射时必须先关闭运行中的虚拟机。否则，将出现The machine ‘boot2docker’ is already locked for a session (or being unlocked)的错误提示
+$ VBoxManage controlvm “default” poweroff
+修改虚拟机与Mac系统的网络映射 
+根据实际需要进行网络映射，其中
+rulename: 自定义规则名称
+hostip: Mac访问地址，可不填
+hostport: Mac映射端口
+guestip: 虚拟机访问地址，可不填
+guestport: 虚拟机映射端口
+$ VBoxManage modifyvm “dufault” –natpf1 “,</p>
+
+</div>
+					<div class="readmore" style="float: right;">
+						
+							<a href="/MyBlog/docker/2018/04/29/docker_net.html" style="color:green">阅读全文</a>
+						
+					</div>								
+			</div>
+			<br/>
+			<hr/>
+			<div class="post-list" style="list-style-type: none;">			
+				 	
+					<h2>
+						<img class="title-image" src="/MyBlog/img/dna.png"/>
 						<a class="post-link" href="/MyBlog/docker/2018/04/29/docker_ip.html">Docker容器通过独立IP暴露给局域网的方法</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
@@ -474,134 +703,6 @@ brw-rw—- 1 root disk 8, 0 Jul 25 22:46 /dev/sda
 					<div class="readmore" style="float: right;">
 						
 							<a href="/MyBlog/linux/2018/04/29/cgroup.html" style="color:green">阅读全文</a>
-						
-					</div>								
-			</div>
-			<br/>
-			<hr/>
-			<div class="post-list" style="list-style-type: none;">			
-				 	
-					<h2>
-						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/linux/2018/04/29/bridge.html">bridge</a>
-					</h2>
-					<div class="author" style="margin-top: -10px;">Posted by
-						<i class="fa fa-user"></i>
-						<a href="/MyBlog/linux/2018/04/29/bridge.html"> 夏泽民</a>
-						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Apr 29, 2018
-						</span>
-					</div>
-					<div class="excerpt"><p>网桥设备作为一个虚拟设备，用于连接多个端口，可以构建一个局域网。与之相似的是vlan设备，在linux中，vlan设备是为了处理802.1q的添加和去除TAG的问题，这和传统交换机中vlan的功能—划分局域网，不太一样，在这里仅仅是处理了消息头，只是实现了隔离功能，并未实现交换功能，如果需要vlan内的数据转发，可以把vlan子接口挂接在网桥设备下。</p>
-
-</div>
-					<div class="readmore" style="float: right;">
-						
-							<a href="/MyBlog/linux/2018/04/29/bridge.html" style="color:green">阅读全文</a>
-						
-					</div>								
-			</div>
-			<br/>
-			<hr/>
-			<div class="post-list" style="list-style-type: none;">			
-				 	
-					<h2>
-						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/golang/2018/04/24/flag.html">flag</a>
-					</h2>
-					<div class="author" style="margin-top: -10px;">Posted by
-						<i class="fa fa-user"></i>
-						<a href="/MyBlog/golang/2018/04/24/flag.html"> 夏泽民</a>
-						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Apr 24, 2018
-						</span>
-					</div>
-					<div class="excerpt"><!-- more -->
-<p>一、命令行语法
-命令行语法主要有以下几种形式：</p>
-
-</div>
-					<div class="readmore" style="float: right;">
-						
-							<a href="/MyBlog/golang/2018/04/24/flag.html" style="color:green">阅读全文</a>
-						
-					</div>								
-			</div>
-			<br/>
-			<hr/>
-			<div class="post-list" style="list-style-type: none;">			
-				 	
-					<h2>
-						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/linux/2018/04/22/expect.html">expect</a>
-					</h2>
-					<div class="author" style="margin-top: -10px;">Posted by
-						<i class="fa fa-user"></i>
-						<a href="/MyBlog/linux/2018/04/22/expect.html"> 夏泽民</a>
-						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Apr 22, 2018
-						</span>
-					</div>
-					<div class="excerpt"><p>expect是一个自动交互功能的工具。expect是开了一个子进程，通过spawn来执行shell脚本，监测到脚本的返回结果，通过expect判断要进行的交互输入内容（send）
-1.安装expect 
-需要先安装tcl：apt-get install tcl
-apt-get install expect
-2.expect使用
-2.1一个简单的输入密码操作</p>
-
-<figure class="highlight"><pre><code class="language-bash" data-lang="bash"><table class="rouge-table"><tbody><tr><td class="gutter gl"><pre class="lineno">1
-2
-3
-4
-5
-6
-7
-</pre></td><td class="code"><pre> <span class="c">#！/usr/bin/expect</span>
-<span class="nb">set </span>timeout 100
-<span class="nb">set </span>password <span class="s2">"123456"</span>
-spawn <span class="nb">sudo </span>rm <span class="nt">-rf</span> zzlogic
-expect <span class="s2">"root123456"</span>
-send <span class="s2">"</span><span class="nv">$password</span><span class="se">\n</span><span class="s2">"</span>
-interact</pre></td></tr></tbody></table></code></pre></figure>
-
-<p>说明：
-第一行#！/usr/bin/expect表示使用expect的shell交互模式
-set是对变量password赋值
-set timeout 100：设置超时时间为100秒，如果要执行的shell命令很长可以设置超时时间长一些。expect超过超时时间没有监测到要找的字符串，则不执行，默认timeout为10秒
-spawn在expect下执行shell脚本
-expect对通过spawn执行的shell脚本的返回进行判断，是否包含“”中的字段
-send：如果expect监测到了包含的字符串，将输入send中的内容，\n相当于回车
-interact：退出expect返回终端，可以继续输入，否则将一直在expect不能退出到终端
-2.2expect的命令行参数
-[lindex $argv n]获得index为n的参数（index从0开始计算）
-$argc为命令行参数的个数
-[lrange $argv 0 0]表示第一个参数
-[lrange $argv 0 3]表示第1到第3个参数
-例如scp_service.sh文件，可以./scp_service.sh -rm来执行，这时是赋值了一个参数
-set option  [lindex $argv 0]（获得第一个参数存到变量option中，参数是的index是从0开始计算的）
-2.3if…elif…else…
-expect支持if语句，
-if {条件1} {
-     条件1执行语句
-} elif {条件2} {
-     条件2执行语句
-} else {
-     其他情况执行语句
-}
-说明：
-1.if的条件用{}来包含条件
-2.if和后面的{}必须有空格隔开
-3.两个花括号之间必须有空格隔开，比如if {} {}，否则会报错 expect:extra characters after close-brace
-3.使用{来衔接下一行，所以if的条件后需要加左花括号{
-4.else不能单独放一行，所以else要跟在}后面
-2.4 expect {}，多行期望，匹配到哪条执行哪条
-背景：有时执行shell后预期结果是不固定的，有可能是询问是yes/no，有可能是去输入密码，所以可以用expect{}
-花括号内放多行语句，从上至下匹配，匹配到哪个expect执行哪句。</p>
-
-</div>
-					<div class="readmore" style="float: right;">
-						
-							<a href="/MyBlog/linux/2018/04/22/expect.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -1129,6 +1230,10 @@ if {条件1} {
 			  
 			    
 			      <a href="/MyBlog/page128/">128</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page129/">129</a>
 			    
 			  
 
@@ -1800,6 +1905,11 @@ if {条件1} {
 						  
 						
 
+						  
+							<li><a href="/MyBlog/page129">129</a></li>
+						  
+						
+
 						
 						  <li><a href="/MyBlog/page81">Next</a></li>
 						
@@ -1831,6 +1941,30 @@ if {条件1} {
 							var searchIndex={
 							"code" : 0 ,
 							"data" : [
+							
+							{
+							"title" : "nginx request_time - ",
+							"url" : "/MyBlog/web/2019/05/21/request_time.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "mysql instant add colum - ",
+							"url" : "/MyBlog/storage/2019/05/21/instantaddcolum.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "mysql ddl-ghost - ",
+							"url" : "/MyBlog/storage/2019/05/21/ddl-ghost.html"
+							}
+							
+							,
+							
 							
 							{
 							"title" : "TIME_WAIT和CLOSE_WAIT - ",
@@ -7032,7 +7166,7 @@ if {条件1} {
 								
 								
 									<a class="bold" href="/MyBlog/category/web">
-										web (120)
+										web (121)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -7149,7 +7283,7 @@ if {条件1} {
 								
 								
 									<a class="bold" href="/MyBlog/category/storage">
-										storage (62)
+										storage (64)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -7236,6 +7370,18 @@ if {条件1} {
 							<div id="tags">
 								<ul style="display:none;width:250px;height:250px;">
 								     
+								   <li>
+										<a href="/MyBlog/web/2019/05/21/request_time.html" style="font-size:40px;"> nginx request_time</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/storage/2019/05/21/instantaddcolum.html" style="font-size:40px;"> mysql instant add colum</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/storage/2019/05/21/ddl-ghost.html" style="font-size:40px;"> mysql ddl-ghost</a>
+									</li>
+									  
 								   <li>
 										<a href="/MyBlog/golang/2019/05/09/time_wait.html" style="font-size:40px;"> TIME_WAIT和CLOSE_WAIT</a>
 									</li>
@@ -7383,18 +7529,6 @@ if {条件1} {
 								   <li>
 										<a href="/MyBlog/web/2019/04/08/qps.html" style="font-size:40px;"> 高qps接入层方案</a>
 									</li>
-									  
-								   <li>
-										<a href="/MyBlog/storage/2019/04/08/forupdate.html" style="font-size:40px;"> for update</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/linux/2019/04/07/inode.html" style="font-size:40px;"> inode 与文件块 block 对应关系</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/linux/2019/04/06/socket.html" style="font-size:40px;"> socket 虚拟文件系统</a>
-									</li>
 									
 								</ul>
 							</div>
@@ -7409,6 +7543,24 @@ if {条件1} {
                 		<ul class="posts" span="recent">  
 							  
 							   <li>  
+								   <span>21 May 2019</span>
+								   <a href="/MyBlog/web/2019/05/21/request_time.html">  
+								   nginx request_time</a>  
+							   </li>  
+							  
+							   <li>  
+								   <span>21 May 2019</span>
+								   <a href="/MyBlog/storage/2019/05/21/instantaddcolum.html">  
+								   mysql instant add colum</a>  
+							   </li>  
+							  
+							   <li>  
+								   <span>21 May 2019</span>
+								   <a href="/MyBlog/storage/2019/05/21/ddl-ghost.html">  
+								   mysql ddl-ghost</a>  
+							   </li>  
+							  
+							   <li>  
 								   <span>09 May 2019</span>
 								   <a href="/MyBlog/golang/2019/05/09/time_wait.html">  
 								   TIME_WAIT和CLOSE_WAIT</a>  
@@ -7418,24 +7570,6 @@ if {条件1} {
 								   <span>09 May 2019</span>
 								   <a href="/MyBlog/golang/2019/05/09/netpoller.html">  
 								   netpoller</a>  
-							   </li>  
-							  
-							   <li>  
-								   <span>09 May 2019</span>
-								   <a href="/MyBlog/linux/2019/05/09/isns.html">  
-								   TCP序列号欺骗</a>  
-							   </li>  
-							  
-							   <li>  
-								   <span>09 May 2019</span>
-								   <a href="/MyBlog/golang/2019/05/09/gopsutil.html">  
-								   gopsutil</a>  
-							   </li>  
-							  
-							   <li>  
-								   <span>26 Apr 2019</span>
-								   <a href="/MyBlog/golang/2019/04/26/goprof.html">  
-								   goprof</a>  
 							   </li>  
 							  
 						</ul>
