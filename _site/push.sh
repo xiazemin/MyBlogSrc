@@ -1,4 +1,5 @@
 #!/bin/bash
+jekyll clean
 jekyll build --trace
 #git add *
 ls |xargs git add -f
