@@ -1,0 +1,54 @@
+---
+title: redis HashTags
+layout: post
+category: storage
+author: 夏泽民
+---
+有些时候我们希望某一部分key可以落到同一个数据分片上。
+
+例如对于用户信息：user:user1:id、user:user1:name；
+
+通过hashtag的方式可以表示为：user:{user1}:id、user:{user1}.name；
+
+当一个key包含 {} 的时候，就不对整个key做hash，而仅对 {} 包括的字符串做hash。
+<!-- more -->
+ twemproxy 是一个Redis的代理服务程序,能够实现key的分片。分片能使key均匀地分布到集群的机器上去，能保证数据的一致性.不支持的方法：
+
+KEYS,MIGRATE,SCAN等
+
+支持但需特殊处理的方法：
+
+MSET,SINTERSTORE,SUNIONSTORE,ZINTERSTORE,ZUNIONSTORE等
+
+MSET
+单实例上的MSET是一个原子性(atomic)操作，所有给定 key 都会在同一时间内被设置，某些给定 key 被更新而另一些给定 key 没有改变的情况，不可能发生。
+而集群上虽然也支持同时设置多个key，但不再是原子性操作。会存在某些给定 key 被更新而另外一些给定 key 没有改变的情况。其原因是需要设置的多个key可能分配到不同的机器上。
+SINTERSTORE,SUNIONSTORE,ZINTERSTORE,ZUNIONSTORE
+这四个命令属于同一类型。它们的共同之处是都需要对一组key进行运算或操作，但要求这些key都被分配到相同机器上。
+这就是分片技术的矛盾之处：
+即要求key尽可能地分散到不同机器，又要求某些相关联的key分配到相同机器。
+Hash Tags
+解铃还需系铃人。解决方法还是从分片技术的原理上找。
+分片，就是一个hash的过程：对key做md5，sha1等hash算法，根据hash值分配到不同的机器上。
+为了实现将key分到相同机器，就需要相同的hash值，即相同的key（改变hash算法也行，但不简单）。
+但key相同是不现实的，因为key都有不同的用途。例如user:user1:ids保存用户的tweets ID，user:user1:tweets保存tweet的具体内容，两个key不可能同名。
+仔细观察user:user1:ids和user:user1:tweets，两个key其实有相同的地方，即user1。能不能拿这一部分去计算hash呢？
+这就是 Hash Tag 。允许用key的部分字符串来计算hash。
+当一个key包含 {} 的时候，就不对整个key做hash，而仅对 {} 包括的字符串做hash。
+假设hash算法为sha1。对user:{user1}:ids和user:{user1}:tweets，其hash值都等同于sha1(user1)。
+Hash Tag 配置
+Hash Tag是用于hash的部分字符串开始和结束的标记，例如"{}"、"$$"等。
+配置时，只需更改hash_tag字段即可
+beta:
+  listen: 127.0.0.1:22122
+  hash: fnv1a_64
+  hash_tag: "{}"
+  distribution: ketama
+  auto_eject_hosts: false
+  timeout: 400
+  redis: true
+  servers:
+   - 127.0.0.1:6380:1 server1
+   - 127.0.0.1:6381:1 server2
+   - 127.0.0.1:6382:1 server3
+   - 127.0.0.1:6383:1 server4
