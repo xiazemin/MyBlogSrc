@@ -1,0 +1,79 @@
+---
+title: waitpid wait
+layout: post
+category: linux
+author: 夏泽民
+---
+【waitpid系统调用】   
+    功能描述：
+  等待进程改变其状态。所有下面哪些调用都被用于等待子进程状态的改变，获取状态已改变的子进程信息。状态改变可被认为是：1.子进程已终止。2.信号导致子进程停止执行。3.信号恢复子进程的执行。在子进程终止的情况下，wait调用将允许系统释放与子进程关联的资源。如果不执行wait，终止了的子进程会停留在"zombie"状态。
+  如果发现子进程改变了状态，这些调用会立即返回。反之，调用会被阻塞直到子进程状态改变，或者由信号处理句柄所中断(假如系统调用没有通过sigaction的SA_RESTART标志重启动)。
+
+  wait系统调用挂起当前执行中的进程，直到它的一个子进程终止。waitpid挂起当前进程的执行，直到指定的子进程状态发生变化。默认，waitpid只等待终止状态的子进程，但这种行为可通过选项来改变。waitid系统调用对于等待哪个子进程状态改变提供了更精确的控制。
+ 
+  子进程已终止，父进程尚未对其执行wait操作，子进程会转入“僵死”状态。内核为“僵死”状态的进程保留最少的信息量(进程标识，终止状态，资源使用信息)，过后父进程执行wait时可以获取子进程信息。只要僵死的进程不通过wait从系统中移去，它将会占据内核进程表中的一个栏位。如果进程表被填满，内核将不能再产生新进程。如果父进程已终止，它的僵死子进程将由init进程收养，并自动执行wait将它们移去。
+
+用法： 
+#include <sys/types.h>
+#include <sys/wait.h>
+pid_t wait(int *status);
+pid_t waitpid(pid_t pid, int *status, int options);
+int waitid(idtype_t idtype, id_t id, siginfo_t *infop, int options);
+
+参数：  
+pid：可能值有以下
+小于-1 //意味着等待所有其进程组标识等于pid绝对值的子进程。
+ -1 //意味着等待任何子进程。
+ 0 //意味着等待任何其组标识等于调用进程组标识的进程。
+大于0 //意味着等待其进程标识等于pid的进程。
+status：指向子进程的返回状态，可通过以下宏进行检索
+WIFEXITED(status) //返回真如果子进程正常终止，例如：通过调用exit()，_exit()，或者从main()的return语句返回。
+WEXITSTATUS(status) //返回子进程的退出状态。这应来自子进程调用exit()或_exit()时指定的参数，或者来自main内部return语句参数的最低字节。只有WIFEXITED返回真时，才应该使用。
+WIFSIGNALED(status) //返回真如果子进程由信号所终止
+WTERMSIG(status) //返回导致子进程终止的信号数量。只有WIFSIGNALED返回真时，才应该使用。
+WCOREDUMP(status) //返回真如果子进程导致内核转存。只有WIFSIGNALED返回真时，才应该使用。并非所有平台都支持这个宏，使用时应放在#ifdef WCOREDUMP ... #endif内部。
+WIFSTOPPED(status) //返回真如果信号导致子进程停止执行。
+WSTOPSIG(status) //返回导致子进程停止执行的信号数量。只有WIFSTOPPED返回真时，才应该使用。
+WIFCONTINUED(status) //返回真如果信号导致子进程继续执行。
+options：可以是0个或多个以下符号常量通过or运算的组合体
+
+WNOHANG //如果没有子进程退出，立即返回
+WUNTRACED //如果有处于停止状态的进程将导致调用返回。
+WCONTINUED //如果停止了的进程由于SIGCONT信号的到来而继续运行，调用将返回。
+下面是Linux特有的选项，不能用于waitid
+__WCLONE //只等待"clone"的子进程。一个"clone" 进程即是终止时不会给父进程发送信号，或者不会给父进程发送SIGCHLD信号的进程。
+__WALL //等待所有类型的子进程，包括"clone"和"non-clone"。
+__WNOTHREAD //不会等待同一线程组的其它线程的子孙。
+
+WUNTRACED 和 WCONTINUED 只有在SIGCHLD信号没有设置SA_NOCLDSTOP标志时才起作用。
+idtype，id：这两个参数结合在一起指出应选择等待哪些子进程，可能情况有
+
+idtype == P_PID //等待进程标识与id匹配的子进程。
+idtype == P_PGID //等待进程组标识与id匹配的任何子进程。
+idtype == P_ALL //等待任何子进程，id无作用
+
+可在options参数中指定的感兴趣的子进程状态改变标志有以下常量，可以通过or运算加以组合
+
+WEXITED //等待已终止的子进程。
+WSTOPPED //等待由于信号已停止执行的子进程。
+WCONTINUED //等待由于信号已恢复执行的子进程。
+WNOHANG //作用如同waitpid。
+WNOWAIT //保留子进程的可等待状态，后面的wait调用可再次获取子进程的状态信息。
+
+infop：成功执行返回时，waitid将填充infop所指向结构体的如下字段
+
+si_pid //子进程标识。
+si_uid //子进程的真实用户标识。
+si_signo //总被设置为SIGCHLD。
+si_status //子进程的退出状态，或者导致子进程退出，停止执行或恢复执行的信号，需要根据si_code字段来解释。
+si_code //可能值有CLD_EXITED(子进程调用_exit退出)， CLD_KILLED(子进程被信号杀死)，CLD_STOPPED(信号导致子进程停止执行)，CLD_CONTINUED(信号恢复子进程继续执行)。
+   
+返回说明：  
+wait()：成功执行时，返回终止子进程的标识。失败返回-1；
+waitpid()：成功执行时，返回状态改变的子进程标识。失败返回-1；如果指定WNOHANG标志，同时pid指定的进程状态没有发生变化，将返回0。
+waitid()：成功执行或者WNOHANG标志被设置而id指定的子进程状态没有发生变化时返回0。失败返回-1。
+出错值可能有下面这些
+ECHILD：参数指定的进程不存在，或者并非调用进程的子进程
+EINTR；WNOHANG不被设置，同时捕捉到一个不被阻塞的信号或SIGCHLD信号
+EINVAL：options参数无效
+<!-- more -->
