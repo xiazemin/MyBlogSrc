@@ -1,0 +1,84 @@
+---
+title: getuid、geteuid和setuid函数
+layout: post
+category: linux
+author: 夏泽民
+---
+在linux中每个进程有三个[实际上有第4个]用户标识符.
+real uid : 真实用户ID.  saved uid : 已保存用户ID , effective uid : 有效用户ID
+真实用户ID(real uid)是login时的用户.而在运行过程中,用于所有的安全检查的是有效用户ID(effective uid).
+一般情况下:real uid = saved uid = effective uid在某些场合下,使用用setuid,setruid函数可以改变effective uid,从而使得程序运行时具有特殊的权限.常见的例子是linux系统中的passwd命令,由于所有的用户信息包括用户密码都保存在/etc/passwd文件中,而/etc/passwd文件只有root权限可以读写,若想让每个用户都只可以修改自己的密码,就必须让普通用户暂时获得有限的读写/etc/passwd的权限.用setuid就可以解决这个
+问题.
+Linux setuid(uid)函数:
+(1)如果由普通用户调用,将当前进程的有效ID设置为uid.
+(2)如果由有效用户ID符为0的进程调用,则将真实,有效和已保存用户ID都设
+置为uid.
+
+Linux的setuid函数和Unix中的setuid函数的行为是不同的.
+Unix中.setuid(uid)函数的行为:
+(1)如果进程没有超级用户特权,且uid等于实际用户ID或已保存用户ID,则只将有效的用户ID设置为uid.否则返回错误.
+(2)如果进程是有超级用户特权,则将真实,有效和已保存用户表示符都设置为uid.
+
+这里主要的区别在于普通用户调用时的行为.产生这个问题的原因是POSIX和BSD的实现差异,而linux却同时支持这两者.BSD中使用setreuid(uid_truid, uid_t euid)来设定真实用户ID(real uid)和有效用户ID(effective uid).这个函数在由有效用户ID符为0的进程调用时,不会改变已保存用户ID.函数seteuid(uid_t uid)等价于setreuid(-1,uid),只改变有效用户ID(effective uid).
+
+函数声明：
+
+#include <unistd.h>
+
+#include <sys/types.h>
+
+uid_t getuid(void);
+
+uid_t geteuid(void);
+
+说明：
+
+两个函数分别获得用户 UID值( getuid() ) 与 用户有效 UID 值 ( geteuid())。
+
+测试程序(用 root 用户创建编译并创建可执行文件)：
+
+#include <stdio.h>
+
+#include <unistd.h>
+
+#include <fcntl.h>
+
+#include <errno.h>
+
+#include <stdlib.h>
+
+int main()
+
+{
+
+   int fd;
+
+   printf("uid study: \n");
+
+   printf("Process's uid = %d, euid = %d ", getuid(), geteuid());
+
+if( (fd =open("test.txt", O_RDWR)) == -1 )
+
+{
+
+       printf("Open failure, errno is %d :%s \n",errno,strerror(errno));
+
+       exit(1);
+
+}
+
+Else
+
+    {
+
+       printf("Open successfully!\n");
+
+    }
+
+   close(fd);
+
+   exit(0);
+
+}
+<!-- more -->
+geteuid()用来取得执行目前进程有效的用户识别码。有效的用户识别码用来决定进程执行的权限，借由此改变此值，进程可以获得额外的权限。倘若执行文件的setID位已被设置，该文件执行时，其进程的euid值便会设成该文件所有者的uid。例如，执行文件/usr/bin/passwd的权限为-r-s--x--x，其s位即为setID（SUID）位，而当任何用户在执行passwd时其有效的用户识别码会被设成passwd所有者的uid值，即root的uid值（0）。返回有效的用户识别码。
