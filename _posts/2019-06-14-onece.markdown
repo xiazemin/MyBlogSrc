@@ -1,0 +1,83 @@
+---
+title: onece
+layout: post
+category: golang
+author: 夏泽民
+---
+sync.once可以控制函数只能被调用一次，不能多次重复调用。
+
+我们可以用下面的代码实现一个线程安全的单例模式
+
+package singleton
+
+import (
+    "fmt"
+    "sync"
+)
+
+type object struct {
+    name string
+}
+
+var once sync.Once
+var obj *object //单例指针
+
+//公开方法 外包调用
+func Instance() *object {
+    once.Do(getObj)
+    return obj
+}
+
+func getObj() {
+    if obj == nil {
+        obj = new(object)
+        //可以做其他初始化事件
+    }
+}
+
+//单例测试
+func (obj *object) Test() {
+    fmt.Println(obj.name)
+}
+<!-- more -->
+如果我们要自己实现这么一个功能如何做呢？
+
+定义一个status变量用来描述是否已经执行过了
+使用sync.Mutex 或者sync.Atomic实现线程安全的获取status状态， 根据状态判断是否执行特定的函数
+然后看下sync.Once实际是如何实现的
+
+// Once is an object that will perform exactly one action.
+type Once struct {
+    m    Mutex
+    done uint32
+}
+
+//使用了双层检查机制 
+func (o *Once) Do(f func()) {
+    if atomic.LoadUint32(&o.done) == 1 {
+        return
+    }
+    // Slow-path.
+    o.m.Lock()
+    defer o.m.Unlock()
+    //这里需要再次重新判断下，因为 atomic.LoadUint32取出状态值到  o.m.Lock() 之间是有可能存在其它gotoutine改变status的状态值的
+    if o.done == 0 {
+        f()
+        atomic.StoreUint32(&o.done, 1)
+    }
+}
+也有网友写出了更简洁的代码,不知道官方为什么没有采用下面的实现方式。
+
+type Once struct {
+    done int32
+}
+
+func (o *Once) Do(f func()) {
+    if atomic.LoadInt32(&o.done) == 1 {
+        return
+    }
+    // Slow-path.
+    if atomic.CompareAndSwapInt32(&o.done, 0, 1) {
+        f()
+    }
+}
