@@ -1,7 +1,7 @@
 ---
 title: docker for mac k8s
 layout: post
-category: web
+category: docker
 author: 夏泽民
 ---
 https://github.com/maguowei/k8s-docker-desktop-for-mac

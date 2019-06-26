@@ -1,7 +1,7 @@
 ---
 title: VBoxManage
 layout: post
-category: web
+category: docker
 author: 夏泽民
 ---
 VBoxManage是VirtualBox的命令行接口。利用他，你可以在主机操作系统的命令行中完全地控制VirtualBox。VBoxManage支持GUI可访问的全部功能，而且更多。VBoxManage展示了虚拟化引擎的全部特征，包括GUI无法访问的。
