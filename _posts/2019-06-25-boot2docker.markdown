@@ -1,7 +1,7 @@
 ---
 title: boot2docker
 layout: post
-category: web
+category: docker
 author: 夏泽民
 ---
 因为有了 Docker 这个东西。它依赖于 LXC(Linux Container)，能从网络上获得配置好的 Linux 镜像，非常容易在隔离的系统中运行自己的应用。也因为它的底层核心是个 LXC，所以在 Mac OS X 下需要在 VirtualBox 中跑一个精小的 LXC(这里是一个 Tiny Core Linux，完全在内存中运行，个头只约 24MB，启动时间小于 5 秒的 boot2docker) 虚拟机，构建在 VirtualBox 中。以后的通信过程就是 docker--> boot2docker --> container，端口或磁盘映射也是遵照这一关系。

@@ -1,7 +1,7 @@
 ---
 title: docker for mac
 layout: post
-category: web
+category: docker
 author: 夏泽民
 ---
 $ screen ~/Library/Containers/com.docker.docker/Data/com.docker.driver.amd64-linux/tty
