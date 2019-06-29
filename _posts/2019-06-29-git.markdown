@@ -1,0 +1,124 @@
+---
+title: git彻底删除提交历史
+layout: post
+category: web
+author: 夏泽民
+---
+git为我们提供了"后悔药", 但有时候我们会将一些敏感数据提交至git仓库，虽然使用了git rm删除文件，但是文件仍然存在在提交历史中。git提供了两个工具给我们去彻底删除提交历史的方法。
+<!-- more -->
+git filter-branch
+
+git clone项目到本地
+
+使用git filter-branch命令移除版本库中的信息, 并重写commit记录。
+# 这里演示了删除一个文件, 将FILENAME替换为文件名，多个以空格分隔， 可以用*匹配目录。
+
+git filter-branch --force --index-filter 'git rm --cached --ignore-unmatch FILENAME' --prune-empty --tag-name-filter cat -- --all
+
+# 还可以直接整个test文件夹
+git filter-branch --force --index-filter 'git rm -r --cached --ignore-unmatch test' --prune-empty --tag-name-filter cat -- --all
+
+(可选) 执行完成后，归档历史已经清理完成，但还有一些垃圾文件，用下面的命令清理
+rm -rf .git/refs/original/
+git reflog expire --expire=now --all
+git gc --prune=now
+git gc --aggressive --prune=now
+
+
+
+确认无误后，提交至版本库（切记，下面的操作将不可逆）
+git push origin --force --all
+git push origin --force --tags
+
+
+
+操作完成后，需要通知小伙伴们重新clone代码，因为提交历史被修改了，远程仓库很可能会与本地仓库冲突
+所以在维护时，应该提醒大家先把代码全部提交，带清理完后，然小伙伴们重新clone使用。
+
+
+BFG Repo-Cleaner
+git官方也推荐使用这个工具，且处理速度要比git filter-branch快上很多。
+bfg --delete-files YOUR-FILE-WITH-SENSITIVE-DATA
+https://github.com/rtyley/bfg-repo-cleaner
+
+
+
+$ git filter-branch --force --index-filter 'git rm --cached --ignore-unmatch path-to-your-remove-file' --prune-empty --tag-name-filter cat -- --all
+其中, path-to-your-remove-file 就是你要删除的文件的相对路径(相对于git仓库的跟目录), 替换成你要删除的文件即可. 注意一点，这里的文件或文件夹，都不能以 '/' 开头，否则文件或文件夹会被认为是从 git 的安装目录开始。
+
+如果你要删除的目标不是文件，而是文件夹，那么请在 `git rm --cached' 命令后面添加 -r 命令，表示递归的删除（子）文件夹和文件夹下的文件，类似于 `rm -rf` 命令。
+
+此外，如果你要删除的文件很多, 可以写进一个.sh文件批量执行, 如果文件或路径里有中文, 由于MinGW或CygWin对中文路径设置比较麻烦, 你可以使用通配符*号, 例如: sound/music_*.mp3, 这样就把sound目录下以music_开头的mp3文件都删除了.
+
+注意: 补充一点, 如果你想以后也不会再上传这个文件或文件夹, 请把这个文件或文件夹添加到.gitignore文件里, 然后再push你的repo.
+
+步骤二: 推送我们修改后的repo
+以强制覆盖的方式推送你的repo, 命令如下:
+
+$ git push origin master --force --all
+这个过程其实是重新上传我们的repo, 比较耗时, 虽然跟删掉重新建一个repo有些类似, 但是好处是保留了原有的更新记录, 所以还是有些不同的. 如果你实在不在意这些更新记录, 也可以删掉重建, 两者也差不太多, 也许后者还更直观些.
+
+步骤三: 清理和回收空间
+虽然上面我们已经删除了文件, 但是我们的repo里面仍然保留了这些objects, 等待垃圾回收(GC), 所以我们要用命令彻底清除它, 并收回空间.
+
+命令如下:
+
+复制代码
+$ rm -rf .git/refs/original/
+
+$ git reflog expire --expire=now --all
+
+$ git gc --prune=now
+
+Counting objects: 2437, done.
+# Delta compression using up to 4 threads.
+# Compressing objects: 100% (1378/1378), done.
+# Writing objects: 100% (2437/2437), done.
+# Total 2437 (delta 1461), reused 1802 (delta 1048)
+
+$ git gc --aggressive --prune=now
+
+Counting objects: 2437, done.
+# Delta compression using up to 4 threads.
+# Compressing objects: 100% (2426/2426), done.
+# Writing objects: 100% (2437/2437), done.
+# Total 2437 (delta 1483), reused 0 (delta 0)
+复制代码
+注: 绿色字部分是命令执行后的结果.
+现在你再看看你的.git目录文件大小是不是变小了.
+
+
+
+
+https://help.github.com/en/articles/removing-files-from-a-repositorys-history
+
+Total 3007 (delta 664), reused 0 (delta 0)
+remote: error: GH001: Large files detected.
+remote: error: Trace: 7b7de6b9372ee392e0f3961b05ea6f33
+remote: error: See http://git.io/iEPt8g for more information.
+remote: error: File  XXX/XXX/BaiduNaviSDK/libbaiduNaviSDK.a is 102.68 MB; this exceeds GitHub‘s file size limit of 100.00 MB
+remote: error: File  XXX/XXX/BaiduNaviSDK/libbaiduNaviSDK.a is 102.68 MB; this exceeds GitHub‘s file size limit of 100.00 MB。这句话的意思是GitHub问件长度限制在100MB以内。它还提示我们到 (http://git.io/iEPt8g) 去如何处理上传大文件。开始我按照原文的操作，结果还是出现这个错误。后来我左思右想，是不是自己理解错了原文作者的意思。果然后来我在.gitinore这个文件中添加了忽略libbaiduNaviSDK.a 的命令，才成功将自己的文件上传。
+具体操作如下：
+当我们上传的项目中包含大于100MB的文件时。我们首先要在.gitinore中忽略它。
+然后在最新的一次提交中，将该文件从本地仓库和远程仓库全部移除掉。如果这个文件很重要，要记得做一次备份。
+如果这个文件是最近一次commit的，并且你还没有push到github
+第一步：在.gitinore中忽略你需要忽略的大文件名字(跟忽略一般文件一样)
+cat .gitinore
+vi .gitinore
+*.libbaiduNaviSDK.a
+
+第二步：从本地仓库移除掉大文件
+git rm --cached /User/xxx/xxx/xxx/libbaiduNaviSDK.a (/User/xxx/xxx/xxx/libbaiduNaviSDK.a换为自己要移除的文件即可)
+
+第三步：提交我们的操作
+git commit --amend -CHEAD
+
+执行完这一步，libbaiduNaviSDK.a将从你的commit仓库中移除。
+此时在向远程服务器push即可成功。
+
+上述方法只能用于当时补救，后面如果有其他提交，就比较麻烦，最好是用彻底清除方法
+
+
+ git log 2ddd1c456339bf630a460a7e4fb91c9b0b243315 --name-only |grep Docker
+
+ 
