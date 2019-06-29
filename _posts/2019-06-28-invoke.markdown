@@ -1,0 +1,144 @@
+---
+title: martini inject
+layout: post
+category: golang
+author: 夏泽民
+---
+用(*interface{})(nil)传递参数类型
+type injector struct {       
+  values map[reflect.Type]reflect.Value       
+  parent Injector
+}
+
+撇开 parent不看，values是一个映射表，用于保存注入的参数，它是一个用reflect.Type当键、reflect.Value为值的map。
+<!-- more -->
+njector是注入接口声明的组合，我们先关注TypeMapper这个接口，从源码可以得知Map和MapTo是用来映射数据类型和数据到values map[reflect.Type]reflect.Value的方法。
+Map方法相对来说比较简单，利用反射获取对象的type。
+func (i *injector) Map(val interface{}) TypeMapper {
+    i.values[reflect.TypeOf(val)] = reflect.ValueOf(val)
+    return i
+}
+
+现在我们先假设参数中有多个string时，values map[reflect.Type]reflect.Value这个map只会保存最后一个string的映射，那我们该如何处理才能完整的保存所有的string参数呢？
+考虑interface类型在底层的实现(type,data)，inject库实现了一个从interface指针中获取类型的函数InterfaceOf，而MapTo则利用InterfaceOf来获取传入的数据类型。
+func InterfaceOf(value interface{}) reflect.Type {       
+  t := reflect.TypeOf(value)       
+
+  for t.Kind() == reflect.Ptr {              
+    t = t.Elem()       
+  }       
+
+  if t.Kind() != reflect.Interface {              
+    panic("Called inject.InterfaceOf with a value that is not a pointer to an interface. (*MyInterface)(nil)")       
+  }       
+  return t
+}
+
+func (i *injector) MapTo(val interface{}, ifacePtr interface{}) TypeMapper {
+    i.values[InterfaceOf(ifacePtr)] = reflect.ValueOf(val)
+    return i
+}
+
+package main
+
+import ( 
+  "fmt" 
+  "github.com/codegangsta/inject"
+)
+
+type SpecialString interface{}
+
+func main() {   
+  fmt.Println(inject.InterfaceOf((*interface{})(nil)))      
+  fmt.Println(inject.InterfaceOf((*SpecialString)(nil)))
+}
+
+输出
+interface {}
+main.SpecialString
+
+看到了吗？指向接口的空指针，虽然data是nil，但是我们只要它的type。分步解释一下：
+//以(*SpecialString)(nil)为例
+t := reflect.TypeOf(value) //t是*main.SpecialString，t.Kind()是ptr,t.Elem()是main.SpecialString
+for t.Kind() == reflect.Ptr { //循环判断，也许是指向指针的指针
+  t = t.Elem() //Elem returns a type's element type.
+}
+if t.Kind() != reflect.Interface {
+  ... //如果不是Interface类型，报panic
+}
+return t //返回(*SpecialString)(nil)的元素原始类型
+
+interface{}是什么，在go里面interface{}就是万能的Any。inject利用了(*interface{})(nil)携带数据类型的特点，只用一个空指针就搞定了数据类型的传输，而且扩展了同类型数据的绑定。
+让我们到martini.go去看看这个注入是怎么用的吧。
+// Martini represents the top level web application. inject.Injector methods can be invoked to map services on a global level.
+type Martini struct {       
+  inject.Injector       
+  handlers []Handler       
+  action   Handler       
+  logger   *log.Logger
+}
+
+// New creates a bare bones Martini instance. Use this method if you want to have full control over the middleware that is used.
+func New() *Martini {       
+  m := &Martini{Injector: inject.New(), action: func() {}, logger: log.New(os.Stdout, "[martini] ", 0)}       
+  m.Map(m.logger)       
+  m.Map(defaultReturnHandler())       
+  return m
+}
+
+func (m *Martini) createContext(res http.ResponseWriter, req *http.Request) *context {
+    c := &context{inject.New(), m.handlers, m.action, NewResponseWriter(res), 0}
+    c.SetParent(m)
+    c.MapTo(c, (*Context)(nil))
+    c.MapTo(c.rw, (*http.ResponseWriter)(nil))
+    c.Map(req)
+    return c
+}
+
+自定义的Martini结构体包含了inject.Injector接口，所以可以很方便的注入logger。后续Invoke中间件的时候，自然就可以通过Injector的Get方法获取logger对象。context则使用了MapTo方法注入了Context和http.ResponseWriter这两个接口类型。
+
+func (inj *injector) Invoke(f interface{}) ([]reflect.Value, error) {
+    t := reflect.TypeOf(f)
+
+    var in = make([]reflect.Value, t.NumIn()) //Panic if t is not kind of Func
+    for i := 0; i < t.NumIn(); i++ {
+        argType := t.In(i)
+        val := inj.Get(argType)
+        if !val.IsValid() {
+            return nil, fmt.Errorf("Value not found for type %v", argType)
+        }
+
+        in[i] = val
+    }
+
+    return reflect.ValueOf(f).Call(in), nil
+}
+
+其实没有太多有技术含量的东西，只要把反射吃透了，再弄清楚前文中Map和MapTo存储的类型数据映射map，那么go的依赖注入就这么赤裸裸的展现在你眼前。
+将函数的值从空接口中反射出来，然后使用reflect.Call来传递参数并调用它。参数个数从t.NumIn()获取，循环遍历参数类型，再通过Get方法从values map[reflect.Type]reflect.Value获取对应类型的数据。
+func (i *injector) Get(t reflect.Type) reflect.Value {
+    val := i.values[t]
+
+    if val.IsValid() {
+        return val
+    }
+
+    // no concrete types found, try to find implementors
+    // if t is an interface
+    if t.Kind() == reflect.Interface {
+        for k, v := range i.values {
+            if k.Implements(t) {
+                val = v
+                break
+            }
+        }
+    }
+
+    // Still no type found, try to look it up on the parent
+    if !val.IsValid() && i.parent != nil {
+        val = i.parent.Get(t)
+    }
+
+    return val
+
+}
