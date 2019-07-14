@@ -1,0 +1,808 @@
+---
+title: cobra
+layout: post
+category: golang
+author: 夏泽民
+---
+https://github.com/spf13/cobra
+Cobra提供简单的接口来创建强大的现代化CLI接口，比如git与go工具。Cobra同时也是一个程序, 用于创建CLI程序
+
+Cobra提供的功能
+
+简易的子命令行模式，如 app server， app fetch等等
+完全兼容posix命令行模式
+嵌套子命令subcommand
+支持全局，局部，串联flags
+使用Cobra很容易的生成应用程序和命令，使用cobra create appname和cobra add cmdname
+如果命令输入错误，将提供智能建议，如 app srver，将提示srver没有，是否是app server
+自动生成commands和flags的帮助信息
+自动生成详细的help信息，如app help
+自动识别-h，--help帮助flag
+自动生成应用程序在bash下命令自动完成功能
+自动生成应用程序的man手册
+命令行别名
+零活定义help和usage信息
+可选的紧密集成的viper apps
+<!-- more -->
+Cobra是建立在结构的命令、参数和标志之上。
+命令代表操作,参数和标志是这些行动的修饰符。
+最好的应用程序就像读取句子。用户会知道如何使用本机应用程序，因为他们将理解如何使用它。
+比如下面的例子，server是命令，port是标志:
+hugo server --port=1313
+
+在下面的命令，我们告诉Git克隆url地址bare
+git clone URL --bare
+
+安装
+使用Cobra很简单。首先，使用go get安装最新版本
+go get -u github.com/spf13/cobra
+
+然后在你项目里引用Cobra
+import "github.com/spf13/cobra"
+
+开始
+通常基于Cobra的应用程序将遵循下面的组织结构，当然你也可以遵循自己的接口：
+  ▾ appName/
+    ▾ cmd/
+        add.go
+        your.go
+        commands.go
+        here.go
+      main.go
+
+在Cobra应用程序中，通常main.go文件非常空洞。它主要只干一件事：初始化Cobra。
+package main
+
+import (
+  "fmt"
+  "os"
+
+  "{pathToYourApp}/cmd"
+)
+
+func main() {
+  cmd.Execute()
+}
+
+使用Cobra生成器
+Cobra提供自己的程序来创建你的程序并且添加你想要的命令。这是最简单的方式把Cobra添加到你的程序里。
+
+
+使用Cobra库
+使用Cobra，需要创建一个空的main.go文件和一个rootCmd文件。你可以选择在合适的地方添加额外的命令。
+创建rootCmd
+Cobra不需要特殊的构造函数。简单的就可以创建你的命令。
+理想情况下你把这个放在在 app/cmd/root.go
+var rootCmd = &cobra.Command{
+  Use:   "hugo",
+  Short: "Hugo is a very fast static site generator",
+  Long: `A Fast and Flexible Static Site Generator built with
+                love by spf13 and friends in Go.
+                Complete documentation is available at http://hugo.spf13.com`,
+  Run: func(cmd *cobra.Command, args []string) {
+    // Do Stuff Here
+  },
+}
+
+func Execute() {
+  if err := rootCmd.Execute(); err != nil {
+    fmt.Println(err)
+    os.Exit(1)
+  }
+}
+
+你会另外定义标志和处理配置init()函数。
+比如 cmd/root.go
+import (
+  "fmt"
+  "os"
+
+  homedir "github.com/mitchellh/go-homedir"
+  "github.com/spf13/cobra"
+  "github.com/spf13/viper"
+)
+
+func init() {
+  cobra.OnInitialize(initConfig)
+  rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.cobra.yaml)")
+  rootCmd.PersistentFlags().StringVarP(&projectBase, "projectbase", "b", "", "base project directory eg. github.com/spf13/")
+  rootCmd.PersistentFlags().StringP("author", "a", "YOUR NAME", "Author name for copyright attribution")
+  rootCmd.PersistentFlags().StringVarP(&userLicense, "license", "l", "", "Name of license for the project (can provide `licensetext` in config)")
+  rootCmd.PersistentFlags().Bool("viper", true, "Use Viper for configuration")
+  viper.BindPFlag("author", rootCmd.PersistentFlags().Lookup("author"))
+  viper.BindPFlag("projectbase", rootCmd.PersistentFlags().Lookup("projectbase"))
+  viper.BindPFlag("useViper", rootCmd.PersistentFlags().Lookup("viper"))
+  viper.SetDefault("author", "NAME HERE <EMAIL ADDRESS>")
+  viper.SetDefault("license", "apache")
+}
+
+func initConfig() {
+  // Don't forget to read config either from cfgFile or from home directory!
+  if cfgFile != "" {
+    // Use config file from the flag.
+    viper.SetConfigFile(cfgFile)
+  } else {
+    // Find home directory.
+    home, err := homedir.Dir()
+    if err != nil {
+      fmt.Println(err)
+      os.Exit(1)
+    }
+
+    // Search config in home directory with name ".cobra" (without extension).
+    viper.AddConfigPath(home)
+    viper.SetConfigName(".cobra")
+  }
+
+  if err := viper.ReadInConfig(); err != nil {
+    fmt.Println("Can't read config:", err)
+    os.Exit(1)
+  }
+}
+
+创建 main.go
+你需要在main函数里执行root命令。
+通常main.go文件非常空洞。它主要只干一件事：初始化Cobra。
+package main
+
+import (
+  "fmt"
+  "os"
+
+  "{pathToYourApp}/cmd"
+)
+
+func main() {
+  cmd.Execute()
+}
+
+创建其它的命令
+其它的命令通常定义在cmd/目录下的自己文件内
+如果你想创建一个version命令，你可以创建cmd/version.go文件，并在文件里这么写:
+package cmd
+
+import (
+  "fmt"
+
+  "github.com/spf13/cobra"
+)
+
+func init() {
+  rootCmd.AddCommand(versionCmd)
+}
+
+var versionCmd = &cobra.Command{
+  Use:   "version",
+  Short: "Print the version number of Hugo",
+  Long:  `All software has versions. This is Hugo's`,
+  Run: func(cmd *cobra.Command, args []string) {
+    fmt.Println("Hugo Static Site Generator v0.9 -- HEAD")
+  },
+}
+
+使用标志
+标志提供修饰符控制动作命令如何操作
+给命令分配一个标志
+当标志定义好了，我们需要定义一个变量来关联标志
+var Verbose bool
+var Source string
+
+持久标志
+'持久'表示每个在那个命令下的命令都将能分配到这个标志。对于全局标志，'持久'的标志绑定在root上。
+局部标志
+Cobra默认只在目标命令上解析标志，父命令忽略任何局部标志。通过打开Command.TraverseChildren Cobra将会在执行任意目标命令前解析标志
+command := cobra.Command{
+  Use: "print [OPTIONS] [COMMANDS]",
+  TraverseChildren: true,
+}
+
+绑定标志与配置
+你同样可以通过viper绑定标志：
+var author string
+
+func init() {
+  rootCmd.PersistentFlags().StringVar(&author, "author", "YOUR NAME", "Author name for copyright attribution")
+  viper.BindPFlag("author", rootCmd.PersistentFlags().Lookup("author"))
+}
+
+在这个例子中，永久的标记 author 被viper绑定, 注意, 当用户没有给--author提供值， author不会被赋值。
+必须的标记
+标记默认是可选的，如果你希望当一个标记没有设置时，命令行报错，你可以标记它为必须的
+rootCmd.Flags().StringVarP(&Region, "region", "r", "", "AWS region (required)")
+rootCmd.MarkFlagRequired("region")
+
+位置和自定义参数
+验证位置参数可以通过 Command的Args字段。
+内置下列验证方法
+
+
+NoArgs - 如果有任何参数，命令行将会报错。
+
+ArbitraryArgs - 命令行将会接收任何参数.
+
+OnlyValidArgs - 如果有如何参数不属于Command的ValidArgs字段，命令行将会报错。
+
+MinimumNArgs(int) - 如果参数个数少于N个，命令行将会报错。
+
+MaximumNArgs(int) - 如果参数个数多余N个，命令行将会报错。
+
+ExactArgs(int) - 如果参数个数不能等于N个，命令行将会报错。
+
+RangeArgs(min, max) - 如果参数个数不在min和max之间, 命令行将会报错.
+
+一个设置自定义验证的例子
+var cmd = &cobra.Command{
+  Short: "hello",
+  Args: func(cmd *cobra.Command, args []string) error {
+    if len(args) < 1 {
+      return errors.New("requires at least one arg")
+    }
+    if myapp.IsValidColor(args[0]) {
+      return nil
+    }
+    return fmt.Errorf("invalid color specified: %s", args[0])
+  },
+  Run: func(cmd *cobra.Command, args []string) {
+    fmt.Println("Hello, World!")
+  },
+}
+
+例子
+在下面的例子，我们定义了3个命令。2个在顶级，一个（cmdTimes）是其中一个顶级命令的子命令。在这个例子里，由于没有给rootCmd提供Run，单独的root是不能运行的，必须要有子命令。
+我们仅为一个命令定义了标记。
+更多关于flags的文档可以在https://github.com/spf13/pflag 找到
+package main
+
+import (
+  "fmt"
+  "strings"
+
+  "github.com/spf13/cobra"
+)
+
+func main() {
+  var echoTimes int
+
+  var cmdPrint = &cobra.Command{
+    Use:   "print [string to print]",
+    Short: "Print anything to the screen",
+    Long: `print is for printing anything back to the screen.
+For many years people have printed back to the screen.`,
+    Args: cobra.MinimumNArgs(1),
+    Run: func(cmd *cobra.Command, args []string) {
+      fmt.Println("Print: " + strings.Join(args, " "))
+    },
+  }
+
+  var cmdEcho = &cobra.Command{
+    Use:   "echo [string to echo]",
+    Short: "Echo anything to the screen",
+    Long: `echo is for echoing anything back.
+Echo works a lot like print, except it has a child command.`,
+    Args: cobra.MinimumNArgs(1),
+    Run: func(cmd *cobra.Command, args []string) {
+      fmt.Println("Print: " + strings.Join(args, " "))
+    },
+  }
+
+  var cmdTimes = &cobra.Command{
+    Use:   "times [# times] [string to echo]",
+    Short: "Echo anything to the screen more times",
+    Long: `echo things multiple times back to the user by providing
+a count and a string.`,
+    Args: cobra.MinimumNArgs(1),
+    Run: func(cmd *cobra.Command, args []string) {
+      for i := 0; i < echoTimes; i++ {
+        fmt.Println("Echo: " + strings.Join(args, " "))
+      }
+    },
+  }
+
+  cmdTimes.Flags().IntVarP(&echoTimes, "times", "t", 1, "times to echo the input")
+
+  var rootCmd = &cobra.Command{Use: "app"}
+  rootCmd.AddCommand(cmdPrint, cmdEcho)
+  cmdEcho.AddCommand(cmdTimes)
+  rootCmd.Execute()
+}
+
+更完整大型程序的例子, 可以查看 Hugo.
+help命令
+当你的程序有子命令时，Cobra 会自动给你程序添加help命令。当你运行‘app help’，会调用help命令。另外，help同样支持其它输入命令。例如，你有一个没有任何其它配置的命令叫‘create’，当你调用‘app help create’ Corbra 将会起作用。
+例子
+下面的输入是 Cobra 自动生成的。除了命令和标志的定义，其它不再需要。
+$ cobra help
+
+Cobra is a CLI library for Go that empowers applications.
+This application is a tool to generate the needed files
+to quickly create a Cobra application.
+
+Usage:
+  cobra [command]
+
+Available Commands:
+  add         Add a command to a Cobra Application
+  help        Help about any command
+  init        Initialize a Cobra Application
+
+Flags:
+  -a, --author string    author name for copyright attribution (default "YOUR NAME")
+      --config string    config file (default is $HOME/.cobra.yaml)
+  -h, --help             help for cobra
+  -l, --license string   name of license for the project
+      --viper            use Viper for configuration (default true)
+
+Use "cobra [command] --help" for more information about a command.
+
+help 就跟其它命令一样，并没有特殊的逻辑或行为。事实上，你也可以提供你自己help如果你想的话。
+定义自己的help
+你能为默认的命令，提供你自己的help命令或模板。使用下面的方法:
+cmd.SetHelpCommand(cmd *Command)
+cmd.SetHelpFunc(f func(*Command, []string))
+cmd.SetHelpTemplate(s string)
+
+后2个也将适用于任何子命令
+使用信息
+当用户提供无效的标记或命令，Cobra 将会返回用法。
+例子
+你可能从上面的帮助意识到，默认的帮助将被嵌入到用法里然后作为输出。
+$ cobra --invalid
+Error: unknown flag: --invalid
+Usage:
+  cobra [command]
+
+Available Commands:
+  add         Add a command to a Cobra Application
+  help        Help about any command
+  init        Initialize a Cobra Application
+
+Flags:
+  -a, --author string    author name for copyright attribution (default "YOUR NAME")
+      --config string    config file (default is $HOME/.cobra.yaml)
+  -h, --help             help for cobra
+  -l, --license string   name of license for the project
+      --viper            use Viper for configuration (default true)
+
+Use "cobra [command] --help" for more information about a command.
+
+定义自己的用法
+你能提供你自己的用法函数或模板给 Cobra 使用。
+比如帮助，方法和模板都可以重写。
+cmd.SetUsageFunc(f func(*Command) error)
+cmd.SetUsageTemplate(s string)
+
+版本标记
+如果Version字段设置到了根命令，Cobra 会提供了一个顶层 ‘--version’标记。运行带上‘--version’标记的程序，将会按照模板版本信息。模板可以通过cmd.SetVersionTemplate(s string)方法修改
+运行前和运行后钩子
+在命令运行前或运行后，再运行方法非常容易。PersistentPreRun和PreRun方法将会在Run之前执行。PersistentPostRun和PostRun方法将会在Run之后执行。Persistent*Run方法会被子命令继承，如果它们自己没有定义的话。这些方法将按照下面的属性执行：
+
+PersistentPreRun
+PreRun
+Run
+PostRun
+PersistentPostRun
+
+下面的例子，2个命令都使用了上面的特性。当子命令执行的时候，它将执行根命令的PersistentPreRun，但不会执行根命令的PersistentPostRun：
+package main
+
+import (
+  "fmt"
+
+  "github.com/spf13/cobra"
+)
+
+func main() {
+
+  var rootCmd = &cobra.Command{
+    Use:   "root [sub]",
+    Short: "My root command",
+    PersistentPreRun: func(cmd *cobra.Command, args []string) {
+      fmt.Printf("Inside rootCmd PersistentPreRun with args: %v\n", args)
+    },
+    PreRun: func(cmd *cobra.Command, args []string) {
+      fmt.Printf("Inside rootCmd PreRun with args: %v\n", args)
+    },
+    Run: func(cmd *cobra.Command, args []string) {
+      fmt.Printf("Inside rootCmd Run with args: %v\n", args)
+    },
+    PostRun: func(cmd *cobra.Command, args []string) {
+      fmt.Printf("Inside rootCmd PostRun with args: %v\n", args)
+    },
+    PersistentPostRun: func(cmd *cobra.Command, args []string) {
+      fmt.Printf("Inside rootCmd PersistentPostRun with args: %v\n", args)
+    },
+  }
+
+  var subCmd = &cobra.Command{
+    Use:   "sub [no options!]",
+    Short: "My subcommand",
+    PreRun: func(cmd *cobra.Command, args []string) {
+      fmt.Printf("Inside subCmd PreRun with args: %v\n", args)
+    },
+    Run: func(cmd *cobra.Command, args []string) {
+      fmt.Printf("Inside subCmd Run with args: %v\n", args)
+    },
+    PostRun: func(cmd *cobra.Command, args []string) {
+      fmt.Printf("Inside subCmd PostRun with args: %v\n", args)
+    },
+    PersistentPostRun: func(cmd *cobra.Command, args []string) {
+      fmt.Printf("Inside subCmd PersistentPostRun with args: %v\n", args)
+    },
+  }
+
+  rootCmd.AddCommand(subCmd)
+
+  rootCmd.SetArgs([]string{""})
+  rootCmd.Execute()
+  fmt.Println()
+  rootCmd.SetArgs([]string{"sub", "arg1", "arg2"})
+  rootCmd.Execute()
+}
+
+输出:
+Inside rootCmd PersistentPreRun with args: []
+Inside rootCmd PreRun with args: []
+Inside rootCmd Run with args: []
+Inside rootCmd PostRun with args: []
+Inside rootCmd PersistentPostRun with args: []
+
+Inside rootCmd PersistentPreRun with args: [arg1 arg2]
+Inside subCmd PreRun with args: [arg1 arg2]
+Inside subCmd Run with args: [arg1 arg2]
+Inside subCmd PostRun with args: [arg1 arg2]
+Inside subCmd PersistentPostRun with args: [arg1 arg2]
+
+处理“未知命令”的建议
+Cobra 会自动输出建议，当遇到“unknown command”错误时。这使得当输入错误时， Cobra 的行为类似git命令。例如：
+$ hugo srever
+Error: unknown command "srever" for "hugo"
+
+Did you mean this?
+        server
+
+Run 'hugo --help' for usage.
+
+建议会基于注册的子命令自动生成。使用了Levenshtein distance的实现。每一个注册的命令会匹配2个距离（忽略大小写）来提供建议。
+如果你希望在你的命令里，禁用建议或虚弱字符串的距离，使用：
+command.DisableSuggestions = true
+
+或
+command.SuggestionsMinimumDistance = 1
+
+你可以通过SuggestFor来给命令提供明确的名词建议。这个特性允许当字符串不相近，但是意思与你的命令相近，别切你也不想给该命令设置别名。比如：
+$ kubectl remove
+Error: unknown command "remove" for "kubectl"
+
+Did you mean this?
+        delete
+
+Run 'kubectl help' for usage.
+
+生成命令的文档
+Cobra 可以基于子命令，标记，等生成文档。以以下格式：
+
+Markdown
+ReStructured Text
+Man Page
+
+生成bash-completion
+Cobra 可以生成一个bash-completion文件。如果你给命令添加更多信息，这些completions可以非常强大和灵活。
+
+
+cobra init
+命令cobra init [yourApp]将会创建初始化应用，同时提供正确的文件结构。同时，其非常智能，你只需给它一个绝对路径，或者一个简单的路径。
+
+cobra.exe init cjapp
+
+<<'COMMENT'
+Your Cobra application is ready at
+/home/chenjian/gofile/src/cjapp.
+
+Give it a try by going there and running `go run main.go`.
+Add commands to it by running `cobra add [cmdname]`.
+COMMENT
+ls -Ra /home/chenjian/gofile/src/cjapp
+
+<<'COMMENT'
+/home/chenjian/gofile/src/cjapp:
+.  ..  cmd  LICENSE  main.go
+
+/home/chenjian/gofile/src/cjapp/cmd:
+.  ..  root.go
+COMMENT
+cobra add
+在路径C:\Users\chenjian\GoglandProjects\src\cjapp下分别执行:
+
+cobra add serve
+<<'COMMENT'
+serve created at /home/chenjian/gofile/src/cjapp/cmd/serve.go
+COMMENT
+
+cobra add config
+<<'COMMENT'
+config created at /home/chenjian/gofile/src/cjapp/cmd/config.go
+COMMENT
+
+cobra add create -p 'configCmd'
+<<'COMMENT'
+create created at /home/chenjian/gofile/src/cjapp/cmd/create.go
+COMMENT
+
+ls -Ra /home/chenjian/gofile/src/cjapp
+
+<<'COMMENT'
+/home/chenjian/gofile/src/cjapp:
+.  ..  cmd  LICENSE  main.go
+
+/home/chenjian/gofile/src/cjapp/cmd:
+.  ..  config.go  create.go  root.go  serve.go
+COMMENT
+此时你可以使用:
+
+go run main.go
+
+<<'COMMENT'
+A longer description that spans multiple lines and likely contains
+examples and usage of using your application. For example:
+
+Cobra is a CLI library for Go that empowers applications.
+This application is a tool to generate the needed files
+to quickly create a Cobra application.
+
+Usage:
+  cjapp [command]
+
+Available Commands:
+  config      A brief description of your command
+  help        Help about any command
+  serve       A brief description of your command
+
+Flags:
+      --config string   config file (default is $HOME/.cjapp.yaml)
+  -h, --help            help for cjapp
+  -t, --toggle          Help message for toggle
+
+Use "cjapp [command] --help" for more information about a command.
+COMMENT
+
+go run main.go config
+<<'COMMENT'
+config called
+COMMENT
+
+go run main.go serve
+<<'COMMENT'
+serve called
+COMMENT
+
+go run main.go config create
+<<'COMMENT'
+create called
+COMMENT
+cobra生成器配置
+Cobra生成器通过~/.cjapp.yaml(Linux下)或者$HOME/.cjapp.yaml(windows)来生成LICENSE。
+
+一个.cjapp.yaml格式例子如下：
+
+author: Chen Jian <chenjian158978@gmail.com>
+license: MIT
+或者可以自定义LICENSE:
+
+license:
+  header: This file is part of {\{ .appName }\}.
+  text: |
+    {\{ .copyright }\}
+
+    This is my license. There are many like it, but this one is mine.
+    My license is my best friend. It is my life. I must master it as I must
+    master my life.
+人工构建Cobra应用
+人工构建需要自己创建main.go文件和RootCmd文件。例如创建一个Cobra应用cjappmanu
+
+RootCmd文件
+路径为cjappmanu/cmd/root.go
+
+代码下载： cjappmanu_cmd_root.go
+
+package cmd
+
+import (
+	"fmt"
+	"os"
+
+	"github.com/mitchellh/go-homedir"
+	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
+)
+
+var RootCmd = &cobra.Command{
+	Use:     "chenjian",
+	Aliases: []string{"cj", "ccccjjjj"},
+	Short:   "call me jack",
+	Long: `A Fast and Flexible Static Site Generator built with
+                love by spf13 and friends in Go.
+                Complete documentation is available at https://o-my-chenjian.com`,
+	Run: func(cmd *cobra.Command, args []string) {
+		fmt.Printf("OK")
+	},
+}
+
+var cfgFile, projectBase, userLicense string
+
+func init() {
+	cobra.OnInitialize(initConfig)
+
+	// 在此可以定义自己的flag或者config设置，Cobra支持持久标签(persistent flag)，它对于整个应用为全局
+	// 在StringVarP中需要填写`shorthand`，详细见pflag文档
+	RootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (defalut in $HOME/.cobra.yaml)")
+	RootCmd.PersistentFlags().StringVarP(&projectBase, "projectbase", "b", "", "base project directory eg. github.com/spf13/")
+	RootCmd.PersistentFlags().StringP("author", "a", "YOUR NAME", "Author name for copyright attribution")
+	RootCmd.PersistentFlags().StringVarP(&userLicense, "license", "l", "", "Name of license for the project (can provide `licensetext` in config)")
+	RootCmd.PersistentFlags().Bool("viper", true, "Use Viper for configuration")
+
+	// Cobra同样支持局部标签(local flag)，并只在直接调用它时运行
+	RootCmd.Flags().BoolP("toggle", "t", false, "Help message for toggle")
+
+	// 使用viper可以绑定flag
+	viper.BindPFlag("author", RootCmd.PersistentFlags().Lookup("author"))
+	viper.BindPFlag("projectbase", RootCmd.PersistentFlags().Lookup("projectbase"))
+	viper.BindPFlag("useViper", RootCmd.PersistentFlags().Lookup("viper"))
+	viper.SetDefault("author", "NAME HERE <EMAIL ADDRESS>")
+	viper.SetDefault("license", "apache")
+}
+
+func Execute()  {
+	RootCmd.Execute()
+}
+
+func initConfig() {
+	// 勿忘读取config文件，无论是从cfgFile还是从home文件
+	if cfgFile != "" {
+		viper.SetConfigName(cfgFile)
+	} else {
+		// 找到home文件
+		home, err := homedir.Dir()
+		if err != nil {
+			fmt.Println(err)
+			os.Exit(1)
+		}
+
+		// 在home文件夹中搜索以“.cobra”为名称的config
+		viper.AddConfigPath(home)
+		viper.SetConfigName(".cobra")
+	}
+	// 读取符合的环境变量
+	viper.AutomaticEnv()
+
+	if err := viper.ReadInConfig(); err != nil {
+		fmt.Println("Can not read config:", viper.ConfigFileUsed())
+	}
+}
+
+main.go
+main.go的目的就是初始化Cobra
+
+附加命令
+附加命令可以在/cmd/文件夹中写，例如一个版本信息文件，可以创建/cmd/version.go
+
+代码下载： version.go
+
+package cmd
+
+import (
+	"fmt"
+
+	"github.com/spf13/cobra"
+)
+
+func init() {
+	RootCmd.AddCommand(versionCmd)
+}
+
+var versionCmd = &cobra.Command{
+	Use:   "version",
+	Short: "Print the version number of ChenJian",
+	Long:  `All software has versions. This is Hugo's`,
+	Run: func(cmd *cobra.Command, args []string) {
+		fmt.Println("Chen Jian Version: v1.0 -- HEAD")
+	},
+}
+
+同时，可以将命令添加到父项中，这个例子中RootCmd便是父项。只需要添加：
+
+RootCmd.AddCommand(versionCmd)
+处理Flags
+Persistent Flags
+persistent意思是说这个flag能任何命令下均可使用，适合全局flag：
+
+RootCmd.PersistentFlags().BoolVarP(&Verbose, "verbose", "v", false, "verbose output")
+Local Flags
+Cobra同样支持局部标签(local flag)，并只在直接调用它时运行
+
+RootCmd.Flags().StringVarP(&Source, "source", "s", "", "Source directory to read from")
+Bind flag with Config
+使用viper可以绑定flag
+
+var author string
+
+func init() {
+  RootCmd.PersistentFlags().StringVar(&author, "author", "YOUR NAME", "Author name for copyright attribution")
+  viper.BindPFlag("author", RootCmd.PersistentFlags().Lookup("author"))
+}
+Positional and Custom Arguments
+Positional Arguments
+Leagacy arg validation有以下几类：
+
+NoArgs: 如果包含任何位置参数，命令报错
+ArbitraryArgs: 命令接受任何参数
+OnlyValidArgs: 如果有位置参数不在ValidArgs中，命令报错
+MinimumArgs(init): 如果参数数目少于N个后，命令行报错
+MaximumArgs(init): 如果参数数目多余N个后，命令行报错
+ExactArgs(init): 如果参数数目不是N个话，命令行报错
+RangeArgs(min, max): 如果参数数目不在范围(min, max)中，命令行报错
+Custom Arguments
+var cmd = &cobra.Command{
+  Short: "hello",
+  Args: func(cmd *cobra.Command, args []string) error {
+    if len(args) < 1 {
+      return errors.New("requires at least one arg")
+    }
+    if myapp.IsValidColor(args[0]) {
+      return nil
+    }
+    return fmt.Errorf("invalid color specified: %s", args[0])
+  },
+  Run: func(cmd *cobra.Command, args []string) {
+    fmt.Println("Hello, World!")
+  },
+}
+
+先执行与后执行
+Run功能的执行先后顺序如下：
+
+PersistentPreRun
+PreRun
+Run
+PostRun
+PersistentPostRun
+错误处理函数
+RunE功能的执行先后顺序如下：
+
+PersistentPreRunE
+PreRunE
+RunE
+PostRunE
+PersistentPostRunE
+对不明命令的建议
+当遇到不明命令，会有提出一定的建，其采用最小编辑距离算法(Levenshtein distance)。例如：
+
+hugo srever
+
+<<'COMMENT'
+Error: unknown command "srever" for "hugo"
+
+Did you mean this?
+        server
+
+Run 'hugo --help' for usage.
+COMMENT
+如果你想关闭智能提示，可以：
+
+command.DisableSuggestions = true
+
+// 或者
+
+command.SuggestionsMinimumDistance = 1
+或者使用SuggestFor属性来自定义一些建议，例如：
+
+kubectl remove
+<<'COMMENT'
+Error: unknown command "remove" for "kubectl"
+
+Did you mean this?
+        delete
+
+Run 'kubectl help' for usage.
+COMMENT
+
+
