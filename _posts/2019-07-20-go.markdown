@@ -1,0 +1,117 @@
+---
+title: go 编译器指示
+layout: post
+category: golang
+author: 夏泽民
+---
+在计算机编程中，编译指示(pragma)是一种语言结构，它指示编译器应该如何处理其输入。指示不是编程语言语法的一部分，因编译器而异。
+<!-- more -->
+https://golang.org/cmd/compile/#hdr-Compiler_Directives
+形如 //go: 就是 Go 语言编译指示的实现方式。
+//go: 是连续的，// 和 go 之间并没有空格。
+
+https://github.com/golang/go/blob/master/src/cmd/compile/internal/gc/lex.go#L52
+
+func pragmaValue(verb string) syntax.Pragma {
+	switch verb {
+	case "go:nointerface":
+		if objabi.Fieldtrack_enabled != 0 {
+			return Nointerface
+		}
+	case "go:noescape":
+		return Noescape
+	case "go:norace":
+		return Norace
+	case "go:nosplit":
+		return Nosplit
+	case "go:noinline":
+		return Noinline
+	case "go:systemstack":
+		return Systemstack
+	case "go:nowritebarrier":
+		return Nowritebarrier
+	case "go:nowritebarrierrec":
+		return Nowritebarrierrec | Nowritebarrier // implies Nowritebarrier
+	case "go:yeswritebarrierrec":
+		return Yeswritebarrierrec
+	case "go:cgo_unsafe_args":
+		return CgoUnsafeArgs
+	case "go:uintptrescapes":
+		// For the next function declared in the file
+		// any uintptr arguments may be pointer values
+		// converted to uintptr. This directive
+		// ensures that the referenced allocated
+		// object, if any, is retained and not moved
+		// until the call completes, even though from
+		// the types alone it would appear that the
+		// object is no longer needed during the
+		// call. The conversion to uintptr must appear
+		// in the argument list.
+		// Used in syscall/dll_windows.go.
+		return UintptrEscapes
+	case "go:notinheap":
+		return NotInHeap
+	}
+	return 0
+}
+
+//go:noinline
+noinline 顾名思义，不要内联。
+
+Inline 内联
+Inline，是在编译期间发生的，将函数调用调用处替换为被调用函数主体的一种编译器优化手段。
+优势：
+减少函数调用的开销，提高执行速度。
+复制后的更大函数体为其他编译优化带来可能性，如 过程间优化
+消除分支，并改善空间局部性和指令顺序性，同样可以提高性能。
+问题：
+代码复制带来的空间增长。
+如果有大量重复代码，反而会降低缓存命中率，尤其对 CPU 缓存是致命的。
+所以，在实际使用中，对于是否使用内联，要谨慎考虑，并做好平衡，以使它发挥最大的作用。
+简单来说，对于短小而且工作较少的函数，使用内联是有效益的。
+
+//go:nosplit
+nosplit 的作用是：跳过栈溢出检测。
+
+栈溢出是什么？
+正是因为一个 Goroutine 的起始栈大小是有限制的，且比较小的，才可以做到支持并发很多 Goroutine，并高效调度。
+stack.go 源码中可以看到，_StackMin 是 2048 字节，也就是 2k，它不是一成不变的，当不够用时，它会动态地增长。
+那么，必然有一个检测的机制，来保证可以及时地知道栈不够用了，然后再去增长。
+回到话题，nosplit 就是将这个跳过这个机制。
+
+优劣
+显然地，不执行栈溢出检查，可以提高性能，但同时也有可能发生 stack overflow 而导致编译失败。
+
+//go:noescape
+noescape 的作用是：禁止逃逸，而且它必须指示一个只有声明没有主体的函数。
+
+逃逸是什么？
+Go 相比 C、C++ 是内存更为安全的语言，主要一个点就体现在它可以自动地将超出自身生命周期的变量，从函数栈转移到堆中，逃逸就是指这种行为。
+
+优劣
+最显而易见的好处是，GC 压力变小了。
+因为它已经告诉编译器，下面的函数无论如何都不会逃逸，那么当函数返回时，其中的资源也会一并都被销毁。
+不过，这么做代表会绕过编译器的逃逸检查，一旦进入运行时，就有可能导致严重的错误及后果。
+
+//go:norace
+norace 的作用是：跳过竞态检测
+我们知道，在多线程程序中，难免会出现数据竞争，正常情况下，当编译器检测到有数据竞争，就会给出提示。
+
+执行 go run -race main.go 利用 -race 来使编译器报告数据竞争问题。你会看到：
+
+==================
+WARNING: DATA RACE
+Read at 0x00000112f470 by goroutine 6:
+  main.add()
+      /Users/sxs/Documents/go/src/test/main.go:15 +0x3a
+
+Previous write at 0x00000112f470 by goroutine 5:
+  main.add()
+      /Users/sxs/Documents/go/src/test/main.go:15 +0x56
+      
+说明两个 goroutine 执行的 add() 在竞争。
+
+优劣
+使用 norace 除了减少编译时间，我想不到有其他的优点了。但缺点却很明显，那就是数据竞争会导致程序的不确定性。
+
+
