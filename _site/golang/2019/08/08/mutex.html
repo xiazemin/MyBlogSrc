@@ -56,13 +56,13 @@
     <link rel="stylesheet" href="/MyBlog/katex/katex.css">
 
     <!--轮播图片-->
-    <!--script type="text/javascript" src="https://xiazemin.github.io/MyBlog/js/jquery.js"></script>
-    <script type="text/javascript" src="https://xiazemin.github.io/MyBlog/js/jquery.stripesrotator.js"></script>
+    <!--script type="text/javascript" src="http://localhost:4000/MyBlog/js/jquery.js"></script>
+    <script type="text/javascript" src="http://localhost:4000/MyBlog/js/jquery.stripesrotator.js"></script>
     <script type="text/javascript">
                     $(document).ready(function() {
                     alert($('#rotator_xzm'));
                      alert($('#rotator_xzm').fn);
-                    $('#rotator_xzm').stripesRotator({ images: [ "https://xiazemin.github.io/MyBlog/img/BPlusTree.png", "https://xiazemin.github.io/MyBlog/img/linuxMMap.jpeg"] });
+                    $('#rotator_xzm').stripesRotator({ images: [ "http://localhost:4000/MyBlog/img/BPlusTree.png", "http://localhost:4000/MyBlog/img/linuxMMap.jpeg"] });
                     });
     </script-->
 
@@ -117,7 +117,7 @@
             <div class="row">
                 <div class="col-lg-12">
                     <div class="heading text-center">
-                        <a href="https://xiazemin.github.io/MyBlog/" style="color: #fff; font-size: 4em; font-family: 'Schoolbell', cursive;">泽民博客</a>
+                        <a href="http://localhost:4000/MyBlog/" style="color: #fff; font-size: 4em; font-family: 'Schoolbell', cursive;">泽民博客</a>
                         <a href="#menu-toggle" class="btn btn-default sciblog" id="menu-toggle" style="font-weight: bold;">&#9776; Menu</a>
                     </div>
                 </div>
@@ -528,6 +528,438 @@ if atomic.CompareAndSwapInt32(&amp;m.state, old, new) {<br />
 // 手递手唤醒一个goroutine<br />
 runtime_Semrelease(&amp;m.sema, true)   } }<br />
 </code></pre></div></div><br />
+<br />
+<p>golang 1.10 mutex互斥锁源码<br />
+2018年05月13日 18:10:54 tydhot 阅读数 369<br />
+Mutex锁分为normal模式和starvation模式。一开始默认处于normal模式。在normal模式中，每个新加入竞争锁行列的协程都会直接参与到锁的竞争当中来，而处于starvation模式时，所有所有新进入的协程都会直接被放入等待队列中挂起，直到其所在队列之前的协程全部执行完毕。</p><br />
+<br />
+<p>在normal模式中协程的挂起等待时间如果大于某个值，就会进入starvation模式。</p><br />
+<br />
+<p>type Mutex struct {<br />
+   state int32<br />
+   sema  uint32<br />
+}<br />
+其中，state用来保存mutex的状态量，低一位表示是否上锁，低二位表示当前锁对象是否被唤醒，低三位表示该锁是否处于staration状态，而后几位表示当前正被该锁阻塞的协程数。而sema则是作为信号量来作为阻塞的依据。</p><br />
+<br />
+<p>Lock()方法进行加锁。</p><br />
+<br />
+<p>func (m *Mutex) Lock() {<br />
+   // Fast path: grab unlocked mutex.<br />
+   if atomic.CompareAndSwapInt32(&amp;m.state, 0, mutexLocked) {<br />
+      if race.Enabled {<br />
+         race.Acquire(unsafe.Pointer(m))<br />
+      }<br />
+      return<br />
+   }</p><br />
+<br />
+<p>var waitStartTime int64<br />
+   starving := false<br />
+   awoke := false<br />
+   iter := 0<br />
+   old := m.state<br />
+   for {<br />
+      // Don’t spin in starvation mode, ownership is handed off to waiters<br />
+      // so we won’t be able to acquire the mutex anyway.<br />
+      if old&amp;(mutexLocked|mutexStarving) == mutexLocked &amp;&amp; runtime_canSpin(iter) {<br />
+         // Active spinning makes sense.<br />
+         // Try to set mutexWoken flag to inform Unlock<br />
+         // to not wake other blocked goroutines.<br />
+         if !awoke &amp;&amp; old&amp;mutexWoken == 0 &amp;&amp; old»mutexWaiterShift != 0 &amp;&amp;<br />
+            atomic.CompareAndSwapInt32(&amp;m.state, old, old|mutexWoken) {<br />
+            awoke = true<br />
+         }<br />
+         runtime_doSpin()<br />
+         iter++<br />
+         old = m.state<br />
+         continue<br />
+      }<br />
+      new := old<br />
+      // Don’t try to acquire starving mutex, new arriving goroutines must queue.<br />
+      if old&amp;mutexStarving == 0 {<br />
+         new |= mutexLocked<br />
+      }<br />
+      if old&amp;(mutexLocked|mutexStarving) != 0 {<br />
+         new += 1 « mutexWaiterShift<br />
+      }<br />
+      // The current goroutine switches mutex to starvation mode.<br />
+      // But if the mutex is currently unlocked, don’t do the switch.<br />
+      // Unlock expects that starving mutex has waiters, which will not<br />
+      // be true in this case.<br />
+      if starving &amp;&amp; old&amp;mutexLocked != 0 {<br />
+         new |= mutexStarving<br />
+      }<br />
+      if awoke {<br />
+         // The goroutine has been woken from sleep,<br />
+         // so we need to reset the flag in either case.<br />
+         if new&amp;mutexWoken == 0 {<br />
+            throw(“sync: inconsistent mutex state”)<br />
+         }<br />
+         new &amp;^= mutexWoken<br />
+      }<br />
+      if atomic.CompareAndSwapInt32(&amp;m.state, old, new) {<br />
+         if old&amp;(mutexLocked|mutexStarving) == 0 {<br />
+            break // locked the mutex with CAS<br />
+         }<br />
+         // If we were already waiting before, queue at the front of the queue.<br />
+         queueLifo := waitStartTime != 0<br />
+         if waitStartTime == 0 {<br />
+            waitStartTime = runtime_nanotime()<br />
+         }<br />
+         runtime_SemacquireMutex(&amp;m.sema, queueLifo)<br />
+         starving = starving || runtime_nanotime()-waitStartTime &gt; starvationThresholdNs<br />
+         old = m.state<br />
+         if old&amp;mutexStarving != 0 {<br />
+            // If this goroutine was woken and mutex is in starvation mode,<br />
+            // ownership was handed off to us but mutex is in somewhat<br />
+            // inconsistent state: mutexLocked is not set and we are still<br />
+            // accounted as waiter. Fix that.<br />
+            if old&amp;(mutexLocked|mutexWoken) != 0 || old»mutexWaiterShift == 0 {<br />
+               throw(“sync: inconsistent mutex state”)<br />
+            }<br />
+            delta := int32(mutexLocked - 1«mutexWaiterShift)<br />
+            if !starving || old»mutexWaiterShift == 1 {<br />
+               // Exit starvation mode.<br />
+               // Critical to do it here and consider wait time.<br />
+               // Starvation mode is so inefficient, that two goroutines<br />
+               // can go lock-step infinitely once they switch mutex<br />
+               // to starvation mode.<br />
+               delta -= mutexStarving<br />
+            }<br />
+            atomic.AddInt32(&amp;m.state, delta)<br />
+            break<br />
+         }<br />
+         awoke = true<br />
+         iter = 0<br />
+      } else {<br />
+         old = m.state<br />
+      }<br />
+   }</p><br />
+<br />
+<p>if race.Enabled {<br />
+      race.Acquire(unsafe.Pointer(m))<br />
+   }<br />
+}<br />
+一开始会直接通过cas将原本值为0（也就是当前没任何协程占用锁）的state赋为1，表示这个锁已经有人加锁。如果成功，表示这是当前锁第一次加锁并且加锁成功，那么可以直接返回。</p><br />
+<br />
+<p>如果之前加锁失败，也就是刚刚的cas操作失败，那么说明就需要等待锁的释放，首先判断是否已经加锁并处于normal模式，将原先锁的state与1和4相或的结果相与，如果与1相等，则说明此时处于normal模式并且已经加锁，而后判断当前协程是否可以自旋。如果可以自旋，则通过右移三位判断是否还有协程正在等待这个锁，如果有，并通过低2位判断是否该所处于被唤醒状态，如果并没有，则将其状态量设为被唤醒的状态，之后进行自旋，直到该协程自旋数量达到上限，或者当前锁被解锁，或者当前锁已经处于starvation模式。</p><br />
+<br />
+<p>if old&amp;(mutexLocked|mutexStarving) == mutexLocked &amp;&amp; runtime_canSpin(iter) {<br />
+   // Active spinning makes sense.<br />
+   // Try to set mutexWoken flag to inform Unlock<br />
+   // to not wake other blocked goroutines.<br />
+   if !awoke &amp;&amp; old&amp;mutexWoken == 0 &amp;&amp; old»mutexWaiterShift != 0 &amp;&amp;<br />
+      atomic.CompareAndSwapInt32(&amp;m.state, old, old|mutexWoken) {<br />
+      awoke = true<br />
+   }<br />
+   runtime_doSpin()<br />
+   iter++<br />
+   old = m.state<br />
+   continue<br />
+}<br />
+在超过自旋数量上限或者当前锁已经解锁或者当前锁已经处于starvation模式，那么就在循环中进入下面的部分。</p><br />
+<br />
+<p>new := old<br />
+// Don’t try to acquire starving mutex, new arriving goroutines must queue.<br />
+if old&amp;mutexStarving == 0 {<br />
+   new |= mutexLocked<br />
+}<br />
+if old&amp;(mutexLocked|mutexStarving) != 0 {<br />
+   new += 1 « mutexWaiterShift<br />
+}<br />
+// The current goroutine switches mutex to starvation mode.<br />
+// But if the mutex is currently unlocked, don’t do the switch.<br />
+// Unlock expects that starving mutex has waiters, which will not<br />
+// be true in this case.<br />
+if starving &amp;&amp; old&amp;mutexLocked != 0 {<br />
+   new |= mutexStarving<br />
+}<br />
+if awoke {<br />
+   // The goroutine has been woken from sleep,<br />
+   // so we need to reset the flag in either case.<br />
+   if new&amp;mutexWoken == 0 {<br />
+      throw(“sync: inconsistent mutex state”)<br />
+   }<br />
+   new &amp;^= mutexWoken<br />
+}<br />
+if atomic.CompareAndSwapInt32(&amp;m.state, old, new) {<br />
+   if old&amp;(mutexLocked|mutexStarving) == 0 {<br />
+      break // locked the mutex with CAS<br />
+   }<br />
+   // If we were already waiting before, queue at the front of the queue.<br />
+   queueLifo := waitStartTime != 0<br />
+   if waitStartTime == 0 {<br />
+      waitStartTime = runtime_nanotime()<br />
+   }<br />
+   runtime_SemacquireMutex(&amp;m.sema, queueLifo)<br />
+   starving = starving || runtime_nanotime()-waitStartTime &gt; starvationThresholdNs<br />
+   old = m.state<br />
+   if old&amp;mutexStarving != 0 {<br />
+      // If this goroutine was woken and mutex is in starvation mode,<br />
+      // ownership was handed off to us but mutex is in somewhat<br />
+      // inconsistent state: mutexLocked is not set and we are still<br />
+      // accounted as waiter. Fix that.<br />
+      if old&amp;(mutexLocked|mutexWoken) != 0 || old»mutexWaiterShift == 0 {<br />
+         throw(“sync: inconsistent mutex state”)<br />
+      }<br />
+      delta := int32(mutexLocked - 1«mutexWaiterShift)<br />
+      if !starving || old»mutexWaiterShift == 1 {<br />
+         // Exit starvation mode.<br />
+         // Critical to do it here and consider wait time.<br />
+         // Starvation mode is so inefficient, that two goroutines<br />
+         // can go lock-step infinitely once they switch mutex<br />
+         // to starvation mode.<br />
+         delta -= mutexStarving<br />
+      }<br />
+      atomic.AddInt32(&amp;m.state, delta)<br />
+      break<br />
+   }<br />
+   awoke = true<br />
+   iter = 0<br />
+} else {<br />
+   old = m.state<br />
+}</p><br />
+<br />
+<p>首先，如果此时还是由于别的协程的占用无法获得锁或者处于starvation模式，都在其state加8表示有新的协程正在处于等待状态。并且如果之前由于自旋而将该锁唤醒，那么此时将其低二位的状态量赋值为0。之后判断starving是否为true，如果为true说明在上一次的循环中，锁需要被定义为starvation模式，那么在这里就将相应的状态量低三位设置为1表示进入starvation模式。</p><br />
+<br />
+<p>之后尝试通过cas将新的state状态量赋值给state，如果失败，则重新获得其 state在下一步循环重新重复上述的操作。如果成功，首先判断已经阻塞时间，如果为零，则从现在开始记录。</p><br />
+<br />
+<p>之后通过runtime_SemacquireMutex()通过信号量将当前协程阻塞。</p><br />
+<br />
+<p>上述runtime_SemacquireMutex()方法的具体实现在了sema.go中。</p><br />
+<br />
+<p>func sync_runtime_SemacquireMutex(addr *uint32, lifo bool) {<br />
+   semacquire1(addr, lifo, semaBlockProfile|semaMutexProfile)<br />
+}</p><br />
+<br />
+<p>func semacquire1(addr *uint32, lifo bool, profile semaProfileFlags) {<br />
+   gp := getg()<br />
+   if gp != gp.m.curg {<br />
+      throw(“semacquire not on the G stack”)<br />
+   }</p><br />
+<br />
+<p>// Easy case.<br />
+   if cansemacquire(addr) {<br />
+      return<br />
+   }</p><br />
+<br />
+<p>// Harder case:<br />
+   // increment waiter count<br />
+   // try cansemacquire one more time, return if succeeded<br />
+   // enqueue itself as a waiter<br />
+   // sleep<br />
+   // (waiter descriptor is dequeued by signaler)<br />
+   s := acquireSudog()<br />
+   root := semroot(addr)<br />
+   t0 := int64(0)<br />
+   s.releasetime = 0<br />
+   s.acquiretime = 0<br />
+   s.ticket = 0<br />
+   if profile&amp;semaBlockProfile != 0 &amp;&amp; blockprofilerate &gt; 0 {<br />
+      t0 = cputicks()<br />
+      s.releasetime = -1<br />
+   }<br />
+   if profile&amp;semaMutexProfile != 0 &amp;&amp; mutexprofilerate &gt; 0 {<br />
+      if t0 == 0 {<br />
+         t0 = cputicks()<br />
+      }<br />
+      s.acquiretime = t0<br />
+   }<br />
+   for {<br />
+      lock(&amp;root.lock)<br />
+      // Add ourselves to nwait to disable “easy case” in semrelease.<br />
+      atomic.Xadd(&amp;root.nwait, 1)<br />
+      // Check cansemacquire to avoid missed wakeup.<br />
+      if cansemacquire(addr) {<br />
+         atomic.Xadd(&amp;root.nwait, -1)<br />
+         unlock(&amp;root.lock)<br />
+         break<br />
+      }<br />
+      // Any semrelease after the cansemacquire knows we’re waiting<br />
+      // (we set nwait above), so go to sleep.<br />
+      root.queue(addr, s, lifo)<br />
+      goparkunlock(&amp;root.lock, “semacquire”, traceEvGoBlockSync, 4)<br />
+      if s.ticket != 0 || cansemacquire(addr) {<br />
+         break<br />
+      }<br />
+   }<br />
+   if s.releasetime &gt; 0 {<br />
+      blockevent(s.releasetime-t0, 3)<br />
+   }<br />
+   releaseSudog(s)<br />
+}</p><br />
+<br />
+<p>首先，在上述的方法中，首先通过semroot()方法根据传入的地址获得semRoot，其具体操作如下。</p><br />
+<br />
+<p>func semroot(addr *uint32) *semaRoot {<br />
+   return &amp;semtable[(uintptr(unsafe.Pointer(addr))»3)%semTabSize].root<br />
+}</p><br />
+<br />
+<p>将传入的Mutex的信号量sema的地址右移三位并与251取余，得到的新地址来得到semRoot，做到将semRoot通过信号量sema来与相应的Mutex绑定的目的。</p><br />
+<br />
+<p>semRoot的结构如下。</p><br />
+<br />
+<p>type semaRoot struct {<br />
+   lock  mutex<br />
+   treap *sudog // root of balanced tree of unique waiters.<br />
+   nwait uint32 // Number of waiters. Read w/o the lock.<br />
+}</p><br />
+<br />
+<p>其中的mutex与之前的Mutex无关，只是一个简单的uintptr来简单的实现并发的线程安全的功能。Treap则是其中平衡二叉树的根节点，nwait则表示证在平衡二叉树阻塞的协程数量。</p><br />
+<br />
+<p>此时，会对信号量sema的值进行判断，如果为0，则继续，否则尝试减1并返回。</p><br />
+<br />
+<p>而后通过semRoot中的mutex进行加锁，这里的锁实现很简单，简单来说实则只是对互斥信号量的cas操作。</p><br />
+<br />
+<p>之后给semRoot的nwait加一，表示新的协程进入等待。</p><br />
+<br />
+<p>之后通过queue()方法正式将目标协程放入平衡二叉树中等待。</p><br />
+<br />
+<p>对于这个节点，首先设置该节点中保存的协程为当前协程，并保存当前信号量地址。</p><br />
+<br />
+<p>首先，如果是第一次根据新的信号量而要加入的节点，那么会直接加入到平衡二叉树中，这颗二叉树中节点的位置通过信号量的地址作为排序的依据，然后插入。</p><br />
+<br />
+<p>s.ticket = fastrand() | 1<br />
+s.parent = last<br />
+*pt = s</p><br />
+<br />
+<p>// Rotate up into tree according to ticket (priority).<br />
+for s.parent != nil &amp;&amp; s.parent.ticket &gt; s.ticket {<br />
+   if s.parent.prev == s {<br />
+      root.rotateRight(s.parent)<br />
+   } else {<br />
+      if s.parent.next != s {<br />
+         panic(“semaRoot queue”)<br />
+      }<br />
+      root.rotateLeft(s.parent)<br />
+   }<br />
+}<br />
+如果不是第一次的插入，那么首先根据信号量的地址从平衡二叉树根节点开始寻找对应的信号量地址所绑定的节点，通过大小确定寻找的左儿子节点或者右儿子节点，直到找到。</p><br />
+<br />
+<p>找到之后，之前在将协程准备阻塞之前会判断以等待时间，如果不为0，说明该协程已经进入过该平衡二叉树。那么将新生成的节点取代原本节点在平衡二叉树的位置，并将老节点放置在该信号量绑定节点的等待队列的头部。如果是第一次，那么只需要将新的节点放在等待队列的末尾。</p><br />
+<br />
+<p>var last *sudog<br />
+pt := &amp;root.treap<br />
+for t := *pt; t != nil; t = *pt {<br />
+   if t.elem == unsafe.Pointer(addr) {<br />
+      // Already have addr in list.<br />
+      if lifo {<br />
+         // Substitute s in t’s place in treap.<br />
+         *pt = s<br />
+         s.ticket = t.ticket<br />
+         s.acquiretime = t.acquiretime<br />
+         s.parent = t.parent<br />
+         s.prev = t.prev<br />
+         s.next = t.next<br />
+         if s.prev != nil {<br />
+            s.prev.parent = s<br />
+         }<br />
+         if s.next != nil {<br />
+            s.next.parent = s<br />
+         }<br />
+         // Add t first in s’s wait list.<br />
+         s.waitlink = t<br />
+         s.waittail = t.waittail<br />
+         if s.waittail == nil {<br />
+            s.waittail = t<br />
+         }<br />
+         t.parent = nil<br />
+         t.prev = nil<br />
+         t.next = nil<br />
+         t.waittail = nil<br />
+      } else {<br />
+         // Add s to end of t’s wait list.<br />
+         if t.waittail == nil {<br />
+            t.waitlink = s<br />
+         } else {<br />
+            t.waittail.waitlink = s<br />
+         }<br />
+         t.waittail = s<br />
+         s.waitlink = nil<br />
+      }<br />
+      return<br />
+   }<br />
+   last = t<br />
+   if uintptr(unsafe.Pointer(addr)) &lt; uintptr(t.elem) {<br />
+      pt = &amp;t.prev<br />
+   } else {<br />
+      pt = &amp;t.next<br />
+   }<br />
+}</p><br />
+<br />
+<p>将当次阻塞加入平衡二叉树中队列之后，就可以先将semRoot中的mutex解锁，并将当前协程挂起。</p><br />
+<br />
+<p>回到Mutex的Lock()中，当之前调用方法将协程挂起后，如果协程被唤醒，那么就会继续下面的流程。</p><br />
+<br />
+<p>starving = starving || runtime_nanotime()-waitStartTime &gt; starvationThresholdNs<br />
+old = m.state<br />
+if old&amp;mutexStarving != 0 {<br />
+   // If this goroutine was woken and mutex is in starvation mode,<br />
+   // ownership was handed off to us but mutex is in somewhat<br />
+   // inconsistent state: mutexLocked is not set and we are still<br />
+   // accounted as waiter. Fix that.<br />
+   if old&amp;(mutexLocked|mutexWoken) != 0 || old»mutexWaiterShift == 0 {<br />
+      throw(“sync: inconsistent mutex state”)<br />
+   }<br />
+   delta := int32(mutexLocked - 1«mutexWaiterShift)<br />
+   if !starving || old»mutexWaiterShift == 1 {<br />
+      // Exit starvation mode.<br />
+      // Critical to do it here and consider wait time.<br />
+      // Starvation mode is so inefficient, that two goroutines<br />
+      // can go lock-step infinitely once they switch mutex<br />
+      // to starvation mode.<br />
+      delta -= mutexStarving<br />
+   }<br />
+   atomic.AddInt32(&amp;m.state, delta)<br />
+   break<br />
+}</p><br />
+<br />
+<p>如果这里协程阻塞而挂起的时间超过了默认值，那么就会将starve设置为true，就会在下一次的循环中将该锁这是为starvation模式。如果已经是这个模式，那么就会将状态量的等待数减1，并判断当前如果已经没有等待的协程，就没有必要继续维持starvation模式，同时也没必要继续执行该循环（当前只有一个协程在占用锁）。</p><br />
+<br />
+<p>解锁通过Unlock()方法。</p><br />
+<br />
+<p>func (m *Mutex) Unlock() {<br />
+   if race.Enabled {<br />
+      _ = m.state<br />
+      race.Release(unsafe.Pointer(m))<br />
+   }</p><br />
+<br />
+<p>// Fast path: drop lock bit.<br />
+   new := atomic.AddInt32(&amp;m.state, -mutexLocked)<br />
+   if (new+mutexLocked)&amp;mutexLocked == 0 {<br />
+      throw(“sync: unlock of unlocked mutex”)<br />
+   }<br />
+   if new&amp;mutexStarving == 0 {<br />
+      old := new<br />
+      for {<br />
+         // If there are no waiters or a goroutine has already<br />
+         // been woken or grabbed the lock, no need to wake anyone.<br />
+         // In starvation mode ownership is directly handed off from unlocking<br />
+         // goroutine to the next waiter. We are not part of this chain,<br />
+         // since we did not observe mutexStarving when we unlocked the mutex above.<br />
+         // So get off the way.<br />
+         if old»mutexWaiterShift == 0 || old&amp;(mutexLocked|mutexWoken|mutexStarving) != 0 {<br />
+            return<br />
+         }<br />
+         // Grab the right to wake someone.<br />
+         new = (old - 1«mutexWaiterShift) | mutexWoken<br />
+         if atomic.CompareAndSwapInt32(&amp;m.state, old, new) {<br />
+            runtime_Semrelease(&amp;m.sema, false)<br />
+            return<br />
+         }<br />
+         old = m.state<br />
+      }<br />
+   } else {<br />
+      // Starving mode: handoff mutex ownership to the next waiter.<br />
+      // Note: mutexLocked is not set, the waiter will set it after wakeup.<br />
+      // But mutex is still considered locked if mutexStarving is set,<br />
+      // so new coming goroutines won’t acquire it.<br />
+      runtime_Semrelease(&amp;m.sema, true)<br />
+   }<br />
+}</p><br />
+<br />
+<p>解锁首先直接将第一位状态量变为0，表示已经解锁。然后根据模式，如果处于normal模式，根据状态量当前是否有协程等待，或者已经有协程已经在自旋等待锁，那么就可以直接结束。否则，就通过runtime_Semrelease()方法尝试唤醒挂起的协程。在runtime_Semrelease()中与之前对应，通过dequeue()方法将寻找到的二叉树节点，也就是循环队列的头部取出，节点中保存的协程作为要唤醒的协程。但是，这里唤醒的携程并不一定会立即获取锁，锁的获取仍旧需要竞争。</p><br />
+<br />
+<p>而如果处于starvation模式，那么会直接通过runtime_Semrelease()方法尝试唤醒挂起的协程，这里唤醒的协程必定持有锁。</p><br />
 
 					 <span class='st_sharethis_large' displayText='ShareThis'></span>
 						<span class='st_facebook_large' displayText='Facebook'></span>
@@ -544,7 +976,7 @@ runtime_Semrelease(&amp;m.sema, true)   } }<br />
        <!--赞-->
     	  <div class="row">
             <div class="col-lg-6">
-                <img src="https://xiazemin.github.io/MyBlog/img/webwxgetmsgimg.jpeg"  height="400" width="auto" />
+                <img src="http://localhost:4000/MyBlog/img/webwxgetmsgimg.jpeg"  height="400" width="auto" />
             </div>
           </div>
 
