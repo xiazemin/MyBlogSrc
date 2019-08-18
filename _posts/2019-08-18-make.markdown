@@ -1,0 +1,196 @@
+---
+title: make new 的区别
+layout: post
+category: golang
+author: 夏泽民
+---
+二者都在堆上分配内存，但是它们的行为不同，适用于不同的类型。
+
+new(T) 为每个新的类型T分配一片内存，初始化为 0 并且返回类型为*T的内存地址：这种方法 返回一个指向类型为 T，值为 0 的地址的指针，它适用于值类型如数组和结构体；它相当于 &T{}。
+make(T) 返回一个类型为 T 的初始值，它只适用于3种内建的引用类型：切片、map 和 channel
+换言之，new 函数分配内存，make 函数初始化；
+<!-- more -->
+new返回一个变量的指针，但是这个指针指向空，你不可以直接对该指针进行操作，否则会报错，除非你将该指针指向一个该类型变量的地址。
+make返回一个该类型的变量，以切片变量为例，上面提到，make适用于创建切片、map和channel,但new也可以创建
+
+package main
+
+import "fmt"
+
+func main() {
+	//使用make创建切片，返回的是变量本身
+	s1 := make([]int,5,10)
+	fmt.Printf("use make create slise type %T value %v \n",s1,s1)
+	s1[0] = 123
+	s1[4] = 321
+	fmt.Printf("make s1 type %T value %v \n",s1,s1)
+
+	//# 使用new 创建切片,返回的是切片变量的指针
+	s2 := new([]int)
+	fmt.Printf("use new create slise type %T value %v \n",s2,s2)
+	fmt.Printf("new s2 type %T value %v \n",*s2,*s2)
+	// 想要赋值的话需要使用*解引用
+	// 这里虽然不报语法错误，但是如果尝试直接使用(*s2)[0] = 123的话会有运行时错误，
+	// panic: runtime error: index out of range
+	s2 = &s1 //需要将变量指针指向一个该类型变量的地址
+	(*s2)[0] = 123
+	(*s2)[4] = 3211
+	fmt.Printf("new s2 type %T value %v \n",s2,s2)
+	//s2的修改也会影响s1
+	fmt.Printf("s1 type %T value %v \n",s1,s1)
+
+
+	m1 := make(map[string]string)
+	m1["name"] = "yangyanxing"
+	m1["age"] = "30"
+	fmt.Printf("m1 use make create type:%T value %v \n",m1,m1)
+
+	m2 := new(map[string]string)
+	fmt.Printf("m2 use new create type:%T value %v \n",m2,m2)
+	//直接赋值会报 panic: assignment to entry in nil map
+	m2 = &m1
+	(*m2)["name"] = "fan"
+	//对m2的修改也会影响到m1
+	fmt.Printf("after m2 change m1 value is %v",m1)
+
+}
+
+map的初始化
+map有以下两种初始化方法
+
+使用make函数
+直接使用map初始化
+
+package main
+
+import "fmt"
+
+func main() {
+	//使用make初始化map
+	mp2 := make(map[string]string)
+	mp2["name"]  = "yangyanxing"
+	mp2["age"] = "18"
+	fmt.Println("m2 address ",&mp2)
+	// out:m2 address  &map[name:yangyanxing age:18]
+
+	mp3 := map[string]int{} //这里要有{},花括号里如果没有内容则说明初始化了一个空字典
+	mp3["yang"] = 18
+	mp3["fan"] = 20
+	fmt.Println(mp3)
+	//out:map[yang:18 fan:20]
+
+	mp4 := map[string]int{
+		"yang":20,
+		"fan":21, //即使是最后一个也要有逗号
+	}
+	fmt.Println(mp4)
+	//out:map[yang:20 fan:21]
+
+	mp5 := map[string]int{"yang":30} //写在同一行则不用加逗号
+	fmt.Println(mp5)
+	//out: map[yang:30]
+
+	mp6 := make(map[string]int,1) //还可以给map加一个容量
+	mp6["yang"] = 30
+	fmt.Println("mp6 lens is ",len(mp6),"address:",&mp6)
+	//out:mp6 lens is  1 address: &map[yang:30]
+	mp6["fan"] = 31
+	fmt.Println("mp6 lens is ",len(mp6),"address:",&mp6)
+	//out:mp6 lens is  2 address: &map[yang:30 fan:31]
+
+	//也可以使用new,但是不可以直接对其进行赋值,因为此时它返回的是一个空指针
+	//需要指向一个该类型的变量地址以后才可以进行操作
+	mp7 := new(map[string]int)
+	fmt.Println(mp7)
+	//out:&map[]
+
+	//(*mp7)["yang"] = 100 //会报运行时错误
+	mp7 = &mp6
+	//mp7["fan"] = 1000 //也不可以直接使用mp7,需要使用* 先解引用
+	(*mp7)["yang"] = 100 //这时就不会报运行时错误
+
+	fmt.Println(mp7)
+	//out:&map[yang:100 fan:31]
+
+}
+
+同样可以通过make和切片本身进行初始化
+数组不能使用make初始化,但是可以使用new初始化
+package main
+
+import "fmt"
+
+type person struct {
+	name string
+	age int
+}
+
+func main() {
+
+	fmt.Println("数组的初始化")
+
+	//声明并初始化一个空数组,里面的元素值为类型的零值
+	arr1 := [2]int{}
+	fmt.Println(arr1) //out: [0 0]
+
+	//初始化时将元素值写上
+	arr2 := [2]int{1,3}
+	fmt.Println(arr2) //out: [1 3]
+	//只写一个,不写的是零值
+	arr3 := [2]int{1}
+	fmt.Println(arr3) //out: [1 0]
+
+	//arr4 := make([2]int) //数组不能使用make
+	var arr5 [2]int
+	arr5[0] = 100
+	fmt.Println(arr5)//[100 0]
+
+	//不指定数组大小,使用... 三点号让其自动展开计算
+	arr6 := [...]int{2,4,6,8}
+	fmt.Println(arr6,len(arr6))//out: [2 4 6 8] 4
+
+	//使用new创建一个数组,得到的是一个指针
+	arr7 := new([3]int)
+	fmt.Println(arr7)//out: &[0 0 0]
+	//可以直接对指针进行操作
+	arr7[0] = 3
+	//和使用*解引用作用一样
+	(*arr7)[1] = 4
+	fmt.Println(arr7) //out: &[3 4 0]
+
+}
+
+结构体不能使用make,需要使用new和结构体本身
+package main
+
+import "fmt"
+
+type person struct {
+	name string
+	age int
+}
+
+func main() {
+	
+	fmt.Println("结构体的初始化")
+	//使用new,返回结构体指针
+	stru1 := new(person)
+	fmt.Println(stru1)//out &{ 0} ,默认是字段的零值
+	//可以直接使用这个指针来操作变量
+	//和使用*解引用效果一样
+	stru1.name = "yangyanxing"
+	(*stru1).age = 18
+	fmt.Println(stru1,*stru1) //&{yangyanxing 18} {yangyanxing 18}
+
+	//只指定一个字段,没有指定的默认零值
+	stru2 := person{name:"fan"}
+	fmt.Println(stru2) //{fan 0}
+	//全部指定,字段的顺序可以不按照定义时的顺序
+	stru3 := person{age:18,name:"yang"}
+	fmt.Println(stru3) //{yang 18}
+	//按照结构体顺序初始化,这时元素的值必须都写全了
+	stru4 := person{"fan",17}
+	fmt.Println(stru4) //{fan 17}
+
+}
+
