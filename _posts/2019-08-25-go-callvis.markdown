@@ -31,3 +31,8 @@ $go-callvis github.com/TrueFurby/go-callvis
 查看 github.com/uber/go-torch/pprof  的调用
 $   go-callvis -focus github.com/uber/go-torch/pprof github.com/uber/go-torch
 
+2、现在安装dep，按照github官网安装：
+
+curl https://raw.githubusercontent.com/golang/dep/master/install.sh | sh
+
+
