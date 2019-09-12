@@ -1,0 +1,859 @@
+---
+title: unsafe
+layout: post
+category: golang
+author: 夏泽民
+---
+unsafe包含以下资源：
+
+三个函数：
+
+func Alignof（variable ArbitraryType）uintptr
+func Offsetof（selector ArbitraryType）uintptr
+func Sizeof（variable ArbitraryType）uintptr
+和一种类型：
+
+类型Pointer * ArbitraryType
+
+其实就是一个int类型指针
+type ArbitraryType int
+
+除了这三个函数和一个类型外，指针在unsafe包也为编译器服务。
+
+出于安全原因，Golang不允许以下之间的直接转换：
+
+两个不同指针类型的值，例如 int64和 float64。
+
+指针类型和uintptr的值。
+但是借助unsafe.Pointer，我们可以打破Go类型和内存安全性，并使上面的转换成为可能。
+
+unsafe包文档中列出的规则：
+
+任何类型的指针值都可以转换为unsafe.Pointer。
+unsafe.Pointer可以转换为任何类型的指针值。
+uintptr可以转换为unsafe.Pointer。
+unsafe.Pointer可以转换为uintptr。
+这些规则与Go规范一致：
+
+底层类型uintptr的任何指针或值都可以转换为指针类型，反之亦然。
+unsafe.Pointer其实就是类似C的void *，在golang中是用于各种指针相互转换的桥梁。uintptr是golang的内置类型，是能存储指针的整型，uintptr的底层类型是int，它和unsafe.Pointer可相互转换。uintptr和unsafe.Pointer的区别就是：unsafe.Pointer只是单纯的通用指针类型，用于转换不同类型指针，它不可以参与指针运算；而uintptr是用于指针运算的，GC 不把 uintptr 当指针，也就是说 uintptr 无法持有对象，uintptr类型的目标会被回收。golang的unsafe包很强大，基本上很少会去用它。它可以像C一样去操作内存，但由于golang不支持直接进行指针运算，所以用起来稍显麻烦。
+<!-- more -->
+unsafe包提供了访问底层内存的方法。是用unsafe函数可以提高访问对象的速度。通常用于对大数组的遍历。
+unsafe内容介绍
+func Alignof(x ArbitraryType) uintptr
+func Offsetof(x ArbitraryType) uintptr
+func Sizeof(x ArbitraryType) uintptr
+type ArbitraryType int
+type Pointer *ArbitraryType
+
+
+通过指针加偏移量的操作，在地址中，修改，访问变量的值
+
+这个包中，只提供了3个函数，两个类型
+unsafe中，通过这两个个兼容万物的类型，将其他类型都转换过来，然后通过这三个函数，分别能取长度，偏移量，对齐字节数，就可以在内存地址映射中，来回游走。放在c语言中，是不是，只要给你一个起始地址，你就一下子干到底！！！在golang中，通过unsafe包，你也可以尽情的去放纵
+uintptr：用于指针运算，GC 不把 uintptr 当指针，uintptr 无法持有对象。uintptr 类型的目标会被回收。
+unsafe.Pointer 可以和 普通指针 进行相互转换。
+unsafe.Pointer 可以和 uintptr 进行相互转换。
+也就是说 unsafe.Pointer 是桥梁，可以让任意类型的指针实现相互转换，也可以将任意类型的指针转换为 uintptr 进行指针运算。
+详细说明
+
+type ArbitraryType int
+
+是int的一个别名，但是golang中，对ArbitraryType赋予了特殊的意义，
+
+type Pointer *ArbitraryType
+
+是int指针类型的一个别名，在golang系统中，可以把Pointer类型，理解成任何指针的亲爹。
+
+func Alignof(x ArbitraryType) uintptr
+
+Alignof返回变量对齐字节数量
+
+func Offsetof(x ArbitraryType) uintptr
+
+Offsetof返回变量指定属性的偏移量，这个函数虽然接收的是任何类型的变量，但是这个又一个前提，就是变量要是一个struct类型，且还不能直接将这个struct类型的变量当作参数，只能将这个struct类型变量的属性当作参数。
+
+func Sizeof(x ArbitraryType) uintptr
+
+Sizeof 返回变量在内存中占用的字节数，切记，如果是slice，则不会返回这个slice在内存中的实际占用长度。
+示例
+通过指针修改结构体字段
+package main
+
+import (
+    "fmt"
+    "unsafe"
+)
+
+func main() {
+    s := struct {
+        a byte
+        b byte
+        c byte
+        d int64
+    }{0, 0, 0, 0}
+
+    // 将结构体指针转换为通用指针
+    p := unsafe.Pointer(&s)
+    // 保存结构体的地址备用（偏移量为 0）
+    up0 := uintptr(p)
+    // 将通用指针转换为 byte 型指针
+    pb := (*byte)(p)
+    // 给转换后的指针赋值
+    *pb = 10
+    // 结构体内容跟着改变
+    fmt.Println(s)
+
+    // 偏移到第 2 个字段
+    up := up0 + unsafe.Offsetof(s.b)
+    // 将偏移后的地址转换为通用指针
+    p = unsafe.Pointer(up)
+    // 将通用指针转换为 byte 型指针
+    pb = (*byte)(p)
+    // 给转换后的指针赋值
+    *pb = 20
+    // 结构体内容跟着改变
+    fmt.Println(s)
+
+    // 偏移到第 3 个字段
+    up = up0 + unsafe.Offsetof(s.c)
+    // 将偏移后的地址转换为通用指针
+    p = unsafe.Pointer(up)
+    // 将通用指针转换为 byte 型指针
+    pb = (*byte)(p)
+    // 给转换后的指针赋值
+    *pb = 30
+    // 结构体内容跟着改变
+    fmt.Println(s)
+
+    // 偏移到第 4 个字段
+    up = up0 + unsafe.Offsetof(s.d)
+    // 将偏移后的地址转换为通用指针
+    p = unsafe.Pointer(up)
+    // 将通用指针转换为 int64 型指针
+    pi := (*int64)(p)
+    // 给转换后的指针赋值
+    *pi = 40
+    // 结构体内容跟着改变
+    fmt.Println(s)
+}
+
+访问数组
+package main
+
+import (
+     "fmt"
+     "unsafe"
+)
+
+type Foo struct {
+     A int
+     B int
+}
+
+func main() {
+     foo := &Foo{1, 2}
+     fmt.Println(foo)
+
+     base := uintptr(unsafe.Pointer(foo))
+     offset := unsafe.Offsetof(foo.A)
+
+     ptr := unsafe.Pointer(base + offset)
+     *(*int)(ptr) = 3
+
+     fmt.Println(foo)
+}
+
+修改其它包中的结构体私有字段
+方法A（指针遍历）
+package main
+
+import (
+    "fmt"
+    "reflect"
+    "strings"
+    "unsafe"
+)
+
+func main() {
+    // 创建一个 strings 包中的 Reader 对象
+    // 它有三个私有字段：s string、i int64、prevRune int
+    sr := strings.NewReader("abcdef")
+    // 此时 sr 中的成员是无法修改的
+    fmt.Println(sr)
+    // 但是我们可以通过 unsafe 来进行修改
+    // 先将其转换为通用指针
+    p := unsafe.Pointer(sr)
+    // 获取结构体地址
+    up0 := uintptr(p)
+    // 确定要修改的字段（这里不能用 unsafe.Offsetof 获取偏移量，因为是私有字段）
+    if sf, ok := reflect.TypeOf(*sr).FieldByName("i"); ok {
+        // 偏移到指定字段的地址
+        up := up0 + sf.Offset
+        // 转换为通用指针
+        p = unsafe.Pointer(up)
+        // 转换为相应类型的指针
+        pi := (*int64)(p)
+        // 对指针所指向的内容进行修改
+        *pi = 3 // 修改索引
+    }
+    // 看看修改结果
+    fmt.Println(sr)
+    // 看看读出的是什么
+    b, err := sr.ReadByte()
+    fmt.Printf("%c, %v\n", b, err)
+}
+
+方法B（类型转换）
+// 定义一个和 strings 包中的 Reader 相同的本地结构体
+type Reader struct {
+    s        string
+    i        int64
+    prevRune int
+}
+
+func main() {
+    // 创建一个 strings 包中的 Reader 对象
+    sr := strings.NewReader("abcdef")
+    // 此时 sr 中的成员是无法修改的
+    fmt.Println(sr)
+    // 我们可以通过 unsafe 来进行修改
+    // 先将其转换为通用指针
+    p := unsafe.Pointer(sr)
+    // 再转换为本地 Reader 结构体
+    pR := (*Reader)(p)
+    // 这样就可以自由修改 sr 中的私有成员了
+    (*pR).i = 3 // 修改索引
+    // 看看修改结果
+    fmt.Println(sr)
+    // 看看读出的是什么
+    b, err := sr.ReadByte()
+    fmt.Printf("%c, %v\n", b, err)
+}
+
+以下是标准库的描述：unsafe包提供了一些跳过go语言类型安全限制的操作。
+
+API：
+该包里面只有一个文件unsafe.go和一堆声明，并没有具体的实现以及测试用例和例子。那我这里就把注释的信息简单翻一下。用作对该包的理解。
+
+Unsafe包绕过了Go语言的安全限制。使用该包会导致你的程序无法移植。
+
+// 该类型仅用于文档的目的，并不是真正unsafe包的一部分，它表示Go语言中的任意类型
+
+type ArbitraryType int
+
+Pointer类型是一个指向任何类型的指针类型。他有四种特殊的操作，这些操作其他类型不允许使用。
+
+1. 任何类型的指针类型都可以转换为Pointer类型
+
+2. Pointer类型可以转换为任何类型的指针类型
+
+3. Uintptr类型值可以转换为Pointer类型
+
+4. Pointer类型可以转换为uintptr类型值
+
+因此，通过Pointer类型，程序可以读写任意内存。使用时应该非常小心。
+
+涉及到Pointer类型的，以下几种使用场景是有效的，其他场景均不号称支持。甚至在有效的这几个场景里面也有很多严格的限制。
+
+场景1：将任意类型转换为Pointer类型然后转换为其他类型。T1->Pointer->T2
+
+限制：T2不能长于T1，两种类型使用相同的内存布局方式。
+
+这种转换允许一种类型转换为另外一种类型。例子如下（float64类型转换为uint64类型）
+
+func Float64bits(f float64) uint64 {
+
+return *(*uint64)(unsafe.Pointer(&f))
+
+}
+
+场景2：将Pointer类型转换为uintptr类型（不返回指针类型）
+
+将Pointer转换为uintptr类型，将会将内存地址作为int值进行保存。通常的用法是用于内存地址的打印。 通常情况下将一个uintptr的值转换为Pointer是无效的。
+
+Uintptr是一个int类型的值并不是指针类型，将Pointer类型转换为Uintptr之后就丢失了指针的语义。即使uintptr包含了某个对象的地址，当该对象被移除的时候，垃圾回收器（GC）既不会更新uintptr的值，也不会因为uintptr值避免该对象被回收。
+
+所以从uintptr到Pointer唯一有效的转换是枚举类型
+
+场景3：将Pointer转换为uintptr，计算后返回
+
+如果p是一个指向一个已分配的对象的Pointer对象，它可以通过如下方式进行偏移：
+
+//将p转换为uintptr，加上一个偏移量之后转换为Pointer对象
+
+p = unsafe.Pointer(uintptr(p) + offset)
+
+最常见的使用方式是访问一个结构体的某一个字段或者数组的某一个元素。如下示例所示：
+
+// 类似于 f := unsafe.Pointer(&s.f)
+
+f := unsafe.Pointer(uintptr(unsafe.Pointer(&s)) + unsafe.Offsetof(s.f))
+
+// 类似于 e := unsafe.Pointer(&x[i])
+
+e := unsafe.Pointer(uintptr(unsafe.Pointer(&x[0])) + i*unsafe.Sizeof(x[0]))
+
+通过这种方式进行结构体的偏移是有效的，通过&获取指针同样是有效的。任何情况下，返回的指针都必须指向原始分配的对象上。这一点与C不同，指针超过对象内存分配地址后是无效的。比如：
+
+// 无效：因为end指针已经超出了s对象的申请空间
+
+var s thing
+
+end = unsafe.Pointer(uintptr(unsafe.Pointer(&s)) + unsafe.Sizeof(s))
+
+// 无效：原因同上
+
+b := make([]byte, n)
+
+end = unsafe.Pointer(uintptr(unsafe.Pointer(&b[0])) + uintptr(n))
+
+此外，需要注意的是，这种转换必须在同一个表达式中完成，并且中间只能包含int类型的运算符。比如：
+
+// 无效：不能先存储后转换，必须在同一个表达式中完成该操作。
+
+u := uintptr(p)
+
+p = unsafe.Pointer(u + offset)
+
+场景4：调用syscall.Syscall函数的时候从Pointer转换为uintptr
+
+在syscall包中，包含这些uintptr参数的系统调用函数，在传入操作系统后有可能会将这些参数重新转换为指针类型（当然这依赖于系统函数的具体实现）。
+
+也就是说有一些系统函数可以将传入的uintptr类型隐试的转换为指针对象并使用。
+
+限制：这种Pointer类型向uintptr的转换必须要和syscall调用函数出现在同一条语句中。如下面实例：
+
+syscall.Syscall(SYS_READ, uintptr(fd), uintptr(unsafe.Pointer(p)), uintptr(n))
+
+这是为了避免调用时，指针指向的对象已经被释放了。如下示例就是无效的，存在对象被释放的风险。
+
+u := uintptr(unsafe.Pointer(p))
+
+syscall.Syscall(SYS_READ, uintptr(fd), u, uintptr(n))
+
+场景5：将reflect.Value.Pointer或者reflect.Value.UnsafeAddr的结果从uintptr转换为Pointer类型
+
+在reflect包中的Value.pointer和undafeaddr两个函数返回的都是uintptr来代替Pointer对象，以防止调用者在没有import unsafe包的情况下将该结果转换为任意类型。但是这就意味着这个结果必须在返回之前立刻转换为指针，否则该对象有被释放的风险。如下：
+
+p := (*int)(unsafe.Pointer(reflect.ValueOf(new(int)).Pointer()))
+
+// 下面这个示例是无效的，申请的对象有被GC回收的风险
+
+u := reflect.ValueOf(new(int)).Pointer()
+
+p := (*int)(unsafe.Pointer(u))
+
+场景6：将一个reflect.SliceHeader 或 reflect.StringHeader的Data字段转换为Pointer（存疑，还没有理解）
+
+和前面的例子一样，反射类型将结构体中的Data字段声明为uintptr，以防止在没有import unsafe之前就将该值转换为任意类型。但是这就意味着这两个类型只有在指向一个活动的切片或者字符串值的时候有效。
+
+var s string
+
+hdr := (*reflect.StringHeader)(unsafe.Pointer(&s)) // case 1
+
+hdr.Data = uintptr(unsafe.Pointer(p)) // case 6 (this case)
+
+hdr.Len = n
+
+在这种用法中，hdr.Data实际上是指向字符串头的另外一种方式，而不是uintptr值本身。
+
+通常情况下，reflect.SliceHeader and reflect.StringHeader这两个对象只有在下面这个情况下被使用，作为*reflect.SliceHeader and *reflect.StringHeader指针，指向一块切片或者字符串。
+
+程序里面不应该声明这些对象，如下图：
+
+//无效：直接声明，不会将Data信息保存为引用
+
+var hdr reflect.StringHeader
+
+hdr.Data = uintptr(unsafe.Pointer(p))
+
+hdr.Len = n
+
+s := *(*string)(unsafe.Pointer(&hdr)) // p 有可能已经被回收
+
+/*
+
+Sizeof返回类型v本身数据所占用的字节数。返回值是“顶层”的数据占有的字节数。例如，若v是一个切片，它会返回该切片描述符的大小，而非该切片底层引用的内存的大小。
+
+*/
+
+func Sizeof（x ArbitraryType）uintptr
+
+/*
+
+Offsetof返回类型v所代表的结构体字段在结构体中的偏移量，它必须为结构体类型的字段的形式。换句话说，它返回该结构起始处与该字段起始处之间的字节数。
+
+*/
+
+func Offsetof(x ArbitraryType) uintptr
+
+/*
+
+Alignof返回类型v的对齐方式（即类型v在内存中占用的字节数）；若是结构体类型的字段的形式，它会返回字段f在该结构体中的对齐方式。
+
+*/
+
+func Alignof(x ArbitraryType) uintptr
+
+
+
+Pointer与uintptr
+unsafe.Pointer在Golang中是用于各种类型转化的桥梁，Pointer代表了一个指向任意类型的指针。
+
+uintptr是Golang的内置类型，是能存储指针的整型，uintptr的底层类型是int，它和unsafe.Pointer可相互转换。
+
+Pointer与uintptr的区别在于：
+
+unsafe.Pointer只是一个指针的类型，但是不能像C中的指针那样作计算，而只能用于转化不同类型的指针；如果unsafe.Pointer变量仍然有效，则由unsafe.Pointer变量表示的地址处的数据不会被GC回收；
+uintptr是可以用于指针运算的，但是无法持有对象，GC并不把uintptr当做指针，所以uintptr类型的目标会被回收。
+在Golang中出于安全的原因，不允许两个不同指针类型的值去直接转换；也不允许指针类型和uintptr的值去直接转换。但是借助unsafe.Pointer，我们
+
+任何类型的指针值都可以转换为unsafe.Pointer；
+unsafe.Pointer可以转换为任何类型的指针值；
+uintptr可以转换为unsafe.Pointer；
+unsafe.Pointer可以转换为uintptr。
+例子
+通过unsafe.Pointer来转化类型
+在此之前提示一下这里我们说的类型的转化，是转化前后变量为同一变量，而不是这样为两个变量：
+
+func main() {
+    var a int64 = 3
+    var b float64 = float64(a)
+    fmt.Println(&a) // 0xc42000e248
+    fmt.Println(&b) // 0xc42000e250
+}   
+如果我们要来做一个强制的转化的话，a = float64(a),Golang会报错：cannot use float64(a) (type float64) as type int64 in assignment。
+
+使用unsafe.Pointer来将T1转化为T2，一个大致的语法为*(*T2)(unsafe.Pointer(&t1))
+
+func main() {
+    var n int64 = 3
+    var pn = &n // n的指针
+    var pf = (*float64)(unsafe.Pointer(pn)) // 通过Pointer来将n的类型转为float
+    fmt.Println(*pf) // 2.5e-323
+    *pf = 3.5
+    fmt.Println(n) // 4615063718147915776
+
+    fmt.Println(pf) // 0xc42007a050
+    fmt.Println(pn) // 0xc42007a050
+}
+这个例子虽然没有实际的意义，但是绕过了Golang类型系统和内存安全，将一个变量的类型作了转化。
+
+通过uintptr来计算偏移量
+我们知道在Golang中指针是不能用来计算的，但是借助uintptr我们可以作计算：
+
+func main() {
+    a := [4]int{0, 1, 2, 3}
+    p1 := unsafe.Pointer(&a[1]) // index为1的元素
+    p3 := unsafe.Pointer(uintptr(p1) + 2 * unsafe.Sizeof(a[0])) // 拿到index为3的指针
+    *(*int)(p3) = 4 // 重新赋值
+    fmt.Println(a) // a = [0 1 2 4]
+}
+同样的对于一个结构体我们也可以通过增减偏移量来定位不同的成员变量，其依赖的注意思想是：结构体的成员在内存中的分配是一段连续的内存，结构体中第一个成员的地址就是这个结构体的地址：
+
+type Person struct {
+    name   string
+    age    int
+}
+
+func main() {
+    a := Person{"Jasper", 27}
+    pa := unsafe.Pointer(&a)
+    aname := (*string)(unsafe.Pointer(uintptr(pa) + unsafe.Offsetof(a.name))) // pname := (*string)(unsafe.Pointer(uintptr(pa))) 这样也是可以的
+    aage := (*int)(unsafe.Pointer(uintptr(pa) + unsafe.Offsetof(a.age)))
+    *aname = "Jasper2"
+    *aage = 28
+    fmt.Println(a) // {Jasper2 28}
+}   
+应用
+上面给的例子都是一些概念上的，没有太多的实际意义，那么在实际的应用中，我们有有哪些地方是可以或者必须借助Pointer与uintptr来实现的呢，下面我们来看一些例子。
+
+string与[]byte相互转换
+我们在写程序的时候会经常遇到string与[]byte相互转换的情况，这种转化其实代价很高，因为string与[]byte的内存空间不共享，所以每次转换都伴随着内存的分配与底层字节的拷贝。而我们使用unsafe就可以避开这些，从而提升性能。
+
+func string2byte(s string) []byte {
+    sh := (*reflect.StringHeader)(unsafe.Pointer(&s))
+    bh := reflect.SliceHeader{
+        Data: sh.Data,
+        Len:  sh.Len,
+        Cap:  sh.Len,
+    }
+    return *(*[]byte)(unsafe.Pointer(&bh))
+}
+
+func byte2string(b []byte) string{
+    bh := (*reflect.SliceHeader)(unsafe.Pointer(&b))
+    sh := reflect.StringHeader{
+        Data: bh.Data,
+        Len:  bh.Len,
+    }
+    return *(*string)(unsafe.Pointer(&sh))
+}
+这样的转化过程依赖于二者的数据结构：
+
+struct string{
+    uint8 *str;
+    int len;
+  }
+
+struct []uint8{
+    uint8 *array;
+    int len;
+    int cap;
+  }  
+注意，这样虽然可以实现，但强烈推荐不要使用这种方法来转换类型，因为这样会导致修改转化过后的值会影响之前的变量。
+
+修改私有成员变量
+在Golang中对于不在同一个package里面的对象的私有变量(小写的)是不能直接修改的，但是使用unsafe可以做到：
+
+package p
+
+import (
+    "fmt"
+)
+
+type V struct {
+    i int32
+    j int64
+}
+
+func (this V) PrintI() {
+    fmt.Printf("i=%d\n", this.i)
+}
+
+func (this V) PrintJ() {
+    fmt.Printf("j=%d\n", this.j)
+}
+我们在mian里面实现来直接修改i,j的值：
+
+package main
+
+import (
+    "p"
+    "unsafe"
+)
+
+func main() {
+    var v *p.V = new(p.V)
+    var i *int32 = (*int32)(unsafe.Pointer(v))
+    *i = int32(1)
+    var j *int64 = (*int64)(unsafe.Pointer(uintptr(unsafe.Pointer(v)) +unsafe.Sizeof(int32(0))))
+    *j = int64(2)
+    v.PrintI()
+    v.PrintJ()
+}
+其实在上面用uintptr计算偏移量介绍的那样，这样可以达到修改私有变量的目的。虽然达到了目的，但是在开发中其实并不建议这么干。
+
+在反射中使用
+reflect包中Value类型的方法中名称为Pointer和UnsafeAddr的方法的返回值类型是uintptr而不是unsafe.Pointer,目的是为了使调用者可以将结果转为任意类型而不用导入unsafe包。然而，这意味着调用结果必须马上再调用完成后转为Pointer,并且是在同一个表达式中完成；如下：
+
+p := (*int)(unsafe.Pointer(reflect.ValueOf(new(int)).Pointer()))
+
+
+The unsafe Package in Golang
+Golang的unsafe包是一个很特殊的包。 为什么这样说呢？ 本文将详细解释。
+
+来自go语言官方文档的警告
+unsafe包的文档是这么说的：
+
+导入unsafe的软件包可能不可移植，并且不受Go 1兼容性指南的保护。
+Go 1 兼容性指南这么说：
+
+导入unsafe软件包可能取决于Go实现的内部属性。 我们保留对可能导致程序崩溃的实现进行更改的权利。
+当然包名称暗示unsafe包是不安全的。 但这个包有多危险呢？ 让我们先看看unsafe包的作用。
+
+Unsafe包的作用
+直到现在（Go1.7），unsafe包含以下资源：
+
+三个函数：
+
+func Alignof（variable ArbitraryType）uintptr
+func Offsetof（selector ArbitraryType）uintptr
+func Sizeof（variable ArbitraryType）uintptr
+和一种类型：
+
+类型Pointer * ArbitraryType
+这里，ArbitraryType不是一个真正的类型，它只是一个占位符。
+
+与Golang中的大多数函数不同，上述三个函数的调用将始终在编译时求值，而不是运行时。 这意味着它们的返回结果可以分配给常量。
+
+（BTW，unsafe包中的函数中非唯一调用将在编译时求值。当传递给len和cap的参数是一个数组值时，内置函数和cap函数的调用也可以在编译时被求值。）
+
+除了这三个函数和一个类型外，指针在unsafe包也为编译器服务。
+
+出于安全原因，Golang不允许以下之间的直接转换：
+
+两个不同指针类型的值，例如 int64和 float64。
+
+指针类型和uintptr的值。
+但是借助unsafe.Pointer，我们可以打破Go类型和内存安全性，并使上面的转换成为可能。这怎么可能发生？让我们阅读unsafe包文档中列出的规则：
+
+任何类型的指针值都可以转换为unsafe.Pointer。
+unsafe.Pointer可以转换为任何类型的指针值。
+uintptr可以转换为unsafe.Pointer。
+unsafe.Pointer可以转换为uintptr。
+这些规则与Go规范一致：
+
+底层类型uintptr的任何指针或值都可以转换为指针类型，反之亦然。
+规则表明unsafe.Pointer类似于c语言中的void 。当然，void 在C语言里是危险的！
+
+在上述规则下，对于两种不同类型T1和T2，可以使 T1值与unsafe.Pointer值一致，然后将unsafe.Pointer值转换为 T2值（或uintptr值）。通过这种方式可以绕过Go类型系统和内存安全性。当然，滥用这种方式是很危险的。
+
+举个例子：
+
+package main
+
+import (
+    "fmt"
+    "unsafe"
+)
+func main() {
+    var n int64 = 5
+    var pn = &n
+    var pf = (*float64)(unsafe.Pointer(pn))
+    // now, pn and pf are pointing at the same memory address
+    fmt.Println(*pf) // 2.5e-323
+    *pf = 3.14159
+    fmt.Println(n) // 4614256650576692846
+}
+在这个例子中的转换可能是无意义的，但它是安全和合法的（为什么它是安全的？）。
+
+因此，资源在unsafe包中的作用是为Go编译器服务，unsafe.Pointer类型的作用是绕过Go类型系统和内存安全。
+
+再来一点 unsafe.Pointer 和 uintptr
+这里有一些关于unsafe.Pointer和uintptr的事实：
+
+uintptr是一个整数类型。
+即使uintptr变量仍然有效，由uintptr变量表示的地址处的数据也可能被GC回收。
+unsafe.Pointer是一个指针类型。
+但是unsafe.Pointer值不能被取消引用。
+如果unsafe.Pointer变量仍然有效，则由unsafe.Pointer变量表示的地址处的数据不会被GC回收。
+unsafe.Pointer是一个通用的指针类型，就像* int等。
+由于uintptr是一个整数类型，uintptr值可以进行算术运算。 所以通过使用uintptr和unsafe.Pointer，我们可以绕过限制，* T值不能在Golang中计算偏移量：
+
+package main
+
+import (
+    "fmt"
+    "unsafe"
+)
+
+func main() {
+    a := [4]int{0, 1, 2, 3}
+    p1 := unsafe.Pointer(&a[1])
+    p3 := unsafe.Pointer(uintptr(p1) + 2 * unsafe.Sizeof(a[0]))
+    *(*int)(p3) = 6
+    fmt.Println("a =", a) // a = [0 1 2 6]
+
+    // ...
+
+    type Person struct {
+        name   string
+        age    int
+        gender bool
+    }
+
+    who := Person{"John", 30, true}
+    pp := unsafe.Pointer(&who)
+    pname := (*string)(unsafe.Pointer(uintptr(pp) + unsafe.Offsetof(who.name)))
+    page := (*int)(unsafe.Pointer(uintptr(pp) + unsafe.Offsetof(who.age)))
+    pgender := (*bool)(unsafe.Pointer(uintptr(pp) + unsafe.Offsetof(who.gender)))
+    *pname = "Alice"
+    *page = 28
+    *pgender = false
+    fmt.Println(who) // {Alice 28 false}
+}
+unsafe包有多危险
+关于unsafe包，Ian，Go团队的核心成员之一，已经确认：
+
+在unsafe包中的函数的签名将不会在以后的Go版本中更改，
+
+并且unsafe.Pointer类型将在以后的Go版本中始终存在。
+所以，unsafe包中的三个函数看起来不危险。 go team leader甚至想把它们放在别的地方。 unsafe包中这几个函数唯一不安全的是它们调用结果可能在后来的版本中返回不同的值。 很难说这种不安全是一种危险。
+
+看起来所有的unsafe包的危险都与使用unsafe.Pointer有关。 unsafe包docs列出了一些使用unsafe.Pointer合法或非法的情况。 这里只列出部分非法使用案例：
+
+package main
+
+import (
+    "fmt"
+    "unsafe"
+)
+
+// case A: conversions between unsafe.Pointer and uintptr 
+//         don't appear in the same expression
+func illegalUseA() {
+    fmt.Println("===================== illegalUseA")
+
+    pa := new([4]int)
+
+    // split the legal use
+    // p1 := unsafe.Pointer(uintptr(unsafe.Pointer(pa)) + unsafe.Sizeof(pa[0]))
+    // into two expressions (illegal use):
+    ptr := uintptr(unsafe.Pointer(pa))
+    p1 := unsafe.Pointer(ptr + unsafe.Sizeof(pa[0]))
+    // "go vet" will make a warning for the above line:
+    // possible misuse of unsafe.Pointer
+
+    // the unsafe package docs, https://golang.org/pkg/unsafe/#Pointer,
+    // thinks above splitting is illegal.
+    // but the current Go compiler and runtime (1.7.3) can't detect
+    // this illegal use.
+    // however, to make your program run well for later Go versions,
+    // it is best to comply with the unsafe package docs.
+
+    *(*int)(p1) = 123
+    fmt.Println("*(*int)(p1)  :", *(*int)(p1)) //
+}    
+
+// case B: pointers are pointing at unknown addresses
+func illegalUseB() {
+    fmt.Println("===================== illegalUseB")
+
+    a := [4]int{0, 1, 2, 3}
+    p := unsafe.Pointer(&a)
+    p = unsafe.Pointer(uintptr(p) + uintptr(len(a)) * unsafe.Sizeof(a[0]))
+    // now p is pointing at the end of the memory occupied by value a.
+    // up to now, although p is invalid, it is no problem.
+    // but it is illegal if we modify the value pointed by p
+    *(*int)(p) = 123
+    fmt.Println("*(*int)(p)  :", *(*int)(p)) // 123 or not 123
+    // the current Go compiler/runtime (1.7.3) and "go vet" 
+    // will not detect the illegal use here.
+
+    // however, the current Go runtime (1.7.3) will 
+    // detect the illegal use and panic for the below code.
+    p = unsafe.Pointer(&a)
+    for i := 0; i <= len(a); i++ {
+        *(*int)(p) = 123 // Go runtime (1.7.3) never panic here in the tests
+
+        fmt.Println(i, ":", *(*int)(p))
+        // panic at the above line for the last iteration, when i==4.
+        // runtime error: invalid memory address or nil pointer dereference
+
+        p = unsafe.Pointer(uintptr(p) + unsafe.Sizeof(a[0]))
+    }
+}
+
+func main() {
+    illegalUseA()
+    illegalUseB()
+}
+编译器很难检测Go程序中非法的unsafe.Pointer使用。 运行“go vet”可以帮助找到一些潜在的错误，但不是所有的都能找到。 同样是Go运行时，也不能检测所有的非法使用。 非法unsafe.Pointer使用可能会使程序崩溃或表现得怪异（有时是正常的，有时是异常的）。 这就是为什么使用不安全的包是危险的。
+
+转换T1 为 T2
+对于将 T1转换为unsafe.Pointer，然后转换为 T2，unsafe包docs说：
+
+如果T2比T1大，并且两者共享等效内存布局，则该转换允许将一种类型的数据重新解释为另一类型的数据。
+这种“等效内存布局”的定义是有一些模糊的。 看起来go团队故意如此。 这使得使用unsafe包更危险。
+
+由于Go团队不愿意在这里做出准确的定义，本文也不尝试这样做。 这里，列出了已确认的合法用例的一小部分，
+
+合法用例1：在[]T和[]MyT之间转换
+在这个例子里，我们用int作为T：
+
+type MyInt int
+在Golang中，[] int和[] MyInt是两种不同的类型，它们的底层类型是自身。 因此，[] int的值不能转换为[] MyInt，反之亦然。 但是在unsafe.Pointer的帮助下，转换是可能的：
+
+package main
+
+import (
+    "fmt"
+    "unsafe"
+)
+
+func main() {
+    type MyInt int
+
+    a := []MyInt{0, 1, 2}
+    // b := ([]int)(a) // error: cannot convert a (type []MyInt) to type []int
+    b := *(*[]int)(unsafe.Pointer(&a))
+
+    b[0]= 3
+
+    fmt.Println("a =", a) // a = [3 1 2]
+    fmt.Println("b =", b) // b = [3 1 2]
+
+    a[2] = 9
+
+    fmt.Println("a =", a) // a = [3 1 9]
+    fmt.Println("b =", b) // b = [3 1 9]
+}
+合法用例2: 调用sync/atomic包中指针相关的函数
+sync / atomic包中的以下函数的大多数参数和结果类型都是unsafe.Pointer或*unsafe.Pointer：
+
+func CompareAndSwapPointer（addr * unsafe.Pointer，old，new unsafe.Pointer）（swapped bool）
+func LoadPointer（addr * unsafe.Pointer）（val unsafe.Pointer）
+func StorePointer（addr * unsafe.Pointer，val unsafe.Pointer）
+func SwapPointer（addr * unsafe.Pointer，new unsafe.Pointer）（old unsafe.Pointer）
+要使用这些功能，必须导入unsafe包。 注意： unsafe.Pointer是一般类型，因此 unsafe.Pointer的值可以转换为unsafe.Pointer，反之亦然。
+
+package main
+
+import (
+    "fmt"
+    "log"
+    "time"
+    "unsafe"
+    "sync/atomic"
+    "sync"
+    "math/rand"
+)
+
+var data *string
+
+// get data atomically
+func Data() string {
+    p := (*string)(atomic.LoadPointer(
+            (*unsafe.Pointer)(unsafe.Pointer(&data)),
+        ))
+    if p == nil {
+        return ""
+    } else {
+        return *p
+    }
+}
+
+// set data atomically
+func SetData(d string) {
+    atomic.StorePointer(
+            (*unsafe.Pointer)(unsafe.Pointer(&data)), 
+            unsafe.Pointer(&d),
+        )
+}
+
+func main() {
+    var wg sync.WaitGroup
+    wg.Add(200)
+
+    for range [100]struct{}{} {
+        go func() {
+            time.Sleep(time.Second * time.Duration(rand.Intn(1000)) / 1000)
+
+            log.Println(Data())
+            wg.Done()
+        }()
+    }
+
+    for i := range [100]struct{}{} {
+        go func(i int) {
+            time.Sleep(time.Second * time.Duration(rand.Intn(1000)) / 1000)
+            s := fmt.Sprint("#", i)
+            log.Println("====", s)
+
+            SetData(s)
+            wg.Done()
+        }(i)
+    }
+
+    wg.Wait()
+
+    fmt.Println("final data = ", *data)
+}
+结论
+unsafe包用于Go编译器，而不是Go运行时。
+使用unsafe作为程序包名称只是让你在使用此包是更加小心。
+使用unsafe.Pointer并不总是一个坏主意，有时我们必须使用它。
+Golang的类型系统是为了安全和效率而设计的。 但是在Go类型系统中，安全性比效率更重要。 通常Go是高效的，但有时安全真的会导致Go程序效率低下。 unsafe包用于有经验的程序员通过安全地绕过Go类型系统的安全性来消除这些低效。
+unsafe包可能被滥用并且是危险的。
