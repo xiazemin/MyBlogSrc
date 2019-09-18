@@ -1,0 +1,128 @@
+---
+title: c++filt
+layout: post
+category: linux
+author: 夏泽民
+---
+  我们知道， 在C++中， 是允许函数重载的， 也就引出了编译器的name mangling机制， 今天我们要介绍的c++filt命令便与此有关。
+
+      对于从事linux开发的人来说， 不可不知道c++filt命令的使用。
+      https://linux.die.net/man/1/c++filt
+      http://web.mit.edu/gnu/doc/html/binutils_10.html
+      https://rcweb.dartmouth.edu/doc/ibmcxx/en_US/doc/toolkits/ref/rkcxxflt.htm
+      http://ccrma.stanford.edu/planetccrma/man/man1/avr-c++filt.1.html
+      https://doc.ecoscentric.com/gnutools/doc/binutils/c_002b_002bfilt.html
+<!-- more -->
+ 如果要调用基础模块库， 就要包含对应的头文件， 并在makefile中指定头文件路径和对应的库。
+
+       之前我们说过了：
+
+      1. 如果没有指定对应的头文件， 则编译会报错， 提示找不到头文件。 
+
+      2. 如果指定了库路径， 但实际没有库， 则会报找不错库文件的错误。 
+
+      3. 如果没有指定库路径(因各种原因啦)， 则编译不会报错， 运行的时候才会报错， 提示dlopen失败。
+
+
+
+      针对3中的问题， 我们之前也说过， 完全不用等到运行阶段才去发现问题， 我们可以在编译出so库后， 用ldd -r命令来找出undefined的函数名(当然也可以用nm命令)， 比如用ldd -r test.so查出缺少_ZNK4Json5ValueixEPKc(这就是name mangling后的函数名), 那怎么知道这个name mangling后的名字的原函数名称呢?  我们可以大致猜测， 但这并不靠谱， 怎么办呢？c++file命令就是专门干这个的， 如下：
+
+[taoge@localhost test]$ c++filt _ZNK4Json5ValueixEPKc
+Json::Value::operator[](char const*) const
+      这样， 就更清楚是哪个函数了。 然后就可以在工程中搜索了， 然后就可以找到对应的库了， 然后就可以修改makefile来指定库了， 酱紫就解决问题了
+
+gdb查看寄存器 i r   查看有程序指针pc或eip 寄存器指向， 函数后面的+num（行数）
+然后在gdb中用反汇编指令disassemble,
+在指定行下看编译信息 _ZN6apsara5pangu15ScopedChunkInfoINS0_12RafChunkInfoEED1Ev
+
+c++函数在linux系统下编译之后会变成类似下面的样子：
+
+_ZN6apsara5pangu15ScopedChunkInfoINS0_12RafChunkInfoEED1Ev
+
+在linux命令行使用c++filter:
+c++filt _ZN6apsara5pangu15ScopedChunkInfoINS0_12RafChunkInfoEED1Ev
+Json::Value::operator[](char const*) const
+
+这样就得到函数的原始名称
+
+
+
+C++的name mangling
+C++是允许函数重载的，也就引出了编译器的name mangling（名字修饰）机制,其目的是给同名的重载函数不同的签名。
+
+例如，对于如下代码：
+
+int test(int a,int b)
+{
+  return a+b;
+}
+
+int test(int a){
+ return a;
+}
+使用g++编译成so后，使用nm -a (ldd -r命令也可以)查看so中的符号：
+
+使用g++编译成so后，使用nm -a (ldd -r命令也可以)查看so中的符号：
+
+发现两个test函数名字变为Z4testi和Z4testii, 这就是name mangling机制产生的。其中_Z是一个前缀，4表示函数名长度（test长度为4），i表示参数类型。
+
+C++的name mangling遵循一定的规则，因此是可逆的，即通过符号还原出原来的函数定义。这个工具就叫c++filt。
+
+c++filt
+对于上述例子中的符号我们使用c++filt
+
+upload successful
+
+可以看到还原出来我们定义的函数。
+
+当然，工程中的函数并没有我们给出的例子中那么简单，例如Android中有那么多的类和命名空间，其编译生成的符号也是很复杂的，例如
+
+$c++filt __ZN3art7DexFile10OpenMemoryEPKhjRKNSt3__112basic_stringIcNS3_11char_traitsIcEENS3_9allocatorIcEEEEjPNS_6MemMapEPKNS_10OatDexFileEPS9_
+输出：
+art::DexFile::OpenMemory(unsigned char const*, unsigned int, std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char> > const&, unsigned int, art::MemMap*, art::OatDexFile const*, std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char> >*)
+总结
+c++filt在hook、逆向等场景中非常有用，可以帮助我们很快的还原符号，定位代码。
+
+
+在用gdb debug C/C++ 程式时，常常会看到一些mangle 过的函式名称，
+
+理论上gdb 应该会自动还原名称，但还是常常会看到没有demangle 的函式…
+
+ 
+
+举例来说，用disas 反组译时，看到程式呼叫一个_ZN7Scanner10ScanPacketEPhji 的函式：
+
+( gdb ) disas 0x00002b757251dfc1
+Dump of assembler code for function ScanPcap:
+0x00002b757251dfa0 <ScanPcap+0>: sub     $0x8 ,%rsp
+0x00002b757251dfa4 <ScanPcap+4>: mov %r9, ( %rsp )
+0x00002b757251dfa8 <ScanPcap+8>: mov %r8,%r9
+0x00002b757251dfab <ScanPcap+11>: mov %rcx,%r8
+0x00002b757251dfae <ScanPcap+14>: mov %edx,%ecx
+0x00002b757251dfb0 <ScanPcap+16>: mov %esi,%edx
+0x00002b757251dfb2 <ScanPcap+18>: mov %rdi,%rsi
+0x00002b757251dfb5 <ScanPcap+21>: mov 0x2063cc ( %rip ) ,%rdi         # 0x2b7572724388
+0x00002b757251dfbc <ScanPcap+28>: callq 0x2b757251dbb0 <_ZN7Scanner10ScanPacketEPhji@plt>
+0x00002b757251dfc1 <ScanPcap+33>: add     $0x8 ,%rsp
+0x00002b757251dfc5 <ScanPcap+37>: retq
+ 
+
+这个是什么函式呢？藉由  c++filt  这个工具的帮助，我们可以还原原始的名称～
+
+只要输入c++filt <mangled symbol name> 就行了(注意不要把@plt 也加上去)，
+
+可以看到原始的函式名称是 Scanner::ScanPacket()，另外也可以看到函式参数的型态：
+
+testuser@localhost ~ $ c++filt _ZN7Scanner10ScanPacketEPhji
+Scanner::ScanPacket ( unsigned char*, unsigned int, int )
+ 
+
+c++filt 不只对我们自己写的函式有用，C++ STL 中的函式也一样有效：
+
+testuser@localhost ~ $ c++filt _ZNSt3mapImSt6vectorI4InfoSaIS1_EESt4lessImESaISt4pairIKmS3_EEEixERS7_
+std::map<unsigned long, std::vector<Info, std::allocator<Info> >, std::less<unsigned long>, std::allocator<std::pair<unsigned long const, std:: vector<Info, std::allocator<Info> > > > >::operator []( unsigned long const& )
+ 
+
+不过c++filt 最好是在编译出C/C++ 程式的同样平台上执行，确保mangle 的方式是一样的，
+
+像我在Mac 上虽然也可以执行c++filt，但输入Linux 上的unmangled 函式名称几乎都无效喔～
