@@ -1,0 +1,153 @@
+---
+title: evalsha
+layout: post
+category: storage
+author: 夏泽民
+---
+在Redis中执行Lua脚本有两种方法：eval和evalsha。
+http://redisdoc.com/script/eval.html
+https://redisbook.readthedocs.io/en/latest/feature/scripting.html
+<!-- more -->
+1.1 eval#
+Copy
+eval 脚本内容 key个数 key列表 参数列表
+下面例子使用了key列表和参数列表来为Lua脚本提供更多的灵活性：
+
+Copy
+127.0.0.1:6379> eval 'return "hello " .. KEYS[1] .. ARGV[1]' 1 redis world
+"hello redisworld"
+此时KEYS[1]="redis"，ARGV[1]="world"，所以最终的返回结果是"hello redisworld"。
+
+如果Lua脚本较长，还可以使用redis-cli--eval直接执行文件。
+
+Copy
+$ redis-cli --eval hello.lua mykey , myargv
+注意，这种方式不需要指定key的数量，用 , 号划分key和arg，注意逗号左右的空格。
+
+eval命令和--eval参数本质是一样的，客户端如果想执行Lua脚本，首先在客户端编写好Lua脚本代码，然后把脚本作为字符串发送给服务端，服务端会将执行结果返回给客户端。
+
+1.2 evalsha#
+除了使用eval，Redis还提供了evalsha命令来执行Lua脚本。
+
+首先要将Lua脚本加载到Redis服务端，得到该脚本的SHA1校验和，evalsha命令使用SHA1作为参数可以直接执行对应Lua脚本，避免每次发送Lua脚本的开销。这样客户端就不需要每次执行脚本内容，而脚本也会常驻在服务端，脚本功能得到了复用。
+
+加载脚本
+script load命令可以将脚本内容加载到Redis内存中，例如下面将lua_get.lua加载到Redis中，得到SHA1为："7413dc2440db1fea7c0a0bde841fa68eefaf149c"
+
+Copy
+$ redis-cli script load "$(cat lua_get.lua)"
+"7413dc2440db1fea7c0a0bde841fa68eefaf149c"
+执行脚本
+evalsha的使用方法如下，参数使用SHA1值，执行逻辑和eval一致。
+
+Copy
+evalsha 脚本SHA1值 key个数 key列表 参数列表
+所以只需要执行如下操作，就可以调用lua_get.lua脚本：
+
+Copy
+127.0.0.1:6379> evalsha 7413dc2440db1fea7c0a0bde841fa68eefaf149c 1 redis world
+"hello redisworld"
+2.Lua的RedisAPI#
+Lua可以使用redis.call函数实现对Redis的访问，例如下面代码是Lua使用redis.call调用了Redis的set和get操作：
+
+Copy
+redis.call("set", "hello", "world")
+redis.call("get", "hello")
+放在Redis的执行效果如下：
+
+Copy
+127.0.0.1:6379> eval 'return redis.call("get", KEYS[1])' 1 hello
+"world"
+除此之外Lua还可以使用redis.pcall函数实现对Redis的调用，redis.call和redis.pcall的不同在于，如果redis.call执行失败，那么脚本执行结束会直接返回错误，而redis.pcall会忽略错误继续执行脚本，所以在实际开发中要根据具体的应用场景进行函数的选择。
+
+获取KEY可以通过 KEYS[1]，获取 Value 可以通过 ARGV[1] 。
+
+3.开发提示#
+Lua可以使用redis.log函数将Lua脚本的日志输出到Redis的日志文件中，但是一定要控制日志级别。
+Redis3.2提供了Lua Script Debugger功能用来调试复杂的Lua脚本，具体可以参考：http://redis.io/topics/ldb。
+
+Copy
+redis.log(redis.LOG_DEBUG,key1)
+redis.LOG_DEBUG
+
+redis.LOG_VERBOSE
+
+redis.LOG_NOTICE
+
+redis.LOG_WARNING
+
+
+在 Lua 脚本中，可以使用两个不同函数来执行 Redis 命令，它们分别是：
+
+redis.call()
+redis.pcall()
+这两个函数的唯一区别在于它们使用不同的方式处理执行命令所产生的错误
+当 redis.call() 在执行命令的过程中发生错误时，脚本会停止执行，并返回一个脚本错误，错误的输出信息会说明错误造成的原因：
+
+edis> lpush foo a
+(integer) 1
+
+redis> eval "return redis.call('get', 'foo')" 0
+(error) ERR Error running script (call to f_282297a0228f48cd3fc6a55de6316f31422f5d17): ERR Operation against a key holding the wrong kind of value
+和 redis.call() 不同， redis.pcall() 出错时并不引发(raise)错误，而是返回一个带 err 域的 Lua 表(table)，用于表示错误：
+
+redis 127.0.0.1:6379> EVAL "return redis.pcall('get', 'foo')" 0
+(error) ERR Operation against a key holding the wrong kind of value
+
+redis.call() 和 redis.pcall() 两个函数的参数可以是任何格式良好(well formed)的 Redis 命令：
+
+> eval "return redis.call('set','foo','bar')" 0
+OK
+需要注意的是，上面这段脚本的确实现了将键 foo 的值设为 bar 的目的，但是，它违反了 EVAL 命令的语义，因为脚本里使用的所有键都应该由 KEYS 数组来传递，就像这样：
+
+> eval "return redis.call('set',KEYS[1],'bar')" 1 foo
+OK
+
+数据类型之间的转换遵循这样一个设计原则：如果将一个 Redis 值转换成 Lua 值，之后再将转换所得的 Lua 值转换回 Redis 值，那么这个转换所得的 Redis 值应该和最初时的 Redis 值一样。
+
+换句话说， Lua 类型和 Redis 类型之间存在着一一对应的转换关系。
+
+以下列出的是详细的转换规则：
+
+从 Redis 转换到 Lua ：
+
+Redis integer reply -> Lua number / Redis 整数转换成 Lua 数字
+Redis bulk reply -> Lua string / Redis bulk 回复转换成 Lua 字符串
+Redis multi bulk reply -> Lua table (may have other Redis data types nested) / Redis 多条 bulk 回复转换成 Lua 表，表内可能有其他别的 Redis 数据类型
+Redis status reply -> Lua table with a single ok field containing the status / Redis 状态回复转换成 Lua 表，表内的 ok 域包含了状态信息
+Redis error reply -> Lua table with a single err field containing the error / Redis 错误回复转换成 Lua 表，表内的 err 域包含了错误信息
+Redis Nil bulk reply and Nil multi bulk reply -> Lua false boolean type / Redis 的 Nil 回复和 Nil 多条回复转换成 Lua 的布尔值 false
+从 Lua 转换到 Redis：
+
+Lua number -> Redis integer reply / Lua 数字转换成 Redis 整数
+Lua string -> Redis bulk reply / Lua 字符串转换成 Redis bulk 回复
+Lua table (array) -> Redis multi bulk reply / Lua 表(数组)转换成 Redis 多条 bulk 回复
+Lua table with a single ok field -> Redis status reply / 一个带单个 ok 域的 Lua 表，转换成 Redis 状态回复
+Lua table with a single err field -> Redis error reply / 一个带单个 err 域的 Lua 表，转换成 Redis 错误回复
+Lua boolean false -> Redis Nil bulk reply / Lua 的布尔值 false 转换成 Redis 的 Nil bulk 回复
+从 Lua 转换到 Redis 有一条额外的规则，这条规则没有和它对应的从 Redis 转换到 Lua 的规则：
+
+Lua boolean true -> Redis integer reply with value of 1 / Lua 布尔值 true 转换成 Redis 整数回复中的 1
+
+
+ SHA-1算法是第一代“安全散列算法”的缩写，其本质就是一个Hash算法。SHA系列标准主要用于生成消息摘要（摘要经加密后成为数字签名），曾被认为是MD5算法的后继者。如今SHA家族已经出现了5个算法。Redis使用的是SHA-1，它能将一个最大2^64比特的消息，转换成一串160位的消息摘要，并能保证任何两组不同的消息产生的消息摘要是不同的。虽然SHA1于早年间也传出了破解之道，但作为SHA家族的第一代算法，对我们仍然很具有学习价值和指导意义。        
+
+        SHA-1算法的详细内容可以参考官方的RFC：http://www.ietf.org/rfc/rfc3174.txt
+
+
+php 
+sha1() 函数使用美国 Secure Hash 算法 1。
+
+来自 RFC 3174 的解释 - 美国 Secure Hash 算法 1：SHA-1 产生一个名为报文摘要的 160 位的输出。报文摘要可以被输入到一个可生成或验证报文签名的签名算法。对报文摘要进行签名，而不是对报文进行签名，这样可以提高进程效率，因为报文摘要的大小通常比报文要小很多。数字签名的验证者必须像数字签名的创建者一样，使用相同的散列算法。
+
+提示：如需计算文件的 SHA-1 散列，请使用 sha1_file() 函数。
+
+语法
+sha1(string,raw)
+参数	描述
+string	必需。规定要计算的字符串。
+raw	
+可选。规定十六进制或二进制输出格式：
+
+TRUE - 原始 20 字符二进制格式
+FALSE - 默认。40 字符十六进制数
