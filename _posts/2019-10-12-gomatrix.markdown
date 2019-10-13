@@ -1,0 +1,269 @@
+---
+title: gomatrix
+layout: post
+category: golang
+author: 夏泽民
+---
+Metrics本来是一个Java库, 捕获JVM和应用程序级指标。也就是说可以获得代码级别的数据指标，比如方法调用了多少次之类。
+
+goalng 在github上使用的包是 https://github.com/rcrowley/go-metrics.git
+
+这个库官方采纳的influxdb 方案只提供了TCP连接功能，然而我想要用的是使用UDP进行数据传输，这样对性能损耗较小。
+
+这主要是由于influxdb是使用http作为API接口，采纳的这个包自己实现了一套定时发送http请求的方式去存储数据。
+<!-- more -->
+MetricRegistry
+Metrics中MetricRegistry是中心容器，它是程序中所有度量的容器，所有新的度量工具都要注册到一个MetricRegistry实例中才可以使用，尽量在一个应用中保持让这个MetricRegistry实例保持单例。
+
+示例：
+
+r := metrics.NewRegistry()  // 整个系统全局唯一
+c := metrics.NewCounter() // 注册一个计数器
+r.Register(“counter”, c)    // 这个注册名全局唯一
+度量
+Metrics提供5种基本的度量类型：Gauges, Counters, Histograms, Meters和 Timers
+
+Gauge
+Gauge是最简单的度量类型，只有一个简单的返回值，
+
+他用来记录一些对象或者事物的瞬时值。
+
+类似于程序里的常量，是不变的值。
+
+Counter
+Counter是一个简单的计数器，他可以增加和减少。
+
+类似于程序里的全局变量，可以增加和减少来改变值。
+
+Meter
+Meter是一种只能自增的计数器，通常用来度量一系列事件发生的比率。他提供了平均速率，以及指数平滑平均速率，以及采样后的1分钟，5分钟，15分钟速率。
+
+类似于 QPS, 每一分钟发送多少次
+
+Histrogram
+Histrogram是用来度量流数据中Value的分布情况，Histrogram可以计算最大/小值、平均值，方差，分位数（如中位数，或者95th分位数），如75%,90%,98%,99%的数据在哪个范围内。
+
+类似于柱状图
+
+中位数
+中位数，统计学中的专有名词，代表一个样本、种群或概率分布中的一个数值，其可将数值集合划分为相等的上下两部分。
+
+简单说，就是一排数据从小到大排列后，中间那个数。
+
+例如: 1，3，6，9，11。中间那个数是6，这就是中位数。1，3，6，9，11，13。这是有六个数，中间是两个数了，那么中位数就是6和9
+
+四分位数
+四分位数（Quartile）也称四分位点，是指在统计学中把所有数值由小到大排列并分成四等份，处于三个分割点位置的数值。
+
+首先确定四分位数的位置：
+Q1的位置= (n+1) × 0.25
+Q2的位置= (n+1) × 0.5
+Q3的位置= (n+1) × 0.75
+所以分位数，就是多少比例样本表示的数值是多少。
+
+Timer
+Timer是Histogram跟Meter的一个组合，比如要统计当前请求的速率和处理时间。
+
+Go port of Coda Hale's Metrics library: https://github.com/dropwizard/metrics.
+
+Documentation: http://godoc.org/github.com/rcrowley/go-metrics.
+
+Usage
+Create and update metrics:
+
+c := metrics.NewCounter()
+metrics.Register("foo", c)
+c.Inc(47)
+
+g := metrics.NewGauge()
+metrics.Register("bar", g)
+g.Update(47)
+
+r := NewRegistry()
+g := metrics.NewRegisteredFunctionalGauge("cache-evictions", r, func() int64 { return cache.getEvictionsCount() })
+
+s := metrics.NewExpDecaySample(1028, 0.015) // or metrics.NewUniformSample(1028)
+h := metrics.NewHistogram(s)
+metrics.Register("baz", h)
+h.Update(47)
+
+m := metrics.NewMeter()
+metrics.Register("quux", m)
+m.Mark(47)
+
+t := metrics.NewTimer()
+metrics.Register("bang", t)
+t.Time(func() {})
+t.Update(47)
+Register() is not threadsafe. For threadsafe metric registration use GetOrRegister:
+
+t := metrics.GetOrRegisterTimer("account.create.latency", nil)
+t.Time(func() {})
+t.Update(47)
+NOTE: Be sure to unregister short-lived meters and timers otherwise they will leak memory:
+
+// Will call Stop() on the Meter to allow for garbage collection
+metrics.Unregister("quux")
+// Or similarly for a Timer that embeds a Meter
+metrics.Unregister("bang")
+Periodically log every metric in human-readable form to standard error:
+
+go metrics.Log(metrics.DefaultRegistry, 5 * time.Second, log.New(os.Stderr, "metrics: ", log.Lmicroseconds))
+Periodically log every metric in slightly-more-parseable form to syslog:
+
+w, _ := syslog.Dial("unixgram", "/dev/log", syslog.LOG_INFO, "metrics")
+go metrics.Syslog(metrics.DefaultRegistry, 60e9, w)
+Periodically emit every metric to Graphite using the Graphite client:
+
+import "github.com/cyberdelia/go-metrics-graphite"
+
+addr, _ := net.ResolveTCPAddr("tcp", "127.0.0.1:2003")
+go graphite.Graphite(metrics.DefaultRegistry, 10e9, "metrics", addr)
+Periodically emit every metric into InfluxDB:
+
+NOTE: this has been pulled out of the library due to constant fluctuations in the InfluxDB API. In fact, all client libraries are on their way out. see issues #121 and #124 for progress and details.
+
+import "github.com/vrischmann/go-metrics-influxdb"
+
+go influxdb.InfluxDB(metrics.DefaultRegistry,
+  10e9, 
+  "127.0.0.1:8086", 
+  "database-name", 
+  "username", 
+  "password"
+)
+Periodically upload every metric to Librato using the Librato client:
+
+Note: the client included with this repository under the librato package has been deprecated and moved to the repository linked above.
+
+import "github.com/mihasya/go-metrics-librato"
+
+go librato.Librato(metrics.DefaultRegistry,
+    10e9,                  // interval
+    "example@example.com", // account owner email address
+    "token",               // Librato API token
+    "hostname",            // source
+    []float64{0.95},       // percentiles to send
+    time.Millisecond,      // time unit
+)
+Periodically emit every metric to StatHat:
+
+import "github.com/rcrowley/go-metrics/stathat"
+
+go stathat.Stathat(metrics.DefaultRegistry, 10e9, "example@example.com")
+Maintain all metrics along with expvars at /debug/metrics:
+
+This uses the same mechanism as the official expvar but exposed under /debug/metrics, which shows a json representation of all your usual expvars as well as all your go-metrics.
+
+import "github.com/rcrowley/go-metrics/exp"
+
+exp.Exp(metrics.DefaultRegistry)
+Installation
+go get github.com/rcrowley/go-metrics
+StatHat support additionally requires their Go client:
+
+go get github.com/stathat/go
+Publishing Metrics
+Clients are available for the following destinations:
+
+AppOptics - https://github.com/ysamlan/go-metrics-appoptics
+Librato - https://github.com/mihasya/go-metrics-librato
+Graphite - https://github.com/cyberdelia/go-metrics-graphite
+InfluxDB - https://github.com/vrischmann/go-metrics-influxdb
+Ganglia - https://github.com/appscode/metlia
+Prometheus - https://github.com/deathowl/go-metrics-prometheus
+DataDog - https://github.com/syntaqx/go-metrics-datadog
+SignalFX - https://github.com/pascallouisperez/go-metrics-signalfx
+Honeycomb - https://github.com/getspine/go-metrics-honeycomb
+Wavefront - https://github.com/wavefrontHQ/go-metrics-wavefront
+Open-Falcon - https://github.com/g4zhuj/go-metrics-falcon
+AWS CloudWatch - https://github.com/savaki/cloudmetrics
+
+
+package main
+ 
+import (
+	"github.com/rcrowley/go-metrics"
+	"time"
+	"os"
+	"log"
+)
+ 
+func main(){
+ 
+	s := metrics.NewExpDecaySample(1024, 0.015) // or metrics.NewUniformSample(1028)
+ 
+	h := metrics.NewHistogram(s)
+ 
+	metrics.Register("baz", h)
+	h.Update(1)
+ 
+ 
+	go metrics.Log(metrics.DefaultRegistry,
+		1 * time.Second,
+		log.New(os.Stdout, "metrics: ", log.Lmicroseconds))
+ 
+ 
+	var j int64
+	j = 1
+	for true {
+		time.Sleep(time.Second * 1)
+		j++
+		h.Update(j)
+	}
+}
+ 
+
+metrics.NewExpDecaySample这函数的两个参数的含义： 第一是内部存储数据的个数
+
+第二个是指数后乘以的数值 具体位置
+
+输出到influxdb
+
+influxdb的安装和基本使用这里不做介绍 
+
+使用下面工作
+https://github.com/vrischmann/go-metrics-influxdb
+
+package main
+ 
+import (
+	"github.com/rcrowley/go-metrics"
+	"time"
+	"github.com/vrischmann/go-metrics-influxdb"
+)
+ 
+func main(){
+	m := metrics.NewMeter()
+	metrics.Register("quux", m)
+	m.Mark(1)
+ 
+	go influxdb.InfluxDB(metrics.DefaultRegistry,
+		time.Second * 5,
+		"http://192.168.150.74:8086",
+		"mydb",
+		"",
+		"")
+ 
+	var j int64
+	j = 1
+	for true {
+		time.Sleep(time.Second*1)
+		m.Mark(j)
+		j += 1
+	}
+}
+ 
+
+看以上的代码 其他地方都不用改动 只要改下输出的地方就可以了
+
+ 
+
+在influx中使用设置的database 表名则自用生成 使用 是 metrics中register 设置的名字加上类型 在这里例子中 表名为quux.meter
+
+ 
+
+就可以在influxdb 里面看到
+
+
+https://prometheus.io/docs/guides/go-application/
