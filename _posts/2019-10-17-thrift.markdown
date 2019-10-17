@@ -1,0 +1,149 @@
+---
+title: thrift t_generator_registry map初始化
+layout: post
+category: lang
+author: 夏泽民
+---
+t_generator类和t_generator_registry类
+ 
+ 这个两个类的主要功能就是为生成所有语言的代码提供基础信息和提供具体代码生成器对象，上面就是调用这个两个类的方法来生成具体语言的代码生成器对象和执行生成代码的功能函数。下面主要分析两个函数的功能，一个是t_generator_registry类的get_generator函数，这个是一个静态的函数可以直接通过类调用；另一个是t_generator类的generate_program函数。 
+<!-- more -->
+(1）t_generator_registry类的get_generator函数 
+
+ 这个函数有两个参数，一个是表示程序的对象program，另一个是语言字符串参数（包括代表语言的简短字符串和可选项的组合，有的没有）。函数首先解析语言字符串参数，参数字符串中是这样组织的：在冒号（：）之前是代表语言的字符串，冒号之后是可选项的参数，每一个可选项参数用逗号（，）分割，每一个可选项参数都是键值对并且键和值是用等号（=）分割。按照上面的字符串格式解析各个参数部分就可以了，可选项参数用map来保存键值对，代码实现如下： 
+
+ string::size_type colon = options.find(‘:’); 
+  string language = options.substr(0, colon); 
+  map<string, string> parsed_options; 
+  if (colon != string::npos) { 
+  string::size_type pos = colon+1; 
+  while (pos != string::npos && pos < options.size()) { 
+  string::size_type next_pos = options.find(‘,’, pos); 
+  string option = options.substr(pos, next_pos-pos); 
+  pos = ((next_pos == string::npos) ? next_pos : next_pos+1); 
+  string::size_type separator = option.find(‘=’); 
+  string key, value; 
+  if (separator == string::npos) { 
+  key = option; 
+  value = “”; 
+  } else { 
+  key = option.substr(0, separator); 
+  value = option.substr(separator+1); 
+  } 
+  parsed_options[key] = value; 
+  } 
+  } 
+ 然后调用get_generator_map函数得到一个代表语言字符串和产生这种语言生成器对象的工厂对象的map对象：gen_map_t& the_map = get_generator_map(); gen_map_t的定义如下： 
+
+ typedef std::map<std::string, t_generator_factory*> gen_map_t; 
+ get_generator_map函数只有两句代码，一个是定义一个静态局部变量并初始化（因为静态局部变量必须并初始化并且只有第一次会执行初始化，因为不初始化链接程序的时候会报错），第二句就是返回这个静态局部变量给调用者，代码如下： 
+
+ static gen_map_t* the_map = new gen_map_t(); 
+  return *the_map; 
+ 然后在这个map对象中找到对应语言的工厂对象，然后用这个工厂对象生产一个这种语言的代码生成器对象并返回给调用者，代码如下所示： 
+
+  gen_map_t::iterator iter = the_map.find(language); 
+  return iter->second->get_generator(program, parsed_options, options); 
+ 本函数的功能已经分析完毕，但是还存在着两个问题（或是困难）。一个是最后一条返回一句是根据具体的语言来使用具体语言生产器的工厂对象生产代码生成器，具体又是怎么生成的了？第二个就是从main函数执行到现在还没有发现在哪儿为get_generator_map函数里定义的静态局部变量添加过任何键值对，那么我们查找具体语言必定会失败，那么会返回一个NULL给调用者，那么程序就会执行不下去了，但是程序确实能够完完整整的执行下去，这个问题困扰了我好一会儿。下面就这两个问题继续分析相关代码并且解决问题。 
+
+ 第一个应该不算是问题，但是必须要解决第二个问题以后才能够解释，因为没有解决第二个问题，那么根本就不会执行到最后一条返回语句这儿来，所以我先解决第二个问题。 
+
+ 第二个问题分析和解决思路如下： 
+
+ 我们通常认为main函数是程序的入口函数，那么所以程序的执行都是从main函数开始的，所以我也选择从main函数开始分析这部分的代码，根据程序的执行流程阅读和分析代码是我一贯的思路。但是这种情况在C++里面有例外，记得我在学习MFC的时候，分析MFC执行过程就发现一个问题，那就是全局变量的初始化是在main函数开始之前的，也就是说全局类对象的构造函数也是在main执行之前执行的。由于我反复从main开始一直详细的阅读每一行代码，所以可以确定确实没有在执行的过程中初始化the_map静态局部变量，所以唯一的可能就是在main函数开始之前已经初始化好了。根据这一点思路自己开始着手查找初始化the_map的代码，发现t_generator_registry类的register_generator函数为the_map添加键值对了，这个函数定义如下： 
+
+ void t_generator_registry::register_generator(t_generator_factory* factory) { 
+  gen_map_t& the_map = get_generator_map(); 
+  if (the_map.find(factory->get_short_name()) != the_map.end()) { 
+  failure(“Duplicate generators for language \”%s\”!\n”, factory->get_short_name().c_str()); 
+  } 
+  the_map[factory->get_short_name()] = factory; 
+ } 
+ 这个函数也首先调用get_generator_map函数得到那个静态局部变量，然后查找要注册的工程是否已经在the_map中存在，如果存在就提示失败信息，否则就把工厂的名字和工厂对象作为键值对添加到the_map中。 
+
+ 虽然找到了为the_map添加键值对的地方，但是还没有找到调用这个注册工厂函数的地方，所以继续在代码中搜索调用这个函数的地方。整个代码就只有一处调用了这个函数，而且是在一个类的构造函数中，代码如下： 
+
+ t_generator_factory::t_generator_factory(const std::string& short_name, const std::string& long_name, 
+     const std::string& documentation) : short_name_(short_name) 
+   , long_name_(long_name) , documentation_(documentation) 
+ { 
+   t_generator_registry::register_generator(this); 
+ } 
+ t_generator_factory类是所有生产代码生产器对象工厂的基类，每一种具体的语言都有自己的代码生成器类和生产这种类的工厂类，上面的代码是它的构造函数，功能就是把自己注册到the_map中。看到这里是否有一种逐渐清晰的感觉，但是总是感觉还有少点什么，就是这个构造函数被调用也必须有这个类的对象被定义或其子类的对象被定义。于是我又开始搜索哪些类是从这个类继承的，发现两处很重要的代码，一处如下： 
+
+ template <typename generator> 
+ class t_generator_factory_impl : public t_generator_factory { 
+  public: 
+  t_generator_factory_impl(const std::string& short_name, const std::string& long_name, 
+          const std::string& documentation) : t_generator_factory(short_name, long_name, documentation) 
+  {} 
+ virtual t_generator* get_generator(t_program* program,  
+  const std::map<std::string, std::string>& parsed_options, const std::string& option_string) { 
+  return new generator(program, parsed_options, option_string); 
+  } 
+ ……//此处省略了一些代码 
+ }; 
+ t_generator_factory_impl类继承了t_generator_factory类，而且在构造函数的时候也调用了父类的构造函数，因为是带参数的构造函数所以必须手动调用父类的构造函数。这个类是一个模板类，模板参数就是一个代码生成器类，所以函数get_generator就能够根据这个模板参数生成new一个对应语言的代码生成器对象了。这里就把上面提到的第一个问题也解决了，每一个工厂类把自己注册到the_map，然后使用者通过代表语言的键（key）在the_map找到对应的工厂对象，然后调用get_generator函数就生成具体的代码生成器对象了，这就是第一个问题提到的最后一句返回语句的代码执行情况。 
+
+ 但是还是没有看到定义具体的工厂对象呀，那么还需要看下面一处的代码： 
+
+ #define THRIFT_REGISTER_GENERATOR(language, long_name, doc)        \ 
+ class t_##language##_generator_factory_impl                      \ 
+  : public t_generator_factory_impl<t_##language##_generator>    \ 
+  {                                                                \ 
+  public:                                                         \ 
+  t_##language##_generator_factory_impl()                        \ 
+  : t_generator_factory_impl<t_##language##_generator>(        \ 
+  #language, long_name, doc)                               \ 
+  {}                                                             \ 
+  };                                                               \ 
+  static t_##language##_generator_factory_impl _registerer; 
+ 这是一个宏定义，它根据参数language定义一个生产具体语言的代码生成器的工厂类，并从t_generator_factory_impl类继承，传递的模板参数也是对应语言的代码生成器类，构造函数同样调用了父类的构造函数；最后还定义了一个对应的静态的类全局变量（千呼万唤始出来，终于找到定义类的全局变量了）。但是还是存在同样的问题就是定义了宏函数还是需要调用才执行吧，所以就在代码中搜索调用了这个宏函数的代码，最终发现这个每一个具体的语言代码生成器的文件都调用了一次，如下面是C++的文件t_cpp_generator.cc中调用的代码： 
+
+ THRIFT_REGISTER_GENERATOR(cpp, “C++”, 
+ ”    pure_enums:      Generate pure enums instead of wrapper classes.\n” 
+ ”    dense:           Generate type specifications for the dense protocol.\n” 
+ ”    include_prefix:  Use full include paths in generated files.\n” 
+ ) 
+ 其他语言的代码生成器类的定义文件中都有类似的调用，这样每一个语言生成器对象的生产工厂就被注册到the_map中了，由此问题得到解决。 
+
+ （2）t_generator类的generate_program函数 
+
+ 这个函数是生成具体语言代码的顶层函数，它会调用子类定义的各个子函数来做具体代码的生成过程，后面会详细解析C++、Java和Python代码生成的过程。 
+
+ 首先调用代码生成器的初始化函数来初始化代码生成器，然后依次调用各种基本数据类型和服务的生成函数来生成相应的代码，最后关闭代码生成器。代码实现如下： 
+
+  init_generator(); 
+   vector<t_enum*> enums = program_->get_enums(); 
+   vector<t_enum*>::iterator en_iter; 
+   for (en_iter = enums.begin(); en_iter != enums.end(); ++en_iter) { 
+  generate_enum(*en_iter); 
+   } 
+   vector<t_typedef*> typedefs = program_->get_typedefs(); 
+   vector<t_typedef*>::iterator td_iter; 
+   for (td_iter = typedefs.begin(); td_iter != typedefs.end(); ++td_iter) { 
+  generate_typedef(*td_iter); 
+   } 
+   vector<t_const*> consts = program_->get_consts(); 
+   generate_consts(consts); 
+   vector<t_struct*> objects = program_->get_objects(); 
+   vector<t_struct*>::iterator o_iter; 
+   for (o_iter = objects.begin(); o_iter != objects.end(); ++o_iter) { 
+     if ((*o_iter)->is_xception()) { 
+  generate_xception(*o_iter); 
+     } else { 
+  generate_struct(*o_iter); 
+     } 
+   } 
+   vector<t_service*> services = program_->get_services(); 
+   vector<t_service*>::iterator sv_iter; 
+   for (sv_iter = services.begin(); sv_iter != services.end(); ++sv_iter) { 
+  service_name_ = get_service_name(*sv_iter); 
+  generate_service(*sv_iter); 
+   } 
+   close_generator(); 
+ 此函数使用的是词法和语法分析结果的一些符号，这些符号都保持在t_program对象的对于数据结构里面，所以上面的函数依次从t_program对象中取得各种数据类型的符号和服务的符号，并依次生成。 
+
+ （3）t_generator类的其它功能简介 
+
+ 这个类是所有具体语言代码生成器的共同基类，所以定义了很多各种语言代码生成需要的共同功能，例如生成代码的格式控制、命名空间的有效性检查、驼峰标识符和下划线标识符的相互转换等等。这些功能比较简单，需要可以直接查看源代码。
