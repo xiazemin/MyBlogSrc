@@ -1,0 +1,106 @@
+---
+title: docker exec 进入容器原理
+layout: post
+category: docker
+author: 夏泽民
+---
+先查看当前docker容器进程号
+docker inspect --format '\{\{ .State.Pid \}\}' CONTAINER ID #CONTAINER ID可以用命令docker ps 查看
+获得pid进程号为
+# docker inspect --format '\{\{ .State.Pid \}\}' da27b7caa4bd
+10822
+用这个查看10822进程对于的所有namespace文件
+# ll /proc/10822/ns
+lrwxrwxrwx 1 root root 0 Nov  8 17:56 ipc -> ipc:[4026532224]
+lrwxrwxrwx 1 root root 0 Nov  8 17:56 mnt -> mnt:[4026532222]
+lrwxrwxrwx 1 root root 0 Nov  8 17:56 net -> net:[4026532227]
+lrwxrwxrwx 1 root root 0 Nov  8 17:56 pid -> pid:[4026532225]
+lrwxrwxrwx 1 root root 0 Nov  8 17:56 user -> user:[4026531837]
+lrwxrwxrwx 1 root root 0 Nov  8 17:56 uts -> uts:[4026532223]
+可以看到，一个进程的每种 Linux Namespace，都在它对应的 /proc/[进程号]/ns 下有一个对应的虚拟文件，并且链接到一个真实的 Namespace 文件上。
+
+有了这样一个可以“hold 住”所有 Linux Namespace 的文件，我们就可以对 Namespace 做一些很有意义事情了，比如：加入到一个已经存在的 Namespace 当中。
+
+这也就意味着：一个进程，可以选择加入到某个进程已有的 Namespace 当中，从而达到“进入”这个进程所在容器的目的，这正是 docker exec 的实现原理。
+而这个操作所依赖的，乃是一个名叫 setns() 的 Linux 系统调用
+<!-- more -->
+简单是实现是通过 open() 系统调用打开了指定的 Namespace 文件，并把这个文件的描述符 fd 交给 setns() 使用。在 setns() 执行后，当前进程就加入了这个文件对应的 Linux Namespace 当中了
+
+比如 Docker 还专门提供了一个参数，可以让你启动一个容器并“加入”到另一个容器的 Network Namespace 里，这个参数就是 -net
+
+#define _GNU_SOURCE
+#include <fcntl.h>
+#include <sched.h>
+#include <unistd.h>
+#include <stdlib.h>
+#include <stdio.h>
+
+#define errExit(msg) do { perror(msg); exit(EXIT_FAILURE);} while (0)
+
+int main(int argc, char *argv[]) {
+    int fd;
+    
+    fd = open(argv[1], O_RDONLY);
+    if (setns(fd, 0) == -1) {
+        errExit("setns");
+    }
+    execvp(argv[2], &argv[2]); 
+    errExit("execvp");
+}
+
+这段代码功能非常简单：它一共接收两个参数，第一个参数是 argv[1]，即当前进程要加入的 Namespace 文件的路径，比如 /proc/25686/ns/net；而第二个参数，则是你要在这个 Namespace 里运行的进程，比如 /bin/bash。
+
+这段代码的的核心操作，则是通过 open() 系统调用打开了指定的 Namespace 文件，并把这个文件的描述符 fd 交给 setns() 使用。在 setns() 执行后，当前进程就加入了这个文件对应的 Linux Namespace 当中了。
+
+现在，你可以编译执行一下这个程序，加入到容器进程（PID=25686）的 Network Namespace 中：<
+
+gcc -o set_ns set_ns.c 
+$ ./set_ns /proc/25686/ns/net /bin/bash 
+$ ifconfig
+eth0      Link encap:Ethernet  HWaddr 02:42:ac:11:00:02  
+          inet addr:172.17.0.2  Bcast:0.0.0.0  Mask:255.255.0.0
+          inet6 addr: fe80::42:acff:fe11:2/64 Scope:Link
+          UP BROADCAST RUNNING MULTICAST  MTU:1500  Metric:1
+          RX packets:12 errors:0 dropped:0 overruns:0 frame:0
+          TX packets:10 errors:0 dropped:0 overruns:0 carrier:0
+	   collisions:0 txqueuelen:0 
+          RX bytes:976 (976.0 B)  TX bytes:796 (796.0 B)
+
+lo        Link encap:Local Loopback  
+          inet addr:127.0.0.1  Mask:255.0.0.0
+          inet6 addr: ::1/128 Scope:Host
+          UP LOOPBACK RUNNING  MTU:65536  Metric:1
+          RX packets:0 errors:0 dropped:0 overruns:0 frame:0
+          TX packets:0 errors:0 dropped:0 overruns:0 carrier:0
+	  collisions:0 txqueuelen:1000 
+          RX bytes:0 (0.0 B)  TX bytes:0 (0.0 B)
+
+正如上所示，当我们执行 ifconfig 命令查看网络设备时，我会发现能看到的网卡“变少”了：只有两个。而我的宿主机则至少有四个网卡。这是怎么回事呢？
+
+实际上，在 setns() 之后我看到的这两个网卡，正是我在前面启动的 Docker 容器里的网卡。也就是说，我新创建的这个 /bin/bash 进程，由于加入了该容器进程（PID=25686）的 Network Namepace，它看到的网络设备与这个容器里是一样的，即：/bin/bash 进程的网络设备视图，也被修改了。
+
+而一旦一个进程加入到了另一个 Namespace 当中，在宿主机的 Namespace 文件上，也会有所体现。
+
+在宿主机上，你可以用 ps 指令找到这个 set_ns 程序执行的 /bin/bash 进程，其真实的 PID 是 28499：
+
+# 在宿主机上
+ps aux | grep /bin/bash
+root     28499  0.0  0.0 19944  3612 pts/0    S    14:15   0:00 /bin/bash
+
+这时，如果按照前面介绍过的方法，查看一下这个 PID=28499 的进程的 Namespace，你就会发现这样一个事实：
+
+ls -l /proc/28499/ns/net
+lrwxrwxrwx 1 root root 0 Aug 13 14:18 /proc/28499/ns/net -> net:[4026532281]
+
+$ ls -l  /proc/25686/ns/net
+lrwxrwxrwx 1 root root 0 Aug 13 14:05 /proc/25686/ns/net -> net:[4026532281]
+在 /proc/[PID]/ns/net 目录下，这个 PID=28499 进程，与我们前面的 Docker 容器进程（PID=25686）指向的 Network Namespace 文件完全一样。这说明这两个进程，共享了这个名叫 net:[4026532281] 的 Network Namespace。
+
+此外，Docker 还专门提供了一个参数，可以让你启动一个容器并“加入”到另一个容器的 Network Namespace 里，这个参数就是 -net，比如:
+
+docker run -it --net container:4ddf4638572d busybox ifconfig
+这样，我们新启动的这个容器，就会直接加入到 ID=4ddf4638572d 的容器，也就是我们前面的创建的 Python 应用容器（PID=25686）的 Network Namespace 中。所以，这里 ifconfig 返回的网卡信息，跟我前面那个小程序返回的结果一模一样，你也可以尝试一下。
+
+而如果我指定–net=host，就意味着这个容器不会为进程启用 Network Namespace。这就意味着，这个容器拆除了 Network Namespace 的“隔离墙”，所以，它会和宿主机上的其他普通进程一样，直接共享宿主机的网络栈。这就为容器直接操作和使用宿主机网络提供了一个渠道。
+
+https://blog.liu-kevin.com/2019/03/15/1-shen-ru-pou-xi-k8s/

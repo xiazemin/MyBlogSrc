@@ -1,0 +1,801 @@
+---
+title: runC
+layout: post
+category: docker
+author: 夏泽民
+---
+https://github.com/opencontainers/runc/tree/v1.0.0-rc6
+容器运行时(Container Runtime)是指管理容器和容器镜像的软件。当前业内比较有名的有docker，rkt等。如果不同的运行时只能支持各自的容器，那么显然不利于整个容器技术的发展。于是在2015年6月，由Docker以及其他容器领域的领导者共同建立了围绕容器格式和运行时的开放的工业化标准，即Open Container Initiative(OCI)，OCI具体包含两个标准：运行时标准(runtime-spec)和容器镜像标准(image-spec)。简单来说，容器镜像标准定义了容器镜像的打包形式(pack format)，而运行时标准定义了如何去运行一个容器。
+
+本文包含以下内容：
+
+runC的概念和使用
+runC运行容器的原理剖析
+本文不包含以下内容：
+
+docker engine使用runC
+<!-- more -->
+runC概念
+runC是一个遵循OCI标准的用来运行容器的命令行工具(CLI Tool)，它也是一个Runtime的实现。尽管你可能对这个概念很陌生，但实际上，你的电脑上的docker底层可能正在使用它。至少在笔者的主机上是这样。
+
+root@node-1:~# docker info
+.....
+Runtimes: runc
+Default Runtime: runc 
+.....
+安装runC
+runC不仅可以被docker engine使用，它也可以单独使用(它本身就是命令行工具)，以下使用步骤完全来自runC's README,如果
+
+依赖项
+Go version 1.6或更高版本
+libseccomp库
+
+ yum install libseccomp-devel for CentOS
+ apt-get install libseccomp-dev for Ubuntu
+下载编译
+# 在GOPATH/src目录创建'github.com/opencontainers'目录
+> cd github.com/opencontainers
+> git clone https://github.com/opencontainers/runc
+> cd runc
+
+> make
+> sudo make install
+或者使用go get安装
+
+# 在GOPATH/src目录创建github.com目录
+> go get github.com/opencontainers/runc
+> cd $GOPATH/src/github.com/opencontainers/runc
+> make
+> sudo make install
+以上步骤完成后，runC将安装在/usr/local/sbin/runc目录
+
+使用runC
+创建一个OCI Bundle
+OCI Bundle是指满足OCI标准的一系列文件，这些文件包含了运行容器所需要的所有数据，它们存放在一个共同的目录，该目录包含以下两项：
+
+config.json：包含容器运行的配置数据
+container 的 root filesystem
+如果主机上安装了docker，那么可以使用docker export命令将已有镜像导出为OCI Bundle的格式
+
+# create the top most bundle directory
+> mkdir /mycontainer
+> cd /mycontainer
+
+# create the rootfs directory
+> mkdir rootfs
+
+# export busybox via Docker into the rootfs directory
+> docker export $(docker create busybox) | tar -C rootfs -xvf -
+> ls rootfs 
+bin  dev  etc  home  proc  root  sys  tmp  usr  var
+有了root filesystem，还需要config.json，runc spec可以生成一个基础模板，之后我们可以在模板基础上进行修改。
+
+> runc spec
+> ls
+config.json rootfs
+生成的config.json模板比较长，这里我将它process中的arg 和 terminal进行修改
+
+{
+    "process": {
+        "terminal":false，     <--  这里改为 true
+        "user": {
+            "uid": 0,
+            "gid": 0
+        },
+        "args": [
+            "sh"               <-- 这里改为 "sleep","5"
+        ],
+        "env": [
+            "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+            "TERM=xterm"  
+        ],
+        "cwd": "/",
+    },
+    "root": {
+        "path": "rootfs",
+        "readonly": true
+    },   
+    "linux": {
+        "namespaces": [
+            {
+                "type": "pid"
+            },
+            {
+                "type": "network"
+            },
+            {
+                "type": "ipc"
+            },
+            {
+                "type": "uts"
+            },
+            {
+                "type": "mount"
+            }
+        ],
+    }
+} 
+config.json 文件的内容都是 OCI Container Runtime 的订制，其中每一项值都可以在Runtime Spec找到具体含义，OCI Container Runtime 支持多种平台，因此其 Spec 也分为通用部分（在config.md中描述）以及平台相关的部分（如linux平台上就是config-linux）
+
+process:指定容器启动后运行的进程运行环境，其中最重要的的子项就是args，它指定要运行的可执行程序， 在上面的修改后的模板中，我们将其改成了"sleep 5"
+root：指定容器的根文件系统，其中path子项是指向前面导出的中root filesystem的路径
+linux: 这一项是平台相关的。其中namespaces表示新创建的容器会额外创建或使用的namespace的类型
+运行容器
+现在我们使用create命令创建容器
+
+# run as root
+> cd /mycontainer
+> runc create mycontainerid
+使用list命令查看容器状态为created
+
+# view the container is created and in the "created" state
+> runc list
+ID              PID         STATUS      BUNDLE                           CREATED                          OWNER
+mycontainerid   12068       created     /mycontainer   2018-12-25T19:45:37.346925609Z                      root 
+使用start命令查看容器状态
+
+# start the process inside the container
+> runc start mycontainerid
+在5s内 使用list命令查看容器状态为running
+
+# within 5 seconds view that the container is running
+runc list
+ID              PID         STATUS      BUNDLE                           CREATED                          OWNER
+mycontainerid   12068       running     /mycontainer   2018-12-25T19:45:37.346925609Z                      root 
+在5s后 使用list命令查看容器状态为stopped
+
+# after 5 seconds view that the container has exited and is now in the stopped state
+runc list
+ID              PID         STATUS      BUNDLE                           CREATED                          OWNER
+mycontainerid   0           stopped     /mycontainer   2018-12-25T19:45:37.346925609Z                       root 
+使用delete命令可以删除容器
+
+# now delete the container
+runc delete mycontainerid
+runC 实现
+runC可以启动并管理符合OCI标准的容器。简单地说，runC需要利用OCI bundle创建一个独立的运行环境，并执行指定的程序。在Linux平台上，这个环境就是指各种类型的Namespace以及Capability等等配置
+
+代码结构
+runC由Go语言实现，当前(2018.12)最新版本是v1.0.0-rc6,代码的结构可分为两大块,一是根目录下的go文件，对应各个runC命令，二是负责创建/启动/管理容器的libcontainer，可以说runC的本质都在libcontainer
+runc
+
+runc create 实现原理 (上)
+以上面的例子为例，以'runc create'这条命令来看runC是如何完成从无到有创建容器，并运行用户指定的 'sleep 5' 这个进程的。
+
+创建容器，运行 sleep 5 就是我们的目标，请牢记
+本文涉及的调用关系如下，可随时翻阅
+ setupSpec(context)
+ startContainer(context, spec, CT_ACT_CREATE, nil) 
+   |- createContainer
+      |- specconv.CreateLibcontainerConfig
+      |- loadFactory(context)
+         |- libcontainer.New(......)
+      |- factory.Create(id, config)
+   |- runner.run(spec.Process)
+      |- newProcess(*config, r.init) 
+      |- r.container.Start(process)
+         |- c.createExecFifo()
+         |- c.start(process)
+            |- c.newParentProcess(process)
+            |- parent.start()
+create命令的响应入口在 create.go, 我们直接关注其注册的Action的实现，当输入runc create mycontainerid时会执行注册的Action，并且参数存放在Context中
+
+/* run.go  */
+Action: func(context *cli.Context) error { 
+  ......
+  spec, err := setupSpec(context)   /* (sleep 5 在这里) */
+
+  status, err := startContainer(context, spec, CT_ACT_CREATE, nil) 
+  .....
+}
+setupSpec：从命令行输入中找到-b 指定的 OCI bundle 目录，若没有此参数，则默认是当前目录。读取config.json文件，将其中的内容转换为Go的数据结构specs.Spec，该结构定义在文件 github.com/opencontainers/runtime-spec/specs-go/config.go,里面的内容都是OCI标准描述的。
+sleep 5 到了变量 spec
+startContainer：尝试创建启动容器，注意这里的第三个参数是 CT_ACT_CREATE, 表示仅创建容器。本文使用linux平台，因此实际调用的是 utils_linux.go 中的startContainer()。startContainer()根据用户将用户输入的 id 和刚才的得到的 spec 作为输入，调用 createContainer() 方法创建容器，再通过一个runner.run()方法启动它
+/× utils_linux.go ×/
+func startContainer(context *cli.Context, spec *specs.Spec, action CtAct, criuOpts *libcontainer.CriuOpts) (int, error) {
+    id := context.Args().First()
+
+    container, err := createContainer(context, id, spec)
+
+    r := &runner{
+        container:       container,
+        action:          action,
+        init:            true,
+        ......
+    }
+    return r.run(spec.Process)
+}
+这里需要先了解下runC中的几个重要数据结构的关系
+
+Container 接口
+在runC中，Container用来表示一个容器对象，它是一个抽象接口，它内部包含了BaseContainer接口。从其内部的方法的名字就可以看出，都是管理容器的基本操作
+
+/* libcontainer/container.go */
+type BaseContainer interface {
+    ID() string
+    Status() (Status, error)
+    State() (*State, error)
+    Config() configs.Config
+    Processes() ([]int, error)
+    Stats() (*Stats, error)
+    Set(config configs.Config) error
+    Start(process *Process) (err error)
+    Run(process *Process) (err error)
+    Destroy() error
+    Signal(s os.Signal, all bool) error
+    Exec() error
+}
+
+/* libcontainer/container_linux.go */
+type Container interface {
+    BaseContainer
+
+    Checkpoint(criuOpts *CriuOpts) error
+    Restore(process *Process, criuOpts *CriuOpts) error
+    Pause() error
+    Resume() error
+    NotifyOOM() (<-chan struct{}, error)
+    NotifyMemoryPressure(level PressureLevel) (<-chan struct{}, error)
+}
+有了抽象接口，那么一定有具体的实现，linuxContainer 就是一个实现，或者说，它是当前版本runC在linux平台上的唯一一种实现。下面是其定义，其中的 initPath 非常关键
+
+type linuxContainer struct {
+    id                   string
+    config               *configs.Config
+    initPath             string
+    initArgs             []string
+    initProcess          parentProcess
+    .....
+}
+Factory 接口
+在runC中，所有的容器都是由容器工厂（Factory）创建的, Factory 也是一个抽象接口，定义如下，它只包含了4个方法
+
+type Factory interface {
+    Create(id string, config *configs.Config) (Container, error)
+    Load(id string) (Container, error)
+    StartInitialization() error
+    Type() string
+}
+linux平台上的对 Factory 接口也有一个标准实现---LinuxFactory,其中的 InitPath 也非常关键，稍后我们会看到
+
+// LinuxFactory implements the default factory interface for linux based systems.
+type LinuxFactory struct {
+    // InitPath is the path for calling the init responsibilities for spawning
+    // a container.
+    InitPath string
+    ......
+
+    // InitArgs are arguments for calling the init responsibilities for spawning
+    // a container.
+    InitArgs []string
+}
+所以，对于linux平台，Factory 创建 Container 实际上就是 LinuxFactory 创建 linuxContainer
+
+回到createContainer(),下面是其实现
+
+func createContainer(context *cli.Context, id string, spec *specs.Spec) (libcontainer.Container, error) {
+    /* 1. 将配置存放到config */
+    rootlessCg, err := shouldUseRootlessCgroupManager(context)
+    config, err := specconv.CreateLibcontainerConfig(&specconv.CreateOpts{
+        CgroupName:       id,
+        UseSystemdCgroup: context.GlobalBool("systemd-cgroup"),
+        NoPivotRoot:      context.Bool("no-pivot"),
+        NoNewKeyring:     context.Bool("no-new-keyring"),
+        Spec:             spec,                              
+        RootlessEUID:     os.Geteuid() != 0,
+        RootlessCgroups:  rootlessCg,
+    })
+
+    /* 2. 加载Factory */
+    factory, err := loadFactory(context)
+    if err != nil {
+        return nil, err
+    }
+
+    /* 3. 调用Factory的Create()方法 */
+    return factory.Create(id, config)
+}
+可以看到，上面的代码大体上分为
+
+将配置存放到 config, 数据类型是 Config.config
+加载 Factory，实际返回 LinuxFactory
+调用 Factory 的Create()方法
+sleep 5 到了变量 config
+第1步存放配置没什么好说的，无非是将已有的 spec 和其他一些用户命令行选项配置换成一个数据结构存下来。而第2部加载Factory，在linux上，就是返回一个 LinuxFactory 结构。而这是通过在其内部调用 libcontainer.New()方法实现的
+
+/* utils/utils_linux.go */
+func loadFactory(context *cli.Context) (libcontainer.Factory, error) {
+    .....
+    return libcontainer.New(abs, cgroupManager, intelRdtManager,
+        libcontainer.CriuPath(context.GlobalString("criu")),
+        libcontainer.NewuidmapPath(newuidmap),
+        libcontainer.NewgidmapPath(newgidmap))
+}
+libcontainer.New() 方法在linux平台的实现如下，可以看到，它的确会返回一个LinuxFactory，并且InitPath设置为"/proc/self/exe"，InitArgs设置为"init"
+
+/* libcontainer/factory_linux.go */
+func New(root string, options ...func(*LinuxFactory) error) (Factory, error) {
+    .....
+    l := &LinuxFactory{
+        .....
+        InitPath:  "/proc/self/exe",
+        InitArgs:  []string{os.Args[0], "init"},
+    }
+    ......
+    return l, nil
+}
+得到了具体的 Factory 实现，下一步就是调用其Create()方法,对 linux 平台而言，就是下面这个方法，可以看到，它会将 LinuxFactory 上记录的 InitPath 和 InitArgs 赋给 linuxContainer 并作为结果返回
+
+func (l *LinuxFactory) Create(id string, config *configs.Config) (Container, error) {
+    ....
+    c := &linuxContainer{
+        id:            id,    
+        config:        config,
+        initPath:      l.InitPath,
+        initArgs:      l.InitArgs,
+    }
+     .....
+    return c, nil
+}
+回到 startContainer() 方法，再得到 linuxContainer 后，将创建一个 runner 结构,并调用其run()方法
+
+/* utils_linux.go */
+func startContainer(context *cli.Context, spec *specs.Spec, action CtAct, criuOpts *libcontainer.CriuOpts) (int, error) {
+    id := context.Args().First()
+
+    container, err := createContainer(context, id, spec)
+
+    r := &runner{
+        container:       container,
+        action:          action,
+        init:            true,     
+        ......
+    }
+    return r.run(spec.Process)
+}
+runner 的 run() 的入参是 spec.Process 结构，我们并不需要关注它的定义，因为它的内容都来源于 config.json 文件，spec.Process 不过是其中 Process 部分的 Go 语言数据的表示。run() 方法的实现如下：
+
+func (r *runner) run(config *specs.Process) (int, error) { 
+    ......
+    process, err := newProcess(*config, r.init)                                  /*  第1部分 */
+    ......
+    switch r.action {
+    case CT_ACT_CREATE:
+        err = r.container.Start(process)   /* runc start */                      /*  第2部分 */
+    case CT_ACT_RESTORE:
+        err = r.container.Restore(process, r.criuOpts) /* runc restore */
+    case CT_ACT_RUN:
+        err = r.container.Run(process)     /* runc run */
+    default:
+        panic("Unknown action")
+    }
+    ......
+    return status, err
+}
+上面的 run() 可分为两部分
+
+调用 newProcess() 方法, 用 spec.Process 创建 libcontainer.Process,注意第二个参数是 true ，表示新创建的 process 会作为新创建容器的第一个 process。
+根据 r.action 的值决定如何操作得到的 libcontainer.Process
+sleep 5 到了变量 process
+libcontainer.Process 结构定义在 /libcontainer/process.go, 其中大部分内容都来自 spec.Process
+
+/* parent process */
+// Process specifies the configuration and IO for a process inside
+// a container.
+type Process struct {
+    Args []string
+    Env []string
+    User string
+    AdditionalGroups []string
+    Cwd string
+    Stdin io.Reader
+    Stdout io.Writer
+    Stderr io.Writer
+    ExtraFiles []*os.File
+
+    ConsoleWidth  uint16
+    ConsoleHeight uint16
+    Capabilities *configs.Capabilities
+    AppArmorProfile string
+    Label string
+    NoNewPrivileges *bool
+    Rlimits []configs.Rlimit
+    ConsoleSocket *os.File
+    Init bool
+
+    ops processOperations
+}
+接下来就是要使用 Start() 方法了
+
+func (c *linuxContainer) Start(process *Process) error {
+
+    if process.Init {
+        if err := c.createExecFifo(); err != nil {  /* 1.创建fifo   */
+            return err
+        }
+    }
+    if err := c.start(process); err != nil {        /* 2. 调用start() */
+        if process.Init {
+            c.deleteExecFifo()
+        }
+        return err
+    }
+    return nil
+}
+Start() 方法主要完成两件事
+
+创建 fifo: 创建一个名为exec.fifo的管道，这个管道后面会用到
+调用 start() 方法，如下
+func (c *linuxContainer) start(process *Process) error {
+    parent, err := c.newParentProcess(process) /*  1. 创建parentProcess */
+
+    err := parent.start();                     /*  2. 启动这个parentProcess */
+    ......
+   
+start() 也完成两件事:
+
+创建一个 ParentProcess
+调用这个 ParentProcess 的 start() 方法
+sleep 5 到了变量 parent
+那么什么是 parentProcess ? 正如其名，parentProcess 类似于 linux 中可以派生出子进程的父进程，在runC中，parentProcess 是一个抽象接口，如下：
+
+type parentProcess interface {
+    // pid returns the pid for the running process.
+    pid() int
+
+    // start starts the process execution.
+    start() error
+
+    // send a SIGKILL to the process and wait for the exit.
+    terminate() error
+
+    // wait waits on the process returning the process state.
+    wait() (*os.ProcessState, error)
+
+    // startTime returns the process start time.
+    startTime() (uint64, error)
+
+    signal(os.Signal) error
+
+    externalDescriptors() []string
+
+    setExternalDescriptors(fds []string)
+}
+它有两个实现，分别为 initProcess 和 setnsProcess ，前者用于创建容器内的第一个进程，后者用于在已有容器内创建新的进程。在我们的创建容器例子中，p.Init = true ，所以会创建 initProcess
+
+func (c *linuxContainer) newParentProcess(p *Process) (parentProcess, error) {
+    parentPipe, childPipe, err := utils.NewSockPair("init")  /* 1.创建 Socket Pair */
+
+    cmd, err := c.commandTemplate(p, childPipe)              /* 2. 创建 *exec.Cmd */
+
+    if !p.Init {
+        return c.newSetnsProcess(p, cmd, parentPipe, childPipe) 
+    }
+
+    if err := c.includeExecFifo(cmd); err != nil {           /* 3.打开之前创建的fifo */
+        return nil, newSystemErrorWithCause(err, "including execfifo in cmd.Exec setup")
+    }
+    return c.newInitProcess(p, cmd, parentPipe, childPipe)   /* 4.创建 initProcess */
+}
+newParentProcess() 方法动作有 4 步，前 3 步都是在为第 4 步做准备，即生成 initProcess
+
+创建一对 SocketPair 没什么好说的，生成的结果会放到 initProcess
+创建 *exec.Cmd,代码如下，这里设置了 cmd 要执行的可执行程序和参数来自 c.initPath，即源自 LinuxFactory 的 "/proc/self/exe",和 "init" ，这表示新执行的程序就是runC本身，只是参数变成了 init，之后又将外面创建的 SocketPair 的一端 childPipe放到了cmd.ExtraFiles ，同时将_LIBCONTAINER_INITPIPE=%d加入cmd.Env,其中 %d为文件描述符的数字
+func (c *linuxContainer) commandTemplate(p *Process, childPipe *os.File) (*exec.Cmd, error) {
+    cmd := exec.Command(c.initPath, c.initArgs[1:]...)
+    cmd.Args[0] = c.initArgs[0]
+    
+    cmd.ExtraFiles = append(cmd.ExtraFiles, p.ExtraFiles...)
+    cmd.ExtraFiles = append(cmd.ExtraFiles, childPipe)
+    cmd.Env = append(cmd.Env,
+        fmt.Sprintf("_LIBCONTAINER_INITPIPE=%d", stdioFdCount+len(cmd.ExtraFiles)-1),
+    )
+    ......
+    return cmd, nil
+}
+includeExecFifo() 方法打开之前创建的 fifo，也将其 fd 放到 cmd.ExtraFiles 中，同时将_LIBCONTAINER_FIFOFD=%d记录到 cmd.Env。
+最后就是创建 InitProcess 了，这里首先将_LIBCONTAINER_INITTYPE="standard"加入cmd.Env，然后从 configs 读取需要新的容器创建的 Namespace 的类型，并将其打包到变量 data 中备用，最后再创建 InitProcess 自己，可以看到，这里将之前的一些资源和变量都联系了起来
+func (c *linuxContainer) newInitProcess(p *Process, cmd *exec.Cmd, parentPipe, childPipe *os.File) (*initProcess, error) {
+    cmd.Env = append(cmd.Env, "_LIBCONTAINER_INITTYPE="+string(initStandard))
+    nsMaps := make(map[configs.NamespaceType]string)
+    for _, ns := range c.config.Namespaces {
+        if ns.Path != "" {
+            nsMaps[ns.Type] = ns.Path
+        }
+    }
+    _, sharePidns := nsMaps[configs.NEWPID]
+    data, err := c.bootstrapData(c.config.Namespaces.CloneFlags(), nsMaps)
+    if err != nil {
+        return nil, err
+    }
+    return &initProcess{
+        cmd:             cmd,
+        childPipe:       childPipe,
+        parentPipe:      parentPipe,
+        manager:         c.cgroupManager,
+        intelRdtManager: c.intelRdtManager,
+        config:          c.newInitConfig(p),
+        container:       c,
+        process:         p,          /*  sleep 5 在这里 */
+        bootstrapData:   data,
+        sharePidns:      sharePidns,
+    }, nil
+}
+sleep 5 在 initProcess.process 中
+回到 linuxContainer 的 start() 方法，创建好了 parent ，下一步就是调用它的 start() 方法了
+
+func (c *linuxContainer) start(process *Process) error {
+    parent, err := c.newParentProcess(process) /*  1. 创建parentProcess (已完成) */
+
+    err := parent.start();                     /*  2. 启动这个parentProcess */
+    ......
+    
+前文讲到，newParentProcess() 根据源自 config.json 的配置，最终生成变量 initProcess ，这个 initProcess 包含的信息主要有
+
+cmd 记录了要执行的可执行文件名，即 "/proc/self/exe init"，注意不要和容器要执行的 sleep 5 混淆了
+cmd.Env 记录了名为 _LIBCONTAINER_FIFOFD=%d 记录的命名管道exec.fifo 的描述符，名为_LIBCONTAINER_INITPIPE=%d记录了创建的 SocketPair 的 childPipe 一端的描述符，名为_LIBCONTAINER_INITTYPE="standard"记录要创建的容器中的进程是初始进程
+initProcess 的 bootstrapData 记录了新的容器要创建哪些类型的 Namespace。
+/* libcontainer/container_linux.go */
+func (c *linuxContainer) start(process *Process) error {
+    parent, err := c.newParentProcess(process) /*  1. 创建parentProcess (已完成) */
+
+    err := parent.start();                     /*  2. 启动这个parentProcess */
+    ......
+准备工作完成之后，就要调用 start() 方法启动。
+
+注意: 此时 sleep 5 线索存储在变量 parent 中
+runC create的实现原理 (下)
+start() 函数实在太长了，因此逐段来看
+
+/* libcontainer/process_linux.go */
+func (p *initProcess) start() error {
+     
+    p.cmd.Start()                 
+    p.process.ops = p    
+    io.Copy(p.parentPipe, p.bootstrapData)
+
+    .....
+}
+p.cmd.Start() 启动 cmd 中设置的要执行的可执行文件 /proc/self/exe，参数是 init，这个函数会启动一个新的进程去执行该命令，并且不会阻塞。
+io.Copy 将 p.bootstrapData 中的数据通过 p.parentPipe 发送给子进程
+/proc/self/exe 正是runc程序自己，所以这里相当于是执行runc init，也就是说，我们输入的是runc create命令，隐含着又去创建了一个新的子进程去执行runc init。为什么要额外重新创建一个进程呢？原因是我们创建的容器很可能需要运行在一些独立的 namespace 中，比如 user namespace,这是通过 setns() 系统调用完成的，而在setns man page中写了下面一段话
+
+A multi‐threaded process may not change user namespace with setns(). It is not permitted to use setns() to reenter the caller's current user names‐pace
+即多线程的进程是不能通过 setns()改变user namespace的。而不幸的是 Go runtime 是多线程的。那怎么办呢 ？所以setns()必须要在Go runtime 启动之前就设置好,这就要用到cgo了，在Go runtime 启动前首先执行嵌入在前面的 C 代码。
+
+具体的做法在nsenter README描述 在runc init命令的响应在文件 init.go 开头，导入 nsenter 包
+
+/* init.go */
+import (
+    "os"
+    "runtime"
+
+    "github.com/opencontainers/runc/libcontainer"
+    _ "github.com/opencontainers/runc/libcontainer/nsenter"
+    "github.com/urfave/cli"
+)
+而nsenter包中开头通过 cgo 嵌入了一段 C 代码, 调用 nsexec()
+
+package nsenter
+/*
+/* nsenter.go */
+#cgo CFLAGS: -Wall
+extern void nsexec();
+void __attribute__((constructor)) init(void) {
+    nsexec();
+}
+*/
+import "C"
+接下来，轮到 nsexec() 完成为容器创建新的 namespace 的工作了, nsexec() 同样很长，逐段来看
+
+/* libcontainer/nsenter/nsexec.c */
+void nsexec(void)
+{
+    int pipenum;
+    jmp_buf env;
+    int sync_child_pipe[2], sync_grandchild_pipe[2];
+    struct nlconfig_t config = { 0 };
+
+    /*
+     * If we don't have an init pipe, just return to the go routine.
+     * We'll only get an init pipe for start or exec.
+     */
+    pipenum = initpipe();
+    if (pipenum == -1)
+        return;
+
+    /* Parse all of the netlink configuration. */
+    nl_parse(pipenum, &config);
+   
+    ......    
+上面这段 C 代码中，initpipe() 从环境中读取父进程之前设置的pipe(_LIBCONTAINER_INITPIPE记录的的文件描述符)，然后调用 nl_parse 从这个管道中读取配置到变量 config ，那么谁会往这个管道写配置呢 ? 当然就是runc create父进程了。父进程通过这个pipe，将新建容器的配置发给子进程，这个过程如下图所示:
+
+ipc
+
+发送的具体数据在 linuxContainer 的 bootstrapData() 函数中封装成netlink msg格式的消息。忽略大部分配置，本文重点关注namespace的配置，即要创建哪些类型的namespace，这些都是源自最初的config.json文件。
+
+至此，子进程就从父进程处得到了namespace的配置，继续往下， nsexec() 又创建了两个socketpair,从注释中了解到，这是为了和它自己的子进程和孙进程进行通信。
+
+void nsexec(void)
+{
+   .....
+    /* Pipe so we can tell the child when we've finished setting up. */
+    if (socketpair(AF_LOCAL, SOCK_STREAM, 0, sync_child_pipe) < 0)  //  sync_child_pipe is an out parameter
+        bail("failed to setup sync pipe between parent and child");
+
+    /*
+     * We need a new socketpair to sync with grandchild so we don't have
+     * race condition with child.
+     */
+    if (socketpair(AF_LOCAL, SOCK_STREAM, 0, sync_grandchild_pipe) < 0)
+        bail("failed to setup sync pipe between parent and grandchild");
+   
+}
+然后就该创建namespace了，看注释可知这里其实有考虑过三个方案
+
+first clone then clone
+first unshare then clone
+first clone then unshare
+最终采用的是方案 3,其中缘由由于考虑因素太多，所以准备之后另写一篇文章分析
+
+接下来就是一个大的 switch case 编写的状态机,大体结构如下，当前进程通过clone()系统调用创建子进程，子进程又通过clone()系统调用创建孙进程，而实际的创建/加入namespace是在子进程完成的
+
+switch (setjmp(env)) {
+  case JUMP_PARENT:{
+           .....
+           clone_parent(&env, JUMP_CHILD);
+           .....
+       }
+  case JUMP_CHILD:{
+           ......
+           if (config.namespaces)
+                join_namespaces(config.namespaces);
+           clone_parent(&env, JUMP_INIT);
+           ......
+       }
+  case JUMP_INIT:{
+       }
+本文不准备展开分析这个状态机了，而将这个状态机的流程画在了下面的时序图中，需要注意的是以下几点
+
+namespaces在runc init 2完成创建
+runc init 1和runc init 2最终都会执行exit(0),但runc init 3不会，它会继续执行runc init命令的后半部分。因此最终只会剩下runc create进程和runc init 3进程
+runc
+
+再回到runc create进程
+
+func (p *initProcess) start() error {
+
+    p.cmd.Start()
+    p.process.ops = p
+    io.Copy(p.parentPipe, p.bootstrapData);
+
+    p.execSetns()
+    ......
+再向 runc init发送了 bootstrapData 数据后，便调用 execSetns() 等待runc init 1进程终止，从管道中得到runc init 3的进程 pid,将该进程保存在 p.process.ops
+
+/* libcontainer/process_linux.go */
+func (p *initProcess) execSetns() error {
+    status, err := p.cmd.Process.Wait()
+
+    var pid *pid
+    json.NewDecoder(p.parentPipe).Decode(&pid)
+
+    process, err := os.FindProcess(pid.Pid)
+
+    p.cmd.Process = process
+    p.process.ops = p
+    return nil
+}
+继续 start()
+
+func (p *initProcess) start() error {
+
+    ...... 
+    p.execSetns()
+    
+    fds, err := getPipeFds(p.pid())
+    p.setExternalDescriptors(fds)
+    p.createNetworkInterfaces()
+    
+    p.sendConfig()
+    
+    parseSync(p.parentPipe, func(sync *syncT) error {
+        switch sync.Type {
+        case procReady:
+            .....
+            writeSync(p.parentPipe, procRun);
+            sentRun = true
+        case procHooks:
+            .....
+            // Sync with child.
+            err := writeSync(p.parentPipe, procResume); 
+            sentResume = true
+        }
+
+        return nil
+    })
+    ......
+可以看到，runc create又开始通过pipe进行双向通信了，通信的对端自然就是runc init 3进程了，runc init 3进程在执行完嵌入的 C 代码后(实际是runc init 1执行的，但runc init 3也是由runc init 1间接clone()出来的)，因此将开始运行 Go runtime，开始响应init命令
+
+sleep 5 通过 p.sendConfig() 发送给了runc init进程
+init命令首先通过 libcontainer.New("") 创建了一个 LinuxFactory,这个方法在上篇文章中分析过，这里不再解释。然后调用 LinuxFactory 的 StartInitialization() 方法。
+
+/* libcontainer/factory_linux.go */
+// StartInitialization loads a container by opening the pipe fd from the parent to read the configuration and state
+// This is a low level implementation detail of the reexec and should not be consumed externally
+func (l *LinuxFactory) StartInitialization() (err error) {
+    var (
+        pipefd, fifofd int
+        envInitPipe    = os.Getenv("_LIBCONTAINER_INITPIPE")  
+        envFifoFd      = os.Getenv("_LIBCONTAINER_FIFOFD")
+    )
+
+    // Get the INITPIPE.
+    pipefd, err = strconv.Atoi(envInitPipe)
+
+    var (
+        pipe = os.NewFile(uintptr(pipefd), "pipe")
+        it   = initType(os.Getenv("_LIBCONTAINER_INITTYPE")) // // "standard" or "setns"
+    )
+    
+    // Only init processes have FIFOFD.
+    fifofd = -1
+    if it == initStandard {
+        if fifofd, err = strconv.Atoi(envFifoFd); err != nil {
+            return fmt.Errorf("unable to convert _LIBCONTAINER_FIFOFD=%s to int: %s", envFifoFd, err)
+        }
+    }
+
+    i, err := newContainerInit(it, pipe, consoleSocket, fifofd)
+
+    // If Init succeeds, syscall.Exec will not return, hence none of the defers will be called.
+    return i.Init() //
+}
+StartInitialization() 方法尝试从环境中读取一系列_LIBCONTAINER_XXX变量的值，还有印象吗？这些值全是在runc create命令中打开和设置的，也就是说，runc create通过环境变量，将这些参数传给了子进程runc init 3
+
+拿到这些环境变量后，runc init 3调用 newContainerInit 函数
+
+/* libcontainer/init_linux.go */
+func newContainerInit(t initType, pipe *os.File, consoleSocket *os.File, fifoFd int) (initer, error) {
+    var config *initConfig
+
+    /* read config from pipe (from runc process) */
+    son.NewDecoder(pipe).Decode(&config); 
+    populateProcessEnvironment(config.Env);
+    switch t {
+    ......
+    case initStandard:
+        return &linuxStandardInit{
+            pipe:          pipe,
+            consoleSocket: consoleSocket,
+            parentPid:     unix.Getppid(),
+            config:        config, // <=== config
+            fifoFd:        fifoFd,
+        }, nil
+    }
+    return nil, fmt.Errorf("unknown init type %q", t)
+}
+newContainerInit() 函数首先尝试从 pipe 读取配置存放到变量 config 中，再存储到变量 linuxStandardInit 中返回
+
+   runc create                    runc init 3
+       |                               |
+  p.sendConfig() --- config -->  NewContainerInit()
+sleep 5 线索在 initStandard.config 中
+回到 StartInitialization(),在得到 linuxStandardInit 后，便调用其 Init()方法了
+
+/* init.go */
+func (l *LinuxFactory) StartInitialization() (err error) {
+    ......
+    i, err := newContainerInit(it, pipe, consoleSocket, fifofd)
+
+    return i.Init()  
+}
+本文忽略掉 Init() 方法前面的一大堆其他配置，只看其最后
+
+func (l *linuxStandardInit) Init() error {
+   ......
+   name, err := exec.LookPath(l.config.Args[0])
+
+   syscall.Exec(name, l.config.Args[0:], os.Environ())
+}
+可以看到，这里终于开始执行 用户最初设置的 sleep 5 了
