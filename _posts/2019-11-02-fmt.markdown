@@ -1,0 +1,161 @@
+---
+title: fmt
+layout: post
+category: algorithm
+author: 夏泽民
+---
+原型
+
+func Print(a ...interface{}) (n int, err error) { return Fprint(os.Stdout, a...)}func Println(a ...interface{}) (n int, err error) { return Fprintln(os.Stdout, a...)}func Printf(format string, a ...interface{}) (n int, err error) { return Fprintf(os.Stdout, format, a...)}
+Print：使用默认格式说明符打印格式并写入标准输出。当两者都不是字符串时，在操作数之间添加空格
+Println：同上，不同的地方是始终在操作数之间添加空格，并附加换行符
+Printf：根据格式说明符进行格式化并写入标准输出
+以上三类就是最常见的格式化 I/O 的方法
+<!-- more -->
+案例一：Print
+
+在这里我们使用 Print 方法做一个分析，便于后面的加深理解
+
+
+func Print(a ...interface{}) (n int, err error) { return Fprint(os.Stdout, a...)}Print 使用默认格式说明符打印格式并写入标准输出。另外当两者都为非空字符串时将插入一个空格
+
+原型
+
+func Fprint(w io.Writer, a ...interface{}) (n int, err error) { p := newPrinter() p.doPrint(a) n, err = w.Write(p.buf) p.free() return}该函数一共有两个形参：
+
+w：输出流，只要实现 io.Writer 就可以（抽象）为流的写入
+a：任意类型的多个值
+分析主干流程
+
+1、 p := newPrinter(): 申请一个临时对象池（sync.Pool）
+
+var ppFree = sync.Pool{ New: func() interface{} { return new(pp) },}func newPrinter() *pp { p := ppFree.Get().(*pp) p.panicking = false p.erroring = false p.fmt.init(&p.buf) return p}
+ppFree.Get()：基于 sync.Pool 实现 *pp 的临时对象池，每次获取一定会返回一个新的 pp 对象用于接下来的处理
+*pp.panicking：用于解决无限递归的 panic、recover 问题，会根据该参数在 catchPanic 及时掐断
+*pp.erroring：用于表示正在处理错误无效的 verb 标识符，主要作用是防止调用 handleMethods 方法
+*pp.fmt.init(&p.buf)：初始化 fmt 配置，会设置 buf 并且清空 fmtFlags 标志位
+2、 p.doPrint(a): 执行约定的格式化动作（参数间增加一个空格、最后一个参数增加换行符）
+
+func (p *pp) doPrint(a []interface{}) { prevString := false for argNum, arg := range a { true && false isString := arg != nil && reflect.TypeOf(arg).Kind() == reflect.String // Add a space between two non-string arguments. if argNum > 0 && !isString && !prevString { p.buf.WriteByte(' ') } p.printArg(arg, 'v') prevString = isString }}可以看到底层通过判断该入参，同时满足以下条件就会添加分隔符（空格）：
+
+当前入参为多个参数（例如：Slice）
+当前入参不为 nil 且不为字符串（通过反射确定）
+当前入参不为首项或上一个入参不为字符串
+而在 Print 方法中，不需要指定格式符。实际上在该方法内直接指定为 v。也就是默认格式的值
+
+p.printArg(arg, 'v')
+w.Write(p.buf): 写入标准输出（io.Writer）
+*pp.free(): 释放已缓存的内容。在使用完临时对象后，会将 buf、arg、value 清空再重新存放到 ppFree 中。以便于后面再取出重用（利用 sync.Pool 的临时对象特性）
+案例二：Printf
+
+标识符
+
+Verbs
+
+%v the value in a default format when printing structs, the plus flag (%+v) adds field names%#v a Go-syntax representation of the value%T a Go-syntax representation of the type of the value%% a literal percent sign; consumes no value%t the word true or falseFlags
+
++ always print a sign for numeric values; guarantee ASCII-only output for %q (%+q)- pad with spaces on the right rather than the left (left-justify the field)# alternate format: add leading 0 for octal (%#o), 0x for hex (%#x); 0X for hex (%#X); suppress 0x for %p (%#p); for %q, print a raw (backquoted) string if strconv.CanBackquote returns true; always print a decimal point for %e, %E, %f, %F, %g and %G; do not remove trailing zeros for %g and %G; write e.g. U+0078 'x' if the character is printable for %U (%#U).' ' (space) leave a space for elided sign in numbers (% d); put spaces between bytes printing strings or slices in hex (% x, % X)0 pad with leading zeros rather than spaces; for numbers, this moves the padding after the sign详细建议参见 Godoc
+
+原型
+
+func Fprintf(w io.Writer, format string, a ...interface{}) (n int, err error) { p := newPrinter() p.doPrintf(format, a) n, err = w.Write(p.buf) p.free() return}与 Print 相比，最大的不同就是 doPrintf 方法了。在这里我们来详细看看其代码，如下：
+
+func (p *pp) doPrintf(format string, a []interface{}) { end := len(format) argNum := 0 // we process one argument per non-trivial format afterIndex := false // previous item in format was an index like [3]. p.reordered = falseformatLoop: for i := 0; i < end; { p.goodArgNum = true lasti := i for i < end && format[i] != '%' { i++ } if i > lasti { p.buf.WriteString(format[lasti:i]) } if i >= end { // done processing format string break } // Process one verb i++ // Do we have flags? p.fmt.clearflags() simpleFormat: for ; i < end; i++ { c := format[i] switch c { case '#': //'#'、'0'、'+'、'-'、' ' ... default: if 'a' <= c && c <= 'z' && argNum < len(a) { ... p.printArg(a[argNum], rune(c)) argNum++ i++ continue formatLoop } break simpleFormat } } // Do we have an explicit argument index? argNum, i, afterIndex = p.argNumber(argNum, format, i, len(a)) // Do we have width? if i < end && format[i] == '*' { ... } // Do we have precision? if i+1 < end && format[i] == '.' { ... } if !afterIndex { argNum, i, afterIndex = p.argNumber(argNum, format, i, len(a)) } if i >= end { p.buf.WriteString(noVerbString) break } ... switch { case verb == '%': // Percent does not absorb operands and ignores f.wid and f.prec. p.buf.WriteByte('%') case !p.goodArgNum: p.badArgNum(verb) case argNum >= len(a): // No argument left over to print for the current verb. p.missingArg(verb) case verb == 'v': ... fallthrough default: p.printArg(a[argNum], verb) argNum++ } } if !p.reordered && argNum < len(a) { ... }}分析主干流程
+
+写入 % 之前的字符内容
+如果所有标志位处理完毕（到达字符尾部），则跳出处理逻辑
+（往后移）跳过 % ，开始处理其他 verb 标志位
+清空（重新初始化） fmt 配置
+处理一些基础的 verb 标识符（simpleFormat）。如：'#'、'0'、'+'、'-'、' ' 以及简单的 verbs 标识符（不包含精度、宽度和参数索引）。需要注意的是，若当前字符为简单 verb 标识符。则直接进行处理。完成后会直接后移到下一个字符。其余标志位则变更 fmt 配置项，便于后续处理
+处理参数索引（argument index）
+处理参数宽度（width）
+处理参数精度（precision）
+% 之后若不存在 verbs 标识符则返回 noVerbString。值为 %!(NOVERB)
+处理特殊 verbs 标识符（如：'%%'、'%#v'、'%+v'）、错误情况（如：参数索引指定错误、参数集个数与 verbs 标识符数量不匹配）或进行格式化参数集
+常规流程处理完毕
+在特殊情况下，若提供的参数集比 verb 标识符多。fmt 将会贪婪检查下去，将多出的参数集以特定的格式输出，如下：
+
+fmt.Printf("%d", 1, 2, 3)// 1%!(EXTRA int=2, int=3)
+约定前缀额外标志：%!(EXTRA
+当前参数的类型
+约定格式符：=
+当前参数的值（默认以 %v 格式化）
+约定格式符：)
+值得注意的是，当指定了参数索引或实际处理的参数小于入参的参数集时，就不会进行贪婪匹配来展示
+
+案例三：Println
+
+原型
+
+func Fprintln(w io.Writer, a ...interface{}) (n int, err error) { p := newPrinter() p.doPrintln(a) n, err = w.Write(p.buf) p.free() return}在这个方法中，最大的区别就是 doPrintln，我们一起来看看，如下：
+
+func (p *pp) doPrintln(a []interface{}) { for argNum, arg := range a { if argNum > 0 { p.buf.WriteByte(' ') } p.printArg(arg, 'v') } p.buf.WriteByte('\n')}分析主干流程
+
+循环入参的参数集，并以空格分隔
+格式化当前参数，默认以 %v 对参数进行格式化
+在结尾添加 \n 字符
+如何格式化参数
+
+在上例的执行流程分析中，可以看到格式化参数这一步是在 p.printArg(arg, verb) 执行的，我们一起来看看它都做了些什么？
+
+func (p *pp) printArg(arg interface{}, verb rune) { p.arg = arg p.value = reflect.Value{} if arg == nil { switch verb { case 'T', 'v': p.fmt.padString(nilAngleString) default: p.badVerb(verb) } return } switch verb { case 'T': p.fmt.fmt_s(reflect.TypeOf(arg).String()) return case 'p': p.fmtPointer(reflect.ValueOf(arg), 'p') return } // Some types can be done without reflection. switch f := arg.(type) { case bool: p.fmtBool(f, verb) case float32: p.fmtFloat(float64(f), 32, verb) ... case reflect.Value: if f.IsValid() && f.CanInterface() { p.arg = f.Interface() if p.handleMethods(verb) { return } } p.printValue(f, verb, 0) default: if !p.handleMethods(verb) { p.printValue(reflect.ValueOf(f), verb, 0) } }}在小节代码中可以看见，fmt 本身对不同的类型做了不同的处理。这样子就避免了通过反射确定。相对的提高了性能
+
+其中有两个特殊的方法，分别是 handleMethods 和 badVerb，接下来分别来看看他们的作用是什么
+
+1、badVerb
+
+它主要用于格式化并处理错误的行为。我们可以一起来看看，代码如下：
+
+func (p *pp) badVerb(verb rune) { p.erroring = true p.buf.WriteString(percentBangString) p.buf.WriteRune(verb) p.buf.WriteByte('(') switch { case p.arg != nil: p.buf.WriteString(reflect.TypeOf(p.arg).String()) p.buf.WriteByte('=') p.printArg(p.arg, 'v') ... default: p.buf.WriteString(nilAngleString) } p.buf.WriteByte(')') p.erroring = false}在处理错误格式化时，我们可以对比以下例子：
+
+fmt.Printf("%s", []int64{1, 2, 3})// [%!s(int64=1) %!s(int64=2) %!s(int64=3)]%在 badVerb 中可以看到错误字符串的处理主要分为以下部分：
+
+约定前缀错误标志：%!
+当前的格式化操作符
+约定格式符：(
+当前参数的类型
+约定格式符：=
+当前参数的值（默认以 %v 格式化）
+约定格式符：)
+2、handleMethods
+
+func (p *pp) handleMethods(verb rune) (handled bool) { if p.erroring { return } // Is it a Formatter? if formatter, ok := p.arg.(Formatter); ok { handled = true defer p.catchPanic(p.arg, verb) formatter.Format(p, verb) return } // If we're doing Go syntax and the argument knows how to supply it, take care of it now. ... return false}这个方法比较特殊，一般在自定义结构体和未知情况下进行调用。主要流程是：
+
+若当前参数为错误 verb 标识符，则直接返回
+判断是否实现了 Formatter
+实现，则利用自定义 Formatter 格式化参数
+未实现，则最大程度的利用 Go syntax 默认规则去格式化参数
+拓展
+
+在 fmt 标准库中可以通过自定义结构体来实现方法的自定义，大致如下几种
+
+fmt.State
+
+type State interface { Write(b []byte) (n int, err error) Width() (wid int, ok bool) Precision() (prec int, ok bool) Flag(c int) bool}State 用于获取标志位的状态值，涉及如下：
+
+Write：将格式化完毕的字符写入缓冲区中，等待下一步处理
+Width：返回宽度信息和是否被设置
+Precision：返回精度信息和是否被设置
+Flag：返回特殊标志符（'#'、'0'、'+'、'-'、' '）是否被设置
+fmt.Formatter
+
+type Formatter interface { Format(f State, c rune)}Formatter 用于实现自定义格式化方法。可通过在自定义结构体中实现 Format 方法来实现这个目的
+
+另外，可以通过 f 获取到当前标识符的宽度、精度等状态值。c 为 verb 标识符，可以得到其动作是什么
+
+fmt.Stringer
+
+type Stringer interface { String() string}当该对象为 String、Array、Slice 等类型时，将会调用 String() 方法对类字符串进行格式化
+
+fmt.GoStringer
+
+type GoStringer interface { GoString() string}当格式化特定 verb 标识符（%v）时，将调用 GoString() 方法对其进行格式化
+
+总结
+
+通过本文对 fmt 标准库的分析，可以发现它有以下特点：
+
+在拓展性方面，可以自定义格式化方法等
+在完整度方面，尽可能的贪婪匹配，输出参数集
+在性能方面，每种不同的参数类型，都实现了不同的格式化处理操作
+在性能方面，尽可能的最短匹配，格式化参数集
