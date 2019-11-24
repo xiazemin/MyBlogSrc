@@ -1,0 +1,162 @@
+---
+title: hook glibc
+layout: post
+category: linux
+author: 夏泽民
+---
+Linux的用C库的都是glibc，有一个叫libc.so.6的文件，这是几乎所有Linux下命令的动态链接中，其中有标准C的各种函数，默认情况下，linux所编译的程序中对标准C函数的链接，都是通过动态链接方式来链接libc.so.6这个函数库的。这也意味着我们在通过我们注入的.so来实现函数覆盖劫持之后需要从libc.so.6中取得原本的正常函数，让程序继续正常执行
+<!-- more -->
+#include <stdio.h>
+#include <string.h>
+
+int main(int argc, char *argv[])
+{
+  if( strcmp(argv[1], "test") )
+  {
+    printf("Incorrect password\n");
+  }
+  else
+  {
+    printf("Correct password\n");
+  }
+  return 0;
+}
+
+用于劫持函数的.so代码hook.c
+
+#include <stdio.h>
+#include <string.h>
+#include <dlfcn.h>
+/*
+hook的目标是strcmp，所以typedef了一个STRCMP函数指针
+hook的目的是要控制函数行为，从原库libc.so.6中拿到strcmp指针，保存成old_strcmp以备调用
+*/
+typedef int(*STRCMP)(const char*, const char*);
+ 
+int strcmp(const char *s1, const char *s2)
+{
+  static void *handle = NULL;
+  static STRCMP old_strcmp = NULL;
+ 
+  if( !handle )
+  {
+    handle = dlopen("libc.so.6", RTLD_LAZY);
+    old_strcmp = (STRCMP)dlsym(handle, "strcmp");
+  }
+  printf("oops!!! hack function invoked. s1=<%s> s2=<%s>\n", s1, s2);
+  return old_strcmp(s1, s2);
+}
+编译：
+
+gcc -o test main.c
+gcc -fPIC -shared -o hook.so hook.c -ldl
+运行:
+
+LD_PRELOAD=./hook.so ./test 123
+
+The Mac OS X operating system has a similar capability using its dylib (dynamically linked/loaded libraries) format which is handled through Mac OS X's dynamic linker - dyld. Instead of using the LD_PRELOAD environment variable, Mac OS X uses the following in a Terminal window:
+
+set env DYLD_INSERT_LIBRARIES /usr/lib/libMallocDebug.dylib 
+
+https://blog.csdn.net/lionzl/article/details/51372011
+
+有时候我们分析/逆向ELF文件时，可能想直接运行ELF看看效果，同时又想捕获ELF文件用了哪些字符串、回连地址&端口、操作了哪些文件等等特征信息。这时我们可以巧妙的借用LD_PRELOAD，来实现一种简易的hook libc库函数方案来打印我们想要的特征信息。
+
+当然我们还可以用APK/ELF沙箱、HOOK等方式捕获更加详细的信息，我们这里不讨论，只就LD_PRELOAD来简单介绍。
+
+二、LD_PRELOAD介绍
+它允许你定义在程序运行前优先加载的动态链接库，用于有选择性的载入不同动态链接库中的相同函数。使用这个环境变量，我们可以在主程序和其动态链接库的中间加载别的动态链接库，甚至覆盖正常的函数库（重写）
+
+三、简易方案
+1：初始化
+
+在初始化阶段，主要工作：获取原始目标函数地址、获取配置文件信息等。设置_main()为构造函数，优于其它函数之前执行
+
+// .init
+__attribute__((constructor))
+void _main()
+{
+    init();
+}
+接着，用dlsym获取目标libc函数原始地址。
+
+typedef int (*PFN_connect)(int, const struct sockaddr *, socklen_t);
+
+#define ADDFUNC( FUNCTYPE, SYMBOL ) (FUNCTYPE)getFuncAddr(SYMBOL)
+
+void *LibcHelper::getFuncAddr( const char*  symbol ) 
+{
+    if ( symbol == NULL ) {
+        return NULL;
+    }
+    void * handle = dlsym( libcHandle, symbol );
+    if ( handle == NULL ) {
+        LOGPRINT( "[-]dlsym fail: ", ".s", symbol );
+    }
+    return handle;
+}
+
+int LibcHelper::init()
+{
+    libcHandle = dlopen( "/system/lib/libc.so", RTLD_NOW|RTLD_GLOBAL );
+    if ( !libcHandle ) {
+        LOGPRINT( "Load libc fail.");
+        return -1;
+    }
+
+    pfnConnect = ADDFUNC(PFN_connect, "connect" );              
+    return 0;
+}
+2：实现hook函数
+
+这是hook函数的主体部分，实现一个跟libc导出函数一致的函数。
+
+int connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen) {
+    LOGFUNC();
+    // 获取原connect地址
+    PFN_connect org_connect = LibcHelper::getInstance().getConnect();
+    if ( org_connect != NULL ) {
+        // 先调用原connect函数
+        int ret = org_connect( sockfd, addr, addrlen );
+        struct sockaddr_in *addr_in = (struct sockaddr_in *)addr;
+        std::ostringstream s;
+        if ( addr_in->sin_family == 1 ) {
+            struct sockaddr_un *sun = (struct sockaddr_un *)addr;
+            s << "unix://" << sun->sun_path;
+        }
+        else {
+            s << "ip://" << inet_ntoa(addr_in->sin_addr) << ":" << ntohs(addr_in->sin_port);
+        }
+        // 过滤无效目标，只对特定进程输出日志
+        if ( CheckUtils::checkShowInfo() ) {
+            // 记录到日志文件中
+            LOGPRINT( "connect",
+                "sockfd", sockfd,
+                "addr", addr,
+                "addrlen", addrlen,
+                ret );
+        }
+        return ret;
+    }
+    LOGPRINT( "connect fail");
+    return -1;
+}
+3：测试
+
+设置LD_PRELOAD环境变量的值为我们的so文件
+
+adb push libcc.so /data/local/tmp
+export LD_PRELOAD=/data/local/tmp/libcc.so
+1
+2
+在这个shell中执行目标ELF文件，查看日志文件即可获取详细信息
+
+
+
+四、问题
+1：这种方法暂时不能直接适用于静态编译的ELF文件
+
+一个idea：参考IDA识别静态函数的方式 不知是否可行？
+2：垃圾信息太多，需要过滤
+
+只对特定的进程（process name）、路径等才输出到日志文件
