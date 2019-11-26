@@ -566,7 +566,7 @@ void *my_malloc(int size);//对应真实的malloc函数
 void my_free(void *);//对应真实的free函数
 
 static const interpose_t interposing_functions[] \
-__attribute__ ((section ("__DATA,__interpose"))) = {{(void *)my_free,(void *)free},{(void *)my_malloc,(void *)malloc}};
+__attribute__ ((section ("__DATA,__interpose"))) =\{\{(void *)my_free,(void *)free},{(void *)my_malloc,(void *)malloc\}\};
 
 void *my_malloc (int size){
     //在我们的函数中，要访问真正的malloc()函数，因为不想自己管理整个堆，所以就调用了原来的malloc()
