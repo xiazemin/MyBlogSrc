@@ -1,0 +1,658 @@
+---
+title: hijack
+layout: post
+category: golang
+author: 夏泽民
+---
+https://golang.org/pkg/net/http/
+
+type Hijacker interface {
+    // Hijack lets the caller take over the connection.
+    // After a call to Hijack the HTTP server library
+    // will not do anything else with the connection.
+    //
+    // It becomes the caller's responsibility to manage
+    // and close the connection.
+    //
+    // The returned net.Conn may have read or write deadlines
+    // already set, depending on the configuration of the
+    // Server. It is the caller's responsibility to set
+    // or clear those deadlines as needed.
+    //
+    // The returned bufio.Reader may contain unprocessed buffered
+    // data from the client.
+    //
+    // After a call to Hijack, the original Request.Body must
+    // not be used.
+    Hijack() (net.Conn, *bufio.ReadWriter, error)
+}
+<!-- more -->
+Hijack()可以将HTTP对应的TCP连接取出，连接在Hijack()之后，HTTP的相关操作就会受到影响，调用方需要负责去关闭连接。看一个简单的例子。
+
+func handle1(w http.ResponseWriter, r *http.Request) {
+    hj, _ := w.(http.Hijacker)
+    conn, buf, _ := hj.Hijack()
+    defer conn.Close()
+    buf.WriteString("hello world")
+    buf.Flush()
+}
+
+func handle2(w http.ResponseWriter, r *http.Request) {
+    fmt.Fprintf(w, "hello world")
+}
+问题来了，上面两个handle方法有什么区别呢？很简单，同样是http请求，返回的结果一个遵循http协议，一个不遵循。
+
+➜  ~ curl -i http://localhost:9090/handle1
+hello world%                                                                                                                                                                                                                            ➜  ~ curl -i http://localhost:9090/handle2
+HTTP/1.1 200 OK
+Date: Thu, 14 Jun 2018 07:51:31 GMT
+Content-Length: 11
+Content-Type: text/plain; charset=utf-8
+
+hello world%
+
+分别是以上两者的返回，可以看到，hijack之后的返回，虽然body是相同的，但是完全没有遵循http协议。（废话，别人都说了hijack之后返回了body然后直接关闭了，哪来的headers = = ）
+
+但我们还是要看看为啥..
+
+func (c *conn) serve(ctx context.Context) {
+    ...
+    serverHandler{c.server}.ServeHTTP(w, w.req)
+    w.cancelCtx()
+    if c.hijacked() {
+      return
+    }
+    w.finishRequest()
+    ...
+}
+这是net/http包中的方法，也是http路由的核心方法。调用ServeHTTP（也就是上边的handle方法）方法，如果被hijack了就直接return了，而一般的http请求会经过后边的finishRequest方法，加入headers等并关闭连接。
+
+打开方式
+上边我们说了Hijack方法，一般在在创建连接阶段使用HTTP连接，后续自己完全处理connection。符合这样的使用场景的并不多，基于HTTP协议的rpc算一个，从HTTP升级到WebSocket也算一个。
+
+RPC中的应用
+go中自带的rpc可以直接复用http server处理请求的那一套流程去创建连接，连接创建完毕后再使用Hijack方法拿到连接。
+
+// ServeHTTP implements an http.Handler that answers RPC requests.
+func (server *server) servehttp(w http.responsewriter, req *http.request) {
+    if req.method != "connect" {
+        w.header().set("content-type", "text/plain; charset=utf-8")
+        w.writeheader(http.statusmethodnotallowed)
+        io.writestring(w, "405 must connect\n")
+        return
+    }
+    conn, _, err := w.(http.hijacker).hijack()
+    if err != nil {
+        log.print("rpc hijacking ", req.remoteaddr, ": ", err.error())
+        return
+    }
+    io.writestring(conn, "http/1.0 "+connected+"\n\n")
+    server.serveconn(conn)
+}
+客户端通过向服务端发送method为connect的请求创建连接，创建成功后即可开始rpc调用。
+
+websocket中的应用
+// ServeHTTP implements the http.Handler interface for a WebSocket
+func (s Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+    s.serveWebSocket(w, req)
+}
+
+func (s Server) serveWebSocket(w http.ResponseWriter, req *http.Request) {
+    rwc, buf, err := w.(http.Hijacker).Hijack()
+    if err != nil {
+        panic("Hijack failed: " + err.Error())
+    }
+    // The server should abort the WebSocket connection if it finds
+    // the client did not send a handshake that matches with protocol
+    // specification.
+    defer rwc.Close()
+    conn, err := newServerConn(rwc, buf, req, &s.Config, s.Handshake)
+    if err != nil {
+        return
+    }
+    if conn == nil {
+        panic("unexpected nil conn")
+    }
+    s.Handler(conn)
+}
+websocket在创建连接的阶段与http使用相同的协议，而在后边的数据传输的过程中使用了他自己的协议，符合了Hijack的用途。通过serveWebSocket方法将HTTP协议升级到Websocket协议。
+
+先看一下hijack相关的结构说明：
+
+type Hijacker interface {
+	Hijack() (net.Conn, *bufio.ReadWriter, error)
+}
+//返回连接接口net.Conn和ReadWriter,bufio读写的
+// Hijack lets the caller take over the connection. -----翻译Hijack让调用者管理连接
+
+// After a call to Hijack(), the HTTP server library 
+
+// will not do anything else with the connection.                    
+
+// It becomes the caller's responsibility to manage
+
+// and close the connection.
+
+------------翻译调用Hijack后，HTTP的server不会对连接做多余的处理让用户自己管理和关闭连接
+
+再看一下docker中对hijack的使用
+
+         dial, err := cli.dial()  //设置TCP keepAlive做长连接
+	// When we set up a TCP connection for hijack, there could be long periods
+	// of inactivity (a long running command with no output) that in certain
+	// network setups may cause ECONNTIMEOUT, leaving the client in an unknown
+	// state. Setting TCP KeepAlive on the socket connection will prohibit
+	// ECONNTIMEOUT unless the socket connection truly is broken
+	if tcpConn, ok := dial.(*net.TCPConn); ok {
+		tcpConn.SetKeepAlive(true)
+		tcpConn.SetKeepAlivePeriod(30 * time.Second)
+	}
+	if err != nil {
+		if strings.Contains(err.Error(), "connection refused") {
+return fmt.Errorf("Cannot connect to the Docker daemon. Is 'docker daemon' running on this host?")
+		}
+		return err
+	}
+	clientconn := httputil.NewClientConn(dial, nil) 
+	defer clientconn.Close()
+
+	// Server hijacks the connection, error 'connection closed' expected
+	clientconn.Do(req)
+
+	rwc, br := clientconn.Hijack() 
+	//清理掉buffer 这步非常重要,返回这个两个参数就是给用户自己管理连接和数据处理
+	defer rwc.Close()
+
+再看看clientconn.Hijack的实现：
+
+func (cc *ClientConn) Hijack() (c net.Conn, r *bufio.Reader) {
+	cc.lk.Lock()
+	defer cc.lk.Unlock()
+	c = cc.c
+	r = cc.r
+	cc.c = nil
+	cc.r = nil
+	return
+}
+//就是在NewClientConn时候保存的net.Conn和bufio.Reader
+func NewClientConn(c net.Conn, r *bufio.Reader) *ClientConn {
+	if r == nil {
+		r = bufio.NewReader(c)
+	}
+	return &ClientConn{
+		c:        c,
+		r:        r,
+		pipereq:  make(map[*http.Request]uint),
+		writeReq: (*http.Request).Write,
+	}
+}
+总结：hijack就是不用重新建立连接或者重新构造ClientConn设置net.Conn和bufio，然后不断复用net.Conn和bufio，自己管理
+
+https://gist.github.com/hartfordfive/91ec4f528227610516e4
+
+看一下hijack相关的结构说明：
+
+type Hijacker interface {
+	Hijack() (net.Conn, *bufio.ReadWriter, error)
+}
+//返回连接接口net.Conn和ReadWriter,bufio读写的
+// Hijack lets the caller take over the connection. -----翻译Hijack让调用者管理连接
+
+// After a call to Hijack(), the HTTP server library 
+
+// will not do anything else with the connection.                    
+
+// It becomes the caller's responsibility to manage
+
+// and close the connection.
+
+------------翻译调用Hijack后，HTTP的server不会对连接做多余的处理让用户自己管理和关闭连接
+
+再看一下docker中对hijack的使用
+
+         dial, err := cli.dial()  //设置TCP keepAlive做长连接
+	// When we set up a TCP connection for hijack, there could be long periods
+	// of inactivity (a long running command with no output) that in certain
+	// network setups may cause ECONNTIMEOUT, leaving the client in an unknown
+	// state. Setting TCP KeepAlive on the socket connection will prohibit
+	// ECONNTIMEOUT unless the socket connection truly is broken
+	if tcpConn, ok := dial.(*net.TCPConn); ok {
+		tcpConn.SetKeepAlive(true)
+		tcpConn.SetKeepAlivePeriod(30 * time.Second)
+	}
+	if err != nil {
+		if strings.Contains(err.Error(), "connection refused") {
+return fmt.Errorf("Cannot connect to the Docker daemon. Is 'docker daemon' running on this host?")
+		}
+		return err
+	}
+	clientconn := httputil.NewClientConn(dial, nil) 
+	defer clientconn.Close()
+ 
+	// Server hijacks the connection, error 'connection closed' expected
+	clientconn.Do(req)
+ 
+	rwc, br := clientconn.Hijack() 
+	//清理掉buffer 这步非常重要,返回这个两个参数就是给用户自己管理连接和数据处理
+	defer rwc.Close()
+
+再看看clientconn.Hijack的实现：
+
+func (cc *ClientConn) Hijack() (c net.Conn, r *bufio.Reader) {
+	cc.lk.Lock()
+	defer cc.lk.Unlock()
+	c = cc.c
+	r = cc.r
+	cc.c = nil
+	cc.r = nil
+	return
+}
+//就是在NewClientConn时候保存的net.Conn和bufio.Reader
+func NewClientConn(c net.Conn, r *bufio.Reader) *ClientConn {
+	if r == nil {
+		r = bufio.NewReader(c)
+	}
+	return &ClientConn{
+		c:        c,
+		r:        r,
+		pipereq:  make(map[*http.Request]uint),
+		writeReq: (*http.Request).Write,
+	}
+}
+总结：hijack就是不用重新建立连接或者重新构造ClientConn设置net.Conn和bufio，然后不断复用net.Conn和bufio，自己管理
+
+ype Hijacker interface  {
+     // Hijack让呼叫者接管连接。
+    //在调用Hijack之后，HTTP服务器库
+    //将对该连接不做任何其他处理。
+    // 
+    //管理
+    和关闭连接
+    成为调用者的责任。// 
+    //返回的net.Conn可能
+    已经设置了
+    读取或写入截止日期，//取决于服务器
+    的配置。呼叫者有责任根据需要设置//或清除这些截止日期。
+    // 
+    //返回的bufio.Reader可能包含
+    来自客户端的
+    未处理的缓冲数据。// 
+    //呼叫Hijack之后，原始的Request.Body必须
+    //不使用。
+    Hijack（）（net.Conn，* bufio.ReadWriter，错误）
+}
+Hijack() 可以将HTTP对应的TCP连线撤回，连线在 Hijack() 之后，HTTP的相关操作就会受到影响，呼叫方需要负责去关闭连线。
+
+从Go 1.6开始，net/http下提供的Server在调用ListenAndServeTLS函数启动https服务的情况下会自动支持HTTP/2。其会根据与客户端TLS握手阶段的ALPN扩展判断客户端是否支持HTTP/2(h2)，若支持，在TLS握手结束后会直接使用HTTP/2进行通讯。
+若需要使用HTTPS但不想开启HTTP/2可以有以下两种方法：
+
+初始化Server结构体时，将TLSNextProto字段置为一个非nil的空map
+
+// 栗子
+server := http.Server{
+	Addr:         ":8080",
+	TLSNextProto: make(map[string]func(*http.Server, *tls.Conn, http.Handler)),
+}
+log.Fatal(server.ListenAndServeTLS("./ssl/ca.crt", "./ssl/ca.key"))
+使用GODEBUG环境变量
+
+GODEBUG=http2client=0  # disable HTTP/2 client support
+GODEBUG=http2server=0  # disable HTTP/2 server support
+GODEBUG=http2debug=1   # enable verbose HTTP/2 debug logs
+GODEBUG=http2debug=2   # ... even more verbose, with frame dumps
+也就是说默认提供的http.Server仅在启用https时才会支持HTTP/2，也就是只支持h2模式。若要使用h2c模式，需要使用golang.org/x/net/http2中提供的API。（P.S:目前大多数浏览器仅支持h2模式）
+WebSocket和HTTP/2不兼容，如果想让WebSocket跑在TLS上，需要用上面的方法禁用HTTP/2
+
+原因分析：
+
+在HTTP1.X中，一个请求和回复对应在一个tcp连接上，在websocket握手结束后，该tcp链接升级为websocket协议。而在HTTP/2中，多个请求和回复会复用一个tcp链接，无法实现上述的过程。
+对应在Go的代码上，以github.com/gorilla/websocket的WebSocket实现为例。其会在握手阶段将http.ResponseWriter断言为http.Hijacker接口并调用其中的Hijack()方法，拿到原始tcp链接对象并进行接管。而在使用HTTP/2时，http.ResponseWriter无法断言为http.Hijacker
+
+github.com/gorilla/websocket
+
+h, ok := w.(http.Hijacker)
+if !ok {
+	return u.returnError(w, r, http.StatusInternalServerError, "websocket: response does not implement http.Hijacker")
+}
+var brw *bufio.ReadWriter
+netConn, brw, err = h.Hijack()
+if err != nil {
+	return u.returnError(w, r, http.StatusInternalServerError, err.Error())
+}
+http.Hijacker
+
+// The Hijacker interface is implemented by ResponseWriters that allow
+// an HTTP handler to take over the connection.
+//
+// The default ResponseWriter for HTTP/1.x connections supports
+// Hijacker, but HTTP/2 connections intentionally do not.
+// ResponseWriter wrappers may also not support Hijacker. Handlers
+// should always test for this ability at runtime.
+type Hijacker interface {
+	// Hijack lets the caller take over the connection.
+	// After a call to Hijack the HTTP server library
+	// will not do anything else with the connection.
+	//
+	// It becomes the caller's responsibility to manage
+	// and close the connection.
+	//
+	// The returned net.Conn may have read or write deadlines
+	// already set, depending on the configuration of the
+	// Server. It is the caller's responsibility to set
+	// or clear those deadlines as needed.
+	//
+	// The returned bufio.Reader may contain unprocessed buffered
+	// data from the client.
+	//
+	// After a call to Hijack, the original Request.Body should
+	// not be used.
+	Hijack() (net.Conn, *bufio.ReadWriter, error)
+}
+有一个WebSocket over HTTP/2的草案，不过并没有什么用，看样子这问题暂时无解。
+
+关于HTTP/2的Server Push，其主要用途是提前推送web资源以减少延时。无法像WebSocket一样作为实时的消息推送手段
+
+1.1 连接超时
+func DialTimeout(network, address string, timeout time.Duration) (Conn, error) 
+第三个参数timeout可以用来设置连接超时设置。
+如果超过timeout的指定的时间，连接没有完成，会返回超时错误。
+
+1.2 读写超时
+在Conn定义中，包括读写的超时时间设置。
+
+type Conn interface {
+    // SetDeadline sets the read and write deadlines associated
+    // with the connection. It is equivalent to calling both
+    // SetReadDeadline and SetWriteDeadline.
+    //
+    ... ...
+    SetDeadline(t time.Time) error
+
+    // SetReadDeadline sets the deadline for future Read calls
+    // and any currently-blocked Read call.
+    // A zero value for t means Read will not time out.
+    SetReadDeadline(t time.Time) error
+
+    // SetWriteDeadline sets the deadline for future Write calls
+    // and any currently-blocked Write call.
+    // Even if write times out, it may return n > 0, indicating that
+    // some of the data was successfully written.
+    // A zero value for t means Write will not time out.
+    SetWriteDeadline(t time.Time) error
+}
+通过上面的函数说明，可以得知，这里的参数t是一个未来的时间点，所以每次读或写之前，都要调用SetXXX重新设置超时时间，
+
+如果只设置一次，就会出现总是超时的问题。
+
+Client示例如下：
+
+transport := &http.Transport{
+         Dial: (&net.Dialer{
+               Timeout: 10 * time.Second,
+         }).Dial,
+         MaxIdleConns: 2,
+}
+client := &http.Client{
+        Timeout:   time.Second * 30,
+        Transport: transport,
+}
+resp, _:= client.Get("http://localhost:8888/hello")
+body, _ := ioutil.ReadAll(resp.Body)
+resp.Body.Close()
+
+
+超时设置
+
+首先介绍HTTP超时设置，Server端，主要关注四个参数：ReadTimeout、ReadHeaderTimeout、WriteTimeout、TimeoutHandler，代码示例如下
+
+type EchoHandler struct {}
+ 
+func (handler *EchoHandler)ServeHTTP(w http.ResponseWriter, req *http.Request) {
+	n, _ := io.WriteString(w, "echo !\n")
+}
+ 
+func main() {
+	timeoutHandler := http.TimeoutHandler(&EchoHandler{}, 5 * time.Second, "echo timed out!")
+	http.Handle("/echo", timeoutHandler)
+	listener, _ := net.Listen("tcp", ":8888")
+	server := &http.Server{
+		ReadTimeout: time.Second * 5,
+		WriteTimeout: time.Second * 10,
+		ReadHeaderTimeout: time.Second * 3,
+	}
+	_  := server.Serve(listener)
+
+}
+
+
+
+https://blog.cloudflare.com/the-complete-guide-to-golang-net-http-timeouts/
+
+HTTP服务端超时设置
+我们举一个TimeoutHandler参数的例子，这个参数是指从读取request body到返回Response的时间（即处理请求的时间），我们设置超时时间为5秒，并在函数处理时Sleep 1分钟，抓包观察连接变化。代码如下：
+
+func (handler *EchoHandler)ServeHTTP(w http.ResponseWriter, req *http.Request) {
+	time.Sleep(time.Second * 60)   
+	n, _ := io.WriteString(w, "echo ! \n")
+}
+timeoutHandler := http.TimeoutHandler(&EchoHandler{}, 5 * time.Second, "echo timed out!")
+使用tcpdump结合wireshark抓包分析如下： 
+
+TimeoutHandler超时
+可见，在读取Request body 5秒之后，（第18秒到23秒），服务端向客户端发送了statuscode为503（服务不可用）的报文，客户端收到的信息如下：
+
+  err: nil
+  statuscode: 503
+  body: "echo timed out!"
+
+
+HTTP client端设置超时代码片段如下：
+
+transport := &http.Transport{
+	Dial: (&net.Dialer{
+		Timeout: 10 * time.Second,
+	}).Dial,
+	IdleConnTimeout:     10 * time.Second,
+	TLSHandshakeTimeout:   5 * time.Second,
+	ResponseHeaderTimeout: 10 * time.Second,
+}
+ 
+client := &http.Client{
+	Timeout:   30 * time.Second,
+	Transport: transport,
+}
+
+
+HTTP client设置
+我们看一下Dialer.Timeout，这个参数限制TCP建立连接的时间，在TCP建立连接时，主动发起请求的一方发送syn报文，如果syn报文没有得到回应，就会对这个syn报文进行重传。在linux中，会对syn报文进行6次重传，第i次重传之后等待2^(i-1)秒，共计等待127秒作用（这个只是一个估计值，不是绝对的）。linux与此相关的两个参数为：
+
+net.ipv4.tcp_syn_retries     默认为6
+net.ipv4.tcp_synack_retries  默认为5，即对synack报文进行5次重传
+
+首先是TCP三次握手的过程 ,然后主动发起连接的一方发送了一个create volume的请求，server对此请求进行了回应（发送了一个ack），此后的时间，链路进入idle状态（双方都没有等待ACK）,在这段时间内，服务器在处理请求，请求处理完成之后，向客户端发送数据
+
+示例二：Server在处理请求过程中宕机。
+
+如果未为客户端设置超时或者KeepAlive, 如果服务端在处理请求的时候宕机（此时链路处于idle状态），那么这个连接在客户端将一直保持，如果不进行处理这个无效的连接将一直占用文件描述符（可能会导致无法建立新连接或者打开文件），用netstat命令查看连接状态如下
+
+netstat -no |grep 8088
+
+连接一直保持
+示例三：Server未宕机，Client处理请求超时
+
+这种情况下，为客户端设置了超时时间（http.Client.Timeout=600s）,那么客户端在超时时间到达时发送fin报文给服务端，服务端对这个fin报文进行回应，但是因为服务端还没处理完，服务端并不会发送fin报文，此时客户端直接从fin_wait2状态到close状态。linux中控制fin_wait2时间的变量为net.ipv4.tcp_fin_time，默认为60秒，
+
+示例四，Server宕机、Client超时
+
+在这种情况下，client会发送fin报文给server，跟示例三一样，但是server并不会对这个fin进行回应，因为它宕机了，这个时候client会对这个fin报文进行重传，重传到一定次数就断开连接，linux控制重传的参数为: tcp_retries1, tcp_retries2，默认情况下，普通报文重传16左右（整个过程持续14分钟）fin报文的重传次数我不确定，持续时间差不多。重传等待时间是上次等待时间的两倍。
+
+fin报文重传
+TCP超时设置
+
+TCP超时设置比较简单，主要是三个参数，这三个方法每次读写前都需要重置一下，因为是设置绝对时间。
+
+Conn.SetDeadline(t time.Time)      
+Conn.SetReadDeadline(t time.Time) 
+Conn.SetWriteDeadline(t time.Time)
+
+bufReader := bufio.NewReader(conn)
+timeoutDuration := 5 * time.Second
+ 
+for {
+// Set a deadline for reading. Read operation will fail if no data is received after deadline.
+conn.SetReadDeadline(time.Now().Add(timeoutDuration))
+ 
+	bytes, err := bufReader.ReadBytes('\n')
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	fmt.Printf("%s", bytes)
+}
+
+
+3. KeepAlive介绍
+
+首先介绍TCP keepAlive，TCP的keepAlive作用如下
+
+判断连接是否断开（由中间设备、对端故障引起）
+为连接保持数据流
+KeepAlive在linux中有三个参数，分别表示开始发送探测报文之前的等待时间，发送探测报文的间隔，以及发送探测报文的此时。
+
+    net.ipv4.tcp_keepalive_time
+    net.ipv4.tcp_keepalive_intvl
+    net.ipv4.tcp_keepalive_probes
+查看修改配置方法的方法为：
+
+   查看 sysctl -a | grep tcp_keepalive
+
+   修改配置文件/etc/sysctl.conf，执行sysctl -p生效
+
+关于TCP keepAlive可以参考TCP Keepalive HOWTO
+http://www.tldp.org/HOWTO/TCP-Keepalive-HOWTO/overview.html
+
+Golang TCP KeepAlive的设置很简单，在Socket情况下，仅需要设置两个参数：
+
+TCPConn.SetKeepAlive(true)
+TCPConn.SetKeepAlivePeriod(3 * time.Minute)
+在HTTP情况下设置分为Client和Server，Client设置如下：
+
+netTransport := &http.Transport{
+	Dial: (&net.Dialer{
+		KeepAlive: 3 * time.Minute,
+	}).Dial,
+}
+Server设置如下：
+
+Server.ListenAndServe()             // enable    
+Server.ListenAndServeTLS()        // enable
+Server.Serve()                              // disable
+Golang的实现为，probes使用linux系统的默认值，intvl的值与time值相等，为参数设置的值，关于golang tcp keepalive可以参考
+https://felixge.de/2014/08/26/tcp-keepalive-with-golang.html
+
+再介绍HTTP KeepAlive，HTTP keepAlive是一种连接复用技术，意在减少连接建立和关闭所消耗的时间。
+
+Golang HTTP keepalive设置如下，client:
+
+http.Transport{
+    DisableKeepAlives: false, 
+    MaxIdleConnsPerHost: 2,       // Per proxy, scheme, addr
+    MaxIdleConns:        2,
+    IdleConnTimeout:     10 * time.Second,
+}
+Server:
+
+Server.SetKeepAlivesEnabled(true)    // Server disable + Client enable = disable
+
+
+4. 问题调试方法
+
+netstat 命令
+
+netstat  no | grep 8808
+
+     -o: 查看状态与计时器
+
+tcpdump 命令
+
+tcpdump -i enp0s31f6 host 172.16.3.113 -w tcpdump.cap
+
+wireshark 软件
+
+使用过滤条件
+
+tcp.port == 8808
+
+ip.addr == 172.16.3.11
+
+type Hijacker interface {
+	Hijack() (net.Conn, *bufio.ReadWriter, error)
+}
+//返回连接接口net.Conn和ReadWriter,bufio读写的
+// Hijack lets the caller take over the connection. -----翻译Hijack让调用者管理连接
+
+// After a call to Hijack(), the HTTP server library 
+
+// will not do anything else with the connection.                    
+
+// It becomes the caller's responsibility to manage
+
+// and close the connection.
+
+------------翻译调用Hijack后，HTTP的server不会对连接做多余的处理让用户自己管理和关闭连接
+
+再看一下docker中对hijack的使用
+
+         dial, err := cli.dial()  //设置TCP keepAlive做长连接
+	// When we set up a TCP connection for hijack, there could be long periods
+	// of inactivity (a long running command with no output) that in certain
+	// network setups may cause ECONNTIMEOUT, leaving the client in an unknown
+	// state. Setting TCP KeepAlive on the socket connection will prohibit
+	// ECONNTIMEOUT unless the socket connection truly is broken
+	if tcpConn, ok := dial.(*net.TCPConn); ok {
+		tcpConn.SetKeepAlive(true)
+		tcpConn.SetKeepAlivePeriod(30 * time.Second)
+	}
+	if err != nil {
+		if strings.Contains(err.Error(), "connection refused") {
+return fmt.Errorf("Cannot connect to the Docker daemon. Is 'docker daemon' running on this host?")
+		}
+		return err
+	}
+	clientconn := httputil.NewClientConn(dial, nil) 
+	defer clientconn.Close()
+
+	// Server hijacks the connection, error 'connection closed' expected
+	clientconn.Do(req)
+
+	rwc, br := clientconn.Hijack() 
+	//清理掉buffer 这步非常重要,返回这个两个参数就是给用户自己管理连接和数据处理
+	defer rwc.Close()
+
+再看看clientconn.Hijack的实现：
+
+func (cc *ClientConn) Hijack() (c net.Conn, r *bufio.Reader) {
+	cc.lk.Lock()
+	defer cc.lk.Unlock()
+	c = cc.c
+	r = cc.r
+	cc.c = nil
+	cc.r = nil
+	return
+}
+//就是在NewClientConn时候保存的net.Conn和bufio.Reader
+func NewClientConn(c net.Conn, r *bufio.Reader) *ClientConn {
+	if r == nil {
+		r = bufio.NewReader(c)
+	}
+	return &ClientConn{
+		c:        c,
+		r:        r,
+		pipereq:  make(map[*http.Request]uint),
+		writeReq: (*http.Request).Write,
+	}
+}
+总结：hijack就是不用重新建立连接或者重新构造ClientConn设置net.Conn和bufio，然后不断复用net.Conn和bufio，自己管理
+
+https://studygolang.com/articles/9339
+https://blog.cloudflare.com/the-complete-guide-to-golang-net-http-timeouts/
