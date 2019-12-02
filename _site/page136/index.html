@@ -144,27 +144,81 @@
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/storage/2018/10/29/maxwell.html">maxwell+kafka+Spark Streaming构建MySQL Binlog日志采集实时处理方案</a>
+						<a class="post-link" href="/MyBlog/storage/2018/11/09/MySql.html">MySql GIS 空间数据库使用体验</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/storage/2018/10/29/maxwell.html"> 夏泽民</a>
+						<a href="/MyBlog/storage/2018/11/09/MySql.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Oct 29, 2018
+							Nov 9, 2018
 						</span>
 					</div>
-					<div class="excerpt"><p>https://github.com/zendesk/maxwell
-组件下载地址：https://github.com/zendesk/maxwell/releases/download/v1.10.7/maxwell-1.10.7.tar.gz
- 给mysql授权(只针对于maxwell库的操作)
-其中user01为数据库用户名 666666为数据库密码
-GRANT ALL on maxwell.* to ‘user01’@’%’ identified by ‘666666’;
-GRANT SELECT, REPLICATION CLIENT, REPLICATION SLAVE on <em>.</em> to ‘user01’@’%’;
-执行maxwell命令行(注：maxwell默认是把监听的mysql的binlog日志发送到kafka的主题叫maxwell的topic上的)</p>
+					<div class="excerpt"><p>https://dev.mysql.com/doc/refman/5.7/en/spatial-function-reference.html
+1.理解下MySql GIS空间数据字段类型
+<img src="https://xiazemin.github.io/MyBlog/img/mysqlgis.gif" />
+1.一个点：POINT（15 20）
+请注意，点坐标无指定分隔逗号。
+2.一根线条，例如有四点组成的线条： LINESTRING（0 0，10 10，20 25，50 60）
+请注意，点坐标对用逗号分隔。
+3.一个多边形，例如一个外环和一个内环组成的多边形：POLYGON（（0 0,10 0,10 10 10 0 0），（5 5 7 5 7 7 5 7 5 5））
+4.多点集合，例如三个点的值：MultIPOINT（0 0，20 20，60 60）
+5.多线集合，例如两根线条的集合：MULTILINESTRING（（10 10，20 20），（15 15，30 15））
+6.多边形集合，例如两个多边形值的集合：MULTIPOLYGON（（（0 0,10 0,10 10 10,0 0）），（（5 5 7 5 7 7 5 7 5 5）））
+7.集合，例如两个点和一条线段的集合：GeometryCollection（POINT（10 10），POINT（30 30），LINESTRING（15 15，20 20））
+2.添加测试数据
+表t_pot 存储点信息，t_polygon存储几何信息
+t_pot 创建语句（由于这里使用的是mysql 5.7的数据库，所以用InnoDB数据引擎，较低版本的数据库需要采用MyISAM ）
+CREATE TABLE <code class="highlighter-rouge">t_pot</code> (
+  <code class="highlighter-rouge">id</code> int(11) NOT NULL AUTO_INCREMENT,
+  <code class="highlighter-rouge">name</code> varchar(255) DEFAULT NULL,
+  <code class="highlighter-rouge">pot</code> point DEFAULT NULL,
+  PRIMARY KEY (<code class="highlighter-rouge">id</code>)
+) ENGINE=InnoDB AUTO_INCREMENT=5 DEFAULT CHARSET=utf8;
+往t_pot表中添加测试数据
+ INSERT INTO <code class="highlighter-rouge">t_pot</code> VALUES (‘1’, ‘A’, GeomFromText(‘POINT(0 0)’));
+INSERT INTO <code class="highlighter-rouge">t_pot</code> VALUES (‘2’, ‘B’, GeomFromText(‘POINT(0 2)’));
+INSERT INTO <code class="highlighter-rouge">t_pot</code> VALUES (‘3’, ‘C’, GeomFromText(‘POINT(2 0)’));
+INSERT INTO <code class="highlighter-rouge">t_pot</code> VALUES (‘4’, ‘D’, GeomFromText(‘POINT(2 2)’));
+ t_polygon创建语句
+CREATE TABLE <code class="highlighter-rouge">t_polygon</code> (
+  <code class="highlighter-rouge">id</code> int(11) NOT NULL AUTO_INCREMENT,
+  <code class="highlighter-rouge">name</code> varchar(255) DEFAULT NULL,
+  <code class="highlighter-rouge">pgn</code> polygon DEFAULT NULL,
+  PRIMARY KEY (<code class="highlighter-rouge">id</code>)
+) ENGINE=InnoDB AUTO_INCREMENT=9 DEFAULT CHARSET=utf8;
+往t_polygon表中添加测试数据
+INSERT INTO <code class="highlighter-rouge">t_polygon</code> VALUES (‘1’, ‘ABCD’, GeomFromText(‘POLYGON((0 0, 2 0, 2 2, 0 2, 0 0))’));
+INSERT INTO <code class="highlighter-rouge">t_polygon</code> VALUES (‘2’, ‘AEGF’, GeomFromText(‘POLYGON((0 0, 4 0, 4 4, 0 4, 0 0))’));
+INSERT INTO <code class="highlighter-rouge">t_polygon</code> VALUES (‘3’, ‘CEGFBD’, GeomFromText(‘POLYGON((0 2, 0 4, 4 4, 4 0, 2 0, 2 2, 0 2))’));
+INSERT INTO <code class="highlighter-rouge">t_polygon</code> VALUES (‘4’, ‘AHJIK’, GeomFromText(‘POLYGON((0 0, 0 6, 6 6, 6 0, 0 0), (2 2, 4 4, 4 2, 2 2))’));
+INSERT INTO <code class="highlighter-rouge">t_polygon</code> VALUES (‘5’, ‘DGK’, GeomFromText(‘POLYGON((2 2, 4 4, 4 2, 2 2))’));
+INSERT INTO <code class="highlighter-rouge">t_polygon</code> VALUES (‘6’, ‘GKJ’, GeomFromText(‘POLYGON((4 4, 4 2, 6 6, 4 4))’));
+INSERT INTO <code class="highlighter-rouge">t_polygon</code> VALUES (‘7’, ‘ADF’, GeomFromText(‘POLYGON((0 0, 2 2, 4 0, 0 0))’));
+INSERT INTO <code class="highlighter-rouge">t_polygon</code> VALUES (‘8’, ‘LDK’, GeomFromText(‘POLYGON((1 1, 2 2, 4 2, 1 1))’));
+t_pot表中的点坐标数据没有什么好解释的，下面对t_polygon数据进行说明
+下面是表中对应的坐标点位置：
+ABDC：POLYGON((0 0, 2 0, 2 2, 0 2, 0 0))  面积为4的正方形
+AEGF：POLYGON((0 0, 4 0, 4 4, 0 4, 0 0)) 面积为16的正方形
+CEGFBD：POLYGON((0 2, 0 4, 4 4, 4 0, 2 0, 2 2, 0 2)) 面积为16的正方形 - 面积为4的正方形
+DGK：POLYGON((2 2, 4 4, 4 2, 2 2))面积为2的直角等腰三角形
+AHJIK：POLYGON((0 0, 0 6, 6 6, 6 0, 0 0), (2 2, 4 4, 4 2, 2 2))  面积为36的正方形 - 面积为2的三角形DGK
+GKJ ：POLYGON((4 4, 4 2, 6 6, 4 4)) 面积为2的三角形
+ADF ：POLYGON((0 0, 2 2, 4 0, 0 0))面积为4的等腰三角形
+LDK：POLYGON((1 1, 2 2, 4 2, 1 1))面积为1的三角形
+3.测试SQL语句
+ST_GEOMFROMTEXT文本数据转成空间数据，所以下面看着就乱码了(Navicate中是不乱码)
+mysql&gt; SELECT ST_GEOMFROMTEXT(“POINT(1 2)”);
++——————————-+
+| ST_GEOMFROMTEXT(“POINT(1 2)”) |
++——————————-+
+|              ð?       @      |
++——————————-+
+1 row in set (0.00 sec)</p>
 
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/storage/2018/10/29/maxwell.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/storage/2018/11/09/MySql.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -174,23 +228,21 @@ GRANT SELECT, REPLICATION CLIENT, REPLICATION SLAVE on <em>.</em> to ‘user01�
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/algorithm/2018/10/28/smaza.html">samza</a>
+						<a class="post-link" href="/MyBlog/storage/2018/11/09/MHA.html">MySQL高可用架构之MHA</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/algorithm/2018/10/28/smaza.html"> 夏泽民</a>
+						<a href="/MyBlog/storage/2018/11/09/MHA.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Oct 28, 2018
+							Nov 9, 2018
 						</span>
 					</div>
-					<div class="excerpt"><p>https://www.w3cschool.cn/samza/
-Samza介绍
-Samza是近日由LinkedIn开源的一项技术，它是一个分布式流处理框架，它是基于Kafka消息队列来实现类实时的流式数据处理的，非常像Twitter的流处理系统Storm。不同的是Samza基于Hadoop，而且使用了LinkedIn自家的Kafka分布式消息系统，并使用资源管理器Apache Hadoop YARN实现容错处理、处理器隔离、安全性和资源管理。</p>
+					<div class="excerpt"><p>MHA（Master High Availability）目前在MySQL高可用方面是一个相对成熟的解决方案，它由日本DeNA公司youshimaton（现就职于Facebook公司）开发，是一套优秀的作为MySQL高可用性环境下故障切换和主从提升的高可用软件。在MySQL故障切换过程中，MHA能做到在0~30秒之内自动完成数据库的故障切换操作，并且在进行故障切换的过程中，MHA能在最大程度上保证数据的一致性，以达到真正意义上的高可用。</p>
 
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/algorithm/2018/10/28/smaza.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/storage/2018/11/09/MHA.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -200,24 +252,23 @@ Samza是近日由LinkedIn开源的一项技术，它是一个分布式流处理�
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/storage/2018/10/28/flume.html">flume</a>
+						<a class="post-link" href="/MyBlog/storage/2018/11/09/ArcSDE.html">ArcSDE 是ArcGIS的空间数据引擎</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/storage/2018/10/28/flume.html"> 夏泽民</a>
+						<a href="/MyBlog/storage/2018/11/09/ArcSDE.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Oct 28, 2018
+							Nov 9, 2018
 						</span>
 					</div>
-					<div class="excerpt"><p>一、Flume简介
-　　flume 作为 cloudera 开发的实时日志收集系统，受到了业界的认可与广泛应用。Flume 初始的发行版本目前被统称为 Flume OG（original generation），属于 cloudera。
-　　但随着 FLume 功能的扩展，Flume OG 代码工程臃肿、核心组件设计不合理、核心配置不标准等缺点暴露出来，尤其是在 Flume OG 的最后一个发行版本 0.9.4. 中，日志传输不稳定的现象尤为严重，为了解决这些问题，2011 年 10 月 22 号，cloudera 完成了 Flume-728，对 Flume 进行了里程碑式的改动：重构核心组件、核心配置以
-　　及代码架构，重构后的版本统称为 Flume NG（next generation）；改动的另一原因是将 Flume 纳入 apache 旗下，cloudera Flume 改名为 Apache Flume。</p>
+					<div class="excerpt"><p>SDE的全称是spatial database engine(空间数据引擎)，之所以称之为引擎，是因为所有的空间数据IO都需要通过它来管理。它属于中间件技术，位于客户端和数据库之间，其本身并不能够存储空间数据（存储是由数据库完成），它的作用可以理解为将数据库中的对象（表、视图等）抽象成上层GIS应用可以认识的概念，例如feature、feature class等。
+	ARCSDE保存了一系统数据库对象，用于管理空间信息，这些对象统称为资料档案库（Repository）。以基于ORACLE数据库的ARCSDE为例，资料档案库包含SDE用户下的数据字典表、存储过程、以及数个.dll文件。数据字典表，用以存储要素类、要素类字段、要素类投影、要素类范围等元数据信息，而存储过程和.dll用于实现对空间数据的GIS运算和操作，例如用于计算polygon周长的方法。
+	文已经说过，ARCSDE并不能够存储空间数据，数据都是存储在RDBMS(关系型数据库)(实际上并不限于RDBMS，ARCSDE也支持非关系型数据库和HADOOP。但现在只谈它与ORACLE SPATIAL的关系，因此，此处说RDBMS)中。以矢量数据为例，它既可以以二近制形式存储为一个BLOB对象，也可以使用RDBMS或ARCSDE提供的矢量数据类型。</p>
 
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/storage/2018/10/28/flume.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/storage/2018/11/09/ArcSDE.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -227,31 +278,29 @@ Samza是近日由LinkedIn开源的一项技术，它是一个分布式流处理�
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/web/2018/10/28/csrftoken.html">csrf token</a>
+						<a class="post-link" href="/MyBlog/storage/2018/11/07/kafka.html">kafka shell</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/web/2018/10/28/csrftoken.html"> 夏泽民</a>
+						<a href="/MyBlog/storage/2018/11/07/kafka.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Oct 28, 2018
+							Nov 7, 2018
 						</span>
 					</div>
-					<div class="excerpt"><!-- more -->
-<p>CSRF 攻击之所以能够成功，是因为黑客可以完全伪造用户的请求，该请求中所有的用户验证信息都是存在于 cookie 中，因此黑客可以在不知道这些验证信息的情况下直接利用用户自己的 cookie 来通过安全验证。要抵御 CSRF，关键在于在请求中放入黑客所不能伪造的信息，并且该信息不存在于 cookie 之中。可以在 HTTP 请求中以参数的形式加入一个随机产生的 token，并在服务器端建立一个拦截器来验证这个 token，如果请求中没有 token 或者 token 内容不正确，则认为可能是 CSRF 攻击而拒绝该请求。
-这种方法要比检查 Referer 要安全一些，token 可以在用户登陆后产生并放于 session 之中，然后在每次请求时把 token 从 session 中拿出，与请求中的 token 进行比对，但这种方法的难点在于如何把 token 以参数的形式加入请求。对于 GET 请求，token 将附在请求地址之后，这样 URL 就变成 http://url?csrftoken=tokenvalue。 而对于 POST 请求来说，要在 form 的最后加上 &lt;input type=”hidden” name=”csrftoken” value=”tokenvalue”/&gt;，这样就把 token 以参数的形式加入请求了。
-如果说这个Token是指的用户登录的凭据，并用以维持登录状态的话，也就是说一个用户必须要输入用户名密码并验证通过后，服务器才会分配一个Token，传回并储存在客户端作为凭证（同时储存在服务器上）。因此并不是每个人都可以获得这个Token，只有能提供正确用户密码的客户端才可以。
-之后每一次操作，都需要客户端向服务器提供这个Token，以验证登录状态，如果考虑安全性的话，还可以增加对User-Agent、IP等信息的验证。
-CSRF防范方法：
-（1）验证码
-（2）refer头
-（3）Token
-说明：理解token的作用，他是一个随机的值，是服务器端前一个请求给的，是一次性的，可以防止csrf这种恶意的携带自己站点的信息发请求或者提交数据（这个动作一般需要获取你的前一个请求的响应返回的token值，加大了难度，并不能完全杜绝）。
-注意当然不能写到cookie中，因为浏览器在发出恶意csrf请求时，是自动带着你的cookie的。</p>
+					<div class="excerpt"><p>创建kafka topic
+查看所有topic列表
+查看指定topic信息
+控制台向topic生产数据
+控制台消费topic的数据
+查看topic某分区偏移量最大（小）值
+增加topic分区数
+删除topic，慎用，只会删除zookeeper中的元数据，消息文件须手动删除
+查看topic消费进度</p>
 
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/web/2018/10/28/csrftoken.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/storage/2018/11/07/kafka.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -261,21 +310,22 @@ CSRF防范方法：
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/storage/2018/10/22/processlist.html">show processlist</a>
+						<a class="post-link" href="/MyBlog/storage/2018/11/02/presto.html">presto</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/storage/2018/10/22/processlist.html"> 夏泽民</a>
+						<a href="/MyBlog/storage/2018/11/02/presto.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Oct 22, 2018
+							Nov 2, 2018
 						</span>
 					</div>
-					<div class="excerpt"><p>SHOW PROCESSLIST显示哪些线程正在运行</p>
+					<div class="excerpt"><p>presto是什么
+是Facebook开源的，完全基于内存的并⾏计算，分布式SQL交互式查询引擎</p>
 
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/storage/2018/10/22/processlist.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/storage/2018/11/02/presto.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -1219,6 +1269,10 @@ CSRF防范方法：
 			  
 			    
 			      <a href="/MyBlog/page232/">232</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page233/">233</a>
 			    
 			  
 
@@ -2410,6 +2464,11 @@ CSRF防范方法：
 						  
 						
 
+						  
+							<li><a href="/MyBlog/page233">233</a></li>
+						  
+						
+
 						
 						  <li><a href="/MyBlog/page137">Next</a></li>
 						
@@ -2443,6 +2502,54 @@ CSRF防范方法：
 							"data" : [
 							
 							{
+							"title" : "itoa - ",
+							"url" : "/MyBlog/golang/2019/12/02/itoa.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "interceptor - ",
+							"url" : "/MyBlog/golang/2019/12/02/interceptor.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "grpc http2 - ",
+							"url" : "/MyBlog/golang/2019/12/02/http2.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "gRPC vs Thrift - ",
+							"url" : "/MyBlog/golang/2019/12/02/gRPC.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "gRPC ProtoBuf - ",
+							"url" : "/MyBlog/golang/2019/12/02/ProtoBuf.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "runtime.Caller runtime.FuncForPC - ",
+							"url" : "/MyBlog/golang/2019/12/02/Caller.html"
+							}
+							
+							,
+							
+							
+							{
 							"title" : "scp - ",
 							"url" : "/MyBlog/web/2019/12/01/scp.html"
 							}
@@ -2451,8 +2558,24 @@ CSRF防范方法：
 							
 							
 							{
+							"title" : "Replication Controller、Replica Set - ",
+							"url" : "/MyBlog/golang/2019/12/01/rc.html"
+							}
+							
+							,
+							
+							
+							{
 							"title" : "kubernetes - ",
 							"url" : "/MyBlog/golang/2019/12/01/kubernetes.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "cli - ",
+							"url" : "/MyBlog/golang/2019/12/01/cli.html"
 							}
 							
 							,
@@ -11867,7 +11990,7 @@ CSRF防范方法：
 								
 								
 									<a class="bold" href="/MyBlog/category/golang">
-										golang (309)
+										golang (317)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -12000,11 +12123,43 @@ CSRF防范方法：
 								<ul style="display:none;width:250px;height:250px;">
 								     
 								   <li>
+										<a href="/MyBlog/golang/2019/12/02/itoa.html" style="font-size:40px;"> itoa</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/golang/2019/12/02/interceptor.html" style="font-size:40px;"> interceptor</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/golang/2019/12/02/http2.html" style="font-size:40px;"> grpc http2</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/golang/2019/12/02/gRPC.html" style="font-size:40px;"> gRPC vs Thrift</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/golang/2019/12/02/ProtoBuf.html" style="font-size:40px;"> gRPC ProtoBuf</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/golang/2019/12/02/Caller.html" style="font-size:40px;"> runtime.Caller runtime.FuncForPC</a>
+									</li>
+									  
+								   <li>
 										<a href="/MyBlog/web/2019/12/01/scp.html" style="font-size:40px;"> scp</a>
 									</li>
 									  
 								   <li>
+										<a href="/MyBlog/golang/2019/12/01/rc.html" style="font-size:40px;"> Replication Controller、Replica Set</a>
+									</li>
+									  
+								   <li>
 										<a href="/MyBlog/golang/2019/12/01/kubernetes.html" style="font-size:40px;"> kubernetes</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/golang/2019/12/01/cli.html" style="font-size:40px;"> cli</a>
 									</li>
 									  
 								   <li>
@@ -12126,38 +12281,6 @@ CSRF防范方法：
 								   <li>
 										<a href="/MyBlog/linux/2019/11/24/DYLD_FORCE_FLAT_NAMESPACE.html" style="font-size:40px;"> DYLD_FORCE_FLAT_NAMESPACE</a>
 									</li>
-									  
-								   <li>
-										<a href="/MyBlog/linux/2019/11/24/.html" style="font-size:40px;"> LD_LIBRARY_PATH</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2019/11/23/%E5%B9%B6%E5%8F%91%E8%AE%BF%E9%97%AE.html" style="font-size:40px;"> tcmalloc</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/linux/2019/11/23/set.html" style="font-size:40px;"> set</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2019/11/23/select.html" style="font-size:40px;"> select</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2019/11/23/pod.html" style="font-size:40px;"> Kubernetes Pod 的实现原理</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2019/11/23/k3s.html" style="font-size:40px;"> k3s</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/web/2019/11/23/flutter.html" style="font-size:40px;"> flutter</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2019/11/23/dubbo-go.html" style="font-size:40px;"> dubbo-go</a>
-									</li>
 									
 								</ul>
 							</div>
@@ -12172,33 +12295,33 @@ CSRF防范方法：
                 		<ul class="posts" span="recent">  
 							  
 							   <li>  
-								   <span>01 Dec 2019</span>
-								   <a href="/MyBlog/web/2019/12/01/scp.html">  
-								   scp</a>  
+								   <span>02 Dec 2019</span>
+								   <a href="/MyBlog/golang/2019/12/02/itoa.html">  
+								   itoa</a>  
 							   </li>  
 							  
 							   <li>  
-								   <span>01 Dec 2019</span>
-								   <a href="/MyBlog/golang/2019/12/01/kubernetes.html">  
-								   kubernetes</a>  
+								   <span>02 Dec 2019</span>
+								   <a href="/MyBlog/golang/2019/12/02/interceptor.html">  
+								   interceptor</a>  
 							   </li>  
 							  
 							   <li>  
-								   <span>01 Dec 2019</span>
-								   <a href="/MyBlog/golang/2019/12/01/borg.html">  
-								   borg</a>  
+								   <span>02 Dec 2019</span>
+								   <a href="/MyBlog/golang/2019/12/02/http2.html">  
+								   grpc http2</a>  
 							   </li>  
 							  
 							   <li>  
-								   <span>30 Nov 2019</span>
-								   <a href="/MyBlog/golang/2019/11/30/Sidecar.html">  
-								   Sidecar</a>  
+								   <span>02 Dec 2019</span>
+								   <a href="/MyBlog/golang/2019/12/02/gRPC.html">  
+								   gRPC vs Thrift</a>  
 							   </li>  
 							  
 							   <li>  
-								   <span>30 Nov 2019</span>
-								   <a href="/MyBlog/golang/2019/11/30/SOFA-MOSN.html">  
-								   SOFA-MOSN</a>  
+								   <span>02 Dec 2019</span>
+								   <a href="/MyBlog/golang/2019/12/02/ProtoBuf.html">  
+								   gRPC ProtoBuf</a>  
 							   </li>  
 							  
 						</ul>
