@@ -1,0 +1,43 @@
+---
+title: thrift optional 字段一般都是指针的原因
+layout: post
+category: golang
+author: 夏泽民
+---
+请问下struct成员，使用指针表示什么含义？什么情况下会这么用？
+譬如你用json序列化和反序列化区分零值和空值的时候
+譬如*string 如果导出的话序列化为null，非指针序列化为""空字符串
+另外如果你用 thrift 时，添加的 optional 字段一般都是指针的，同样道理
+<!-- more -->
+两次拷贝
+因为 thrift IDL 生成出来的 struct 不是很好用，比如：
+
+用 *int 表示 optional
+无法增加不在 IDL 里的业务字段
+所以为了避免和 thrift 的 codegen 做搏斗，业务就自己再定义了一个struct。然后解析的过程就变成了
+
+[]byte => thrift struct => 业务的 struct
+
+这就多了一次内存的拷贝，同时增加了GC负担。这个问题最佳的解决办法就是直接对象绑定到业务 struct 上，也就是 Go 的 struct 不用和 IDL 字段一一对应。这种映射关系和常见 JSON 绑定是类似的。
+
+
+没 IDL 无法编解码
+不是所有人都喜欢代码生成的。有的时候为了开发方便，会希望能不能用反射之类的方式直接绑定到对象上。
+
+即便排除掉口味偏好。仍然有一些场景下无法用Codegen来解决。比如，我们需要一个 thrift proxy。这个代理可以在网络传输过程中修改 thrift message 的第0个参数的内容。我们不能提前知道所有可能的 thrift message 的 IDL，当然也无法对这些 IDL 提前代码生成。使用官方的 thrift lib 是很难优雅地解决这个问题地。
+
+在 Go 里面使用 thrift 未必比 JSON 要快
+
+为什么会慢呢？主要是这么两点
+
+完全无buffer的解析。所有的数据都假设从 io.Reader 里读取出来。
+中途大量的 check err 的代码
+
+https://github.com/thrift-iterator/go
+通过静态代码生成支持对象绑定，基于纯 Go 实现的代码生成框架 v2pro/wombat ，从 Go struct 直接生成代码。
+通过 jsoniter 类似的反射支持对象绑定，实现性能不受太大影响的情况下，不用代码生成也能使用 thrift协议
+支持无 IDL 解析，移植 jsoniter 的 api
+支持 iterator api，支持不同字段用不同的解析模式
+能 skip 字段并返回 []byte
+支持把thrift解析成map
+重写解析代码，达到和Protobuf一样的性能水平

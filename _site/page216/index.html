@@ -147,71 +147,56 @@
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/spark/2017/12/13/sbt.html">sbt</a>
+						<a class="post-link" href="/MyBlog/linux/2017/12/24/goroutine.html">goroutine</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/spark/2017/12/13/sbt.html"> 夏泽民</a>
+						<a href="/MyBlog/linux/2017/12/24/goroutine.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Dec 13, 2017
+							Dec 24, 2017
+						</span>
+					</div>
+					<div class="excerpt"><p>Go runtime的调度器：在了解Go的运行时的scheduler之前，需要先了解为什么需要它，因为我们可能会想，OS内核不是已经有一个线程scheduler了嘛？熟悉POSIX API的人都知道，POSIX的方案在很大程度上是对Unix process进场模型的一个逻辑描述和扩展，两者有很多相似的地方。 Thread有自己的信号掩码，CPU affinity等。但是很多特征对于Go程序来说都是累赘。 尤其是context上下文切换的耗时。另一个原因是Go的垃圾回收需要所有的goroutine停止，使得内存在一个一致的状态。垃圾回收的时间点是不确定的，如果依靠OS自身的scheduler来调度，那么会有大量的线程需要停止工作。 单独的开发一个GO得调度器，可以是其知道在什么时候内存状态是一致的，也就是说，当开始垃圾回收时，运行时只需要为当时正在CPU核上运行的那个线程等待即可，而不是等待所有的线程。用户空间线程和内核空间线程之间的映射关系有：N:1,1:1和M:NN:1是说，多个（N）用户线程始终在一个内核线程上跑，context上下文切换确实很快，但是无法真正的利用多核。1：1是说，一个用户线程就只在一个内核线程上跑，这时可以利用多核，但是上下文switch很慢。M:N是说， 多个goroutine在多个内核线程上跑，这个看似可以集齐上面两者的优势，但是无疑增加了调度的难度。
+Go的调度器内部有三个重要的结构：M，P，G
+M:代表真正的内核OS线程，和POSIX里的thread差不多，真正干活的人G:代表一个goroutine，它有自己的栈，instruction pointer和其他信息（正在等待的channel等等），用于调度。P:代表调度的上下文，可以把它看做一个局部的调度器，使go代码在一个线程上跑，它是实现从N:1到N:M映射的关键。
+有2个物理线程M，每一个M都拥有一个context（P），每一个也都有一个正在运行的goroutine。P的数量可以通过GOMAXPROCS()来设置，它其实也就代表了真正的并发度，即有多少个goroutine可以同时运行。图中灰色的那些goroutine并没有运行，而是出于ready的就绪态，正在等待被调度。P维护着这个队列（称之为runqueue），Go语言里，启动一个goroutine很容易：go function 就行，所以每有一个go语句被执行，runqueue队列就在其末尾加入一个goroutine，在下一个调度点，就从runqueue中取出（如何决定取哪个goroutine？）一个goroutine执行。为何要维护多个上下文P？因为当一个OS线程被阻塞时，P可以转而投奔另一个OS线程！图中看到，当一个OS线程M0陷入阻塞时，P转而在OS线程M1上运行。调度器保证有足够的线程来运行所以的context P。</p>
+
+</div>
+					<div class="readmore" style="float: right;">
+						
+							<a href="/MyBlog/linux/2017/12/24/goroutine.html" style="color:green">阅读全文</a>
+						
+					</div>								
+			</div>
+			<br/>
+			<hr/>
+			<div class="post-list" style="list-style-type: none;">			
+				 	
+					<h2>
+						<img class="title-image" src="/MyBlog/img/dna.png"/>
+						<a class="post-link" href="/MyBlog/web/2017/12/24/goclipse.html">goclipse eclipse go 开发环境搭建＋跳转支持</a>
+					</h2>
+					<div class="author" style="margin-top: -10px;">Posted by
+						<i class="fa fa-user"></i>
+						<a href="/MyBlog/web/2017/12/24/goclipse.html"> 夏泽民</a>
+						<span class="post-meta"><i class="fa fa-calendar"></i> 
+							Dec 24, 2017
 						</span>
 					</div>
 					<div class="excerpt"><!-- more -->
-<p>SBT = (not so) Simple Build Tool,是scala的构建工具，与java的maven地位相同。其设计宗旨是让简单的项目可以简单的配置，而复杂的项目可以复杂的配置。。。
-sbt项目的目录规约
-和maven一样，sbt有约定了一个通用的目录结构，使用约定的结构会使后面的工作简单很多。
-base/<br />
-          build.sbt              //构建配置文件
-         /project                 //也是构建配置的一部分
-                      /build.scala                         //高级配置，可选
-         /src/
-                /main
-                          /scala
-                          /java
-                         /resources
-               /test
-                          /scala
-                          /java
-                         /resources
-base代表项目的根目录
-项目配置可以在build.sbt文件里定义，也可以在base/project/build.scala文件里定义，一般情况下build.sbt就已经足够，除非多工程项目或者需要很多特殊定义的项目
-常用命令
-在我读完sbt的getting started文档之前，我也经常有疑问：为什么scala不沿用maven，而要搞出sbt这么个(not so simple) Simple Build Tool ？
-在读完文档，并实际操作后，我现在感觉确实是物有所值的。
-checkout 我的sbtTemple项目后，进入命令行，进入到项目根目录，输入sbt回车进入sbt交互模式
-sbt有哪些命令可用？输入help命令查询，即会列出一堆可用的命令，比如exit,reload等，不知道某个命令的作用？help 命令名，比如输入help exit显示exit命令的作用。 
-列出的命令里并没有compile,test等常用的命令？因为那些不是sbt的命令而是当前工程的task. 输入 tasks命令，就可以看见 compile,test,package等等任务的说明了。
-想查看项目的配置？用show命令，输入show name,看当前项目的名字，输入show libraryDependencies看当前项目依赖的库，libraryDependencies太长记不住？输入lib后按tab键！ 交互窗口是有tab提示的！输入help show，你可以看到show命令的作用是显示配置的值，如果show之后跟的是任务，则执行该任务并显示任务执行的结果。 你可以试试show compile看什么结果,如果你不想执行compile，而是想看命令的说明，请用inspect命令,inspect命令比较复杂，执行后输出的结果也比较复杂，具体这个命令的作用是什么请help inspect, 不过得等理解了build definition的含义后才能看懂help说的是什么。。。
-常用的任务则有compile, test, run,package,doc等，请顾名思义或自行help之。另外这些任务常常还有些变种，比如package-doc,package-src等，用tasks命令查看任务的列表，必有一款适合您
-有一个强大的任务不得不特别拎出来说一下：console
-输入console回车，会在当前会话内启动一个REPL，不要告诉我你不知道REPL是scala解释器的意思。。。就是你在命令行下输入scala回车后进入的那个交互界面。
-强大的是，sbt会加载你的项目依赖的全部jar包和你自己的代码！ 你可以在这个解释器里实验你的半成品。 我的模板工程里有一个sample/Account.scala文件，十几行很简单的代码，你可以看一下，然后在console窗口里玩弄Account类和Account伴生对象.  不过别忘了先import sample._
-因为依赖的jar包也都被加载了，所以对于那些你可能还不熟悉的第三方库，你有可以在console里玩个痛快！这功能很给力，谁用谁知道。
-顺便在提一下，sbt命令有3种执行模式：
-1、交互式，即上文所描述的
-2、批处理式，即在命令行下输入sbt 命令名来执行，比如sbt compile就会编译代码，而不进入交互模式
-3、连绵不绝式，在命令名前加上~号，即会进入连绵不绝模式，比如~compile,会编译当前代码，然后监听代码改变，每当你编辑了代码并保存后，sbt就会自动编译代码，~test也一样，当你修改代码后自动编译并运行单元测试。按回车键可退出此模式。
-build definition释义
-你前面应该试过show name和show libraryDependencies了吧？show出来的结果就是来自你的build.sbt文件，也就是build definition了。打开build.sbt就可以看到name := “sbt11template”  还有其他的一堆xxx := xxxx，很显然的，这就是个key-value pair,  sbt就是读取配置文件并构建一个key-value的map. 但是在build.sbt里面并非key := value, 而是key := expression. 文件里的每一行其实是一句scala语句，不行你可以试试把
-name := “sbt11template” 改成
-name := {“sbt11template”.toUpperCase} 
-然后reload,  再show name,你会看到变成大写的SBT11TEMPLATE
-:=是最常用的方法，其作用就是将key设置成expression的值，相同的key如果被多次赋值，则后面的值会覆盖掉前面的值。适用于简单类型的key，比如name,version等。
-其他的常用方法有
-+=，将值添加进现有值里，适用于集合类型的key，比如libraryDependencies
-++=,将一个集合值加入当前集合里
-~= ，。。这个牛X，你在~=后面写个函数，~=将key的当前值传给你的函数，然后将函数结果作为新值，比如你可以在name := xxx后面再来一句 
-name ~= { _. toUpperCase },一样是把name变成大写
-«= 将另一个key的值赋给当前key,比如auther «= name ,这个方法还有个高级用法，你可以组合多个其他key的值，赋给当前key，用文档里的例子
-name «= (name, organization, version) { (n, o, v) =&gt; “project “ + n + “ from “ + o + “ version “ + v }
-还有适用于集合类型的版本
-&lt;+= 和 &lt;++=
-这些语法的官方文档在此https://github.com/harrah/xsbt/wiki/Getting-Started-More-About-Settings</p>
+<p>Eclipse Mars (4.5)  下载地址：https://www.eclipse.org/mars/
+golang 1.6.0rc2 下载地址：http://www.golangtc.com/download
+goclipse 0.14.1 下载地址: https://github.com/GoClipse/goclipse
+eclipse在线安装地址：http://goclipse.github.io/releases/
+eclipse+goclipse安装后不能联想和跳转问题解决
+Window-&gt;Preferences-&gt;Go
+指定$GOPATH 和$GOROOT
+<img src="https://xiazemin.github.io/MyBlog/img/goclipse.png" /></p>
 
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/spark/2017/12/13/sbt.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/web/2017/12/24/goclipse.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -221,47 +206,22 @@ name «= (name, organization, version) { (n, o, v) =&gt; “project “ + n + �
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/linux/2017/12/13/radix_tree.html">radix tree</a>
+						<a class="post-link" href="/MyBlog/web/2017/12/22/tcp_flag.html">tcp_flag</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/linux/2017/12/13/radix_tree.html"> 夏泽民</a>
+						<a href="/MyBlog/web/2017/12/22/tcp_flag.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Dec 13, 2017
-						</span>
-					</div>
-					<div class="excerpt"><p>基数树</p>
-
-</div>
-					<div class="readmore" style="float: right;">
-						
-							<a href="/MyBlog/linux/2017/12/13/radix_tree.html" style="color:green">阅读全文</a>
-						
-					</div>								
-			</div>
-			<br/>
-			<hr/>
-			<div class="post-list" style="list-style-type: none;">			
-				 	
-					<h2>
-						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/spark/2017/12/13/maven.html">maven 安装</a>
-					</h2>
-					<div class="author" style="margin-top: -10px;">Posted by
-						<i class="fa fa-user"></i>
-						<a href="/MyBlog/spark/2017/12/13/maven.html"> 夏泽民</a>
-						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Dec 13, 2017
+							Dec 22, 2017
 						</span>
 					</div>
 					<div class="excerpt"><!-- more -->
-<p>https://maven.apache.org/download.cgi?Preferred=http%3A%2F%2Fmirror.bit.edu.cn%2Fapache%2F
-下载 Maven, 并解压到某个目录。例如/Users/robbie/apache-maven-3.3.3</p>
+<p>在TCP层，有个FLAGS字段，这个字段有以下几个标识：SYN, FIN, ACK, PSH, RST, URG.</p>
 
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/spark/2017/12/13/maven.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/web/2017/12/22/tcp_flag.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -271,41 +231,22 @@ name «= (name, organization, version) { (n, o, v) =&gt; “project “ + n + �
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/spark/2017/12/13/figaro.html">figaro mac 安装</a>
+						<a class="post-link" href="/MyBlog/web/2017/12/22/short_url.html">url短链</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/spark/2017/12/13/figaro.html"> 夏泽民</a>
+						<a href="/MyBlog/web/2017/12/22/short_url.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Dec 13, 2017
+							Dec 22, 2017
 						</span>
 					</div>
-					<div class="excerpt"><p>$brew install sbt
- $which sbt
-/usr/local/bin/sbt
-$ git clone https://github.com/xiazemin/figaro.git
-$sbt package
-[warn] No sbt.version set in project/build.properties, base directory: /Users/didi/figaro/figaro
-[info] Set current project to figaro (in build file:/Users/didi/figaro/figaro/)
-[info] Updating {file:/Users/didi/figaro/figaro/}figaro…
-[info] Done updating.
-[info] Packaging /Users/didi/figaro/figaro/target/scala-2.12/figaro_2.12-0.1-SNAPSHOT.jar …
-[info] Done packaging.
-[success] Total time: 3 s, completed 2017-12-13 13:13:19
-操作后会得到一个jar文件
-target/scala-2.12/figaro_2.12-0.1-SNAPSHOT.jar
-建立一个scala工程将生成的jar包引入
-问题：
-包无法引入
-参考：
-https://www.cra.com/work/case-studies/figaro
-下载编译包
-安装到：/Applications/figaro-5.0.0.0-2.11
-项目中引入包即可</p>
+					<div class="excerpt"><p>什么是短链接 🔗
+就是把普通网址，转换成比较短的网址。比如：http://t.cn/RlB2PdD 这种，在微博这些限制字数的应用里。好处不言而喻。短、字符少、美观、便于发布、传播。</p>
+
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/spark/2017/12/13/figaro.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/web/2017/12/22/short_url.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -315,113 +256,24 @@ https://www.cra.com/work/case-studies/figaro
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/web/2017/12/13/bigEnd.html">大端小端</a>
+						<a class="post-link" href="/MyBlog/linux/2017/12/22/pid_0_1.html">ID为0和ID为1的进程</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/web/2017/12/13/bigEnd.html"> 夏泽民</a>
+						<a href="/MyBlog/linux/2017/12/22/pid_0_1.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Dec 13, 2017
+							Dec 22, 2017
 						</span>
 					</div>
-					<div class="excerpt"><p>大端模式，是指数据的高字节保存在内存的低地址中，而数据的低字节保存在内存的高地址中
-<!-- more -->
-判断方法
-（一）指针法</p>
+					<div class="excerpt"><!-- more -->
+<p>ID为0的进程通常是调度进程，常常被称为交换进程（swapper）。该进程是内核的一部分，它并不执行任何磁盘上的程序，因此也被称为系统进程。
+ID为1的进程，通常是init进程，在自举过程结束时由内核调用。该进程的程序文件，在UNIX早起版本中是/etc/init，在较新的版本中是/sbin/init。该进程负责在自举内核后启动一个UNIX系统。init通常读与系统有关的初始化文件（/etc/rc*文件或/etc/inittab文件，以及/etc/init.d中的文件），并将系统引导到一个状态。init 进程绝不会终止，它是一个普通的用户进程（与交换进程不同，它不是内核的系统进程）但是它以超级用户特权运行。 ——摘自APUE
+父进程ID为0的进程通常是内核进程，它们作为系统自举过程的一部分而启动，但init进程是个例外，它的父进程是0，但是它是用户进程。</p>
 
-<figure class="highlight"><pre><code class="language-c" data-lang="c"><table class="rouge-table"><tbody><tr><td class="gutter gl"><pre class="lineno">1
-2
-3
-4
-5
-6
-7
-8
-9
-10
-11
-</pre></td><td class="code"><pre> <span class="cp">#include &lt;stdio.h&gt;
-</span><span class="kt">int</span> <span class="nf">main</span><span class="p">()</span>
-<span class="p">{</span>
-    <span class="kt">int</span> <span class="n">val</span> <span class="o">=</span> <span class="mi">1</span><span class="p">;</span>
-    <span class="kt">char</span> <span class="o">*</span><span class="n">ret</span> <span class="o">=</span> <span class="p">(</span><span class="kt">char</span> <span class="o">*</span><span class="p">)</span><span class="o">&amp;</span><span class="n">val</span><span class="p">;</span>
-    <span class="k">if</span> <span class="p">(</span><span class="o">*</span><span class="n">ret</span> <span class="o">==</span> <span class="mi">1</span><span class="p">)</span>
-        <span class="n">printf</span><span class="p">(</span><span class="s">"小端存储"</span><span class="p">);</span>
-    <span class="k">else</span>
-        <span class="n">printf</span><span class="p">(</span><span class="s">"大端存储"</span><span class="p">);</span>
-    <span class="k">return</span> <span class="mi">0</span><span class="p">;</span>
-<span class="p">}</span></pre></td></tr></tbody></table></code></pre></figure>
-
-<p>（二）联合法</p>
-
-<figure class="highlight"><pre><code class="language-c" data-lang="c"><table class="rouge-table"><tbody><tr><td class="gutter gl"><pre class="lineno">1
-2
-3
-4
-5
-6
-7
-8
-9
-10
-11
-12
-13
-14
-15
-16
-</pre></td><td class="code"><pre> <span class="cp">#include &lt;stdio.h&gt;
-</span><span class="k">union</span> <span class="n">UN</span>
-<span class="p">{</span>
-    <span class="kt">int</span> <span class="n">a</span><span class="p">;</span>
-    <span class="kt">char</span> <span class="n">c</span><span class="p">;</span>
-<span class="p">};</span>
-<span class="kt">int</span> <span class="nf">main</span><span class="p">()</span>
-<span class="p">{</span>
-    <span class="k">union</span> <span class="n">UN</span> <span class="n">un</span><span class="p">;</span>
-    <span class="n">un</span><span class="p">.</span><span class="n">a</span> <span class="o">=</span> <span class="mi">1</span><span class="p">;</span>
-    <span class="k">if</span> <span class="p">(</span><span class="n">un</span><span class="p">.</span><span class="n">c</span> <span class="o">==</span> <span class="mi">1</span><span class="p">)</span>
-        <span class="n">printf</span><span class="p">(</span><span class="s">"小端存储"</span><span class="p">);</span>
-    <span class="k">else</span>
-        <span class="n">printf</span><span class="p">(</span><span class="s">"大端存储"</span><span class="p">);</span>
-    <span class="k">return</span> <span class="mi">0</span><span class="p">;</span>
-<span class="p">}</span></pre></td></tr></tbody></table></code></pre></figure>
-
-<p>php 判断方法</p>
-
-<figure class="highlight"><pre><code class="language-php" data-lang="php"><table class="rouge-table"><tbody><tr><td class="gutter gl"><pre class="lineno">1
-2
-3
-4
-5
-6
-7
-8
-9
-10
-11
-</pre></td><td class="code"><pre><span class="cp">&lt;?php</span>
-<span class="nb">define</span><span class="p">(</span><span class="s1">'BIG_ENDIAN'</span><span class="p">,</span> <span class="nb">pack</span><span class="p">(</span><span class="s1">'L'</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span> <span class="o">===</span> <span class="nb">pack</span><span class="p">(</span><span class="s1">'N'</span><span class="p">,</span> <span class="mi">1</span><span class="p">));</span>
-<span class="k">if</span> <span class="p">(</span><span class="nx">BIG_ENDIAN</span><span class="p">)</span>
-<span class="p">{</span>
-    <span class="k">echo</span> <span class="s2">"大端序"</span><span class="p">;</span>
-<span class="p">}</span>
-<span class="k">else</span>
-<span class="p">{</span>
-    <span class="k">echo</span> <span class="s2">"小端序"</span><span class="p">;</span>
-<span class="p">}</span>
-<span class="k">echo</span> <span class="s2">"</span><span class="se">\n</span><span class="s2">"</span><span class="p">;</span></pre></td></tr></tbody></table></code></pre></figure>
-
-<p>PHP pack() 函数  函数把数据装入一个二进制字符串。
-pack(format,args+)
-format 参数
-L - unsigned long (always 32 bit, machine byte order)
-N - unsigned long (always 32 bit, big endian byte order)
-V - unsigned long (always 32 bit, little endian byte order)</p>
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/web/2017/12/13/bigEnd.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/linux/2017/12/22/pid_0_1.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -1389,6 +1241,14 @@ V - unsigned long (always 32 bit, little endian byte order)</p>
 			  
 			    
 			      <a href="/MyBlog/page238/">238</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page239/">239</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page240/">240</a>
 			    
 			  
 
@@ -2610,6 +2470,16 @@ V - unsigned long (always 32 bit, little endian byte order)</p>
 						  
 						
 
+						  
+							<li><a href="/MyBlog/page239">239</a></li>
+						  
+						
+
+						  
+							<li><a href="/MyBlog/page240">240</a></li>
+						  
+						
+
 						
 						  <li><a href="/MyBlog/page217">Next</a></li>
 						
@@ -2641,6 +2511,78 @@ V - unsigned long (always 32 bit, little endian byte order)</p>
 							var searchIndex={
 							"code" : 0 ,
 							"data" : [
+							
+							{
+							"title" : "Uber 设计 - ",
+							"url" : "/MyBlog/web/2019/12/18/Uber.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "Facebook面试真题：如何设计Payment System - ",
+							"url" : "/MyBlog/web/2019/12/17/Payment.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "设计Netflix - ",
+							"url" : "/MyBlog/web/2019/12/17/Netflix.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "Uber Project Lead揭秘：在科技巨头如何从0到1，主导项目 - ",
+							"url" : "/MyBlog/web/2019/12/17/.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "thrift optional 字段一般都是指针的原因 - ",
+							"url" : "/MyBlog/golang/2019/12/16/thrift.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "feed 流 - ",
+							"url" : "/MyBlog/web/2019/12/16/feed.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "如何设计Twitter - ",
+							"url" : "/MyBlog/web/2019/12/16/Twitter.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "SWRR 算法 - ",
+							"url" : "/MyBlog/linux/2019/12/16/SWRR.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "LVS - ",
+							"url" : "/MyBlog/linux/2019/12/16/LVS.html"
+							}
+							
+							,
+							
 							
 							{
 							"title" : "tcp-no-delay - ",
@@ -12243,7 +12185,7 @@ V - unsigned long (always 32 bit, little endian byte order)</p>
 								
 								
 									<a class="bold" href="/MyBlog/category/web">
-										web (183)
+										web (189)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -12288,7 +12230,7 @@ V - unsigned long (always 32 bit, little endian byte order)</p>
 								
 								
 									<a class="bold" href="/MyBlog/category/linux">
-										linux (254)
+										linux (256)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -12315,7 +12257,7 @@ V - unsigned long (always 32 bit, little endian byte order)</p>
 								
 								
 									<a class="bold" href="/MyBlog/category/golang">
-										golang (324)
+										golang (325)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -12448,6 +12390,42 @@ V - unsigned long (always 32 bit, little endian byte order)</p>
 								<ul style="display:none;width:250px;height:250px;">
 								     
 								   <li>
+										<a href="/MyBlog/web/2019/12/18/Uber.html" style="font-size:40px;"> Uber 设计</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/web/2019/12/17/Payment.html" style="font-size:40px;"> Facebook面试真题：如何设计Payment System</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/web/2019/12/17/Netflix.html" style="font-size:40px;"> 设计Netflix</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/web/2019/12/17/.html" style="font-size:40px;"> Uber Project Lead揭秘：在科技巨头如何从0到1，主导项目</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/golang/2019/12/16/thrift.html" style="font-size:40px;"> thrift optional 字段一般都是指针的原因</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/web/2019/12/16/feed.html" style="font-size:40px;"> feed 流</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/web/2019/12/16/Twitter.html" style="font-size:40px;"> 如何设计Twitter</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/linux/2019/12/16/SWRR.html" style="font-size:40px;"> SWRR 算法</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/linux/2019/12/16/LVS.html" style="font-size:40px;"> LVS</a>
+									</li>
+									  
+								   <li>
 										<a href="/MyBlog/golang/2019/12/15/tcp-no-delay.html" style="font-size:40px;"> tcp-no-delay</a>
 									</li>
 									  
@@ -12570,42 +12548,6 @@ V - unsigned long (always 32 bit, little endian byte order)</p>
 								   <li>
 										<a href="/MyBlog/golang/2019/12/01/rc.html" style="font-size:40px;"> Replication Controller、Replica Set</a>
 									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2019/12/01/kubernetes.html" style="font-size:40px;"> kubernetes</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2019/12/01/cli.html" style="font-size:40px;"> cli</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2019/12/01/borg.html" style="font-size:40px;"> borg</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2019/11/30/Sidecar.html" style="font-size:40px;"> Sidecar</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2019/11/30/SOFA-MOSN.html" style="font-size:40px;"> SOFA-MOSN</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2019/11/29/injector.html" style="font-size:40px;"> injector</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2019/11/29/Martini.html" style="font-size:40px;"> Martini</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2019/11/28/hijack.html" style="font-size:40px;"> hijack</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2019/11/28/gometalinter.html" style="font-size:40px;"> gometalinter</a>
-									</li>
 									
 								</ul>
 							</div>
@@ -12620,33 +12562,33 @@ V - unsigned long (always 32 bit, little endian byte order)</p>
                 		<ul class="posts" span="recent">  
 							  
 							   <li>  
-								   <span>15 Dec 2019</span>
-								   <a href="/MyBlog/golang/2019/12/15/tcp-no-delay.html">  
-								   tcp-no-delay</a>  
+								   <span>18 Dec 2019</span>
+								   <a href="/MyBlog/web/2019/12/18/Uber.html">  
+								   Uber 设计</a>  
 							   </li>  
 							  
 							   <li>  
-								   <span>15 Dec 2019</span>
-								   <a href="/MyBlog/golang/2019/12/15/ratelimit.html">  
-								   ratelimit</a>  
+								   <span>17 Dec 2019</span>
+								   <a href="/MyBlog/web/2019/12/17/Payment.html">  
+								   Facebook面试真题：如何设计Payment System</a>  
 							   </li>  
 							  
 							   <li>  
-								   <span>15 Dec 2019</span>
-								   <a href="/MyBlog/golang/2019/12/15/mail.html">  
-								   mail 实现ssl</a>  
+								   <span>17 Dec 2019</span>
+								   <a href="/MyBlog/web/2019/12/17/Netflix.html">  
+								   设计Netflix</a>  
 							   </li>  
 							  
 							   <li>  
-								   <span>15 Dec 2019</span>
-								   <a href="/MyBlog/docker/2019/12/15/kubernetes.html">  
-								   kubernetes 网络</a>  
+								   <span>17 Dec 2019</span>
+								   <a href="/MyBlog/web/2019/12/17/.html">  
+								   Uber Project Lead揭秘：在科技巨头如何从0到1，主导项目</a>  
 							   </li>  
 							  
 							   <li>  
-								   <span>15 Dec 2019</span>
-								   <a href="/MyBlog/golang/2019/12/15/gracehttp.html">  
-								   gracehttp</a>  
+								   <span>16 Dec 2019</span>
+								   <a href="/MyBlog/golang/2019/12/16/thrift.html">  
+								   thrift optional 字段一般都是指针的原因</a>  
 							   </li>  
 							  
 						</ul>
