@@ -1,0 +1,342 @@
+---
+title: skiplist
+layout: post
+category: golang
+author: 夏泽民
+---
+跳表是在 O(log(n)) 时间内完成增加、删除、搜索操作的数据结构。跳表相比于树堆与红黑树，其功能与性能相当，并且跳表的代码长度相较下更短，其设计思想与链表相似。
+
+
+例如，一个跳表包含 [30, 40, 50, 60, 70, 90]，然后增加 80、45 到跳表中
+<!-- more -->
+跳表中有很多层，每一层是一个短的链表。在第一层的作用下，增加、删除和搜索操作的时间复杂度不超过 O(n)。跳表的每一个操作的平均时间复杂度是 O(log(n))，空间复杂度是 O(n)。
+
+
+在本题中，你的设计应该要包含这些函数：
+
+
+bool search(int target) : 返回target是否存在于跳表中。
+void add(int num): 插入一个元素到跳表。
+bool erase(int num): 在跳表中删除一个值，如果 num 不存在，直接返回false. 如果存在多个 num ，删除其中任意一个即可。
+了解更多 : https://en.wikipedia.org/wiki/Skip_list
+
+
+注意，跳表中可能存在多个相同的值，你的代码需要处理这种情况。
+
+
+样例:
+
+
+Skiplist skiplist = new Skiplist();
+​
+​
+skiplist.add(1);
+skiplist.add(2);
+skiplist.add(3);
+skiplist.search(0);   // 返回 false
+skiplist.add(4);
+skiplist.search(1);   // 返回 true
+skiplist.erase(0);    // 返回 false，0 不在跳表中
+skiplist.erase(1);    // 返回 true
+skiplist.search(1);   // 返回 false，1 已被擦除
+
+
+约束条件:
+
+
+0 <= num, target <= 20000
+最多调用 50000 次 search, add, 以及 erase操作。
+解题思路：
+
+1，跳表简介
+
+跳表是由William Pugh发明的，这位确实是个大牛，搞出一些很不错的东西。简单说来跳表也是
+
+
+链表的一种，只不过它在链表的基础上增加了跳跃功能，正是这个跳跃的功能，使得在查找元素时，跳表能够提供O(log n)的时间复杂
+
+
+度。红黑树等这样的平衡数据结构查找的时间复杂度也是O(log n)，并且相对于红黑树这样的平衡二叉树skiplist的优点是更好的支持并
+
+
+发操作，但是要实现像红黑树这样的数据结构并非易事,但是只要你熟悉链表的基本操作,再加之对跳表原理的理解，实现一个跳表数据
+
+
+结构就是一个很自然的事情了。
+
+
+此外，跳表在当前热门的开源项目中也有很多应用，比如LevelDB的核心数据结构memtable是用跳表实现的，redis的sorted set数据
+
+
+结构也是有跳表实现的。
+2，skiplist主要思想
+
+
+
+先从链表开始，如果是一个简单的链表（不一定有序），那么我们在链表中查找一个元素X的话，需要将遍历整个链表直到找到元素X为止。
+有序数组查找问题我们可以使用二分查找算法，但对于有序链表却不能使用二分查找。这个时候我们在想下平衡树,比如BST,他们都是通过把一些
+
+
+节点取出来作为其节点下某种意义的索引，比如父节点一般大于左子节点而小于右子节点。因此这个时候我们想到类似二叉搜索树的做法把一些
+
+
+节点提取出来，作为索引。
+当然我们还可以再从一级索引提取一些元素出来，作为二级索引,这样更能加快元素搜索。
+
+
+这基本上就是跳表的核心思想，其实是一种通过“空间来换取时间”的一个算法，通过在每个节点中增加了向前的指针(即层)，从而提升查找的效率。
+
+
+跳跃列表是按层建造的。底层是一个普通的有序链表。每个更高层都充当下面列表的「快速跑道」，这里在层 i 中的元素按某个固定的概率 p (通常
+
+
+为0.5或0.25)出现在层 i+1 中。平均起来，每个元素都在 1/(1-p) 个列表中出现, 而最高层的元素（通常是在跳跃列表前端的一个特殊的头元素）
+
+
+在 O(log1/p n) 个列表中出现。
+
+
+3，SkipList基本数据结构及其实现
+
+一个跳表，应该具有以下特征：
+
+
+1>,一个跳表应该有几个层（level）组成；
+
+
+2>,跳表的第一层包含所有的元素；
+
+
+3>,每一层都是一个有序的链表；
+
+
+4>,如果元素x出现在第i层，则所有比i小的层都包含x；
+
+
+5>,每个节点包含key及其对应的value和一个指向同一层链表的下个节点的指针数组
+
+4，注意问题
+
+1>,如果放任增长，高度失去控制会影响效果，所以一般会限制最高高度
+
+2>,如果删除的值在索引中，注意要删除每一层
+
+
+
+代码实现
+```
+const MAX_LEVEL=10
+type Skiplist struct {
+  maxLevel int
+  root []*Node   
+}
+type Node struct{
+    level int
+    next []*Node
+    prev []*Node
+    value int
+    count int
+}
+
+func NewNode(level,value int)*Node{
+   return &Node{
+            level:level,
+            value:value,
+            next:make([]*Node,level+1),
+            prev:make([]*Node,level+1),
+            count:1,
+        }
+}
+
+func Constructor() Skiplist {
+    return Skiplist{
+        maxLevel:-1,
+    }
+}
+
+func (this *Skiplist) SearchPos(target int)*Node{
+ if this.maxLevel==-1{
+        return nil
+    }
+ next:=this.root[this.maxLevel]
+ for level:=next.level;level>=0;level--{
+    if target==next.value{
+            return next
+    }else if target<next.value{
+            for next.prev[level]!=nil && target<=next.prev[level].value{
+                next=next.prev[level]
+            }
+    }else{
+           for next.next[level]!=nil && target>=next.next[level].value{
+               next=next.next[level]
+           }
+    }
+    //fmt.Println("search :",target," level",level)
+ }
+    return next
+}
+
+func (this *Skiplist) Search(target int) bool {
+    n:=this.SearchPos(target)
+    //this.Print()
+    if n==nil{
+        return false
+    }
+    return n.value==target
+}
+func(this *Skiplist)Print(){
+    if this.root==nil{
+        return
+    }
+    fmt.Println(*this)
+    for i:=this.maxLevel;i>=0;i--{
+    cur:=this.root[i]
+    for cur!=nil && cur.next!=nil{
+       fmt.Print("->[",cur.value,cur.count,"]")
+       cur=cur.next[i]
+    }
+      fmt.Println(i)
+    }
+}
+
+func(this*Skiplist)randomUpgrade()bool{
+     rand.Seed(time.Now().UnixNano()) 
+     r:=rand.Intn(7)%2
+     if this.maxLevel>MAX_LEVEL{
+         return false
+     }
+     //fmt.Println("rand:---",r) 
+    return r==1
+}
+
+func(n*Node)InsertLevelNode(level int,nn *Node){
+        if n==nil ||n.prev==nil || n.next==nil || nn==nil ||nn.prev==nil ||nn.next==nil{
+            return
+        }
+        if n.value>nn.value {
+           prev:=n.prev[level]
+
+           n.prev[level]=nn
+           nn.next[level]=n
+           
+           nn.prev[level]=prev
+
+           if prev!=nil{
+             prev.next[level]=nn
+           }
+        }else{
+           next:=n.next[level]
+
+           n.next[level]=nn
+           nn.prev[level]=n
+
+           nn.next[level]=next
+           if next!=nil{
+            next.prev[level]=nn
+           }
+        }
+}
+
+func (this *Skiplist) Add(num int)  {
+     //this.Print()
+     n:=this.SearchPos(num)
+     if n==nil{
+         this.maxLevel=0
+         n=NewNode(0,num)
+         this.root=append(this.root,n)
+         return
+     }
+
+     if n.value==num{
+         n.count++
+         return 
+     }
+
+      
+    if this.randomUpgrade(){
+        this.maxLevel++
+        nn:=NewNode(this.maxLevel,num)
+        this.root=append(this.root,nn)
+        
+        for i:=1;i<=this.maxLevel-1;i++{
+            in:=this.root[i]
+            for in!=nil && in.value>num  && in.prev!=nil && in.prev[i]!=nil{
+                in=in.prev[i]
+            }
+            for in!=nil && in.value<num && in.next!=nil && in.next[i]!=nil{
+                in=in.next[i]
+            }
+            in.InsertLevelNode(i,nn)   
+        }
+
+        n.InsertLevelNode(0,nn)
+    }else{
+      nn:=NewNode(0,num)
+      n.InsertLevelNode(0,nn)
+    }
+}
+
+func (this*Skiplist)DeleteNode(n*Node,level int){
+    if n==nil{
+        return
+    }
+    next:=n.next[level]
+    prev:=n.prev[level]
+    //fmt.Println("next",next,"prev",prev)
+    if prev!=nil{
+        prev.next[level]=next
+    }else{
+        this.root[level]=next
+    }
+    if next!=nil{
+         next.prev[level]=prev
+    }
+}
+
+func (this *Skiplist) Erase(num int) bool {
+    //this.Print()
+    n:=this.SearchPos(num)
+    if n!=nil{
+    //fmt.Println("erease ",*n)
+    }
+    if n==nil || n.value!=num{
+        return false
+    }
+
+    if n.count>1{
+        n.count--
+        return true
+    }
+
+    for i:=0;i<=n.level;i++{
+        //fmt.Println("-->",i)
+        this.DeleteNode(n,i)
+    }
+    //fmt.Println("-->")
+    //this.Print()
+    //level i 删除了，i+1 肯定删除了，特殊情况，n层都是最高index，
+    count:=0
+    for level:=this.maxLevel;n.level==this.maxLevel && level>=0 && this.root!=nil && this.root[level]==nil ;level--{
+        count++
+    }
+    this.root=this.root[:len(this.root)-count]
+    this.maxLevel-=count
+
+    n.count--
+    n.level=-1
+    n.next=nil
+    n.prev=nil
+    n=nil
+
+    return true  
+}
+
+
+/**
+ * Your Skiplist object will be instantiated and called as such:
+ * obj := Constructor();
+ * param_1 := obj.Search(target);
+ * obj.Add(num);
+ * param_3 := obj.Erase(num);
+ */
+ ```
