@@ -27,6 +27,234 @@ func round(x float64){
 }
 计算的结果和php round（）函数不一致
 <!-- more -->
+package main
+
+import "fmt"
+
+func main() {
+    p := (float32(93) - float32(20)) / (float32(140) - float32(20))
+    fmt.Println((float64(93)-float64(20))/(float64(140)-float64(20))*float64(300), (float32(93)-float32(20))/(float32(140)-float32(20))*float32(300), p*float32(300))
+}
+
+182.49999999999997 182.5 182.5
+可以发现，使用float32 两者结果一样了，回过头来看，php的float是float32，double 是float64
+
+1 浮点数为什么不精确
+先看两个case
+
+// case1: 135.90*100 ====
+// float32
+var f1 float32 = 135.90
+fmt.Println(f1 * 100) // output:13589.999
+// float64
+var f2 float64 = 135.90
+fmt.Println(f2 * 100) // output:13590
+浮点数在单精度下, 135.9*100即出现了偏差, 双精度下结果正确.
+
+// case2: 0.1 add 10 times ===
+// float32
+var f3 float32 = 0
+for i := 0; i < 10; i++ {
+    f3 += 0.1
+}
+fmt.Println(f3) //output:1.0000001
+
+// float64
+var f4 float64 = 0
+for i := 0; i < 10; i++ {
+    f4 += 0.1
+}
+fmt.Println(f4) //output:0.9999999999999999
+0.1加10次, 这下无论是float32和float64都出现了偏差.
+
+为什么呢, Go和大多数语言一样, 使用标准的IEEE754表示浮点数, 0.1使用二进制表示结果是一个无限循环数, 只能舍入后表示, 累加10次之后就会出现偏差.
+
+此外, 还有几个隐藏的坑https://play.golang.org/p/bQPbirROmN
+
+float32和float64直接互转会精度丢失, 四舍五入后错误.
+int64转float64在数值很大的时候出现偏差.
+合理但须注意: 两位小数乘100强转int, 比期望值少了1.
+package main
+
+import (
+    "fmt"
+)
+
+func main() {
+    // case: float32==>float64
+    // 从数据库中取出80.45, 历史代码用float32接收
+    var a float32 = 80.45
+    var b float64
+    // 有些函数只能接收float64, 只能强转
+    b = float64(a)
+    // 打印出值, 强转后出现偏差
+    fmt.Println(a) //output:80.45
+    fmt.Println(b) //output:80.44999694824219
+    // ... 四舍五入保留小数点后1位, 期望80.5, 结果是80.4
+
+    // case: int64==>float64
+    var c int64 = 987654321098765432
+    fmt.Printf("%.f\n", float64(c)) //output:987654321098765440
+
+    // case: int(float64(xx.xx*100))
+    var d float64 = 1129.6
+    var e int64 = int64(d * 100)
+    fmt.Println(e) //output:112959
+}
+##2 数据库是怎么做的
+MySQL提供了decimal(p,d)/numberlic(p,d)类型的定点数表示法, 由p位数字(不包括符号、小数点)组成, 小数点后面有d位数字, 占p+2个字节, 计算性能会比double/float类型弱一些.
+
+##3 Go代码如何实现Decimal
+Java有成熟的标准库java.lang.BigDecimal,Python有标准库Decimal, 可惜GO没有. 在GitHub搜decimal, star数量比较多的是TiDB里的MyDecimal和ithub.com/shopspring/decimal的实现.
+
+shopspring的Decimal实现比较简单, 思路是使用十进制定点数表示法, 有多少位小数就小数点后移多少位, value保存移之后的整数, exp保存小数点后的数位个数, number=value*10^exp, 因为移小数点后的整数可能很大, 所以这里借用标准包里的math/big表示这个大整数. exp使用了int32, 所以这个包最多能表示小数点后有32个十进制数位的情况.
+
+Decimal结构体的定义如下
+
+// Decimal represents a fixed-point decimal. It is immutable.
+// number = value * 10 ^ exp
+type Decimal struct {
+    value *big.Int
+
+    // NOTE(vadim): this must be an int32, because we cast it to float64 during
+    // calculations. If exp is 64 bit, we might lose precision.
+    // If we cared about being able to represent every possible decimal, we
+    // could make exp a *big.Int but it would hurt performance and numbers
+    // like that are unrealistic.
+    exp int32
+}
+TiDB里的MyDecimal定义位于github.com/pingcap/tidb/util/types/mydecimal.go, 实现比shopspring的Decimal复杂多了, 也更底层(不依赖math/big), 性能也更好(见下面的benchmark). 其思路是:
+digitsInt保存数字的整数部分数字个数, digitsFrac保存数字的小数部分数字个数, resultFrac保存计算及序列化时保留至小数点后几位, negative标明数字是否为负数, wordBuf是一个定长的int32数组(长度为9), 数字去掉小数点的主体保存在这里, 一个int32有32个bit, 最大值为(2**31-1)2147483647(10个十进制数), 所以一个int32最多能表示9个十进制数位, 因此wordBuf 最多能容纳9*9个十进制数位.
+
+// MyDecimal represents a decimal value.
+type MyDecimal struct {
+    digitsInt int8 // the number of *decimal* digits before the point.
+
+    digitsFrac int8 // the number of decimal digits after the point.
+
+    resultFrac int8 // result fraction digits.
+
+    negative bool
+
+    //  wordBuf is an array of int32 words.
+    // A word is an int32 value can hold 9 digits.(0 <= word < wordBase)
+    wordBuf [maxWordBufLen]int32
+}
+看看这两种decimal类型在文首的两个case下的结果, 同时跑个分.
+
+main_test.go
+
+package main
+
+import (
+    "testing"
+    "github.com/shopspring/decimal"
+    "github.com/pingcap/tidb/util/types"
+    "log"
+)
+
+var case1String = "135.90"
+var case1Bytes = []byte(case1String)
+var case2String = "0"
+var case2Bytes = []byte("0")
+
+func ShopspringDecimalCase1() decimal.Decimal {
+    dec1, err := decimal.NewFromString(case1String)
+    if err != nil {
+        log.Fatal(err)
+    }
+    dec2 := decimal.NewFromFloat(100)
+    dec3 := dec1.Mul(dec2)
+    return dec3
+}
+
+func TidbDecimalCase1() *types.MyDecimal {
+    dec1 := new(types.MyDecimal)
+    err := dec1.FromString(case1Bytes)
+    if err != nil {
+        log.Fatal(err)
+    }
+    dec2 := new(types.MyDecimal).FromInt(100)
+    dec3 := new(types.MyDecimal)
+    err = types.DecimalMul(dec1, dec2, dec3)
+    if err != nil {
+        log.Fatal(err)
+    }
+    return dec3
+}
+
+func ShopspringDecimalCase2() decimal.Decimal {
+    dec1, err := decimal.NewFromString(case2String)
+    if err != nil {
+        log.Fatal(err)
+    }
+    dec2 := decimal.NewFromFloat(0.1)
+    for i := 0; i < 10; i++ {
+        dec1 = dec1.Add(dec2)
+    }
+    return dec1
+}
+
+func TidbDecimalCase2() *types.MyDecimal {
+    dec1 := new(types.MyDecimal)
+    dec1.FromString(case2Bytes)
+    dec2 := new(types.MyDecimal)
+    dec2.FromFloat64(0.1)
+    for i := 0; i < 10; i++ {
+        types.DecimalAdd(dec1, dec2, dec1)
+    }
+    return dec1
+
+}
+
+// case1: 135.90*100 ====
+func BenchmarkShopspringDecimalCase1(b *testing.B) {
+    for i := 0; i < b.N; i++ {
+        ShopspringDecimalCase1()
+    }
+    b.Log(ShopspringDecimalCase1()) // output: 13590
+}
+
+func BenchmarkTidbDecimalCase1(b *testing.B) {
+    for i := 0; i < b.N; i++ {
+        TidbDecimalCase1()
+    }
+    b.Log(TidbDecimalCase1()) //  output: 13590.00
+}
+
+// case2: 0.1 add 10 times ===
+func BenchmarkShopspringDecimalCase2(b *testing.B) {
+    for i := 0; i < b.N; i++ {
+        ShopspringDecimalCase2()
+    }
+    b.Log(ShopspringDecimalCase2()) //  output: 1
+}
+
+func BenchmarkTidbDecimalCase2(b *testing.B) {
+    for i := 0; i < b.N; i++ {
+        TidbDecimalCase2()
+    }
+    b.Log(TidbDecimalCase2()) //  output: 1.0
+}
+BenchmarkShopspringDecimalCase1-8        2000000               664 ns/op             340 B/op         10 allocs/op
+
+BenchmarkTidbDecimalCase1-8             20000000                99.2 ns/op            48 B/op          1 allocs/op
+
+BenchmarkShopspringDecimalCase2-8         300000              5210 ns/op            4294 B/op        111 allocs/op
+
+BenchmarkTidbDecimalCase2-8              3000000               517 ns/op              83 B/op          3 allocs/op
+可见两种实现在上面两个case下表示准确, TiDB的decimal实现的性能高于shopspring的实现, 堆内存分配次数也更少.
+
+##4. MyDecimal的已知问题
+
+用了一段时间后, tidb.MyDecimal也有一些问题
+
+原版除法有bug, 可以通过除数和被除数同时放大一定倍数临时修复, 更好的解决方法需要官方人员解决, 已提issue, 这个bug真是匪夷所思. https://github.com/pingcap/tidb/issues/4873, 2017.11.3官方修复decimal除法问题:https://github.com/pingcap/tidb/pull/4995/files.
+原版乘法有小问题, 行为不一致, 原版的from1和to不能为同一个指针, 但 Add Sub Div却可以. 可以通过copy参数修复.
+移位小坑, 右移属于扩大数值, 没有问题. 左移有问题, 注意1左移两位不会变成0.01, 所以shift不要传负数.
+round, 目前这个库的Round模式ModeHalfEven实际上是ModeHalfUp, 正常的四舍五入, 不是float的ModeHalfEven. 3.5=>4, 4.5=>5, 5.5=>6, 注意后期是否有变更.
+
+
 php在使用加减乘除等运算符计算浮点数的时候，经常会出现意想不到的结果，特别是关于财务数据方面的计算，给不少工程师惹了很多的麻烦。比如今天工作终于到的一个案例：
 
 $a = 2586;
