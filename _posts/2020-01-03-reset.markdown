@@ -1,0 +1,145 @@
+---
+title: Connect reset by peer
+layout: post
+category: linux
+author: 夏泽民
+---
+1，如果一端的Socket被关闭（或主动关闭，或因为异常退出而 引起的关闭），另一端仍发送数据，发送的第一个数据包引发该异常(Connect reset by peer)。
+
+Socket默认连接60秒，60秒之内没有进行心跳交互，即读写数据，就会自动关闭连接。
+
+2，一端退出，但退出时并未关闭该连接，另一端如果在从连接中读数据则抛出该异常（Connection reset）。
+
+简单的说就是在连接断开后的读和写操作引起的。
+<!-- more -->
+Connection reset by peer的常见原因：
+
+1）服务器的并发连接数超过了其承载量，服务器会将其中一些连接关闭；
+如果知道实际连接服务器的并发客户数没有超过服务器的承载量，则有可能是中了病毒或者木马，引起网络流量异常。可以使用netstat -an查看网络连接情况。
+2）客户关掉了浏览器，而服务器还在给客户端发送数据；
+3）浏览器端按了Stop；
+这两种情况一般不会影响服务器。但是如果对异常信息没有特别处理，有可能在服务器的日志文件中，重复出现该异常，造成服务器日志文件过大，影响服务器的运行。可以对引起异常的部分，使用try…catch捕获该异常，然后不输出或者只输出一句提示信息，避免使用e.printStackTrace();输出全部异常信息。
+4）防火墙的问题；
+如果网络连接通过防火墙，而防火墙一般都会有超时的机制，在网络连接长时间不传输数据时，会关闭这个TCP的会话，关闭后在读写，就会导致异常。 如果关闭防火墙，解决了问题，需要重新配置防火墙，或者自己编写程序实现TCP的长连接。实现TCP的长连接，需要自己定义心跳协议，每隔一段时间，发送一次心跳协议，双方维持连接。
+5）JSP的buffer问题。
+JSP页面缺省缓存为8k，当JSP页面数据比较大的时候，有可能JSP没有完全传递给浏览器。这时可以适当调整buffer的大小。
+
+第1个异常是java.net.BindException:Address already in use: JVM_Bind。
+
+该异常发生在服务器端进行new ServerSocket(port)（port是一个0，65536的整型值）操作时。异常的原因是以为与port一样的一个端口已经被启动，并进行监听。此时用netstat –an命令，可以看到一个Listending状态的端口。只需要找一个没有被占用的端口就能解决这个问题。
+
+第2个异常是java.net.ConnectException: Connection refused: connect。
+
+该异常发生在客户端进行 new Socket(ip, port)操作时，该异常发生的原因是或者具有ip地址的机器不能找到（也就是说从当前机器不存在到指定ip路由），或者是该ip存在，但找不到指定的端口进行监听。出现该问题，首先检查客户端的ip和port是否写错了，如果正确则从客户端ping一下服务器，看是否能 ping通，如果能ping通（服务服务器端把ping禁掉则需要另外的办法），则看在服务器端的监听指定端口的程序是否启动，这个肯定能解决这个问题。
+
+第3个异常是java.net.SocketException: Socket is closed，该异常在客户端和服务器均可能发生。
+
+异常的原因是己方主动关闭了连接后（调用了Socket的close方法）再对网络连接进行读写操作。
+
+第4个异常是java.net.SocketException: （Connection reset或者 Connect reset by peer:Socket write error）。
+
+该异常在客户端和服务器端均有可能发生，引起该异常的原因有两个，第一个就是如果一端的Socket被关闭（或主动关闭或者因为异常退出而引起的关闭），另一端仍发送数据，发送的第一个数据包引发该异常 (Connect reset by peer)。另一个是一端退出，但退出时并未关闭该连接，另一端如果在从连接中读数据则抛出该异常（Connection reset）。简单的说就是在连接断开后的读和写操作引起的。
+
+第5个异常是java.net.SocketException: Broken pipe。该异常在客户端和服务器均有可能发生。
+
+在第4个异常的第一种情况中（也就是抛出SocketExcepton:Connect reset by peer:Socket write error后），如果再继续写数据则抛出该异常。前两个异常的解决方法是首先确保程序退出前关闭所有的网络连接，其次是要检测对方的关闭连接操作，发现对方关闭连接后自己也要关闭该连接。
+
+Connection reset by peer的常见原因：
+
+1）服务器的并发连接数超过了其承载量，服务器会将其中一些连接关闭；
+如果知道实际连接服务器的并发客户数没有超过服务器的承载量，则有可能是中了病毒或者木马，引起网络流量异常。可以使用netstat -an查看网络连接情况。
+
+2）客户关掉了浏览器，而服务器还在给客户端发送数据；
+
+3）浏览器端按了Stop；
+
+这两种情况一般不会影响服务器。但是如果对异常信息没有特别处理，有可能在服务器的日志文件中，重复出现该异常，造成服务器日志文件过大，影响服务器的运行。可以对引起异常的部分，使用try…catch捕获该异常，然后不输出或者只输出一句提示信息，避免使用e.printStackTrace();输出全部异常信息。
+
+4）防火墙的问题；
+
+5）JSP的buffer问题。
+JSP页面缺省缓存为8k，当JSP页面数据比较大的时候，有可能JSP没有完全传递给浏览器。这时可以适当调整buffer的大小。 <%@ page buffer=”100k”%>
+
+常见网络异常（转自http://www.cnblogs.com/kaixin110/archive/2008/04/11/1148671.html）：
+第1个异常是java.net.BindException:Address already in use: JVM_Bind。该异常发生在服务器端进行new ServerSocket
+
+(port)（port是一个0，65536的整型值）操作时。异常的原因是以为与port一样的一个端口已经被启动，并进行监听。此时用
+
+netstat –an命令，可以看到一个Listending状态的端口。只需要找一个没有被占用的端口就能解决这个问题。
+
+第2个异常是java.net.ConnectException: Connection refused: connect。该异常发生在客户端进行 new Socket(ip, port)
+
+操作时，该异常发生的原因是或者具有ip地址的机器不能找到（也就是说从当前机器不存在到指定ip路由），或者是该ip存在
+
+，但找不到指定的端口进行监听。出现该问题，首先检查客户端的ip和port是否写错了，如果正确则从客户端ping一下服务器
+
+看是否能 ping通，如果能ping通（服务服务器端把ping禁掉则需要另外的办法），则看在服务器端的监听指定端口的程序是否
+
+启动，这个肯定能解决这个问题。
+
+第3个异常是java.net.SocketException: Socket is closed，该异常在客户端和服务器均可能发生。异常的原因是己方主动关
+
+闭了连接后（调用了Socket的close方法）再对网络连接进行读写操作。
+
+第4个异常是java.net.SocketException: （Connection reset或者 Connect reset by peer:Socket write error）。该异常
+
+在客户端和服务器端均有可能发生，引起该异常的原因有两个，第一个就是如果一端的Socket被关闭（或主动关闭或者因为异
+
+常退出而引起的关闭），另一端仍发送数据，发送的第一个数据包引发该异常 (Connect reset by peer)。另一个是一端退出
+
+，但退出时并未关闭该连接，另一端如果在从连接中读数据则抛出该异常（Connection reset）。简单的说就是在连接断开后
+
+的读和写操作引起的。
+
+第5个异常是java.net.SocketException: Broken pipe。该异常在客户端和服务器均有可能发生。在第4个异常的第一种情况中
+
+（也就是抛出SocketExcepton:Connect reset by peer:Socket write error后），如果再继续写数据则抛出该异常。前两个异
+
+常的解决方法是首先确保程序退出前关闭所有的网络连接，其次是要检测对方的关闭连接操作，发现对方关闭连接后自己也要
+
+关闭该连接。
+
+客户端错误代码10053 Software caused connection abort（软件原因导致连接中断）
+
+1，如果一端的Socket被关闭（或主动关闭，或因为异常退出而 引起的关闭），另一端仍发送数据，发送的第一个数据包引发该异常(Connect reset by peer)。
+
+Socket默认连接60秒，60秒之内没有进行心跳交互，即读写数据，就会自动关闭连接。
+
+2，一端退出，但退出时并未关闭该连接，另一端如果在从连接中读数据则抛出该异常（Connection reset）。
+
+ 简单的说就是在连接断开后的读和写操作引起的。
+ 
+
+Connection reset by peer的常见原因：
+
+1）服务器的并发连接数超过了其承载量，服务器会将其中一些连接关闭；
+ 如果知道实际连接服务器的并发客户数没有超过服务器的承载量，则有可能是中了病毒或者木马，引起网络流量异常。可以使用netstat -an查看网络连接情况。
+ 2）客户关掉了浏览器，而服务器还在给客户端发送数据；
+ 3）浏览器端按了Stop；
+ 这两种情况一般不会影响服务器。但是如果对异常信息没有特别处理，有可能在服务器的日志文件中，重复出现该异常，造成服务器日志文件过大，影响服务器的运行。可以对引起异常的部分，使用try…catch捕获该异常，然后不输出或者只输出一句提示信息，避免使用e.printStackTrace();输出全部异常信息。
+ 4）防火墙的问题；
+ 如果网络连接通过防火墙，而防火墙一般都会有超时的机制，在网络连接长时间不传输数据时，会关闭这个TCP的会话，关闭后在读写，就会导致异常。 如果关闭防火墙，解决了问题，需要重新配置防火墙，或者自己编写程序实现TCP的长连接。实现TCP的长连接，需要自己定义心跳协议，每隔一段时间，发送一次心跳协议，双方维持连接。
+ 5）JSP的buffer问题。
+ JSP页面缺省缓存为8k，当JSP页面数据比较大的时候，有可能JSP没有完全传递给浏览器。这时可以适当调整buffer的大小。
+
+第1个异常是java.net.BindException:Address already in use: JVM_Bind。
+
+该异常发生在服务器端进行new ServerSocket(port)（port是一个0，65536的整型值）操作时。异常的原因是以为与port一样的一个端口已经被启动，并进行监听。此时用netstat –an命令，可以看到一个Listending状态的端口。只需要找一个没有被占用的端口就能解决这个问题。
+
+第2个异常是java.net.ConnectException: Connection refused: connect。
+
+该异常发生在客户端进行 new Socket(ip, port)操作时，该异常发生的原因是或者具有ip地址的机器不能找到（也就是说从当前机器不存在到指定ip路由），或者是该ip存在，但找不到指定的端口进行监听。出现该问题，首先检查客户端的ip和port是否写错了，如果正确则从客户端ping一下服务器，看是否能 ping通，如果能ping通（服务服务器端把ping禁掉则需要另外的办法），则看在服务器端的监听指定端口的程序是否启动，这个肯定能解决这个问题。
+
+第3个异常是java.net.SocketException: Socket is closed，该异常在客户端和服务器均可能发生。
+
+异常的原因是己方主动关闭了连接后（调用了Socket的close方法）再对网络连接进行读写操作。
+
+第4个异常是java.net.SocketException: （Connection reset或者 Connect reset by peer:Socket write error）。
+
+该异常在客户端和服务器端均有可能发生，引起该异常的原因有两个，第一个就是如果一端的Socket被关闭（或主动关闭或者因为异常退出而引起的关闭），另一端仍发送数据，发送的第一个数据包引发该异常 (Connect reset by peer)。另一个是一端退出，但退出时并未关闭该连接，另一端如果在从连接中读数据则抛出该异常（Connection reset）。简单的说就是在连接断开后的读和写操作引起的。
+
+第5个异常是java.net.SocketException: Broken pipe。该异常在客户端和服务器均有可能发生。
+
+在第4个异常的第一种情况中（也就是抛出SocketExcepton:Connect reset by peer:Socket write error后），如果再继续写数据则抛出该异常。前两个异常的解决方法是首先确保程序退出前关闭所有的网络连接，其次是要检测对方的关闭连接操作，发现对方关闭连接后自己也要关闭该连接。
+
+客户端错误代码10053 Software caused connection abort（软件原因导致连接中断）
