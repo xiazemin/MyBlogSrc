@@ -1,0 +1,177 @@
+---
+title: gc
+layout: post
+category: docker
+author: 夏泽民
+---
+圾回收（GC，Garbage Collection）机制针对Kubernetes1.1.7，docker容器。
+
+<!-- more -->
+01. Kubernetes的垃圾回收由kubelet进行管理，每分钟会查询清理一次容器，每五分钟查询清理一次镜像。在kubelet刚启动时并不会立即进行GC，即第一次进行容器回收为kubelet启动一分钟后，第一次进行镜像回收为kubelet启动五分钟后。
+
+02. 不推荐使用其它管理工具或手工进行容器和镜像的清理，因为kubelet需要通过容器来判断pod的运行状态，如果使用其它方式清除容器有可能影响kubelet的正常工作。
+
+03. 镜像的回收针对node结点上由docker管理的所有镜像，无论该镜像是否是在创建pod时pull的。而容器的回收策略只应用于通过kubelet管理的容器。
+
+04. Kubernetes通过kubelet集成的cadvisor进行镜像的回收，有两个参数可以设置：--image-gc-high-threshold和--image-gc-low-threshold。当用于存储镜像的磁盘使用率达到百分之--image-gc-high-threshold时将触发镜像回收，删除最近最久未使用（LRU，Least Recently Used）的镜像直到磁盘使用率降为百分之--image-gc-low-threshold或无镜像可删为止。默认--image-gc-high-threshold为90，--image-gc-low-threshold为80。
+
+05. 容器的回收有三个参数可设置：--minimum-container-ttl-duration，--maximum-dead-containers-per-container和--maximum-dead-containers。从容器停止运行时起经过--minimum-container-ttl-duration时间后，该容器标记为已过期将来可以被回收（只是标记，不是回收），默认值为1m0s。一般情况下每个pod最多可以保留--maximum-dead-containers-per-container个已停止运行的容器集，默认值为2。整个node节点可以保留--maximum-dead-containers个已停止运行的容器，默认值为100。
+
+06. 如果需要关闭容器的垃圾回收策略，可以将--minimum-container-ttl-duration设为0（表示无限制），--maximum-dead-containers-per-container和--maximum-dead-containers设为负数。
+
+07. --minimum-container-ttl-duration的值可以使用单位后缀，如h表示小时，m表示分钟，s表示秒。
+
+08. 当--maximum-dead-containers-per-container和--maximum-dead-containers冲突时，--maximum-dead-containers优先考虑。
+
+09. 对于那些由kubelet创建的但由于某些原因导致无名字（<none>）的容器，会在到达GC时间点时被删除。
+
+10. 回收容器时，按创建时间排序，优先删除那些创建时间最早的容器。
+
+11. 到达GC时间点时，具体的GC过程如下：1）遍历所有pod，使其满足--maximum-dead-containers-per-container；2）经过上一步后如果不满足--maximum-dead-containers，计算值X=（--maximum-dead-containers）/（pod总数），再遍历所有pod，使其满足已停止运行的容器集个数不大于X且至少为1；3）经过以上两步后如果还不满足--maximum-dead-containers，则对所有已停止的容器排序，优先删除创建时间最早的容器直到满足--maximum-dead-containers为止。
+
+12. 当某个镜像重新pull或启动某个pod用到该镜像时，该镜像的最近使用时间都会被更新。
+
+13. Kubernetes的垃圾回收在1.1.4版本开始才渐渐完善，之前的版本存在比较多bug甚至不能发挥作用。
+
+14. 关于容器的回收需要特别注意pod的概念，比如，通过同一个yaml文件create一个pod，再delete这个pod，然后再create这个pod，此时之前的那个pod对应的容器并不会作为新创建pod的已停止容器集，因为这两个pod虽然同名，但已经不是同一个pod了。只有同一个pod中在运行过程中由于意外或其它情况停止的容器才算是这个pod的已停止容器集。
+
+二、Experiments
+1. 镜像回收（使用docker默认--graph参数：/var/lib/docker）
+
+结点上运行的docker设置的参数--graph使用默认的/var/lib/docker，指向/var文件系统，通过df -lh查看目前 /var 磁盘使用率为30%，启动kubelet设置镜像回收相关参数如下：
+
+--image-gc-high-threshold=40 --image-gc-low-threshold=35
+此时任意创建两个使用不同镜像的pod，在node节点上可以看到新pull了三个images（pause镜像是启动pod必需的）：
+
+[@tc-151-100 /opt/domeos/openxxs/k8s-1.1.7-flannel]# docker images
+REPOSITORY                        TAG                 IMAGE ID            CREATED             SIZE
+10.11.150.76:5000/openxxs/iperf   1.2                 1783511c56f8        3 months ago        279 MB
+10.11.150.76:5000/centos          7                   5ddf34d4d69b        8 months ago        172.2 MB
+pub.domeos.org/kubernetes/pause   latest              f9d5de079539        20 months ago       239.8 kB
+此时查看/var磁盘使用率达到了41%，然后将使用10.11.150.76:5000/centos:7镜像的pod删除，等待GC的镜像回收时间点。然而五分钟过去了，什么事情也没有发生=_=!!。还记得 docker rmi 镜像时有个前提条件是什么吗？没错，要求使用该镜像的容器都已经被删除了才可以。前面删除pod只是停止了容器，并没有将容器删除。因此手工将对应的容器docker rm掉，再等待五分钟后，可以看到镜像已经被删除回收了：
+
+[@tc-151-100 /opt/domeos/openxxs/k8s-1.1.7-flannel]# docker images
+REPOSITORY                        TAG                 IMAGE ID            CREATED             SIZE
+10.11.150.76:5000/openxxs/iperf   1.2                 1783511c56f8        3 months ago        279 MB
+pub.domeos.org/kubernetes/pause   latest              f9d5de079539        20 months ago       239.8 kB
+结论：只有相关联的容器都被停止并删除回收后，才能将Kubernetes的镜像垃圾回收策略应用到该镜像上。
+
+2. 镜像回收（使用自定义docker --graph参数：/opt/docker）
+
+结点上运行的docker设置的参数--graph指向 /opt 磁盘，通过 df -lh 查看目前 /opt 磁盘使用率为 48% ，启动 kubelet 设置镜像回收相关参数如下：
+
+--image-gc-high-threshold=50 --image-gc-low-threshold=40
+此时任意创建两个使用不同镜像的pod，在node节点上可以看到新pull了三个images：
+
+[@tc-151-100 /opt/domeos/openxxs/k8s-1.1.7-flannel]# docker images
+REPOSITORY                        TAG                 IMAGE ID            CREATED             SIZE
+10.11.150.76:5000/openxxs/iperf   1.2                 1783511c56f8        3 months ago        279 MB
+10.11.150.76:5000/centos          7                   5ddf34d4d69b        8 months ago        172.2 MB
+pub.domeos.org/kubernetes/pause   latest              f9d5de079539        20 months ago       239.8 kB
+此时查看/opt磁盘使用率达到了51%，然后将使用10.11.150.76:5000/centos:7镜像的pod删除，手工将对应的容器docker rm掉，等待GC的镜像回收时间点。然而五分钟过去了，十分钟过去了，docker images时centos镜像依旧顽固地坚守在阵地。
+
+结论：目前Kubernetes的镜像垃圾回收策略可以在docker --graph参数默认为/var/lib/docker时正常工作，当--graph设置为其它磁盘路径时还存在bug。
+
+问题反馈在Github的相关issue里（戳这里），可以继续跟进。
+
+Append: 根据Github上的反馈，这个bug将在后续版本中解决，目前版本需要让设置了--graph的镜像垃圾回收生效，在启动kubelet时还需要加上参数 --docker-root=<docker --graph参数值>。
+
+3. 容器回收之--maximum-dead-containers-per-container参数
+
+启动kubelet设置容器回收相关参数如下：
+
+--maximum-dead-containers-per-container=1 --minimum-container-ttl-duration=30s --maximum-dead-containers=100
+创建一个只包含一个容器且该容器一运行就退出的pod，此时在node节点上可以看到该pod中的容器不断的创建退出创建退出：
+
+复制代码
+[@tc-151-100 /home/domeos]# docker ps -a
+CONTAINER ID        IMAGE                                    COMMAND             CREATED             STATUS                      PORTS               NAMES
+2fe969499164        10.11.150.76:5000/centos:7               "/bin/bash"         4 seconds ago       Exited (0) 2 seconds ago                        k8s_iperf1.57dfe29d_test-gc-pod-exit_default_92e8bd05-e9e6-11e5-974c-782bcb2a316a_68cc6f03
+555b5e7a8550        10.11.150.76:5000/centos:7               "/bin/bash"         24 seconds ago      Exited (0) 22 seconds ago                       k8s_iperf1.57dfe29d_test-gc-pod-exit_default_92e8bd05-e9e6-11e5-974c-782bcb2a316a_ad4a5e39
+94b30a0b32c2        10.11.150.76:5000/centos:7               "/bin/bash"         34 seconds ago      Exited (0) 32 seconds ago                       k8s_iperf1.57dfe29d_test-gc-pod-exit_default_92e8bd05-e9e6-11e5-974c-782bcb2a316a_4027e3e1
+d458e6a7d396        pub.domeos.org/kubernetes/pause:latest   "/pause"            34 seconds ago      Up 33 seconds                                   k8s_POD.bdb2e1f5_test-gc-pod-exit_default_92e8bd05-e9e6-11e5-974c-782bcb2a316a_09798975
+复制代码
+GC的容器回收时间点到达时，可以看到创建时间大于30秒的已退出容器只剩下一个（pause容器不计算），且先创建的容器被优先删除：
+
+复制代码
+[@tc-151-100 /home/domeos]# docker ps -a
+CONTAINER ID        IMAGE                                    COMMAND             CREATED             STATUS                      PORTS               NAMES
+5aae6157aeff        10.11.150.76:5000/centos:7               "/bin/bash"         46 seconds ago      Exited (0) 45 seconds ago                       k8s_iperf1.57dfe29d_test-gc-pod-exit_default_92e8bd05-e9e6-11e5-974c-782bcb2a316a_f126d2a8
+d458e6a7d396        pub.domeos.org/kubernetes/pause:latest   "/pause"            2 minutes ago       Up 2 minutes                                    k8s_POD.bdb2e1f5_test-gc-pod-exit_default_92e8bd05-e9e6-11e5-974c-782bcb2a316a_09798975
+复制代码
+结论：Kubernetes容器垃圾回收的--maximum-dead-containers-per-container参数设置可正常工作。
+
+4. --maximum-dead-containers-per-container针对容器还是容器集
+
+启动kubelet设置容器回收相关参数如下：
+
+--maximum-dead-containers-per-container=1 --minimum-container-ttl-duration=30s --maximum-dead-containers=100
+创建一个包含三个容器且这些容器一运行就退出的pod，此时在node节点上可以看到该pod中的容器不断的创建退出创建退出：
+
+复制代码
+[@tc-151-100 /home/domeos]# docker ps -a
+CONTAINER ID        IMAGE                                    COMMAND             CREATED             STATUS                      PORTS               NAMES
+dec04bd28a03        10.11.150.76:5000/centos:7               "/bin/bash"         7 seconds ago       Exited (0) 6 seconds ago                        k8s_iperf1.57dfe29d_test-gc-pod-exit_default_d1677c09-e9e7-11e5-974c-782bcb2a316a_830a9375
+7c94d4a963a7        10.11.150.76:5000/centos:7               "/bin/bash"         7 seconds ago       Exited (0) 6 seconds ago                        k8s_iperf3.5c8de29f_test-gc-pod-exit_default_d1677c09-e9e7-11e5-974c-782bcb2a316a_975d44d3
+4f3e7e8ddfd5        10.11.150.76:5000/centos:7               "/bin/bash"         8 seconds ago       Exited (0) 7 seconds ago                        k8s_iperf2.5a36e29e_test-gc-pod-exit_default_d1677c09-e9e7-11e5-974c-782bcb2a316a_d024eb06
+cb48cf2ba133        10.11.150.76:5000/centos:7               "/bin/bash"         12 seconds ago      Exited (0) 11 seconds ago                       k8s_iperf3.5c8de29f_test-gc-pod-exit_default_d1677c09-e9e7-11e5-974c-782bcb2a316a_b5ff7373
+ec2941f046f0        10.11.150.76:5000/centos:7               "/bin/bash"         13 seconds ago      Exited (0) 12 seconds ago                       k8s_iperf2.5a36e29e_test-gc-pod-exit_default_d1677c09-e9e7-11e5-974c-782bcb2a316a_69b1a996
+f831e8ed5687        10.11.150.76:5000/centos:7               "/bin/bash"         13 seconds ago      Exited (0) 12 seconds ago                       k8s_iperf1.57dfe29d_test-gc-pod-exit_default_d1677c09-e9e7-11e5-974c-782bcb2a316a_fbc02e2e
+ee972a4537fc        pub.domeos.org/kubernetes/pause:latest   "/pause"            14 seconds ago      Up 13 seconds                                   k8s_POD.bdb2e1f5_test-gc-pod-exit_default_d1677c09-e9e7-11e5-974c-782bcb2a316a_85b3c032
+复制代码
+GC的容器回收时间点到达时，可以看到创建时间大于30秒的已退出容器剩下三个（pause容器不计算），且这三个容器正好是一组：
+
+复制代码
+[@tc-151-100 /home/domeos]# docker ps -a
+CONTAINER ID        IMAGE                                    COMMAND             CREATED              STATUS                      PORTS               NAMES
+e4351e6855ae        10.11.150.76:5000/centos:7               "/bin/bash"         51 seconds ago       Exited (0) 50 seconds ago                       k8s_iperf3.5c8de29f_test-gc-pod-exit_default_d1677c09-e9e7-11e5-974c-782bcb2a316a_263dd820
+990baa6e6a7a        10.11.150.76:5000/centos:7               "/bin/bash"         52 seconds ago       Exited (0) 51 seconds ago                       k8s_iperf2.5a36e29e_test-gc-pod-exit_default_d1677c09-e9e7-11e5-974c-782bcb2a316a_b16b5eaa
+c6916fb06d65        10.11.150.76:5000/centos:7               "/bin/bash"         53 seconds ago       Exited (0) 51 seconds ago                       k8s_iperf1.57dfe29d_test-gc-pod-exit_default_d1677c09-e9e7-11e5-974c-782bcb2a316a_1d8ea284
+ee972a4537fc        pub.domeos.org/kubernetes/pause:latest   "/pause"            About a minute ago   Up About a minute                               k8s_POD.bdb2e1f5_test-gc-pod-exit_default_d1677c09-e9e7-11e5-974c-782bcb2a316a_85b3c032
+复制代码
+结论：--maximum-dead-containers-per-container的计数针对一个pod内的容器集而不是容器的个数。
+
+5. 容器回收之--maximum-dead-containers参数
+
+启动kubelet设置容器回收相关参数如下：
+
+--maximum-dead-containers-per-container=2 --minimum-container-ttl-duration=30s --maximum-dead-containers=3
+创建一个包含三个容器的pod，再删除该pod，再创建该pod，再删除该pod，这样就产生了8个已退出容器（包括两个pause容器）：
+
+复制代码
+[@tc-151-100 /home/domeos]# docker ps -a
+CONTAINER ID        IMAGE                                    COMMAND             CREATED             STATUS                              PORTS               NAMES
+a28625d189df        10.11.150.76:5000/centos:7               "/bin/bash"         1 seconds ago       Exited (0) Less than a second ago                       k8s_iperf3.5c8de29f_test-gc-pod-exit_default_c7612b59-e9ee-11e5-974c-782bcb2a316a_48c11200
+97aca44f0deb        10.11.150.76:5000/centos:7               "/bin/bash"         2 seconds ago       Exited (0) 1 seconds ago                                k8s_iperf2.5a36e29e_test-gc-pod-exit_default_c7612b59-e9ee-11e5-974c-782bcb2a316a_df34f48d
+4e57b6c839ae        10.11.150.76:5000/centos:7               "/bin/bash"         3 seconds ago       Exited (0) 2 seconds ago                                k8s_iperf1.57dfe29d_test-gc-pod-exit_default_c7612b59-e9ee-11e5-974c-782bcb2a316a_afd622b2
+12588fce1433        pub.domeos.org/kubernetes/pause:latest   "/pause"            3 seconds ago       Exited (2) Less than a second ago                       k8s_POD.bdb2e1f5_test-gc-pod-exit_default_c7612b59-e9ee-11e5-974c-782bcb2a316a_c9d4cbaa
+621ed207d452        10.11.150.76:5000/centos:7               "/bin/bash"         4 seconds ago       Exited (0) 3 seconds ago                                k8s_iperf3.5c8de29f_test-gc-pod-exit_default_c5cbddbb-e9ee-11e5-974c-782bcb2a316a_a91278cd
+023c10fad4fd        10.11.150.76:5000/centos:7               "/bin/bash"         5 seconds ago       Exited (0) 4 seconds ago                                k8s_iperf2.5a36e29e_test-gc-pod-exit_default_c5cbddbb-e9ee-11e5-974c-782bcb2a316a_6cc03f37
+756eb7bb4b53        10.11.150.76:5000/centos:7               "/bin/bash"         5 seconds ago       Exited (0) 4 seconds ago                                k8s_iperf1.57dfe29d_test-gc-pod-exit_default_c5cbddbb-e9ee-11e5-974c-782bcb2a316a_83312ec2
+d54bdc22773e        pub.domeos.org/kubernetes/pause:latest   "/pause"            6 seconds ago       Exited (2) 3 seconds ago                                k8s_POD.bdb2e1f5_test-gc-pod-exit_default_c5cbddbb-e9ee-11e5-974c-782bcb2a316a_ccb57220
+复制代码
+GC的容器回收时间点到达时，可以看到已退出容器只剩下了三个，pause容器也被回收了：
+
+复制代码
+[@tc-151-100 /home/domeos]# docker ps -a
+CONTAINER ID        IMAGE                        COMMAND             CREATED             STATUS                     PORTS               NAMES
+a28625d189df        10.11.150.76:5000/centos:7   "/bin/bash"         2 minutes ago       Exited (0) 2 minutes ago                       k8s_iperf3.5c8de29f_test-gc-pod-exit_default_c7612b59-e9ee-11e5-974c-782bcb2a316a_48c11200
+97aca44f0deb        10.11.150.76:5000/centos:7   "/bin/bash"         2 minutes ago       Exited (0) 2 minutes ago                       k8s_iperf2.5a36e29e_test-gc-pod-exit_default_c7612b59-e9ee-11e5-974c-782bcb2a316a_df34f48d
+4e57b6c839ae        10.11.150.76:5000/centos:7   "/bin/bash"         2 minutes ago       Exited (0) 2 minutes ago                       k8s_iperf1.57dfe29d_test-gc-pod-exit_default_c7612b59-e9ee-11e5-974c-782bcb2a316a_afd622b2
+复制代码
+结论：Kubernetes容器垃圾回收的--maximum-dead-containers参数设置可正常工作；pause容器也作为可回收容器被管理着；Tips第11条第3）点。
+
+6. --maximum-dead-containers对于非kubelet管理的容器是否计数
+
+在第5个实验的基础上，手工创建一个container，等待GC的容器回收时间点到达，一分钟过去了，两分钟过去了，docker ps -a 显示的依然是4个容器：
+
+复制代码
+[@tc-151-100 /home/domeos]# docker run -it 10.11.150.76:5000/openxxs/iperf:1.2 /bin/sh
+sh-4.2# exit
+exit
+[@tc-151-100 /home/domeos]# docker ps -a
+CONTAINER ID        IMAGE                                 COMMAND             CREATED             STATUS                      PORTS               NAMES
+939b932dc7db        10.11.150.76:5000/openxxs/iperf:1.2   "/bin/sh"           2 minutes ago       Exited (0) 2 minutes ago                        backstabbing_aryabhata
+a28625d189df        10.11.150.76:5000/centos:7            "/bin/bash"         12 minutes ago      Exited (0) 12 minutes ago                       k8s_iperf3.5c8de29f_test-gc-pod-exit_default_c7612b59-e9ee-11e5-974c-782bcb2a316a_48c11200
+97aca44f0deb        10.11.150.76:5000/centos:7            "/bin/bash"         12 minutes ago      Exited (0) 12 minutes ago                       k8s_iperf2.5a36e29e_test-gc-pod-exit_default_c7612b59-e9ee-11e5-974c-782bcb2a316a_df34f48d
+4e57b6c839ae        10.11.150.76:5000/centos:7            "/bin/bash"         12 minutes ago      Exited (0) 12 minutes ago                       k8s_iperf1.57dfe29d_test-gc-pod-exit_default_c7612b59-e9ee-11e5-974c-782bcb2a316a_afd622b2
