@@ -147,56 +147,68 @@
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/storage/2018/09/27/binlog.html">mac mysql 开启binlog</a>
+						<a class="post-link" href="/MyBlog/storage/2018/10/22/processlist.html">show processlist</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/storage/2018/09/27/binlog.html"> 夏泽民</a>
+						<a href="/MyBlog/storage/2018/10/22/processlist.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Sep 27, 2018
+							Oct 22, 2018
 						</span>
 					</div>
-					<div class="excerpt"><p>mysql -uroot -p1
-查询是否支持binlog, 如下OFF代表不支持
-mysql&gt; show variables like ‘log_bin’;
-+—————+——-+
-| Variable_name | Value |
-+—————+——-+
-| log_bin       | OFF   |
-+—————+——-+
-1 row in set (0.00 sec)
-.查看my.cnf路径
-mysql –help –verbose | grep my.cnf
-/etc/my.cnf /etc/mysql/my.cnf /usr/local/mysql/etc/my.cnf ~/.my.cnf
-默认mac 没有my.cnf
-不要修改/usr/local/Cellar/mysql/5.7.13/support-files/my-default.cnf
-否则会导致mysqld启动失败，各种权限错误
+					<div class="excerpt"><p>SHOW PROCESSLIST显示哪些线程正在运行</p>
+
+</div>
+					<div class="readmore" style="float: right;">
+						
+							<a href="/MyBlog/storage/2018/10/22/processlist.html" style="color:green">阅读全文</a>
+						
+					</div>								
+			</div>
+			<br/>
+			<hr/>
+			<div class="post-list" style="list-style-type: none;">			
+				 	
+					<h2>
+						<img class="title-image" src="/MyBlog/img/dna.png"/>
+						<a class="post-link" href="/MyBlog/storage/2018/10/21/tcmalloc.html">ptmalloc、tcmalloc和jemalloc</a>
+					</h2>
+					<div class="author" style="margin-top: -10px;">Posted by
+						<i class="fa fa-user"></i>
+						<a href="/MyBlog/storage/2018/10/21/tcmalloc.html"> 夏泽民</a>
+						<span class="post-meta"><i class="fa fa-calendar"></i> 
+							Oct 21, 2018
+						</span>
+					</div>
+					<div class="excerpt"><p>内存管理可以分为三个层次，自底向上分别是：
+操作系统内核的内存管理
+glibc层使用系统调用维护的内存管理算法
+应用程序从glibc动态分配内存后，根据应用程序本身的程序特性进行优化， 比如使用引用计数std::shared_ptr，apache的内存池方式等等。
+应具有以下特性:
+额外的空间损耗尽量少
+分配速度尽可能快
+尽量避免内存碎片
+缓存本地化友好
+通用性，兼容性，可移植性，易调试
+目前大部分服务端程序使用glibc提供的malloc/free系列函数，而glibc使用的ptmalloc2在性能上远远弱后于google的tcmalloc和facebook的jemalloc。 而且后两者只需要使用LD_PRELOAD环境变量启动程序即可，甚至并不需要重新编译。
 <!-- more -->
-新建文件my.cnf并添加如下内容</p>
-<h1 id="log_bin">log_bin</h1>
-<p>log-bin = mysql-bin #开启binlog
-binlog-format = ROW #选择row模式
-server_id = 1 #配置mysql replication需要定义，不能和canal的slaveId重复
-出现如下错误：
-eror: Found option without preceding group in config file: /Users/gukey/.my.cnf at line: 1
-说明不符合格式要求，修改my.cnf
-[client]
-socket=/usr/local/var/mysql/mysql.sock
-[mysqld]
-socket=/usr/local/var/mysql/mysql.sock</p>
-<h1 id="log_bin-1">log_bin</h1>
-<p>log-bin = mysql-bin #开启binlog
-binlog-format = ROW #选择row模式
-server_id = 1</p>
-
-<p>$/usr/local/Cellar/mysql/5.7.13/support-files/mysql.server start
-Starting MySQL
-. ERROR! The server quit without updating PID file (/usr/local/var/mysql/bogon.pid).</p>
+glibc ptmalloc2
+ptmalloc2即是我们当前使用的glibc malloc版本。
+ptmalloc原理
+ x86_64 下 Linux 进程的默认地址空间, 对 heap 的操作, 操作系统提供了brk()系统调用，设置了Heap的上边界； 对 mmap 映射区域的操作,操作系 统 供了 mmap()和 munmap()函数。
+因为系统调用的代价很高，不可能每次申请内存都从内核分配空间，尤其是对于小内存分配。 而且因为mmap的区域容易被munmap释放，所以一般大内存采用mmap()，小内存使用brk()。
+多线程支持
+Ptmalloc2有一个主分配区(main arena)， 有多个非主分配区。 非主分配区只能使用mmap向操作系统批发申请HEAP_MAX_SIZE（64位系统为64MB）大小的虚拟内存。 当某个线程调用malloc的时候，会先查看线程私有变量中是否已经存在一个分配区，如果存在则尝试加锁，如果加锁失败则遍历arena链表试图获取一个没加锁的arena， 如果依然获取不到则创建一个新的非主分配区。
+free()的时候也要获取锁。分配小块内存容易产生碎片，ptmalloc在整理合并的时候也要对arena做加锁操作。在线程多的时候，锁的开销就会增大。
+ptmalloc内存管理
+用户请求分配的内存在ptmalloc中使用chunk表示， 每个chunk至少需要8个字节额外的开销。 用户free掉的内存不会马上归还操作系统，ptmalloc会统一管理heap和mmap区域的空闲chunk，避免了频繁的系统调用。
+ptmalloc 将相似大小的 chunk 用双向链表链接起来, 这样的一个链表被称为一个 bin。Ptmalloc 一共 维护了 128 个 bin,并使用一个数组来存储这些 bin
+数组中的第一个为 unsorted bin, 数组中从 2 开始编号的前 64 个 bin 称为 small bins, 同一个small bin中的chunk具有相同的大小。small bins后面的bin被称作large bins。</p>
 
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/storage/2018/09/27/binlog.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/storage/2018/10/21/tcmalloc.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -206,42 +218,30 @@ Starting MySQL
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/linux/2018/09/27/automake.html">autoconf和automake</a>
+						<a class="post-link" href="/MyBlog/storage/2018/10/21/rowstorage.html">列式存储</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/linux/2018/09/27/automake.html"> 夏泽民</a>
+						<a href="/MyBlog/storage/2018/10/21/rowstorage.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Sep 27, 2018
+							Oct 21, 2018
 						</span>
 					</div>
-					<div class="excerpt"><p>使用autoconf和automake两个工具来帮助我们自动地生成符合自由软件惯例的Makefile，这样就可以象常见的GNU程序一样，只要使用“./configure”，“make”，“make
- instal”就可以把程序安装到Linux系统中去了。这将特别适合想做开放源代码软件的程序开发人员，又或如果你只是自己写些小的Toy程序，那么这个文章对你也会有很大的帮助。
- 
-一、Makefile介绍
-　　Makefile是用于自动编译和链接的，一个工程有很多文件组成，每一个文件的改变都会导致工程的重新链接，但是不是所有的文件都需要重新编译，Makefile中纪录有文件的信息，在make时会决定在链接的时候需要重新编译哪些文件。
-　　Makefile的宗旨就是：让编译器知道要编译一个文件需要依赖其他的哪些文件。当那些依赖文件有了改变，编译器会自动的发现最终的生成文件已经过时，而重新编译相应的模块。
-　　Makefile的基本结构不是很复杂，但当一个程序开发人员开始写Makefile时，经常会怀疑自己写的是否符合惯例，而且自己写的Makefile经常和自己的开发环境相关联，当系统环境变量或路径发生了变化后，Makefile可能还要跟着修改。这样就造成了手工书写Makefile的诸多问题，automake恰好能很好地帮助我们解决这些问题。
-　　使用automake，程序开发人员只需要写一些简单的含有预定义宏的文件，由autoconf根据一个宏文件生成configure，由automake根据另一个宏文件生成Makefile.in，再使用configure依据Makefile.in来生成一个符合惯例的Makefile。下面我们将详细介绍Makefile的automake生成方法。
- 
-二、使用的环境
-　　本文所提到的程序是基于Linux发行版本：Fedora Core release 1，它包含了我们要用到的autoconf，automake。
- 
-三、从helloworld入手
-　　我们从大家最常使用的例子程序helloworld开始。
-　　下面的过程如果简单地说来就是：
-　　新建三个文件：　　helloworld.c　　configure.in　　Makefile.am
-　　然后执行：autoscan; aclocal; autoconf; automake –add-missing; ./configure; make; ./helloworld;
-　　就可以看到Makefile被产生出来，而且可以将helloworld.c编译通过。很简单吧，几条命令就可以做出一个符合惯例的Makefile，感觉如何呀。现在开始介绍详细的过程：
- 
-1、建目录
-　　在你的工作目录下建一个helloworld目录，我们用它来存放helloworld程序及相关文件，如在/home/my/build下：
-      $ mkdir helloword      $ cd helloworld</p>
-
+					<div class="excerpt"><p>列式存储(Column-based)是相对于传统关系型数据库的行式存储(Row-based)来说的。简单来说两者的区别就是如何组织表。
+将表放入存储系统中有两种方法，而我们绝大部分是采用行存储的。行存储法是将各行放入连续的物理位置，这很像传统的记录和文件系统。列存储法是将数据按照列存储到数据库中，与行存储类似，
+<img src="https://xiazemin.github.io/MyBlog/img/columbased" />
+应用行式存储的数据库系统称为行式数据库，同理应用列式存储的数据库系统称为列式数据库。随着列式数据库的发展，传统的行式数据库加入了列式存储的支持，形成具有两种存储方式的数据库系统。
+传统的关系型数据库，如Oracle、DB2、MySQL、SQL SERVER等采用行式存储法，当然传统的关系型数据库也在不断发展中。随着Oracle 12c推出了in memory组件，使得Oracle数据库具有了双模式数据存放方式，从而能够实现对混合类型应用的支持：传统的以行形式保存的数据满足OLTP应用；列形式保存的数据满足以查询为主的OLAP应用。
+新兴的Hbase、HP Vertica、EMC Greenplum等分布式数据库采用列式存储，当然这些数据库也有对行式存储的支持比如HP Vertica。
+随着传统关系型数据库与新兴的分布式数据库不断的发展，列式存储与行式存储会不断融合，数据库系统会呈现双模式数据存放方式，这也是商业竞争的需要。
+<img src="https://xiazemin.github.io/MyBlog/img/columbased_row" />
+列式存储的主要优点之一就是可以大幅降低系统的I/O，尤其是在海量数据查询时，I/O向来是系统的主要瓶颈之一。行式更适合OLTP，比如传统的基于增删改查操作的应用。列式更适合OLAP，非常适合于在数据仓库领域发挥作用，比如数据分析、海量存储和商业智能；涉及不经常更新的数据。
+由于设计上的不同，列式数据库在并行查询处理和压缩上更有优势。而且数据是以列为单元存储，完全不用考虑数据建模或者说建模更简单了。要查询计算哪些列上的数据，直接读取列就行。
+<!-- more --></p>
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/linux/2018/09/27/automake.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/storage/2018/10/21/rowstorage.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -251,45 +251,41 @@ Starting MySQL
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/linux/2018/09/26/bash.html">bash  2>&1</a>
+						<a class="post-link" href="/MyBlog/storage/2018/10/21/mysql-proxy-lua.html">mysql-proxy-lua</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/linux/2018/09/26/bash.html"> 夏泽民</a>
+						<a href="/MyBlog/storage/2018/10/21/mysql-proxy-lua.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Sep 26, 2018
+							Oct 21, 2018
 						</span>
 					</div>
-					<div class="excerpt"><p>“命令&gt;/dev/null 2&gt;&amp;1 ”等价于“命令 &amp;&gt;/dev/null ”
+					<div class="excerpt"><p>MySQL Proxy处于客户端应用程序和MySQL服务器之间，通过截断、改变并转发客户端和后端数据库之间的通信来实现其功能，这和WinGate之类的网络代理服务器的基本思想是一样的。代理服务器是和TCP/IP协议打交道，而要理解MySQL Proxy的工作机制，同样要清楚MySQL客户端和服务器之间的通信协议，MySQL Protocol包括认证和查询两个基本过程：
+　　认证过程包括：
+　　客户端向服务器发起连接请求
+　　服务器向客户端发送握手信息
+　　客户端向服务器发送认证请求
+　　服务器向客户端发送认证结果
+　　如果认证通过，则进入查询过程：
+　　客户端向服务器发起查询请求
+　　服务器向客户端返回查询结果
+　　当然，这只是一个粗略的描述，每个过程中发送的包都是有固定格式的，想详细了解MySQL Protocol的同学，可以去这里看看。MySQL Proxy要做的，就是介入协议的各个过程。首先MySQL Proxy以服务器的身份接受客户端请求，根据配置对这些请求进行分析处理，然后以客户端的身份转发给相应的后端数据库服务器，再接受服务器的信息，返回给客户端。所以MySQL Proxy需要同时实现客户端和服务器的协议。
+　　由于要对客户端发送过来的SQL语句进行分析，还需要包含一个SQL解析器。可以说MySQL Proxy相当于一个轻量级的MySQL了，实际上，MySQL Proxy的admin server是可以接受SQL来查询状态信息的。
+　　MySQL Proxy通过lua脚本来控制连接转发的机制。主要的函数都是配合MySQL Protocol各个过程的，这一点从函数名上就能看出来：
+　　connect_server()   
+　　read_handshake()   
+　　read_auth()   
+　　read_auth_result()   
+　　read_query()   
+　　read_query_result()  
+　　至于为什么采用lua脚本语言，我想这是因为MySQL Proxy中采用了wormhole存储引擎的关系吧，这个虫洞存储引擎很有意思，数据的存储格式就是一段lua脚本
 <!-- more -->
-我们在Linux下经常会碰到nohup command&gt;/dev/null 2&gt;&amp;1 &amp;这样形式的命令。首先我们把这条命令大概分解下首先就是一个nohup表示当前用户和系统的回话下的进城忽略响应HUP消息。&amp;是把该命令以后台的job的形式运行。那么就剩下command&gt;/dev/null 2&gt;&amp;1,command&gt;/dev/null较好理解，/dev/null表示一个空设备，就是说吧command的执行结果重定向到空设备中，说白了就是不显示任何信息。那么2&gt;&amp;1又是什么含义?
-2&gt;&amp;1
-几个基本符号及其含义
-/dev/null 表示空设备文件0 表示stdin标准输入1 表示stdout标准输出2 表示stderr标准错误从command&gt;/dev/null说起
-其实这条命令是一个缩写版，对于一个重定向命令，肯定是a &gt; b这种形式，那么command &gt; /dev/null难道是command充当a的角色，/dev/null充当b的角色。这样看起来比较合理，其实一条命令肯定是充当不了a，肯定是command执行产生的输出来充当a，其实就是标准输出stdout。所以command &gt; /dev/null相当于执行了command 1 &gt; /dev/null。执行command产生了标准输出stdout(用1表示)，重定向到/dev/null的设备文件中。
-说说2&gt;&amp;1
-通过上面command &gt; /dev/null等价于command 1 &gt; /dev/null,那么对于2&gt;&amp;1也就好理解了，2就是标准错误，1是标准输出，那么这条命令不就是相当于把标准错误重定向到标准输出么。等等是&amp;1而不是1，这里&amp;是什么？这里&amp;相当于等效于标准输出。这里有点不好理解，先看下面。
-command&gt;a 2&gt;a 与 command&gt;a 2&gt;&amp;1的区别
-通过上面的分析，对于command&gt;a 2&gt;&amp;1这条命令，等价于command 1&gt;a 2&gt;&amp;1可以理解为执行command产生的标准输入重定向到文件a中，标准错误也重定向到文件a中。那么是否就说command 1&gt;a 2&gt;&amp;1等价于command 1&gt;a 2&gt;a呢。其实不是，command 1&gt;a 2&gt;&amp;1与command 1&gt;a 2&gt;a还是有区别的，区别就在于前者只打开一次文件a，后者会打开文件两次，并导致stdout被stderr覆盖。&amp;1的含义就可以理解为用标准输出的引用，引用的就是重定向标准输出产生打开的a。从IO效率上来讲，command
- 1&gt;a 2&gt;&amp;1比command 1&gt;a 2&gt;a的效率更高。
-举个栗子
-来个shell
-//test.sh
-#!/bin/sh
-t
-date
-chmod +x test.sh为test.sh增加执行权限。这里我们弄了两条命令，其中t指令并不存在，执行会报错，会输出到stderr。date能正常执行，执行会输出当前时间，会输出到stdout。
-执行./test.sh &gt; res1.log结果为
-我们发现stderr并没有被重定向到res1.log中，stderr被打印到了屏幕上。这也进一步证明了上面说的./test.sh &gt; res1.log等价于./test.sh 1&gt;res1.log
-执行./test.sh&gt;res2.log 2&gt;&amp;1结果为
-这次我们发现stdout和stderr都被重定向到了res2.log中了。上面我们未对stderr也就是2说明如何输出，stderr就输出到了屏 幕上，这里我们不仅对stdout进行说明，重定向到res2.log中，对标准错误也进行了说明，让其重定向到res2.log的引用即 res2.log的文件描述符中。
-再思考一下
-为何2&gt;&amp;1要写在command&gt;1的后面，直接用2可以么。比如ls 2&gt;a。其实这种用法也是可以的，ls命令列出当前的目录，用stdout（1）表示，由于这个时候没有stderr(2)，这个时候执行ls 2&gt;a也会正常产生一个a的文件，但是a的文件中是空的，因为这时候执行ls并没有产生stderr(2)。</p>
+通过这几个入口函数我们可以控制mysql-proxy的一些行为。</p>
 
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/linux/2018/09/26/bash.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/storage/2018/10/21/mysql-proxy-lua.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -299,49 +295,21 @@ chmod +x test.sh为test.sh增加执行权限。这里我们弄了两条命令，
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/linux/2018/09/23/uninterruptible.html">uninterruptible D 状态</a>
+						<a class="post-link" href="/MyBlog/storage/2018/10/21/mvcc.html">mvcc</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/linux/2018/09/23/uninterruptible.html"> 夏泽民</a>
+						<a href="/MyBlog/storage/2018/10/21/mvcc.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Sep 23, 2018
+							Oct 21, 2018
 						</span>
 					</div>
-					<div class="excerpt"><p>D状态即无法中断的休眠进程，是由于在等待IO，比如磁盘IO，网络IO，其他外设IO，如果进程正在等待的IO在较长的时间内都没有响应，那么就被ps看到了，同时也就意味着很有可能有IO出了问题，可能是外设本身出了故障，也可能是比如挂载的远程文件系统已经不可访问等操作时出现的问题。</p>
+					<div class="excerpt"><p>MySQL InnoDB存储引擎，实现的是基于多版本的并发控制协议——MVCC (Multi-Version Concurrency Control) (注：与MVCC相对的，是基于锁的并发控制，Lock-Based Concurrency Control)。MVCC最大的好处，相信也是耳熟能详：读不加锁，读写不冲突。在读多写少的OLTP应用中，读写不冲突是非常重要的，极大的增加了系统的并发性能，这也是为什么现阶段，几乎所有的RDBMS，都支持了MVCC。</p>
 
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/linux/2018/09/23/uninterruptible.html" style="color:green">阅读全文</a>
-						
-					</div>								
-			</div>
-			<br/>
-			<hr/>
-			<div class="post-list" style="list-style-type: none;">			
-				 	
-					<h2>
-						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/linux/2018/09/23/bpf.html">LSF、BPF、eBPF</a>
-					</h2>
-					<div class="author" style="margin-top: -10px;">Posted by
-						<i class="fa fa-user"></i>
-						<a href="/MyBlog/linux/2018/09/23/bpf.html"> 夏泽民</a>
-						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Sep 23, 2018
-						</span>
-					</div>
-					<div class="excerpt"><!-- more -->
-<p>概览LSF(Linuxsocketfilter)起源于BPF(BerkeleyPacketFilter),基础从架构一致,但使用更简单。LSF内部的BPF最早是cBPF(classic),后来x86平台首先切换到eBPF(extended),但由于很多上层应用程序仍然使用cBPF(tcpdump、iptables),并且eBPF还没有支持很多平台,所以内核提供了从cBPF向eBPF转换的逻辑,并且eBPF在设计的时候也是沿用了很多cBPF的指令编码。但是在指令集合寄存器,还有
-概览
-LSF(Linux socket filter)起源于BPF(Berkeley Packet Filter),基础从架构一致,但使用更简单。LSF内部的BPF最早是cBPF(classic),后来x86平台首先切换到eBPF(extended),但由于很多上层应用程序仍然使用cBPF(tcpdump、iptables),并且eBPF还没有支持很多平台,所以内核提供了从cBPF向eBPF转换的逻辑,并且eBPF在设计的时候也是沿用了很多cBPF的指令编码。但是在指令集合寄存器,还有架构设计上有很大不同(例如eBPF已经可以调用C函数,并且可以跳转到另外的eBPF程序)。
-但是新的eBPF一出来就被玩坏了,人们很快发现了它在内核trace方面的意义,它可以保证绝对安全的获取内核执行信息。是内核调试和开发者的不二选择,所以针对这个方面,例如kprobe、ktap、perf eBPF等优秀的工作逐渐产生。反而包过滤部门关注的人不够多。tc(traffic controll)是使用eBPF的一角优秀的用户端程序,它允许不用重新编译模块就可以动态添加删除新的流量控制算法。netfilter的xtable模块,配合xt_bpf模块,就可以实现将eBPF程序添加到hook点,来实现过滤。当然,内核中提供了从cBPF到eBPF编译的函数,所以,任何情况下想要使用cBPF都可以,内核会自动检测和编译。</p>
-
-</div>
-					<div class="readmore" style="float: right;">
-						
-							<a href="/MyBlog/linux/2018/09/23/bpf.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/storage/2018/10/21/mvcc.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -1357,6 +1325,26 @@ LSF(Linux socket filter)起源于BPF(Berkeley Packet Filter),基础从架构一�
 			  
 			    
 			      <a href="/MyBlog/page250/">250</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page251/">251</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page252/">252</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page253/">253</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page254/">254</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page255/">255</a>
 			    
 			  
 
@@ -2638,6 +2626,31 @@ LSF(Linux socket filter)起源于BPF(Berkeley Packet Filter),基础从架构一�
 						  
 						
 
+						  
+							<li><a href="/MyBlog/page251">251</a></li>
+						  
+						
+
+						  
+							<li><a href="/MyBlog/page252">252</a></li>
+						  
+						
+
+						  
+							<li><a href="/MyBlog/page253">253</a></li>
+						  
+						
+
+						  
+							<li><a href="/MyBlog/page254">254</a></li>
+						  
+						
+
+						  
+							<li><a href="/MyBlog/page255">255</a></li>
+						  
+						
+
 						
 						  <li><a href="/MyBlog/page161">Next</a></li>
 						
@@ -2669,6 +2682,190 @@ LSF(Linux socket filter)起源于BPF(Berkeley Packet Filter),基础从架构一�
 							var searchIndex={
 							"code" : 0 ,
 							"data" : [
+							
+							{
+							"title" : "dynamo - ",
+							"url" : "/MyBlog/storage/2020/01/06/dynamo.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "xargs - ",
+							"url" : "/MyBlog/linux/2020/01/05/xargs.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "UNIX域套接字传递描述符的应用 - ",
+							"url" : "/MyBlog/linux/2020/01/05/socket.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "rest - ",
+							"url" : "/MyBlog/golang/2020/01/05/rest.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "rainbow table 彩虹表 - ",
+							"url" : "/MyBlog/algorithm/2020/01/05/rainbow.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "pki Public Key Infrastructure - ",
+							"url" : "/MyBlog/algorithm/2020/01/05/pki.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "mysqldump Mysql 大量数据快速导出 - ",
+							"url" : "/MyBlog/storage/2020/01/05/mysqldump.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "mysql优化技巧 - ",
+							"url" : "/MyBlog/storage/2020/01/05/mysql_op.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "mysql index - ",
+							"url" : "/MyBlog/storage/2020/01/05/mysql_index.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "mysql 同库不同表索引不一样 - ",
+							"url" : "/MyBlog/storage/2020/01/05/mysql.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "Mysql模糊查询like效率 - ",
+							"url" : "/MyBlog/storage/2020/01/05/like.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "int(2) tinyint - ",
+							"url" : "/MyBlog/storage/2020/01/05/int.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "index 索引 - ",
+							"url" : "/MyBlog/storage/2020/01/05/index.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "Mysql的explain - ",
+							"url" : "/MyBlog/storage/2020/01/05/explain.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "bgsave - ",
+							"url" : "/MyBlog/storage/2020/01/05/bgsave.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "TIMESTAMP - ",
+							"url" : "/MyBlog/storage/2020/01/05/TIMESTAMP.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "进程中线程同步的四种方式 - ",
+							"url" : "/MyBlog/linux/2020/01/05/CCriticalSection.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "BCrypt 如何存储密码 - ",
+							"url" : "/MyBlog/algorithm/2020/01/05/BCrypt.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "206 http 1.1断点续传 - ",
+							"url" : "/MyBlog/linux/2020/01/05/206.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "uniq - ",
+							"url" : "/MyBlog/linix/2020/01/04/uniq.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "sort - ",
+							"url" : "/MyBlog/linux/2020/01/04/sort.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "nginx 日志访问量统计 - ",
+							"url" : "/MyBlog/linux/2020/01/04/log.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "httpCache - ",
+							"url" : "/MyBlog/linux/2020/01/04/httpCache.html"
+							}
+							
+							,
+							
 							
 							{
 							"title" : "tcp errno - ",
@@ -12812,7 +13009,7 @@ LSF(Linux socket filter)起源于BPF(Berkeley Packet Filter),基础从架构一�
 								
 								
 									<a class="bold" href="/MyBlog/category/linux">
-										linux (266)
+										linux (273)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -12839,7 +13036,7 @@ LSF(Linux socket filter)起源于BPF(Berkeley Packet Filter),基础从架构一�
 								
 								
 									<a class="bold" href="/MyBlog/category/golang">
-										golang (344)
+										golang (345)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -12884,7 +13081,7 @@ LSF(Linux socket filter)起源于BPF(Berkeley Packet Filter),基础从架构一�
 								
 								
 									<a class="bold" href="/MyBlog/category/storage">
-										storage (99)
+										storage (110)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -12902,7 +13099,7 @@ LSF(Linux socket filter)起源于BPF(Berkeley Packet Filter),基础从架构一�
 								
 								
 									<a class="bold" href="/MyBlog/category/algorithm">
-										algorithm (71)
+										algorithm (74)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -12921,6 +13118,15 @@ LSF(Linux socket filter)起源于BPF(Berkeley Packet Filter),基础从架构一�
 								
 									<a class="bold" href="/MyBlog/category/elasticsearch">
 										Elasticsearch (1)
+									</a>
+                        </div>
+                        <div class="col-lg-6">
+                        	
+								
+								
+								
+									<a class="bold" href="/MyBlog/category/linix">
+										linix (1)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -12971,6 +13177,98 @@ LSF(Linux socket filter)起源于BPF(Berkeley Packet Filter),基础从架构一�
 							<div id="tags">
 								<ul style="display:none;width:250px;height:250px;">
 								     
+								   <li>
+										<a href="/MyBlog/storage/2020/01/06/dynamo.html" style="font-size:40px;"> dynamo</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/linux/2020/01/05/xargs.html" style="font-size:40px;"> xargs</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/linux/2020/01/05/socket.html" style="font-size:40px;"> UNIX域套接字传递描述符的应用</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/golang/2020/01/05/rest.html" style="font-size:40px;"> rest</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/algorithm/2020/01/05/rainbow.html" style="font-size:40px;"> rainbow table 彩虹表</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/algorithm/2020/01/05/pki.html" style="font-size:40px;"> pki Public Key Infrastructure</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/storage/2020/01/05/mysqldump.html" style="font-size:40px;"> mysqldump Mysql 大量数据快速导出</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/storage/2020/01/05/mysql_op.html" style="font-size:40px;"> mysql优化技巧</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/storage/2020/01/05/mysql_index.html" style="font-size:40px;"> mysql index</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/storage/2020/01/05/mysql.html" style="font-size:40px;"> mysql 同库不同表索引不一样</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/storage/2020/01/05/like.html" style="font-size:40px;"> Mysql模糊查询like效率</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/storage/2020/01/05/int.html" style="font-size:40px;"> int(2) tinyint</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/storage/2020/01/05/index.html" style="font-size:40px;"> index 索引</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/storage/2020/01/05/explain.html" style="font-size:40px;"> Mysql的explain</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/storage/2020/01/05/bgsave.html" style="font-size:40px;"> bgsave</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/storage/2020/01/05/TIMESTAMP.html" style="font-size:40px;"> TIMESTAMP</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/linux/2020/01/05/CCriticalSection.html" style="font-size:40px;"> 进程中线程同步的四种方式</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/algorithm/2020/01/05/BCrypt.html" style="font-size:40px;"> BCrypt 如何存储密码</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/linux/2020/01/05/206.html" style="font-size:40px;"> 206 http 1.1断点续传</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/linix/2020/01/04/uniq.html" style="font-size:40px;"> uniq</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/linux/2020/01/04/sort.html" style="font-size:40px;"> sort</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/linux/2020/01/04/log.html" style="font-size:40px;"> nginx 日志访问量统计</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/linux/2020/01/04/httpCache.html" style="font-size:40px;"> httpCache</a>
+									</li>
+									  
 								   <li>
 										<a href="/MyBlog/linux/2020/01/03/tcp.html" style="font-size:40px;"> tcp errno</a>
 									</li>
@@ -13038,98 +13336,6 @@ LSF(Linux socket filter)起源于BPF(Berkeley Packet Filter),基础从架构一�
 								   <li>
 										<a href="/MyBlog/web/2020/01/02/trap.html" style="font-size:40px;"> Abort trap 6</a>
 									</li>
-									  
-								   <li>
-										<a href="/MyBlog/linux/2020/01/02/rst.html" style="font-size:40px;"> rst</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2020/01/01/update.html" style="font-size:40px;"> golang 升级安装</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2020/01/01/govendor.html" style="font-size:40px;"> govendor</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2020/01/01/goproxy.html" style="font-size:40px;"> goproxy</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2020/01/01/etcd.html" style="font-size:40px;"> etcd 编译</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2020/01/01/depend.html" style="font-size:40px;"> golang 自动下载所有依赖包</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2019/12/30/pool.html" style="font-size:40px;"> sync.Pool</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2019/12/30/map.html" style="font-size:40px;"> sync.Map</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2019/12/30/dcl.html" style="font-size:40px;"> DCL双检查锁机制</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2019/12/30/CACHE.html" style="font-size:40px;"> CACHE的一些基本概念</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/web/2019/12/29/npm.html" style="font-size:40px;"> 为什么要用npm scripts替代gulp</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/web/2019/12/29/gulp.html" style="font-size:40px;"> gulp</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2019/12/29/BloomFilter.html" style="font-size:40px;"> BloomFilter golang实现</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/web/2019/12/28/upstream.html" style="font-size:40px;"> upstream</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2019/12/28/panic.html" style="font-size:40px;"> panic defer 顺序</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/web/2019/12/28/gateway.html" style="font-size:40px;"> 网关中间件</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/linux/2019/12/28/fullnat.html" style="font-size:40px;"> full nat Session的Hash表</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/algorithm/2019/12/28/ac.html" style="font-size:40px;"> kmp tire树 ac自动机</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/web/2019/12/28/OmniPlan.html" style="font-size:40px;"> OmniPlan 项目排期管理工具</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/storage/2019/12/28/MySQL_backup.html" style="font-size:40px;"> MySQL_backup</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/storage/2019/12/28/2pl.html" style="font-size:40px;"> 事务ACID、2PC、3PC、2PL</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/algorithm/2019/12/26/kmp.html" style="font-size:40px;"> kmp 实现strstr</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2019/12/26/float.html" style="font-size:40px;"> float 的表示和进度转换</a>
-									</li>
 									
 								</ul>
 							</div>
@@ -13144,33 +13350,33 @@ LSF(Linux socket filter)起源于BPF(Berkeley Packet Filter),基础从架构一�
                 		<ul class="posts" span="recent">  
 							  
 							   <li>  
-								   <span>03 Jan 2020</span>
-								   <a href="/MyBlog/linux/2020/01/03/tcp.html">  
-								   tcp errno</a>  
+								   <span>06 Jan 2020</span>
+								   <a href="/MyBlog/storage/2020/01/06/dynamo.html">  
+								   dynamo</a>  
 							   </li>  
 							  
 							   <li>  
-								   <span>03 Jan 2020</span>
-								   <a href="/MyBlog/docker/2020/01/03/sysvinit.html">  
-								   如何运行多进程Docker容器</a>  
+								   <span>05 Jan 2020</span>
+								   <a href="/MyBlog/linux/2020/01/05/xargs.html">  
+								   xargs</a>  
 							   </li>  
 							  
 							   <li>  
-								   <span>03 Jan 2020</span>
-								   <a href="/MyBlog/linux/2020/01/03/systemctl.html">  
-								   systemctl init.d</a>  
+								   <span>05 Jan 2020</span>
+								   <a href="/MyBlog/linux/2020/01/05/socket.html">  
+								   UNIX域套接字传递描述符的应用</a>  
 							   </li>  
 							  
 							   <li>  
-								   <span>03 Jan 2020</span>
-								   <a href="/MyBlog/linux/2020/01/03/reset.html">  
-								   Connect reset by peer</a>  
+								   <span>05 Jan 2020</span>
+								   <a href="/MyBlog/golang/2020/01/05/rest.html">  
+								   rest</a>  
 							   </li>  
 							  
 							   <li>  
-								   <span>03 Jan 2020</span>
-								   <a href="/MyBlog/linux/2020/01/03/refused.html">  
-								   Connection refused</a>  
+								   <span>05 Jan 2020</span>
+								   <a href="/MyBlog/algorithm/2020/01/05/rainbow.html">  
+								   rainbow table 彩虹表</a>  
 							   </li>  
 							  
 						</ul>
