@@ -1,0 +1,621 @@
+---
+title: php map 实现
+layout: post
+category: lang
+author: 夏泽民
+---
+PHP数组底层数据结构 
+
+   PHP 数组底层依赖的散列表数据结构定义如下（位于 Zend/zend_types.h）：
+
+   
+
+   这个散列表中有很多成员，我们挑几个比较重要的来讲讲：
+
+arData：散列表中保存存储元素的数组，其内存是连续的，arData指向数组的起始位置；
+nTableSize：数组的总容量，即可以容纳的元素数，arData 的内存大小就是根据这个值确定的，它的大小的是2的幂次方，最小为8，然后按照 8、16、32...依次递增；
+nTableMask：这个值在散列函数根据 key 的哈希值映射元素的时候用到，它的值实际就是 nTableSize 的负数，即 nTableMask = -nTableSize，用位运算来表示就是 nTableMask = ~nTableSize+1；
+nNumUsed、nNumOfElements：nNumUsed 是指数组当前使用的 Bucket 数，但不是数组有效元素个数，因为某个数组元素被删除后并没有立即从数组中删除，而是将其标记为 IS_UNDEF，只有在数组需要扩容时才会真正删除，nNumOfElements 则表示数组中有效的元素数量，即调用 count 函数返回值，如果没有扩容，nNumUsed 一直递增，无论是否删除元素；
+nNextFreeElement：这个是给自动确定数值索引使用的，默认从 0 开始，比如 $arr[] = 200，这个时候 nNextFreeElement 值会自动加 1；
+pDestructor：当删除或覆盖数组中的某个元素时，如果提供了这个函数句柄，则在删除或覆盖时调用此函数，对旧元素进行清理；
+u：这个联合体结构主要用于一些辅助作用
+   Bucket 的结构比较简单，主要用来保存元素的 key 和 value，以及一个整型的 h（散列值，或者叫哈希值）：如果元素是数值索引，则其值就是数值索引的值；如果是字符串索引，那么其值就是 key 通过 Time33 算法计算得到的散列值，h 的值用来最终映射元素的存储位置。Bucket 的数据结构如下：
+
+   
+
+ 
+
+PHP 数组的基本实现 
+
+   散列表主要由两部分组成：存储元素数组、散列函数。散列表的基本实现前面已经探讨过，PHP 中的数组除了具备散列表的基本特点之外，还有一个特别的地方，那就是它是有序的（与Java中的HashMap的无序有所不同）：数组中各元素的顺序和插入顺序一致。这个是怎么实现的呢？
+
+   为了实现 PHP 数组的有序性，PHP 底层的散列表在散列函数与元素数组之间加了一层映射表，这个映射表也是一个数组，大小和存储元素的数组相同，存储元素的类型为整型，用于保存元素在实际存储的有序数组中的下标 —— 元素按照先后顺序依次插入实际存储数组，然后将其数组下标按照散列函数散列出来的位置存储在新加的映射表中：
+
+   
+
+   这样，就可以完成最终存储数据的有序性了。
+
+   PHP 数组底层结构中并没有显式标识这个中间映射表，而是与 arData 放到了一起，在数组初始化的时候并不仅仅分配用于存储 Bucket 的内存，还会分配相同数量的 uint32_t 大小的空间，这两块空间是一起分配的，然后将 arData 偏移到存储元素数组的位置，而这个中间映射表就可以通过 arData 向前访问到。
+
+ 
+
+数组的初始化
+
+   数组的初始化主要是针对 HashTable 成员的设置，初始化时并不会立即分配 arData 的内存，插入第一个元素之后才会分配 arData 的内存。初始化操作可以通过 zend_hash_init 宏完成，最后由 _zend_hash_init_int 函数处理（该函数定义在 Zend/zend_hash.c 文件中）：
+
+   
+
+   此时的 HashTable 只是设置了散列表的大小及其他成员的初始值，还无法用来存储元素。
+
+ 
+
+插入数据
+
+   插入时会检查数组是否已经分配存储空间，因为初始化并没有实际分配 arData 的内存，在第一次插入时才会根据 nTableSize 的大小分配，分配以后会把 HashTable->u.flags 打上 HASH_FLAG_INITIALIZED 掩码，这样，下次插入时发现已经分配了就不会重复操作，这段检查逻辑位于 _zend_hash_add_or_update_i 函数中：
+
+复制代码
+if (UNEXPECTED(!(HT_FLAGS(ht) & HASH_FLAG_INITIALIZED))) {
+    zend_hash_real_init_mixed(ht);
+    if (!ZSTR_IS_INTERNED(key)) {
+        zend_string_addref(key);
+        HT_FLAGS(ht) &= ~HASH_FLAG_STATIC_KEYS;
+        zend_string_hash_val(key);
+    }
+    goto add_to_hash;
+}
+复制代码
+   如果 arData 还没有分配，则最终由 zend_hash_real_init_mixed_ex 完成内存分配：
+
+   
+
+   分配完 arData 的内存后就可以进行插入操作了，插入时先将元素按照顺序插入 arData，然后将其在 arData 数组中的位置存储到根据 key 的散列值与 nTableMask 计算得到的中间映射表中的对应位置：
+
+   
+
+   上述只是最基本的插入处理，不涉及已存在数据的覆盖和清理。
+
+ 
+
+哈希冲突
+
+   PHP 数组底层的散列表采用链地址法解决哈希冲突，即将冲突的 Bucket 串成链表。
+
+   HashTable 中的 Bucket 会记录与它冲突的元素在 arData 数组中的位置，这也是一个链表，冲突元素的保存位置不在 Bucket 结构中，而是保存在了存储元素 zval 的 u2 结构中，即    Bucket.val.u2.next，所以插入时分为以下两步：
+
+// 将映射表中原来的值保存到新 Bucket 中，哈希冲突时会用到（以链表方式解决哈希冲突）
+Z_NEXT(p->val) = HT_HASH_EX(arData, nIndex);
+// 再把新元素数组存储位置更新到数据表中
+// 保存idx：((unit32_t*))(ht->arData)[nIndex] = idx
+HT_HASH_EX(arData, nIndex) = HT_IDX_TO_HASH(idx);
+ 
+
+数组查找
+
+   清楚了 HashTable 的实现和哈希冲突的解决方式之后，查找的过程就比较简单了：首先根据 key 计算出的散列值与 nTableMask 计算得到最终散列值 nIndex，然后根据散列值从中间映射表中得到存储元素在有序存储数组中的位置 idx，接着根据 idx 从有序存储数组（即 arData）中取出 Bucket，遍历该 Bucket，判断 Bucket 的 key 是否是要查找的 key，如果是则终止遍历，否则继续根据 zval.u2.next 遍历比较。
+
+   对应的底层源码如下：
+
+   
+
+ 
+
+删除数据
+
+   关于数组数据删除前面我们在介绍散列表中的 nNumUsed 和 nNumOfElements 字段时已经提及过，从数组中删除元素时，并没有真正移除，并重新 rehash，而是当 arData 满了之后，才会移除无用的数据，从而提高性能。即数组在需要扩容的情况下才会真正删除元素：首先检查数组中已删除元素所占比例，如果比例达到阈值则触发重新构建索引的操作，这个过程会把已删除的 Bucket 移除，然后把后面的 Bucket 往前移动补上空位，如果还没有达到阈值则会分配一个原数组大小 2 倍的新数组，然后把原数组的元素复制到新数组上，最后重建索引，重建索引会将已删除的 Bucket 移除。
+
+   对应底层代码如下：
+
+    
+
+   除此之外，数组还有很多其他操作，比如复制、合并、销毁、重置等，这些操作对应的代码都位于 zend_hash.c 中，感兴趣的同学可以去看看。
+<!-- more -->
+哈希表
+
+　　哈希表，顾名思义，即将不同的关键字映射到不同单元的一种数据结构。而将不同关键字映射到不同单元的方法就叫做哈希函数
+
+　　理想情况下，经过哈希函数处理，关键字和单元是会进行一一对应的；但是如果关键字值足够多的情况下，就容易出现多个关键字映射到同一单元的情况，即出现哈希冲突
+
+　　哈希冲突的解决方案，要么使用链接法，要么使用开放寻址法
+
+链接法
+　　即当不同的关键字映射到同一单元时，在同一单元内使用链表来保存这些关键字
+
+开放寻址法
+　　即当插入数据时，如果发现关键字被映射到的单元存在数据了，说明发生了冲突，就继续寻找下一个单元，直到找到可用单元为止
+
+　　而因为开放寻址法方案属于占用其他关键字映射单元的位置，所以后续的关键字更容易出现哈希冲突，因此容易出现性能下降
+
+链表
+
+　　既然上面提到了链表，这里我们简单聊一下链表的基础知识。链表分为很多种类型，常用的数据结构包括：队列，栈，双向链表等
+
+　　链表，就是由不同的链表节点组成的一种数据结构。链表节点一般由元素+指向下一节点的指针组成。而双向链表，顾名思义，则是由指向上一节点的指针+元素+指向下一节点的指针组成
+
+　　对于数据结构的内容，我们不过多展开，我们之后会有专门的内容去详细介绍数据结构
+
+php数组
+
+　　php解决哈希冲突的方式是使用了链接法，所以php数组是由哈希表+链表实现，准确来说，是由哈希表+双向链表实现。
+
+内部结构-哈希表
+
+HashTable结构体主要用来存放哈希表的基本信息
+
+1
+
+2
+
+3
+
+4
+
+5
+
+6
+
+7
+
+8
+
+9
+
+10
+
+11
+
+12
+
+13
+
+14
+
+15
+
+16
+
+17
+
+typedef struct _hashtable {
+
+    uint nTableSize;        // hash Bucket的大小，即哈希表的容量，最小为8，以2x增长。
+
+    uint nTableMask;        // nTableSize-1 ， 索引取值的优化
+
+    uint nNumOfElements;    // hash Bucket中当前存在的元素个数，count()函数会直接返回此值
+
+    ulong nNextFreeElement; // 下一个可使用的数字键值
+
+    Bucket *pInternalPointer;   // 当前遍历的指针（foreach比for快的原因之一）
+
+    Bucket *pListHead;          // 存储整个哈希表的头元素指针
+
+    Bucket *pListTail;          // 存储整个哈希表的尾元素指针
+
+    Bucket **arBuckets;         // 存储hash数组
+
+    dtor_func_t pDestructor;    // 在删除元素时执行的回调函数，用于资源的释放
+
+    zend_bool persistent;       //指出了Bucket内存分配的方式。如果persisient为TRUE，则使用操作系统本身的内存分配函数为Bucket分配内存，否则使用PHP的内存分配函数。
+
+    unsigned char nApplyCount; // 标记当前hash Bucket被递归访问的次数（防止多次递归）
+
+    zend_bool bApplyProtection;// 标记当前hash桶允许不允许多次访问，不允许时，最多只能递归3次
+
+#if ZEND_DEBUG
+
+    int inconsistent;
+
+#endif
+
+} HashTable;
+
+Bucket结构体则用于保存数据的具体内容
+
+1
+
+2
+
+3
+
+4
+
+5
+
+6
+
+7
+
+8
+
+9
+
+10
+
+11
+
+12
+
+typedef struct bucket {
+
+    ulong h;            // 对char *key进行hash后的值，或者是用户指定的数字索引值
+
+    uint nKeyLength;    // hash关键字的长度，如果数组索引为数字，此值为0
+
+    void *pData;        // 指向value，一般是用户数据的副本，如果是指针数据，则指向pDataPtr
+
+    void *pDataPtr;     // 如果是指针数据，此值会指向真正的value，同时上面pData会指向此值
+
+    struct bucket *pListNext;   // 指向整个哈希表的该单元的下一个元素
+
+    struct bucket *pListLast;   // 指向整个哈希表的该单元的上一个元素
+
+    struct bucket *pNext;       // 指向由于哈希冲突导致存放在同一个单元的链表中的下一个元素
+
+    struct bucket *pLast;       // 指向由于哈希冲突导致存放在同一个单元的链表中的上一个元素
+
+    // 保存当前值所对于的key字符串，这个字段只能定义在最后，实现变长结构体
+
+    char arKey[1];             
+
+} Bucket;
+
+　　其中Bucket结构体内有指向用户数据的pData元素，其实是指向了之前我们介绍的变量zval结构体，这也是为什么当创建数组时，会出现数组元素+1的变量容器。
+
+哈希表内部结构关系图
+
+
+
+　　从上图我们可以看出，Bucket在存放数据的时候，如果存在哈希冲突，则将多个关键字映射到链表中，由此组成了双向链表
+
+总结
+
+　　今天，我们以数组作为切入点，简单了解了下基本的数据结构：哈希表和链表；并且了解了数组的底层实现，即哈希表+双向链表。其实哈希表作为php中最重要的数据结构，用处很广。变量的符号表，函数列表等都是用哈希表来存储的
+　　
+　　PHP 数组具有的特性
+PHP 的数组是一种非常强大灵活的数据类型，在讲它的底层实现之前，先看一下 PHP 的数组都具有哪些特性。
+
+可以使用数字或字符串作为数组健值
+
+?
+1
+$arr = [1 => 'ok', 'one' => 'hello'];
+可按顺序读取数组
+
+?
+1
+2
+3
+foreach($arr as $key => $value){
+ echo $arr[$key];
+}
+可随机读取数组中的元素
+?
+1
+2
+3
+4
+5
+$arr = [1 => 'ok', 'one' => 'hello', 'a' => 'world'];
+ 
+echo $arr['one'];
+ 
+echo current($arr);
+数组的长度是可变的
+
+?
+1
+2
+3
+4
+5
+$arr = [1, 2, 3];
+ 
+$arr[] = 4;
+ 
+array_push($arr, 5);
+正是基于这些特性，我们可以使用 PHP 中的数组轻易的实现集合、栈、列表、字典等多种数据结构。那么这些特性在底层是如何实现的呢？ 这就得从数据结构说起了。
+
+数据结构
+
+PHP 中的数组实际上是一个有序映射。映射是一种把 values 关联到 keys 的类型。
+PHP 数组的底层实现是散列表（也叫 hashTable )，散列表是根据键（Key）直接访问内存存储位置的数据结构，它的key - value 之间存在一个映射函数，可以根据 key 通过映射函数得到的散列值直接索引到对应的 value 值，无需通过关键字比较，在理想情况下，不考虑散列冲突，散列表的查找效率是非常高的，时间复杂度是 O(1)。
+
+从源码中我们可以看到 zend_array 的结构如下：
+
+?
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+typedef struct _zend_array zend_array;
+typedef struct _zend_array hashTable;
+ 
+struct _zend_array {
+  zend_refcounted_h gc;
+  union {
+    struct {
+      ZEND_ENDIAN_LOHI_4(
+          zend_uchar  flags,
+          zend_uchar  nApplyCount,
+          zend_uchar  nIteratorsCount,
+          zend_uchar  reserve)
+    } v;
+    uint32_t flags;
+  } u;
+  uint32_t     nTableMask; // 哈希值计算掩码，等于nTableSize的负值(nTableMask = -nTableSize)
+  Bucket      *arData;   // 存储元素数组，指向第一个Bucket
+  uint32_t     nNumUsed;  // 已用Bucket数（含失效的 Bucket）
+  uint32_t     nNumOfElements; // 哈希表有效元素数
+  uint32_t     nTableSize;   // 哈希表总大小，为2的n次方（包括无效的元素）
+  uint32_t     nInternalPointer; // 内部指针，用于遍历
+  zend_long     nNextFreeElement; // 下一个可用的数值索引,如:arr[] = 1;arr["a"] = 2;arr[] = 3; 则nNextFreeElement = 2;
+  dtor_func_t    pDestructor;
+};
+该结构中的 Bucket 即储存元素的数组，arData 指向数组的起始位置，使用映射函数对 key 值进行映射后可以得到偏移值，通过内存起始位置 + 偏移值即可在散列表中进行寻址操作。
+
+Bucket 的数据结构如下：
+
+?
+1
+2
+3
+4
+5
+typedef struct _Bucket {
+  zval       val; // 存储的具体 value，这里是一个 zval，而不是一个指针
+  zend_ulong    h;  // 数字 key 或字符串 key 的哈希值。用于查找时 key 的比较  
+  zend_string   *key; // 当 key 值为字符串时，指向该字符串对应的 zend_string（使用数字索引时该值为 NULL），用于查找时 key 的比较
+} Bucket;
+到这里有个问题出现了：存储在散列表里的元素是无序的，PHP 数组如何做到按顺序读取的呢？
+
+答案是中间映射表，为了实现散列表的有序性，PHP 为其增加了一张中间映射表，该表是一个大小与 Bucket 相同的数组，数组中储存整形数据，用于保存元素实际储存的 Value 在 Bucekt 中的下标。Bucekt 中的数据是有序的，而中间映射表中的数据是无序的。
+
+
+
+而通过映射函数映射后的散列值要在中间映射表的区间内，这就对映射函数提出了要求。
+
+映射函数
+PHP7 数组采用的映射方式：
+
+?
+1
+nIndex = h | ht->nTableMask;
+将 key 经过 time33 算法生成的哈希值 h 和 nTableMask 进行或运算即可得出映射表的下标，其中 nTableMask 数值为 nTableSize 的负数。并且由于 nTableSize 的值为 2 的幂次方，所以 nTableMask 二进制位右侧全部为 0，保证了 h | ht->nTableMask 的取值范围会在 [-nTableSize, -1] 之间，正好在映射表的下标范围内。另外，用按位或运算的方法和其他方法如取余的方法相比运算速度较高，这个映射函数可以说设计的非常巧妙了。
+
+散列（哈希）冲突
+不同键名的通过映射函数计算得到的散列值有可能相同，此时便发生了散列冲突。
+
+对于散列冲突有以下 4 种常用方法：
+
+1.将散列值放到相邻的最近地址里
+
+2.换个散列函数重新计算散列值
+
+3.将冲突的散列值统一放到另一个地方
+
+4.在冲突位置构造一个单向链表，将散列值相同的元素放到相同槽位对应的链表中。这个方法叫链地址法，PHP 数组就是采用这个方法解决散列冲突的问题。
+
+其具体实现是：将冲突的 Bucket 串成链表，这样中间映射表映射出的就不是某一个元素，而是一个 Bucket 链表，通过散列函数定位到对应的 Bucket 链表时，需要遍历链表，逐个对比 Key 值，继而找到目标元素。而每个 Bucket 之间的链接则是将原 value 的下标保存到新 value 的 zval.u2.next 里，新 value 放在当前位置上，从而形成一个单向链表。
+
+举个例子：
+
+当我们访问 $arr['key'] 的过程中，假设首先通过散列运算得出映射表下标为 -2 ，然后访问映射表发现其内容指向 arData 数组下标为 1 的元素。此时我们将该元素的 key 和要访问的键名相比较，发现两者并不相等，则该元素并非我们所想访问的元素，而元素的 zval.u2.next 保存的值正是另一个具有相同散列值的元素对应 arData 数组的下标，所以我们可以不断通过 zval.u2.next 的值遍历直到找到键名相同的元素。
+
+扩容
+PHP 的数组在底层实现了自动扩容机制，当插入一个元素且没有空闲空间时，就会触发自动扩容机制，扩容后再执行插入。
+
+扩容的过程为：
+
+如果已删除元素所占比例达到阈值，则会移除已被逻辑删除的 Bucket，然后将后面的 Bucket 向前补上空缺的 Bucket，因为 Bucket 的下标发生了变动，所以还需要更改每个元素在中间映射表中储存的实际下标值。
+
+如果未达到阈值，PHP 则会申请一个大小是原数组两倍的新数组，并将旧数组中的数据复制到新数组中，因为数组长度发生了改变，所以 key-value 的映射关系需要重新计算，这个步骤为重建索引。
+
+重建散列表
+在删除某一个数组元素时，会先使用标志位对该元素进行逻辑删除，即在删除 value 时只是将 value 的 type 设置为 IS_UNDEF，而不会立即删除该元素所在的 Bucket，因为如果每次删除元素立刻删除 Bucket 的话，每次都需要进行排列操作，会造成不必要的性能开销。
+
+所以，当删除元素达到一定数量或扩容后都需要重建散列表，即移除被标记为删除的 value。因为 value 在 Bucket 位置移动了或哈希数组 nTableSize 变化了导致 key 与 value 的映射关系改变，重建过程就是遍历 Bucket 数组中的 value，然后重新计算映射值更新到散列表。
+
+什么是哈希表
+记住，在C里面，数组是内存块，你可以通过下标访问这些内存块。因此，在C里面的数组只能使用整数且有序的键值（那就是说，你不能在键值0之后使用1332423442的键值）。C里面没有关联数组这种东西。
+
+哈希表是这样的东西：它们使用哈希函数转换字符串键值为正常的整型键值。哈希后的结果可以被作为正常的C数组的键值（又名为内存块）。现在的问题是，哈希函数会有冲突，那就是说，多个字符串键值可能会生成一样的哈希值。例如，在PHP，超过64个元素的数组里，字符串”foo”和”oof”拥有一样的哈希值。
+
+这个问题可以通过存储可能冲突的值到链表中，而不是直接将值存储到生成的下标里。
+
+HashTable和Bucket
+typedef struct _hashtable {
+uint nTableSize;
+uint nTableMask;
+uint nNumOfElements;
+ulong nNextFreeElement;
+Bucket *pInternalPointer;
+Bucket *pListHead;
+Bucket *pListTail;
+Bucket **arBuckets;
+dtor_func_t pDestructor;
+zend_bool persistent;
+unsigned char nApplyCount;
+zend_bool bApplyProtection;
+if ZEND_DEBUG int inconsistent;
+} HashTable;
+
+nNumOfElements
+标识现在存储在数组里面的值的数量。这也是函数count的返回值
+nTableSize
+表示哈希表的容量。它通常是下一个大于等于nNumOfElements的2的幂值。比如，如果数组存储了32元素，那么哈希表也是32大小的容量。但如果再多一个元素添加进来，也就是说，数组现在有33个元素，那么哈希表的容量就被调整为64。 这是为了保持哈希表在空间和时间上始终有效。很明显，如果哈希表太小，那么将会有很多的冲突，而且性能也会降低。另一方面，如果哈希表太大，那么浪费内存。2的幂值是一个很好的折中方案。
+nTableMask
+是哈希表的容量减一。这个mask用来根据当前的表大小调整生成的哈希值。例如，”foo”真正的哈希值（使用DJBX33A哈希函数）是193491849。如果我们现在有64容量的哈希表，我们明显不能使用它作为数组的下标。取而代之的是通过应用哈希表的mask，然后只取哈希表的低位。
+hash | 193491849 | 0b1011100010000111001110001001
+& mask | & 63 | & 0b0000000000000000000000111111
+= index | = 9 | = 0b0000000000000000000000001001
+nNextFreeElement
+是下一个可以使用的数字键值，当你使用$array[] = xyz是被使用到。
+pInternalPointer
+存储数组当前的位置。这个值在foreach遍历时可使用reset()，current()，key()，next()，prev()和end()函数访问。
+pListHead和pListTail
+标识了数组的第一个和最后一个元素的位置。记住：PHP的数组是有序集合。比如，[‘foo’ => ‘bar’, ‘bar’ => ‘foo’]和[‘bar’ => ‘foo’, ‘foo’ => ‘bar’]这两个数组包含了相同的元素，但却有不同的顺序。
+arBuckets
+是我们经常谈论的“哈希表（internal C array）”。它用Bucket **来定义，因此它可以被看作数组的bucket指针（我们会马上谈论Bucket是什么）。
+pDestructor
+是值的析构器。如果一个值从HT中移除，那么这个函数会被调用。常见的析构函数是zval_ptr_dtor。zval_ptr_dtor会减少zval的引用数量，而且，如果它遇到o，它会销毁和释放它。
+typedef struct bucket {
+ulong h;
+uint nKeyLength;
+void *pData;
+void *pDataPtr;
+struct bucket *pListNext;
+struct bucket *pListLast;
+struct bucket *pNext;
+struct bucket *pLast;
+const char *arKey;
+} Bucket;
+
+h
+是一个哈希值（没有应用mask值映射之前的值）。
+
+arKey
+用来保存字符串键值。
+
+nKeyLength
+是对应的长度。如果是数字键值，那么这两个变量都不会被使用。
+
+pData
+及
+
+pDataPtr
+被用来存储真正的值。对PHP数组来说，它的值是一个zval结构体（但它也在其他地方使用到）。不要纠结为什么有两个属性。它们两者的区别是谁负责释放值。
+
+pListNext
+和
+
+pListLast
+标识数组元素的下一个元素和上一个元素。如果PHP想顺序遍历数组它会从pListHead这个bucket开始（在HashTable结构里面），然后使用pListNext bucket作为遍历指针。在逆序也是一样，从pListTail指针开始，然后使用pListLast指针作为变量指针。（你可以在用户代码里调用end()然后调用prev()函数达到这个效果。）
+
+pNext
+和
+
+pLast
+生成我上面提到的“可能冲突的值链表”。arBucket数组存储第一个可能值的bucket。如果该bucket没有正确的键值，PHP会查找pNext指向的bucket。它会一直指向后面的bucket直到找到正确的bucket。pLast在逆序中也是一样的原理。
+
+你可以看到，PHP的哈希表实现相当复杂。这是它使用超灵活的数组类型要付出的代价。
+
+哈希表是怎么被使用的？
+Zend Engine定义了大量的API函数供哈希表使用。低级的哈希表函数预览可以在
+zend_hash.h文件里面找到。另外Zend Engine在zend_API.h文件定义了稍微高级一些的API。
+
+我们没有足够的时间去讲所有的函数，但是我们至少可以查看一些实例函数，看看它是如何工作的。我们将使用array_fill_keys作为实例函数。
+
+使用第二部分提到的技巧你可以很容易地找到函数在
+ext/standard/array.c文件里面定义了。现在，让我们来快速查看这个函数。
+跟大部分函数一样，函数的顶部有一堆变量的定义，然后调用zend_parse_parameters
+函数：
+
+zval *keys, *val, **entry;
+HashPosition pos;
+if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "az", &keys, &val) == FAILURE) {
+return;
+}
+
+很明显，az参数说明第一个参数类型是数组（即变量keys），第二个参数是任意的zval（即变量val）。
+
+解析完参数后，返回数组就被初始化了：
+
+array_init_size(return_value,zend_hash_num_elements(Z_ARRVAL_P(keys));
+
+这一行包含了array API里面存在的三步重要的部分：
+
+Z_ARRVAL_P宏从zval里面提取值到哈希表。
+
+zend_hash_num_elements提取哈希表元素的个数（nNumOfElements属性）。
+
+array_init_size使用size变量初始化数组。
+
+因此，这一行使用与键值数组一样大小来初始化数组到return_value变量里。
+
+这里的size只是一种优化方案。函数也可以只调用
+array_init(return_value)，这样随着越来越多的元素添加到数组里，PHP就会多次重置数组的大小。通过指定特定的大小，PHP会在一开始就分配正确的内存空间。
+数组被初始化并返回后，函数用跟下面大致相同的代码结构，使用while循环变量keys数组：
+
+zend_hash_internal_pointer_reset_ex(Z_ARRVAL_P(keys), &pos);
+while (zend_hash_get_current_data_ex(Z_ARRVAL_P(keys), (void **)&entry, &pos) == SUCCESS) {
+zend_hash_move_forward_ex(Z_ARRVAL_P(keys), &pos);
+}
+
+这可以很容易地翻译成PHP代码：
+
+reset($keys);
+while (null !== $entry = current($keys)) {
+next($keys);
+}
+
+跟下面的一样：
+
+foreach ($keys as $entry) {
+// some code
+}
+
+唯一不同的是，C的遍历并没有使用内部的数组指针，而使用它自己的pos变量来存储当前的位置。
+
+在循环里面的代码分为两个分支：一个是给数字键值，另一个是其他键值。数字键值的分支只有下面的两行代码：
+
+zval_add_ref(&val);
+zend_hash_index_update(Z_ARRVAL_P(return_value),
+Z_LVAL_PP(entry), &val,
+sizeof(zval *), NULL);
+
+这看起来太直接了：首先值的引用增加了（添加值到哈希表意味着增加另一个指向它的引用），然后值被插入到哈希表中。zend_hash_index_update宏的参数分别是，需要更新的哈希表Z_ARRVAL_P(return_value)，整型下标
+Z_LVAL_PP(entry)，值&val，值的大小sizeof(zval *)以及目标指针(这个我们不关注，因此是NULL）。
+
+非数字下标的分支就稍微复杂一点：
+
+zval key, *key_ptr = *entry;
+if (Z_TYPE_PP(entry) != IS_STRING) {
+key = **entry;
+zval_copy_ctor(&key);
+convert_to_string(&key);
+key_ptr = &key;
+}
+zval_add_ref(&val);
+zend_symtable_update(Z_ARRVAL_P(return_value), Z_STRVAL_P(key_ptr), Z_STRLEN_P(key_ptr) + 1, &val, sizeof(zval *), NULL);
+if (key_ptr != *entry) {
+zval_dtor(&key);
+}
+
+首先，使用convert_to_string将键值转换为字符串（除非它已经是字符串了）。在这之前，entry被复制到新的key变量。key = **entry这一行实现。另外，
+zval_copy_ctor函数会被调用，不然复杂的结构（比如字符串或数组）不会被正确地复制。
+
+上面的复制操作非常有必要，因为要保证类型转换不会改变原来的数组。如果没有copy操作，强制转换不仅仅修改局部的变量，而且也修改了在键值数组中的值（显然，这对用户来说非常意外）。
+
+显然，循环结束之后，复制操作需要再次被移除，zval_dtor(&key)
+做的就是这个工作。zval_ptr_dtor和zval_dtor的不同是zval_ptr_dtor只会在refcount变量为0时销毁zval变量，而zval_dtor会马上销毁它，而不是依赖
+refcount的值。这就为什么你看到zval_pte_dtor使用”normal”变量而zval_dtor
+使用临时变量，这些临时变量不会在其他地方使用。而且，zval_ptr_dtor
+会在销毁之后释放zval的内容而zval_dtor不会。因为我们没有malloc()任何东西，因此我们也不需要free()，因此在这方面，zval_dtor做了正确的选择。
+
+现在来看看剩下的两行（重要的两行^^）：
+
+zval_add_ref(&val);
+zend_symtable_update(Z_ARRVAL_P(return_value), Z_STRVAL_P(key_ptr), Z_STRLEN_P(key_ptr) + 1, &val, sizeof(zval *), NULL);
+
+这跟数字键值分支完成后的操作非常相似。不同的是，现在调用的是
+zend_symtable_update而不是zend_hash_index_update，而传递的是键值字符串和它的长度
