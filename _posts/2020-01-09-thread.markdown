@@ -1,0 +1,82 @@
+---
+title: 多线程模式下全局变量竞争
+layout: post
+category: linux
+author: 夏泽民
+---
+优点:在一个进程内的所有线程共享全局变量，很方便在多个线程间共享数据
+
+    缺点:线程是对全局变量随意遂改可能造成多线程之间对全局变量的混乱（即线程非安全
+<!-- more -->
+解决的办法:可以在线程对全局变量操作的地方添加一个互斥锁.
+
+上锁的过程:
+
+    当一个线程调用锁的acquire()方法获得锁时，锁就进入“locked”状态。每次只有一个线程可以获得锁。如果此时另一个线程试图获得这个锁，该线程就会变为“blocked”状态，称为“阻塞”，直到拥有锁的线程调用锁的release()方法释放锁之后，锁进入“unlocked”状态。线程调度程序从处于同步阻塞状态的线程中选择一个来获得锁，并使得该线程进入运行（running）状态
+    
+    结论：一个线程改变的值，在另外一个线程中能够有效，多线程共享全局变量。
+    
+    有一个初始值为n的全局变量作为计数器,
+然后用n个线程,每个线程将计数器减1,将这个计数器减少到0;
+在n比较大的时候, 得不到正确结果.
+
+使用了pthread线程和std::thread,尝试了用pthread_mutex, std::mutex, 以及__atomic_sub_fetch进行加锁或者原子减,都得不到正确结果
+
+当n为10的时候,可以得到正确结果.
+当n为100的时候,得不到正确结果.而在线程内延时10ms之后可以得到正确结果
+
+我猜是共享资源这里出了问题,但是实在想不通,这个锁应该怎么加才是对的... 求各位Dalao解答一下`
+
+相关代码
+全局变量
+
+int count = 100;
+pthread_mutex_t mutex_pthread;
+mutex mutex_std;
+线程函数
+
+void* writer(void* id) {
+
+  cout << "Writer enter. " << (long)id << endl;
+//this_thread::sleep_for(chrono::milliseconds(10));
+
+//__atomic_sub_fetch(&count, 1, __ATOMIC_RELAXED);
+
+//pthread_mutex_lock(&mutex_pthread);
+//count--;
+//pthread_mutex_unlock(&mutex_pthread);
+
+  {
+    lock_guard<mutex> lock_guard1(mutex_std);
+    count--;
+  }
+
+  cout << "Writer exit. " << (long)id << ", count: " << count << endl;
+  return NULL;
+}
+主函数
+
+int main() {
+  std::cout << "Hello, World!" << std::endl;
+
+  pthread_mutex_init(&mutex_pthread, NULL);
+  vector<pthread_t> writers;
+  for (int i = 0; i < count; i++) {
+    pthread_t th;
+    pthread_create(&th, NULL, writer, (void*)i);
+    writers.push_back(th);
+  }
+
+
+  for (int i = 0; i < count; i++) {
+    void* ret;
+    pthread_join(writers[i], &ret);
+  }
+
+  cout.flush();
+  cerr << "All writers end. Count: " << count << endl;
+  while (count);
+  cerr << "All writers end. Count: " << count << endl;
+
+  return 0;
+}

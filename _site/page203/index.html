@@ -147,42 +147,50 @@
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/docker/2018/05/09/pipework.html">pipework  为docker容器配置独立IP</a>
+						<a class="post-link" href="/MyBlog/zookeeper/2018/06/10/raft.html">Paxos、Raft、Zab和VR</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/docker/2018/05/09/pipework.html"> 夏泽民</a>
+						<a href="/MyBlog/zookeeper/2018/06/10/raft.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							May 9, 2018
+							Jun 10, 2018
 						</span>
 					</div>
 					<div class="excerpt"><!-- more -->
-<p>环境:安装docker        关闭selinux     开启路由转发（net.ipv4.ip_forward =  1）
-一、将 Docker 容器配置到本地网络环境中
-为了使本地网络中的机器和 Docker 容器更方便的通信，我们经常会有将 Docker 容器配置到和主机同一网段的需求。这个需求其实很容易实现，我们只要将 Docker 容器和主机的网卡桥接起来，再给 Docker 容器配上 IP 就可以了。
-下面我们来操作一下，我主机 A 地址为 192.168.157.128/24,网关为 192.168.157.2,需要给 Docker容器的地址配置为 192.168.157.150/24。在主机 A 上做如下操作：
-安装 pipework
-下载地址：wget https://github.com/jpetazzo/pipework.git
-unzippipework-master.zip
-cp -p /root/pipework-master/pipework/usr/local/bin/
-启动 Docker 容器。
-docker run -itd–name test1 镜像 /bin/bash
-配置容器网络，并连到网桥 br0 上。网关在 IP 地址后面加@指定。
-pipework br0 test1192.168.157.150/24@192.168.157.2
-将主机 eno16777736 桥接到 br0 上，并把 eno16777736 的 IP 配置在 br0 上。
-p addradd 192.168.157.128/24 dev br0
-ip addrdel 192.168. 157.128/24 dev eno16777736
-brctladdif br0 eno16777736
-ip routedel default
-ip routeadd default via 192.168.157.2 dev br0
-注：如果是远程操作，中间网络会断掉，所以放在一条命令中执行。
-ip addradd 192.168.157.128/24 dev br0；ip addr del 192.168. 157.128/24 deveno16777736；brctl addif br0 eno16777736；ip route del default；ip route add default via 192.168.157.2dev br0
-完成上述步骤后，我们发现 Docker 容器已经可以使用新的 IP 和主机网络里的机器相互通信了</p>
+<p>Raft
+Paxos偏向于理论、对如何应用到工程实践提及较少。理解的难度加上现实的骨感，在生产环境中基于Paxos实现一个正确的分布式系统非常难[1]：
+There are significant gaps between the description of the Paxos algorithm and the needs of a real-world system. In order to build a real-world system, an expert needs to use numerous ideas scattered in the literature and make several relatively small protocol extensions. The cumulative effort will be substantial and the final system will be based on an unproven protocol.
+Raft[2][3]在2013年提出，提出的时间虽然不长，但已经有很多系统基于Raft实现。相比Paxos，Raft的买点就是更利于理解、更易于实行。
+为达到更容易理解和实行的目的，Raft将问题分解和具体化：Leader统一处理变更操作请求，一致性协议的作用具化为保证节点间操作日志副本(log replication)一致，以term作为逻辑时钟(logical clock)保证时序，节点运行相同状态机(state machine)[4]得到一致结果。Raft协议具体过程如下：
+Client发起请求，每一条请求包含操作指令
+请求交由Leader处理，Leader将操作指令(entry)追加(append)至操作日志，紧接着对Follower发起AppendEntries请求、尝试让操作日志副本在Follower落地
+如果Follower多数派(quorum)同意AppendEntries请求，Leader进行commit操作、把指令交由状态机处理
+状态机处理完成后将结果返回给Client
+指令通过log index(指令id)和term number保证时序，正常情况下Leader、Follower状态机按相同顺序执行指令，得出相同结果、状态一致。
+宕机、网络分化等情况可引起Leader重新选举(每次选举产生新Leader的同时，产生新的term)、Leader/Follower间状态不一致。Raft中Leader为自己和所有Follower各维护一个nextIndex值，其表示Leader紧接下来要处理的指令id以及将要发给Follower的指令id，LnextIndex不等于FnextIndex时代表Leader操作日志和Follower操作日志存在不一致，这时将从Follower操作日志中最初不一致的地方开始，由Leader操作日志覆盖Follower，直到LnextIndex、FnextIndex相等。
+Paxos中Leader的存在是为了提升决议效率，Leader的有无和数目并不影响决议一致性，Raft要求具备唯一Leader，并把一致性问题具体化为保持日志副本的一致性，以此实现相较Paxos而言更容易理解、更容易实现的目标。
+Zab
+Zab[5][6]的全称是Zookeeper atomic broadcast protocol，是Zookeeper内部用到的一致性协议。相比Paxos，Zab最大的特点是保证强一致性(strong consistency，或叫线性一致性linearizable consistency)。
+和Raft一样，Zab要求唯一Leader参与决议，Zab可以分解成discovery、sync、broadcast三个阶段：
+discovery: 选举产生PL(prospective leader)，PL收集Follower epoch(cepoch)，根据Follower的反馈PL产生newepoch(每次选举产生新Leader的同时产生新epoch，类似Raft的term)
+sync: PL补齐相比Follower多数派缺失的状态、之后各Follower再补齐相比PL缺失的状态，PL和Follower完成状态同步后PL变为正式Leader(established leader)
+broadcast: Leader处理Client的写操作，并将状态变更广播至Follower，Follower多数派通过之后Leader发起将状态变更落地(deliver/commit)
+Leader和Follower之间通过心跳判别健康状态，正常情况下Zab处在broadcast阶段，出现Leader宕机、网络隔离等异常情况时Zab重新回到discovery阶段。
+了解完Zab的基本原理，我们再来看Zab怎样保证强一致性，Zab通过约束事务先后顺序达到强一致性，先广播的事务先commit、FIFO，Zab称之为primary order(以下简称PO)。实现PO的核心是zxid。
+Zab中每个事务对应一个zxid，它由两部分组成：&lt;e, c&gt;，e即Leader选举时生成的epoch，c表示当次epoch内事务的编号、依次递增。假设有两个事务的zxid分别是z、z’，当满足 z.e &lt; z’.e 或者 z.e = z’.e &amp;&amp; z.c &lt; z’.c 时，定义z先于z’发生(z &lt; z’)。
+为实现PO，Zab对Follower、Leader有以下约束：
+有事务z和z’，如果Leader先广播z，则Follower需保证先commit z对应的事务
+有事务z和z’，z由Leader p广播，z’由Leader q广播，Leader p先于Leader q，则Follower需保证先commit z对应的事务
+有事务z和z’，z由Leader p广播，z’由Leader q广播，Leader p先于Leader q，如果Follower已经commit z，则q需保证已commit z才能广播z’
+第1、2点保证事务FIFO，第3点保证Leader上具备所有已commit的事务。
+相比Paxos，Zab约束了事务顺序、适用于有强一致性需求的场景。
+Paxos、Raft、Zab再比较
+除Paxos、Raft和Zab外，Viewstamped Replication(简称VR)[7][8]也是讨论比较多的一致性协议。这些协议包含很多共同的内容(Leader、quorum、state machine等)，因而我们不禁要问：Paxos、Raft、Zab和VR等分布式一致性协议区别到底在哪，还是根本就是一回事？[9]</p>
 
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/docker/2018/05/09/pipework.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/zookeeper/2018/06/10/raft.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -192,45 +200,22 @@ ip addradd 192.168.157.128/24 dev br0；ip addr del 192.168. 157.128/24 deveno16
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/docker/2018/05/09/namespace.html">调用namespace的API</a>
+						<a class="post-link" href="/MyBlog/zookeeper/2018/06/10/quorum.html">quorum</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/docker/2018/05/09/namespace.html"> 夏泽民</a>
+						<a href="/MyBlog/zookeeper/2018/06/10/quorum.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							May 9, 2018
+							Jun 10, 2018
 						</span>
 					</div>
 					<div class="excerpt"><!-- more -->
-<p>Linux内核中就提供了这六种namespace隔离的系统调用，如下表所示。
-Namespace
-系统调用参数
-隔离内容
-UTS
-CLONE_NEWUTS
-主机名与域名
-IPC
-CLONE_NEWIPC
-信号量、消息队列和共享内存
-PID
-CLONE_NEWPID
-进程编号
-Network
-CLONE_NEWNET
-网络设备、网络栈、端口等等
-Mount
-CLONE_NEWNS
-挂载点（文件系统）
-User
-CLONE_NEWUSER
-用户和用户组
-表 namespace六项隔离
-实际上，Linux内核实现namespace的主要目的就是为了实现轻量级虚拟化（容器）服务。在同一个namespace下的进程可以感知彼此的变化，而对外界的进程一无所知。这样就可以让容器中的进程产生错觉，仿佛自己置身于一个独立的系统环境中，以此达到独立和隔离的目的。</p>
+<p>在分布式系统中有个CAP理论，对于P（分区容忍性）而言，是实际存在 从而无法避免的。因为，分布系统中的处理不是在本机，而是网络中的许多机器相互通信，故网络分区、网络通信故障问题无法避免。因此，只能尽量地在C 和 A 之间寻求平衡。对于数据存储而言，为了提高可用性（Availability），采用了副本备份，比如对于HDFS，默认每块数据存三份。某数据块所在的机器宕机了，就去该数据块副本所在的机器上读取（从这可以看出，数据分布方式是按“数据块”为单位分布的）</p>
 
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/docker/2018/05/09/namespace.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/zookeeper/2018/06/10/quorum.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -240,89 +225,21 @@ CLONE_NEWUSER
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/net/2018/05/08/ifconfig.html">ifconfig</a>
+						<a class="post-link" href="/MyBlog/zookeeper/2018/06/10/paxos_quorum.html">Paxos和Quorum</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/net/2018/05/08/ifconfig.html"> 夏泽民</a>
+						<a href="/MyBlog/zookeeper/2018/06/10/paxos_quorum.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							May 8, 2018
+							Jun 10, 2018
 						</span>
 					</div>
-					<div class="excerpt"><!-- more -->
-<p>ifconfig是linux中用于显示或配置网络设备（网络接口卡）的命令，英文全称是network interfaces configuring。配置网卡的IP地址语法例：ifconfig eth0 192.168.0.1 netmask 255.255.255.0
-系统命令编辑
-Linux命令：ifconfig
-语法
-ifconfig [网络设备][down up -allmulti -arp -promisc][add<地址>][del<地址>][<硬件地址>] [media<网络媒介类型>][mem_start<内存地址>][metric<数目>][mtu<字节>][netmask<子网掩码>][tunnel<地址>][-broadcast<地址>] [-pointopoint<地址>]
-补充说明
-补充说明：ifconfig可设置网络设备的状态，或是显示当前的设置。
-参数
-参　数：
-[网络设备] 网络设备的名称。
-down 关闭指定的网络设备。
-up 启动指定的网络设备。
--arp 打开或关闭指定接口上使用的ARP协议。前面加上一个负号用于关闭该选项。
--allmuti 关闭或启动指定接口的无区别模式。前面加上一个负号用于关闭该选项。
--promisc 关闭或启动指定网络设备的promiscuous模式。前面加上一个负号用于关闭该选项。
-add<地址> 设置网络设备IPv6的IP地址。
-del<地址> 删除网络设备IPv6的IP地址。
-media<网络媒介类型> 设置网络设备的媒介类型。
-mem_start<内存地址> 设置网络设备在主内存所占用的起始地址。
-metric<数目> 指定在计算数据包的转送次数时，所要加上的数目。
-mtu<字节> 设置网络设备的MTU。
-netmask<子网掩码> 设置网络设备的子网掩码。
-tunnel<地址> 建立IPv4与IPv6之间的隧道通信地址。
--broadcast<地址> 将要送往指定地址的数据包当成广播数据包来处理。
--pointopoint<地址> 与指定地址的网络设备建立直接连线，此模式具有保密功能。
-网卡命令
-无论是Linux 自动安装还是我们手工安装，Linux 都会向你询问有关网络的问题并配置相关的软件。这个用于配置网卡的基本命令就是ifconfig。
-在执行ifconfig 命令后，系统将在内核表中设置必要的参数，这样Linux 就知道如何与网络上的网卡通信。ifconfig 命令有以下两种格式：
-※ifconfig [interface]
-※ifconfig interface [aftype] option | address …
-ifconfig 的第一种格式（或使用不带任何参数的ifconfig 命令）可以用来查看当前系统的网络配置情况。
-在刚刚安装完系统之后，实际上是在没有网卡或者网络连接的情况下使用Linux，但通过ifconfig 可以使用回绕方式工作，使计算机认为自己工作在网络上。
-下面我们运行一下ifconfig 命令，不带参数的ifconfig 命令可以显示当前启动的网络接口，其输出结果为：
-[root@machine1 /sbin]#ifconfig
-eth0 Link encap:Ethernet HWaddr 52:54:AB:DD:6F:61
-inet addr:210.34.6.89 Bcast:210.34.6.127 Mask:255.255.255.128
-UP BROADCAST RUNNING MULTICAST MTU:1500 Metric:1
-RX packets:46299 errors:0 dropped:0 overruns:0 frame:189
-TX packets:3057 errors:0 dropped:0 overruns:0 carrier:0
-collisions:0 txqueuelen:100
-Interrupt:5 Base address:0xece0
-lo Link encap:Local Loopback
-inet addr:127.0.0.1Mask:255.0.0.0
-UP LOOPBACK RUNNING MTU:3924 Metric:1
-RX packets:44 errors:0 dropped:0 overruns:0 frame:0
-TX packets:44 errors:0 dropped:0 overruns:0 carrier:0
-collisions:0 txqueuelen:0
-其中以eth0 为首的部分是本机的以太网卡配置参数，这里显示了网卡的设备名/dev/eth0 和硬件的MAC 地址52:54:AB:DD:6F:61，MAC 地址是生产厂家定的，每个网卡拥有的唯一地址。
-不过我们可以手工改动网卡的MAC 地址，只要我们在/etc/rc.d/init.d/中的network 中加入：
-ifconfig eth0 hw ether xx:xx:xx:xx:xx:xx
-Jiania 解说 注:
-eth0，eth1,eth2,代表网卡一，网卡二，网卡三
-hw 代表hardware 硬件意思
-ether 代表ethernet以太网的意思
-然后重启，此时再用ifconfig 命令查看一下，我们就会发现网卡的MAC 地址已经变成xx:xx:xx:xx:xx:xx了。
-配置网卡
-配置网卡的IP地址
-ifconfig eth0 192.168.0.1 netmask 255.255.255.0
-在eth0上配置上192.168.0.1 的IP地址及24位掩码。若想再在eth0上在配置一个192.168.1.1/24 的IP地址怎么办？用下面的命令
-ifconfig eth0：0 192.168.1.1 netmask 255.255.255.0
-这时再用ifconifg命令查看，就可以看到两个网卡的信息了，分别为：eth0和eth0：0.若还想再增加IP，那网卡的命名就接着是：eth0：1、eth0：2……想要几个就填几个。ok！
-配置网卡的硬件地址
-ifconfig eth0 hw ether xx：xx：xx：xx：xx：xx就将网卡的硬件地址更改了，此时你就可以骗过局域网内的IP地址绑定了。
-将网卡禁用
-ifconfig eth0 down
-将网卡启用
-ifconfig eth0 up
-ifconfig 命令的功能很强大，还可以设置网卡的MTU，混杂模式等。</地址></地址></地址></子网掩码></字节></数目></内存地址></网络媒介类型></地址></地址></地址></地址></地址></子网掩码></字节></数目></内存地址></网络媒介类型></硬件地址></地址></地址></p>
+					<div class="excerpt"><p>为什么需要Paxos或Quorum算法？分布式系统实现数据存储，是通过多份数据副本来保证可靠，假设部分节点访问数据失败，还有其他节点提供一致的数据返回给用户。对数据存储而言，怎样保证副本数据的一致性当属分布式存储最重要的问题。 一致性是分布式理论中的根本性问题，近半个世纪以来，科学家们围绕着一致性问题提出了很多理论模型，依据这些理论模型，业界也出现了很多工程实践投影。何为一致性问题？简而言之，一致性问题就是相互独立的节点之间，在可控的时间范围内如何达成一项决议的问题。</p>
 
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/net/2018/05/08/ifconfig.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/zookeeper/2018/06/10/paxos_quorum.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -332,30 +249,28 @@ ifconfig 命令的功能很强大，还可以设置网卡的MTU，混杂模式�
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/net/2018/05/06/subnet_mask.html">subnet_mask  子网掩码</a>
+						<a class="post-link" href="/MyBlog/elasticsearch/2018/06/10/lucence.html">lucence  elasticsearch</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/net/2018/05/06/subnet_mask.html"> 夏泽民</a>
+						<a href="/MyBlog/elasticsearch/2018/06/10/lucence.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							May 6, 2018
+							Jun 10, 2018
 						</span>
 					</div>
-					<div class="excerpt"><p>子网掩码(subnet mask)是每个使用互联网的人必须要掌握的基础知识，只有掌握它，才能够真正理解TCP/IP协议的设置。
-子网掩码——屏蔽一个IP地址的网络部分的“全1”比特模式。对于A类地址来说，默认的子网掩码是255.0.0.0；对于B类地址来说默认的子网掩码是255.255.0.0；对于C类地址来说默认的子网掩码是255.255.255.0。
-利用子网掩码可以把大的网络划分成子网，即VLSM（可变长子网掩码），也可以把小的网络归并成大的网络即超网。
+					<div class="excerpt"><p>lucene，最先进、功能最强大的搜索库，直接基于lucene开发，非常复杂，api复杂（实现一些简单的功能，写大量的java代码），需要深入理解原理（各种索引结构）
+elasticsearch，基于lucene，隐藏复杂性，提供简单易用的restful api接口、java api接口（还有其他语言的api接口）
+（1）分布式的文档存储引擎
+（2）分布式的搜索引擎和分析引擎
+（3）分布式，支持PB级数据
+开箱即用，优秀的默认参数，不需要任何额外设置，完全开源
 <!-- more -->
-子网掩码的设定必须遵循一定的规则。与二进制IP地址相同，子网掩码由1和0组成，且1和0分别连续。子网掩码的长度也是32位，左边是网络位，用二进制数字“1”表示，1的数目等于网络位的长度；右边是主机位，用二进制数字“0”表示，0的数目等于主机位的长度。这样做的目的是为了让掩码与ip地址做按位与运算时用0遮住原主机数，而不改变原网络段数字，而且很容易通过0的位数确定子网的主机数（2的主机位数次方-2，因为主机号全为1时表示该网络广播地址，全为0时表示该网络的网络号，这是两个特殊地址）。只有通过子网掩码，才能表明一台主机所在的子网与其他子网的关系，使网络正常工作。
-子网掩码通常有以下2种格式的表示方法：
-1． 通过与IP地址格式相同的点分十进制表示
-如：255.0.0.0 或255.255.255.128
-2． 在IP地址后加上”/”符号以及1-32的数字，其中1-32的数字表示子网掩码中网络标识位的长度
-如：192.168.1.1/24 的子网掩码也可以表示为255.255.255.0</p>
+Lucene概述</p>
 
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/net/2018/05/06/subnet_mask.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/elasticsearch/2018/06/10/lucence.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -365,32 +280,22 @@ ifconfig 命令的功能很强大，还可以设置网卡的MTU，混杂模式�
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/linux/2018/05/06/iptables.html">iptables</a>
+						<a class="post-link" href="/MyBlog/zookeeper/2018/06/10/jndi.html">jndi</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/linux/2018/05/06/iptables.html"> 夏泽民</a>
+						<a href="/MyBlog/zookeeper/2018/06/10/jndi.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							May 6, 2018
+							Jun 10, 2018
 						</span>
 					</div>
-					<div class="excerpt"><p>ptables是linux自带的一款开源的内核级基于数据包过滤的防火墙。利用iptables可以实现诸如数据包过滤、转发等功能。
-iptables包含表，表中包含链，链中包含规则。（规则指的是一条条用于过滤数据包的语句）
-iptables共有四个表五个链，简称四表五链。
-四表指的是filter, nat, mangle, raw。其中前2个是用的最多的，后面2个用的较少，raw可以说基本不怎么使用。
-五链指的是INPUT, OUTPUT, FORWARD, PREROUTING, POSTROUTING。（注意，链名用大写。）
-<!-- more -->
-filter表
-过滤数据包，用于本机防火墙，这是默认表。
-包含的三个链，
-INPUT 链：用于过滤所有目标地址是本机的数据包
-OUTPUT 链：用于过滤所有本机产生的数据包
-FORWARD链：用于过滤所有路过本机的数据包</p>
+					<div class="excerpt"><!-- more -->
+<p>JNDI是 Java 命名与目录接口（Java Naming and Directory Interface），在J2EE规范中是重要的规范之一，不少专家认为，没有透彻理解JNDI的意义和作用，就没有真正掌握J2EE特别是EJB的知识。</p>
 
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/linux/2018/05/06/iptables.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/zookeeper/2018/06/10/jndi.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -1426,6 +1331,30 @@ FORWARD链：用于过滤所有路过本机的数据包</p>
 			  
 			    
 			      <a href="/MyBlog/page255/">255</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page256/">256</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page257/">257</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page258/">258</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page259/">259</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page260/">260</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page261/">261</a>
 			    
 			  
 
@@ -2732,6 +2661,36 @@ FORWARD链：用于过滤所有路过本机的数据包</p>
 						  
 						
 
+						  
+							<li><a href="/MyBlog/page256">256</a></li>
+						  
+						
+
+						  
+							<li><a href="/MyBlog/page257">257</a></li>
+						  
+						
+
+						  
+							<li><a href="/MyBlog/page258">258</a></li>
+						  
+						
+
+						  
+							<li><a href="/MyBlog/page259">259</a></li>
+						  
+						
+
+						  
+							<li><a href="/MyBlog/page260">260</a></li>
+						  
+						
+
+						  
+							<li><a href="/MyBlog/page261">261</a></li>
+						  
+						
+
 						
 						  <li><a href="/MyBlog/page204">Next</a></li>
 						
@@ -2765,6 +2724,206 @@ FORWARD链：用于过滤所有路过本机的数据包</p>
 							"data" : [
 							
 							{
+							"title" : "多线程模式下全局变量竞争 - ",
+							"url" : "/MyBlog/linux/2020/01/09/thread.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "流水线冒险及解决方法 - ",
+							"url" : "/MyBlog/linux/2020/01/09/pipleline.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "服务自动发现 - ",
+							"url" : "/MyBlog/web/2020/01/09/discovery.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "Mutex/Semaphore/Spinlock - ",
+							"url" : "/MyBlog/linux/2020/01/09/Semaphore.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "IPC Inter-Process Communication，进程间通信 - ",
+							"url" : "/MyBlog/linux/2020/01/09/IPC.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "zend_parse_paramenters - ",
+							"url" : "/MyBlog/lang/2020/01/08/zend_parse_paramenters.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "php 扩展加载顺序 - ",
+							"url" : "/MyBlog/lang/2020/01/08/zend_module_entry.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "如何理解PHP虚拟机 - ",
+							"url" : "/MyBlog/lang/2020/01/08/vm.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "内存屏障原理分析 - ",
+							"url" : "/MyBlog/linux/2020/01/08/valotile.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "linux最大进程数、最大打开文件数 - ",
+							"url" : "/MyBlog/linux/2020/01/08/ulimit.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "内存池 - ",
+							"url" : "/MyBlog/linux/2020/01/08/slab.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "rename - ",
+							"url" : "/MyBlog/linux/2020/01/08/rename.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "post - ",
+							"url" : "/MyBlog/algorithm/2020/01/08/post.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "pass_two - ",
+							"url" : "/MyBlog/lang/2020/01/08/pass_two.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "mmap的原理 - ",
+							"url" : "/MyBlog/linux/2020/01/08/mmap.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "多线程安全无锁日志系统 - ",
+							"url" : "/MyBlog/linux/2020/01/08/log4cpp.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "log - ",
+							"url" : "/MyBlog/linux/2020/01/08/log.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "php 函数在vm执行流程 - ",
+							"url" : "/MyBlog/lang/2020/01/08/func.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "LD_PRELOAD和dlopen选项RTLD_DEEPBIND之间的优先级 - ",
+							"url" : "/MyBlog/linux/2020/01/08/dlopen.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "linux 下调试coredump文件 - ",
+							"url" : "/MyBlog/linux/2020/01/08/coredump.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "SATA硬盘和SSD硬盘性能测试对比 - ",
+							"url" : "/MyBlog/linux/2020/01/08/SATA.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "OOM原理分析 - ",
+							"url" : "/MyBlog/linux/2020/01/08/OOM.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "检测内存泄露 - ",
+							"url" : "/MyBlog/linux/2020/01/08/MemoryLeaks.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "双缓冲(Double Buffer)原理和使用 - ",
+							"url" : "/MyBlog/linux/2020/01/08/Buffer.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "phpize php-config 作用 - ",
+							"url" : "/MyBlog/lang/2020/01/07/phpize.html"
+							}
+							
+							,
+							
+							
+							{
 							"title" : "php - ",
 							"url" : "/MyBlog/lang/2020/01/07/php.html"
 							}
@@ -2773,8 +2932,32 @@ FORWARD链：用于过滤所有路过本机的数据包</p>
 							
 							
 							{
+							"title" : "php map 实现 - ",
+							"url" : "/MyBlog/lang/2020/01/07/map.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "php include和require区别 - ",
+							"url" : "/MyBlog/lang/2020/01/07/include.html"
+							}
+							
+							,
+							
+							
+							{
 							"title" : "文件锁 - ",
 							"url" : "/MyBlog/linux/2020/01/07/flock.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "MINIT、RINIT、RSHUTDOWN、MSHUTDOWN加载顺序 - ",
+							"url" : "/MyBlog/lang/2020/01/07/MINIT.html"
 							}
 							
 							,
@@ -13069,7 +13252,7 @@ FORWARD链：用于过滤所有路过本机的数据包</p>
 								
 								
 									<a class="bold" href="/MyBlog/category/web">
-										web (197)
+										web (198)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -13114,7 +13297,7 @@ FORWARD链：用于过滤所有路过本机的数据包</p>
 								
 								
 									<a class="bold" href="/MyBlog/category/linux">
-										linux (274)
+										linux (291)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -13132,7 +13315,7 @@ FORWARD链：用于过滤所有路过本机的数据包</p>
 								
 								
 									<a class="bold" href="/MyBlog/category/lang">
-										lang (51)
+										lang (60)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -13204,7 +13387,7 @@ FORWARD链：用于过滤所有路过本机的数据包</p>
 								
 								
 									<a class="bold" href="/MyBlog/category/algorithm">
-										algorithm (74)
+										algorithm (75)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -13283,11 +13466,123 @@ FORWARD链：用于过滤所有路过本机的数据包</p>
 								<ul style="display:none;width:250px;height:250px;">
 								     
 								   <li>
+										<a href="/MyBlog/linux/2020/01/09/thread.html" style="font-size:40px;"> 多线程模式下全局变量竞争</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/linux/2020/01/09/pipleline.html" style="font-size:40px;"> 流水线冒险及解决方法</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/web/2020/01/09/discovery.html" style="font-size:40px;"> 服务自动发现</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/linux/2020/01/09/Semaphore.html" style="font-size:40px;"> Mutex/Semaphore/Spinlock</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/linux/2020/01/09/IPC.html" style="font-size:40px;"> IPC Inter-Process Communication，进程间通信</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/lang/2020/01/08/zend_parse_paramenters.html" style="font-size:40px;"> zend_parse_paramenters</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/lang/2020/01/08/zend_module_entry.html" style="font-size:40px;"> php 扩展加载顺序</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/lang/2020/01/08/vm.html" style="font-size:40px;"> 如何理解PHP虚拟机</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/linux/2020/01/08/valotile.html" style="font-size:40px;"> 内存屏障原理分析</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/linux/2020/01/08/ulimit.html" style="font-size:40px;"> linux最大进程数、最大打开文件数</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/linux/2020/01/08/slab.html" style="font-size:40px;"> 内存池</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/linux/2020/01/08/rename.html" style="font-size:40px;"> rename</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/algorithm/2020/01/08/post.html" style="font-size:40px;"> post</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/lang/2020/01/08/pass_two.html" style="font-size:40px;"> pass_two</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/linux/2020/01/08/mmap.html" style="font-size:40px;"> mmap的原理</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/linux/2020/01/08/log4cpp.html" style="font-size:40px;"> 多线程安全无锁日志系统</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/linux/2020/01/08/log.html" style="font-size:40px;"> log</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/lang/2020/01/08/func.html" style="font-size:40px;"> php 函数在vm执行流程</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/linux/2020/01/08/dlopen.html" style="font-size:40px;"> LD_PRELOAD和dlopen选项RTLD_DEEPBIND之间的优先级</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/linux/2020/01/08/coredump.html" style="font-size:40px;"> linux 下调试coredump文件</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/linux/2020/01/08/SATA.html" style="font-size:40px;"> SATA硬盘和SSD硬盘性能测试对比</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/linux/2020/01/08/OOM.html" style="font-size:40px;"> OOM原理分析</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/linux/2020/01/08/MemoryLeaks.html" style="font-size:40px;"> 检测内存泄露</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/linux/2020/01/08/Buffer.html" style="font-size:40px;"> 双缓冲(Double Buffer)原理和使用</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/lang/2020/01/07/phpize.html" style="font-size:40px;"> phpize php-config 作用</a>
+									</li>
+									  
+								   <li>
 										<a href="/MyBlog/lang/2020/01/07/php.html" style="font-size:40px;"> php</a>
 									</li>
 									  
 								   <li>
+										<a href="/MyBlog/lang/2020/01/07/map.html" style="font-size:40px;"> php map 实现</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/lang/2020/01/07/include.html" style="font-size:40px;"> php include和require区别</a>
+									</li>
+									  
+								   <li>
 										<a href="/MyBlog/linux/2020/01/07/flock.html" style="font-size:40px;"> 文件锁</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/lang/2020/01/07/MINIT.html" style="font-size:40px;"> MINIT、RINIT、RSHUTDOWN、MSHUTDOWN加载顺序</a>
 									</li>
 									  
 								   <li>
@@ -13329,118 +13624,6 @@ FORWARD链：用于过滤所有路过本机的数据包</p>
 								   <li>
 										<a href="/MyBlog/storage/2020/01/05/mysql_index.html" style="font-size:40px;"> mysql index</a>
 									</li>
-									  
-								   <li>
-										<a href="/MyBlog/storage/2020/01/05/mysql.html" style="font-size:40px;"> mysql 同库不同表索引不一样</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/storage/2020/01/05/like.html" style="font-size:40px;"> Mysql模糊查询like效率</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/storage/2020/01/05/int.html" style="font-size:40px;"> int(2) tinyint</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/storage/2020/01/05/index.html" style="font-size:40px;"> index 索引</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/storage/2020/01/05/explain.html" style="font-size:40px;"> Mysql的explain</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/storage/2020/01/05/bgsave.html" style="font-size:40px;"> bgsave</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/storage/2020/01/05/TIMESTAMP.html" style="font-size:40px;"> TIMESTAMP</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/linux/2020/01/05/CCriticalSection.html" style="font-size:40px;"> 进程中线程同步的四种方式</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/algorithm/2020/01/05/BCrypt.html" style="font-size:40px;"> BCrypt 如何存储密码</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/linux/2020/01/05/206.html" style="font-size:40px;"> 206 http 1.1断点续传</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/linix/2020/01/04/uniq.html" style="font-size:40px;"> uniq</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/linux/2020/01/04/sort.html" style="font-size:40px;"> sort</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/linux/2020/01/04/log.html" style="font-size:40px;"> nginx 日志访问量统计</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/linux/2020/01/04/httpCache.html" style="font-size:40px;"> httpCache</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/linux/2020/01/03/tcp.html" style="font-size:40px;"> tcp errno</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/docker/2020/01/03/sysvinit.html" style="font-size:40px;"> 如何运行多进程Docker容器</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/linux/2020/01/03/systemctl.html" style="font-size:40px;"> systemctl init.d</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/linux/2020/01/03/reset.html" style="font-size:40px;"> Connect reset by peer</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/linux/2020/01/03/refused.html" style="font-size:40px;"> Connection refused</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/docker/2020/01/03/prune.html" style="font-size:40px;"> prune</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/docker/2020/01/03/pause.html" style="font-size:40px;"> pause</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/docker/2020/01/03/list-watch.html" style="font-size:40px;"> list-watch</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/docker/2020/01/03/gc.html" style="font-size:40px;"> gc</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/docker/2020/01/03/etcd.html" style="font-size:40px;"> etcd</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/linux/2020/01/03/dbus_connection.html" style="font-size:40px;"> Failed to get D-Bus connection</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/linux/2020/01/03/dbus.html" style="font-size:40px;"> dbus</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/linux/2020/01/03/dapper.html" style="font-size:40px;"> dapper</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/linux/2020/01/03/broken.html" style="font-size:40px;"> Broken Pipe</a>
-									</li>
 									
 								</ul>
 							</div>
@@ -13455,33 +13638,33 @@ FORWARD链：用于过滤所有路过本机的数据包</p>
                 		<ul class="posts" span="recent">  
 							  
 							   <li>  
-								   <span>07 Jan 2020</span>
-								   <a href="/MyBlog/lang/2020/01/07/php.html">  
-								   php</a>  
+								   <span>09 Jan 2020</span>
+								   <a href="/MyBlog/linux/2020/01/09/thread.html">  
+								   多线程模式下全局变量竞争</a>  
 							   </li>  
 							  
 							   <li>  
-								   <span>07 Jan 2020</span>
-								   <a href="/MyBlog/linux/2020/01/07/flock.html">  
-								   文件锁</a>  
+								   <span>09 Jan 2020</span>
+								   <a href="/MyBlog/linux/2020/01/09/pipleline.html">  
+								   流水线冒险及解决方法</a>  
 							   </li>  
 							  
 							   <li>  
-								   <span>06 Jan 2020</span>
-								   <a href="/MyBlog/storage/2020/01/06/dynamo.html">  
-								   dynamo</a>  
+								   <span>09 Jan 2020</span>
+								   <a href="/MyBlog/web/2020/01/09/discovery.html">  
+								   服务自动发现</a>  
 							   </li>  
 							  
 							   <li>  
-								   <span>06 Jan 2020</span>
-								   <a href="/MyBlog/storage/2020/01/06/Consistency.html">  
-								   强一致性、顺序一致性、弱一致性和共识</a>  
+								   <span>09 Jan 2020</span>
+								   <a href="/MyBlog/linux/2020/01/09/Semaphore.html">  
+								   Mutex/Semaphore/Spinlock</a>  
 							   </li>  
 							  
 							   <li>  
-								   <span>05 Jan 2020</span>
-								   <a href="/MyBlog/linux/2020/01/05/xargs.html">  
-								   xargs</a>  
+								   <span>09 Jan 2020</span>
+								   <a href="/MyBlog/linux/2020/01/09/IPC.html">  
+								   IPC Inter-Process Communication，进程间通信</a>  
 							   </li>  
 							  
 						</ul>
