@@ -147,6 +147,114 @@
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
+						<a class="post-link" href="/MyBlog/linux/2018/04/29/namespace.html">linux namespace</a>
+					</h2>
+					<div class="author" style="margin-top: -10px;">Posted by
+						<i class="fa fa-user"></i>
+						<a href="/MyBlog/linux/2018/04/29/namespace.html"> 夏泽民</a>
+						<span class="post-meta"><i class="fa fa-calendar"></i> 
+							Apr 29, 2018
+						</span>
+					</div>
+					<div class="excerpt"><p>Linux Namespace是Linux提供的一种内核级别环境隔离的方法。不知道你是否还记得很早以前的Unix有一个叫chroot的系统调用（通过修改根目录把用户jail到一个特定目录下），chroot提供了一种简单的隔离模式：chroot内部的文件系统无法访问外部的内容。Linux Namespace在此基础上，提供了对UTS、IPC、mount、PID、network、User等的隔离机制。
+举个例子，我们都知道，Linux下的超级父亲进程的PID是1，所以，同chroot一样，如果我们可以把用户的进程空间jail到某个进程分支下，并像chroot那样让其下面的进程 看到的那个超级父进程的PID为1，于是就可以达到资源隔离的效果了（不同的PID namespace中的进程无法看到彼此）
+Linux Namespace 有如下种类，官方文档在这里《Namespace in Operation》
+分类	系统调用参数	相关内核版本
+Mount namespaces	CLONE_NEWNS	Linux 2.4.19
+UTS namespaces	CLONE_NEWUTS	Linux 2.6.19
+IPC namespaces	CLONE_NEWIPC	Linux 2.6.19
+PID namespaces	CLONE_NEWPID	Linux 2.6.24
+Network namespaces	CLONE_NEWNET	始于Linux 2.6.24 完成于 Linux 2.6.29
+User namespaces	CLONE_NEWUSER	始于 Linux 2.6.23 完成于 Linux 3.8)
+主要是三个系统调用
+clone() – 实现线程的系统调用，用来创建一个新的进程，并可以通过设计上述参数达到隔离。
+unshare() – 使某进程脱离某个namespace
+setns() – 把某进程加入到某个namespace
+User Namespace主要是用了CLONE_NEWUSER的参数。使用了这个参数后，内部看到的UID和GID已经与外部不同了，默认显示为65534。那是因为容器找不到其真正的UID所以，设置上了最大的UID（其设置定义在/proc/sys/kernel/overflowuid）。
+要把容器中的uid和真实系统的uid给映射在一起，需要修改 /proc/<pid>/uid_map 和 /proc/<pid>/gid_map 这两个文件。这两个文件的格式为：
+ID-inside-ns ID-outside-ns length
+其中：
+第一个字段ID-inside-ns表示在容器显示的UID或GID，
+第二个字段ID-outside-ns表示容器外映射的真实的UID或GID。
+第三个字段表示映射的范围，一般填1，表示一一对应。
+比如，把真实的uid=1000映射成容器内的uid=0
+$ cat /proc/2465/uid_map
+         0       1000          1
+再比如下面的示例：表示把namespace内部从0开始的uid映射到外部从0开始的uid，其最大范围是无符号32位整形
+$ cat /proc/$$/uid_map
+         0          0          4294967295
+另外，需要注意的是：
+写这两个文件的进程需要这个namespace中的CAP_SETUID (CAP_SETGID)权限（可参看Capabilities）
+写入的进程必须是此user namespace的父或子的user namespace进程。
+另外需要满如下条件之一：1）父进程将effective uid/gid映射到子进程的user namespace中，2）父进程如果有CAP_SETUID/CAP_SETGID权限，那么它将可以映射到父进程中的任一uid/gid。
+<!-- more -->
+当你启动一个Docker容器后，你可以使用ip link show或ip addr show来查看当前宿主机的网络情况（我们可以看到有一个docker0，还有一个veth22a38e6的虚拟网卡——给容器用的） 
+ # 把容器里的 veth-ns1改名为 eth0 （容器外会冲突，容器内就不会了）
+ip netns exec ns1  ip link set dev veth-ns1 name eth0 
+ # 为容器中的网卡分配一个IP地址，并激活它
+ip netns exec ns1 ifconfig eth0 192.168.10.11/24 up
+ # 上面我们把veth-ns1这个网卡按到了容器中，然后我们要把lxcbr0.1添加上网桥上
+brctl addif lxcbr0 lxcbr0.1
+ # 为容器增加一个路由规则，让容器可以访问外面的网络
+ip netns exec ns1     ip route add default via 192.168.10.1
+ # 在/etc/netns下创建network namespce名称为ns1的目录，
+ # 然后为这个namespace设置resolv.conf，这样，容器内就可以访问域名了
+mkdir -p /etc/netns/ns1
+echo "nameserver 8.8.8.8" &gt; /etc/netns/ns1/resolv.conf
+上面基本上就是docker网络的原理了，只不过，
+Docker的resolv.conf没有用这样的方式，而是用了Mount Namesapce的那种方式
+另外，docker是用进程的PID来做Network Namespace的名称的。</pid></pid></p>
+
+</div>
+					<div class="readmore" style="float: right;">
+						
+							<a href="/MyBlog/linux/2018/04/29/namespace.html" style="color:green">阅读全文</a>
+						
+					</div>								
+			</div>
+			<br/>
+			<hr/>
+			<div class="post-list" style="list-style-type: none;">			
+				 	
+					<h2>
+						<img class="title-image" src="/MyBlog/img/dna.png"/>
+						<a class="post-link" href="/MyBlog/docker/2018/04/29/docker_net.html">docker_net</a>
+					</h2>
+					<div class="author" style="margin-top: -10px;">Posted by
+						<i class="fa fa-user"></i>
+						<a href="/MyBlog/docker/2018/04/29/docker_net.html"> 夏泽民</a>
+						<span class="post-meta"><i class="fa fa-calendar"></i> 
+							Apr 29, 2018
+						</span>
+					</div>
+					<div class="excerpt"><p>由于Boot2Docker的存在，造成了三层Mac-&gt;VirtualBox-&gt;Docker网络,由VirtualBox到Docker的映射可以通过run容器的时候指定-p参数实现，而从宿主机到VirtualBox端口映射需要通过下述方法实现:
+查询虚拟机网络： 
+VBoxManagelistvms查询虚拟机网络状态，默认虚拟机名为′default′ VBoxManage showvminfo “default” | grep NIC 
+2.关闭运行中的虚拟机 
+由于Boot2Docker会自动运行VirtualBox中的虚拟机，所以在设置网络映射时必须先关闭运行中的虚拟机。否则，将出现The machine ‘boot2docker’ is already locked for a session (or being unlocked)的错误提示
+$ VBoxManage controlvm “default” poweroff
+修改虚拟机与Mac系统的网络映射 
+根据实际需要进行网络映射，其中
+rulename: 自定义规则名称
+hostip: Mac访问地址，可不填
+hostport: Mac映射端口
+guestip: 虚拟机访问地址，可不填
+guestport: 虚拟机映射端口
+$ VBoxManage modifyvm “dufault” –natpf1 “,</p>
+
+</div>
+					<div class="readmore" style="float: right;">
+						
+							<a href="/MyBlog/docker/2018/04/29/docker_net.html" style="color:green">阅读全文</a>
+						
+					</div>								
+			</div>
+			<br/>
+			<hr/>
+			<div class="post-list" style="list-style-type: none;">			
+				 	
+					<h2>
+						<img class="title-image" src="/MyBlog/img/dna.png"/>
 						<a class="post-link" href="/MyBlog/docker/2018/04/29/docker_ip.html">Docker容器通过独立IP暴露给局域网的方法</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
@@ -501,110 +609,6 @@ brw-rw—- 1 root disk 8, 0 Jul 25 22:46 /dev/sda
 					<div class="readmore" style="float: right;">
 						
 							<a href="/MyBlog/linux/2018/04/29/bridge.html" style="color:green">阅读全文</a>
-						
-					</div>								
-			</div>
-			<br/>
-			<hr/>
-			<div class="post-list" style="list-style-type: none;">			
-				 	
-					<h2>
-						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/golang/2018/04/24/flag.html">flag</a>
-					</h2>
-					<div class="author" style="margin-top: -10px;">Posted by
-						<i class="fa fa-user"></i>
-						<a href="/MyBlog/golang/2018/04/24/flag.html"> 夏泽民</a>
-						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Apr 24, 2018
-						</span>
-					</div>
-					<div class="excerpt"><!-- more -->
-<p>一、命令行语法
-命令行语法主要有以下几种形式：</p>
-
-</div>
-					<div class="readmore" style="float: right;">
-						
-							<a href="/MyBlog/golang/2018/04/24/flag.html" style="color:green">阅读全文</a>
-						
-					</div>								
-			</div>
-			<br/>
-			<hr/>
-			<div class="post-list" style="list-style-type: none;">			
-				 	
-					<h2>
-						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/linux/2018/04/22/expect.html">expect</a>
-					</h2>
-					<div class="author" style="margin-top: -10px;">Posted by
-						<i class="fa fa-user"></i>
-						<a href="/MyBlog/linux/2018/04/22/expect.html"> 夏泽民</a>
-						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Apr 22, 2018
-						</span>
-					</div>
-					<div class="excerpt"><p>expect是一个自动交互功能的工具。expect是开了一个子进程，通过spawn来执行shell脚本，监测到脚本的返回结果，通过expect判断要进行的交互输入内容（send）
-1.安装expect 
-需要先安装tcl：apt-get install tcl
-apt-get install expect
-2.expect使用
-2.1一个简单的输入密码操作</p>
-
-<figure class="highlight"><pre><code class="language-bash" data-lang="bash"><table class="rouge-table"><tbody><tr><td class="gutter gl"><pre class="lineno">1
-2
-3
-4
-5
-6
-7
-</pre></td><td class="code"><pre> <span class="c">#！/usr/bin/expect</span>
-<span class="nb">set </span>timeout 100
-<span class="nb">set </span>password <span class="s2">"123456"</span>
-spawn <span class="nb">sudo </span>rm <span class="nt">-rf</span> zzlogic
-expect <span class="s2">"root123456"</span>
-send <span class="s2">"</span><span class="nv">$password</span><span class="se">\n</span><span class="s2">"</span>
-interact</pre></td></tr></tbody></table></code></pre></figure>
-
-<p>说明：
-第一行#！/usr/bin/expect表示使用expect的shell交互模式
-set是对变量password赋值
-set timeout 100：设置超时时间为100秒，如果要执行的shell命令很长可以设置超时时间长一些。expect超过超时时间没有监测到要找的字符串，则不执行，默认timeout为10秒
-spawn在expect下执行shell脚本
-expect对通过spawn执行的shell脚本的返回进行判断，是否包含“”中的字段
-send：如果expect监测到了包含的字符串，将输入send中的内容，\n相当于回车
-interact：退出expect返回终端，可以继续输入，否则将一直在expect不能退出到终端
-2.2expect的命令行参数
-[lindex $argv n]获得index为n的参数（index从0开始计算）
-$argc为命令行参数的个数
-[lrange $argv 0 0]表示第一个参数
-[lrange $argv 0 3]表示第1到第3个参数
-例如scp_service.sh文件，可以./scp_service.sh -rm来执行，这时是赋值了一个参数
-set option  [lindex $argv 0]（获得第一个参数存到变量option中，参数是的index是从0开始计算的）
-2.3if…elif…else…
-expect支持if语句，
-if {条件1} {
-     条件1执行语句
-} elif {条件2} {
-     条件2执行语句
-} else {
-     其他情况执行语句
-}
-说明：
-1.if的条件用{}来包含条件
-2.if和后面的{}必须有空格隔开
-3.两个花括号之间必须有空格隔开，比如if {} {}，否则会报错 expect:extra characters after close-brace
-3.使用{来衔接下一行，所以if的条件后需要加左花括号{
-4.else不能单独放一行，所以else要跟在}后面
-2.4 expect {}，多行期望，匹配到哪条执行哪条
-背景：有时执行shell后预期结果是不固定的，有可能是询问是yes/no，有可能是去输入密码，所以可以用expect{}
-花括号内放多行语句，从上至下匹配，匹配到哪个expect执行哪句。</p>
-
-</div>
-					<div class="readmore" style="float: right;">
-						
-							<a href="/MyBlog/linux/2018/04/22/expect.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -3040,6 +3044,22 @@ if {条件1} {
 							var searchIndex={
 							"code" : 0 ,
 							"data" : [
+							
+							{
+							"title" : "Charles不能捕获localhost请求 - ",
+							"url" : "/MyBlog/web/2020/01/13/localhost.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "源码剖析：fmt 标准库 - ",
+							"url" : "/MyBlog/golang/2020/01/13/fmt.html"
+							}
+							
+							,
+							
 							
 							{
 							"title" : "file_get_contents - ",
@@ -13610,7 +13630,7 @@ if {条件1} {
 								
 								
 									<a class="bold" href="/MyBlog/category/web">
-										web (198)
+										web (199)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -13682,7 +13702,7 @@ if {条件1} {
 								
 								
 									<a class="bold" href="/MyBlog/category/golang">
-										golang (347)
+										golang (348)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -13832,6 +13852,14 @@ if {条件1} {
 							<div id="tags">
 								<ul style="display:none;width:250px;height:250px;">
 								     
+								   <li>
+										<a href="/MyBlog/web/2020/01/13/localhost.html" style="font-size:40px;"> Charles不能捕获localhost请求</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/golang/2020/01/13/fmt.html" style="font-size:40px;"> 源码剖析：fmt 标准库</a>
+									</li>
+									  
 								   <li>
 										<a href="/MyBlog/php/2020/01/10/file_get_contents.html" style="font-size:40px;"> file_get_contents</a>
 									</li>
@@ -13983,14 +14011,6 @@ if {条件1} {
 								   <li>
 										<a href="/MyBlog/linux/2020/01/05/xargs.html" style="font-size:40px;"> xargs</a>
 									</li>
-									  
-								   <li>
-										<a href="/MyBlog/linux/2020/01/05/socket.html" style="font-size:40px;"> UNIX域套接字传递描述符的应用</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2020/01/05/rest.html" style="font-size:40px;"> rest</a>
-									</li>
 									
 								</ul>
 							</div>
@@ -14003,6 +14023,18 @@ if {条件1} {
                 <div class="well">
                 	<h4>Recent posts</h4>
                 		<ul class="posts" span="recent">  
+							  
+							   <li>  
+								   <span>13 Jan 2020</span>
+								   <a href="/MyBlog/web/2020/01/13/localhost.html">  
+								   Charles不能捕获localhost请求</a>  
+							   </li>  
+							  
+							   <li>  
+								   <span>13 Jan 2020</span>
+								   <a href="/MyBlog/golang/2020/01/13/fmt.html">  
+								   源码剖析：fmt 标准库</a>  
+							   </li>  
 							  
 							   <li>  
 								   <span>10 Jan 2020</span>
@@ -14020,18 +14052,6 @@ if {条件1} {
 								   <span>09 Jan 2020</span>
 								   <a href="/MyBlog/linux/2020/01/09/thread.html">  
 								   多线程模式下全局变量竞争</a>  
-							   </li>  
-							  
-							   <li>  
-								   <span>09 Jan 2020</span>
-								   <a href="/MyBlog/golang/2020/01/09/symbols.html">  
-								   no debugging symbols found</a>  
-							   </li>  
-							  
-							   <li>  
-								   <span>09 Jan 2020</span>
-								   <a href="/MyBlog/golang/2020/01/09/runtime-gdb.py.html">  
-								   runtime-gdb.py</a>  
 							   </li>  
 							  
 						</ul>
