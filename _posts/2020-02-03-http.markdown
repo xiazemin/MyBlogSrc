@@ -1,0 +1,534 @@
+---
+title:  net/http包
+layout: post
+category: golang
+author: 夏泽民
+---
+Golang仅需要几行代码，便可以建立一个简单的 Web 服务：
+
+package main
+
+
+
+import (
+
+    "fmt"
+
+    "log"
+
+    "net/http"
+
+)
+
+
+
+func main() {
+
+    helloHandler := func(w http.ResponseWriter, req *http.Request) {
+
+        fmt.Fprintf(w, "Hello, world!\n")
+
+    }
+
+
+
+    http.HandleFunc("/hello", helloHandler)
+
+    log.Fatal(http.ListenAndServe(":9999", nil))
+
+}
+<!-- more -->
+Golang仅需要几行代码，便可以建立一个简单的 Web 服务：
+
+package main
+
+
+
+import (
+
+    "fmt"
+
+    "log"
+
+    "net/http"
+
+)
+
+
+
+func main() {
+
+    helloHandler := func(w http.ResponseWriter, req *http.Request) {
+
+        fmt.Fprintf(w, "Hello, world!\n")
+
+    }
+
+
+
+    http.HandleFunc("/hello", helloHandler)
+
+    log.Fatal(http.ListenAndServe(":9999", nil))
+
+}
+
+编译运行，如果不出意外的话，访问 
+
+http://localhost:9999/hello，你将会在浏览器上看到 Hello, world!
+
+刚接触到Go的时候，我是很震惊的！！！以前写 PHP，要配 web 服务，还得搭个 Nginx或Apache 服务器呢，配置下监听的接口转发到fastcgi进行处理。Go这么流氓吗，直接几行代码就完事了？是的，Go 就真的很流氓，它直接监听了 TCP 端口。
+
+Web 服务器运转机制
+以使用TCP协议通讯的socket为例，socket通信交互流程大概是这样子的
+Golang仅需要几行代码，便可以建立一个简单的 Web 服务：
+
+package main
+
+
+
+import (
+
+    "fmt"
+
+    "log"
+
+    "net/http"
+
+)
+
+
+
+func main() {
+
+    helloHandler := func(w http.ResponseWriter, req *http.Request) {
+
+        fmt.Fprintf(w, "Hello, world!\n")
+
+    }
+
+
+
+    http.HandleFunc("/hello", helloHandler)
+
+    log.Fatal(http.ListenAndServe(":9999", nil))
+
+}
+
+编译运行，如果不出意外的话，访问 
+
+http://localhost:9999/hello，你将会在浏览器上看到 Hello, world!
+
+刚接触到Go的时候，我是很震惊的！！！以前写 PHP，要配 web 服务，还得搭个 Nginx或Apache 服务器呢，配置下监听的接口转发到fastcgi进行处理。Go这么流氓吗，直接几行代码就完事了？是的，Go 就真的很流氓，它直接监听了 TCP 端口。
+
+Web 服务器运转机制
+以使用TCP协议通讯的socket为例，socket通信交互流程大概是这样子的
+
+
+
+我们来看一段代码 net 包的一段示例代码
+
+ln, err := net.Listen("tcp", ":8080")
+
+if err != nil {
+
+    // handle error
+
+}
+
+for {
+
+    conn, err := ln.Accept()
+
+    if err != nil {
+
+        // handle error
+
+    }
+
+    go handleConnection(conn)
+
+}
+
+创建 Listen Socket，监听指定端口 8080，等待客户端的请求，创建 goroutine 处理请求。
+
+实际上 Go 的 web server 也就是这么个处理逻辑，只是在这多了一些处理逻辑：请求的协议解析，读取客户端提交的数据，路由分配（根据请求分配对应的 handler 处理请求），封装响应数据。
+
+http 包源码分析
+还记得快速搭建 web 服务器的时候有行代码：
+
+http.ListenAndServe(":9999", nil)，Go 就是通过这个方法来处理上面 端口监听、请求解析、路由分配、响应处理。
+
+1. 端口监听
+让我们追进去看看，实际上，初始化一个server对象，调用了 server 的 ListenAndServe 方法。
+
+func ListenAndServe(addr string, handler Handler) error {
+
+    server := &Server{Addr: addr, Handler: handler}
+
+    return server.ListenAndServe()
+
+}
+
+再追进去看看，瞧，这不是嘛
+
+ln, err := net.Listen("tcp", addr) ，用TCP协议搭建了一个服务，监听着我们设置的端口呢。
+
+func (srv *Server) ListenAndServe() error {
+
+    if srv.shuttingDown() {
+
+        return ErrServerClosed
+
+    }
+
+    addr := srv.Addr
+
+    if addr == "" {
+
+        addr = ":http"
+
+    }
+
+    ln, err := net.Listen("tcp", addr)
+
+    if err != nil {
+
+        return err
+
+    }
+
+    return srv.Serve(ln)
+
+}
+
+2. 接受请求
+知道如何监听端口，是不是有点小兴奋了，让我们再继续追进去看看 srv.Serve(ln)，核心代码片段：
+
+    for {
+
+        // 接受监听器listener的请求
+
+        rw, e := l.Accept()
+
+        if e != nil {
+
+            // 监听是否关闭信号
+
+            select {
+
+            case <-srv.getDoneChan():
+
+                return ErrServerClosed
+
+            default:
+
+            }
+
+        }
+
+            ……
+
+        // 创建新连接
+
+        c := srv.newConn(rw)
+
+        // 再返回之前，设置连接状态
+
+        c.setState(c.rwc, StateNew) // before Serve can return
+
+        // 创建goroutine，真正处理连接
+
+        go c.serve(ctx)
+
+    }
+
+可以看到，这里用了一个死循环 for{} 等待。
+
+首先通过 listener.Accept 接受请求，是不是跟上面提到的socket的运行机制很像了。
+
+接着用接受到的请求创建一个新的 Conn，并设置为New状态。
+
+最后创建 goroutine，真正的处理连接。
+
+知识点：每个请求都会创建一个对应的goroutine去处理，所以各个请求之间是相互不影响的，同时提高并发性能。
+
+3. 读取请求并解析
+来，我们再进去 go c.serve(ctx) 看看，忽略一些细节，重点关注关键流程
+
+for {
+
+        ……
+
+
+
+        // 读request请求
+
+        w, err := c.readRequest(ctx)
+
+
+
+        ……
+
+        // 调用业务层定义的路由
+
+        serverHandler{c.server}.ServeHTTP(w, w.req)
+
+
+
+        ……
+
+        // flush刷io buffer的数据
+
+        w.finishRequest()
+
+readRequest 便是读取数据，解析请求的地方，包括解析请求的header、body，和一些基本的校验，比如header头信息，请求method等。
+
+最后将请求的数据赋值到Request，并初始化Response对象，供业务层调用。
+
+4. 路由分配handler
+上面关键流程已经看到了 
+
+serverHandler{c.server}.ServeHTTP(w, w.req)，这个实际上就是调用最开始在main函数定义的handler，并将处理好的Request、Response对象作为参数传入。
+
+type serverHandler struct {
+
+    srv *Server
+
+}
+
+
+
+func (sh serverHandler) ServeHTTP(rw ResponseWriter, req *Request) {
+
+    handler := sh.srv.Handler
+
+    if handler == nil {
+
+        handler = DefaultServeMux
+
+    }
+
+    if req.RequestURI == "*" && req.Method == "OPTIONS" {
+
+        handler = globalOptionsHandler{}
+
+    }
+
+    handler.ServeHTTP(rw, req)
+
+}
+
+还记得吗，我们最上面是这样调用的 http.ListenAndServe(":9999", nil)，第二个参数是nil。
+
+所以，你看在ServeHTTP中会进入这段逻辑，
+
+ handler = DefaultServeMux，我们使用了默认的路由器，如果 ListenAndServe 不是传nil的话，那就会使用你自己定义的路由器。
+
+我们来看看 httprouter 的例子，你就会明白了：
+
+package main
+
+
+
+import (
+
+    "fmt"
+
+    "net/http"
+
+    "log"
+
+
+
+    "github.com/julienschmidt/httprouter"
+
+)
+
+
+
+func Index(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
+
+    fmt.Fprint(w, "Welcome!\n")
+
+}
+
+
+
+func main() {
+
+    router := httprouter.New()
+
+    router.GET("/", Index)
+
+
+
+    log.Fatal(http.ListenAndServe(":8080", router))
+
+}
+
+看到了吧，上面router便是自定义的路由器，在走到上面ServerHTTP的时候，便是使用指定的路由器进行路由。
+
+5. 路由分配handler
+好了，我们知道了使用默认的路由器（ DefaultServeMux），再看看它是怎么根据路径找对应handler的吧~~~
+
+我想你看到这已经累了，请不要轻易离开，学海无涯苦作舟啊~~
+
+路由的过程里面我们只要弄懂下面的三个问题，就知道 Go 自带的路由是怎么运行的了：
+
+1. 什么时候注册的路由？
+
+2. 如何根据注册的路由找对应的handler？
+
+3. 如果没注册路由访问会返回什么？
+
+好，我们首先来看看默认路由器（ DefaultServeMux）的结构定义：
+
+type ServeMux struct {
+
+    mu    sync.RWMutex
+
+    m     map[string]muxEntry
+
+    es    []muxEntry
+
+    hosts bool
+
+}
+
+其中， m 是一个map，用来存储路由pattern与handler的关系； es 是一个slice，将路由按长度从大到小排序存储起来。
+
+匹配规则：首先精确匹配 m 中的pattern；如果在 m 不能精确匹配路径时，会在 es 中找到最接近的路由规则：比如注册了两个路径 /a/b/ /a/ ，当请求URL是 /a/b/c时，会匹配到 /a/b/ 而不是 /a/。
+
+1. 什么时候注册的路由？
+
+还记得吧，在 ListenAndServe 之前，有这么一行代码， http.HandleFunc("/hello", helloHandler)，这个便是在注册路由。我们来看看关键代码：
+
+func HandleFunc(pattern string, handler func(ResponseWriter, *Request)) {
+
+    DefaultServeMux.HandleFunc(pattern, handler)
+
+}
+
+
+
+func (mux *ServeMux) HandleFunc(pattern string, handler func(ResponseWriter, *Request)) {
+
+    ……
+
+    mux.Handle(pattern, HandlerFunc(handler))
+
+}
+
+
+
+func (mux *ServeMux) Handle(pattern string, handler Handler) {
+
+    ……
+
+    e := muxEntry{h: handler, pattern: pattern}
+
+    mux.m[pattern] = e
+
+    if pattern[len(pattern)-1] == '/' {
+
+        mux.es = appendSorted(mux.es, e)
+
+    }
+
+
+
+    if pattern[0] != '/' {
+
+        mux.hosts = true
+
+    }
+
+}
+
+看到了吧，在调用 http.HandleFunc 时，会把路由表往 ServeMux.m 和 ServeMux.es 写
+
+2. 如何根据注册的路由找对应的handler？
+
+其实知道怎么写路由表，大概也能猜到是怎么进行找了，无非就是从上面的 m， es 进行匹配。
+
+我们上面从端口监听，接受请求，读取请求并解析，再到路由分配handler，一路追到 handler.ServeHTTP(rw, req)，现在再看看这段代码的实现
+
+// 根据预设的pattern，将request分配最匹配的handler处理
+
+func (mux *ServeMux) ServeHTTP(w ResponseWriter, r *Request) {
+
+    ……
+
+    h, _ := mux.Handler(r)
+
+    h.ServeHTTP(w, r)
+
+}
+
+
+
+……
+
+
+
+func (mux *ServeMux) handler(host, path string) (h Handler, pattern string) {
+
+    if mux.hosts {
+
+        h, pattern = mux.match(host + path)
+
+    }
+
+    if h == nil {
+
+        h, pattern = mux.match(path)
+
+    }
+
+    if h == nil {
+
+        h, pattern = NotFoundHandler(), ""
+
+    }
+
+    return
+
+}
+
+
+
+func (mux *ServeMux) match(path string) (h Handler, pattern string) {
+
+    // 优先查找m表
+
+    v, ok := mux.m[path]
+
+    if ok {
+
+        return v.h, v.pattern
+
+    }
+
+
+
+    // 未精确匹配成功，查询es（已排序），路径长的优先匹配
+
+    for _, e := range mux.es {
+
+        if strings.HasPrefix(path, e.pattern) {
+
+            return e.h, e.pattern
+
+        }
+
+    }
+
+    return nil, ""
+
+}
+
+3. 如果没注册路由访问会返回什么？
+
+这个问题其实上面代码已经看到了，Go 内置了一个 NotFoundHandler()，返回 "404 page not found"
+
+好了，我想你看完这个，应该对 Go 如何用几行代码搭建 Web 服务器有了基本了解。
