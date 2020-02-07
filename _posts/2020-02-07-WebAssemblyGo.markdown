@@ -252,6 +252,8 @@ Go中的Wasm支持正式进行试验。syscall/js API本身也在不断变化，
 环境
 需要golang版本高于go1.11, 本文golang版本:
 
+升级go 版本后idea golang 标准库也标红 解决办法，将 /usr/local/go/ 也加入gopath 问题解决
+
 $ go version
 > go version go1.11.1 darwin/amd64
 js中调用golang函数案例
