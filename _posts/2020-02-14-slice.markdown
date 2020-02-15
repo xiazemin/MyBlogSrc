@@ -1,0 +1,150 @@
+---
+title: slice作为函数参数是值传递
+layout: post
+category: algorithm
+author: 夏泽民
+---
+golang中的切片slice底层通过数组实现，slice类似一个结构体，其中一个字段保存的是底层数组的地址，还有长度(len) 和 容量(cap）两个字段。
+
+结构体作为函数参数时是值拷贝，同理，实际上slice作为函数参数时也是值拷贝，在函数中对slice的修改是通过slice中保存的地址对底层数组进行修改，所以函数外的silce看起来被改变了。
+
+当需要对slice做插入和删除时，由于需要更改长度字段，值拷贝就不行了，需要传slice本身在内存中的地址。
+<!-- more -->
+以删除为例，说明这种情况。
+
+不通过函数，直接删除slice中的一个元素
+package main
+
+import "fmt"
+
+func main() {
+    si := []int{1, 2, 3, 4, 5, 6, 7, 8, 9}
+
+    fmt.Printf("%v  len %d \n", si, len(si))
+    
+    si = append(si[:3],si[4:]...)
+    
+    fmt.Printf("%v  len %d \n", si, len(si))
+}
+// ---------输出结果-------------------
+[1 2 3 4 5 6 7 8 9]  len 9 
+[1 2 3 5 6 7 8 9]  len 8 
+// --------成功删除了4  长度减1---------
+通过函数，参数是slice变量
+func main() {
+    si := []int{1, 2, 3, 4, 5, 6, 7, 8, 9}
+
+    fmt.Printf("%v  len %d \n", si, len(si))
+    
+    test1(si)
+    
+    fmt.Printf("%v  len %d \n", si, len(si))
+}
+
+func test1(si []int) {
+    si = append(si[:3], si[4:]...)
+}
+
+// -------------输出结果-------------------
+[1 2 3 4 5 6 7 8 9]  len 9 
+[1 2 3 5 6 7 8 9 9]  len 9 
+// -----4虽然被删除了，但是长度不变，最后面还多了个9，可见不是想要的结果
+通过函数，参数是slice变量的地址
+func main() {
+    si := []int{1, 2, 3, 4, 5, 6, 7, 8, 9}
+
+    fmt.Printf("%v  len %d \n", si, len(si))
+    
+    test(&si)
+
+    fmt.Printf("%v  len %d \n", si, len(si))
+}
+
+func test(si *[]int) {
+    (*si) = append((*si)[:3], (*si)[4:]...)
+}
+
+
+// ---------输出结果-------------------
+[1 2 3 4 5 6 7 8 9]  len 9 
+[1 2 3 5 6 7 8 9]  len 8 
+// --------成功删除了4  长度减1---------
+
+https://nanxiao.gitbooks.io/golang-101-hacks/
+在Go语言中，函数参数是值传递。使用slice作为函数参数时，函数获取到的是slice的副本:一个指针，指向底层数组的起始地址，同时带有slice的长度和容量。既然各位熟知数据存储的内存的地址，现在可以对切片数据进行修改。让我们看看下面的例子:
+In Go, the function parameters are passed by value. With respect to use slice as a function argument, that means the function will get the copies of the slice: a pointer which points to the starting address of the underlying array, accompanied by the length and capacity of the slice. Oh boy! Since you know the address of the memory which is used to store the data, you can tweak the slice now.
+
+package main
+
+import (
+    "fmt"
+)
+
+func modifyValue(s []int)  {
+    s[1] = 3
+    fmt.Printf("In modifyValue: s is %v\n", s)
+}
+func main() {
+    s := []int{1, 2}
+    fmt.Printf("In main, before modifyValue: s is %v\n", s)
+    modifyValue(s)
+    fmt.Printf("In main, after modifyValue: s is %v\n", s)
+}
+运行结果如下
+
+In main, before modifyValue: s is [1 2]
+In modifyValue: s is [1 3]
+In main, after modifyValue: s is [1 3]
+由此可见，执行modifyValue函数，切片s的元素发生了变化。尽管modifyValue函数只是操作slice的副本，但是任然改变了切片的数据元素，看另一个例子:
+You can see, after running modifyValue function, the content of slice s is changed. Although the modifyValue function just gets a copy of the memory address of slice's underlying array, it is enough!
+See another example:
+
+package main
+
+import (
+    "fmt"
+)
+
+func addValue(s []int) {
+    s = append(s, 3)
+    fmt.Printf("In addValue: s is %v\n", s)
+}
+
+func main() {
+    s := []int{1, 2}
+    fmt.Printf("In main, before addValue: s is %v\n", s)
+    addValue(s)
+    fmt.Printf("In main, after addValue: s is %v\n", s)
+}
+The result is like this:
+
+In main, before addValue: s is [1 2]
+In addValue: s is [1 2 3]
+In main, after addValue: s is [1 2]
+而这一次，addValue函数并没有修改main函数中的切片s的元素。这是因为它只是操作切片s的副本，而不是切片s本身。所以如果真的想让函数改变切片的内容，可以传递切片的地址:
+This time, the addValue function doesn't take effect on the s slice in main function. That's because it just manipulate the copy of the s, not the "real" s.
+So if you really want the function to change the content of a slice, you can pass the address of the slice:
+
+package main
+
+import (
+    "fmt"
+)
+
+func addValue(s *[]int) {
+    *s = append(*s, 3)
+    fmt.Printf("In addValue: s is %v\n", s)
+}
+
+func main() {
+    s := []int{1, 2}
+    fmt.Printf("In main, before addValue: s is %v\n", s)
+    addValue(&s)
+    fmt.Printf("In main, after addValue: s is %v\n", s)
+}     
+运行结果如下
+
+
+In main, before addValue: s is [1 2]
+In addValue: s is &[1 2 3]
+In main, after addValue: s is [1 2 3]
