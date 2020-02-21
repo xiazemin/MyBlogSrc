@@ -1081,7 +1081,7 @@ type Line struct { p, q Point3D }
 你可以写
 
 origin := Point3D{}                            // Point3D 为零值
-line := Line{origin, Point3D{y: -4, z: 12.3}}  // line.q.x 为零值
+line := Line{origin, Point3D{y: -4, z: 12.3\}\}  // line.q.x 为零值
 对数组和分片字面值来说，应用如下规则：
 
 数组中的每个元素有一个关联的标记其位置的整数索引。
@@ -1109,15 +1109,15 @@ tmp[0 : n]
 在数组、分片或者映射类型 T 的复合字面值中，如果元素或映射的键本身为复合字面值，当其字面值类型和 T 的元素或键类型一致时，该字面值类型可以省略。类似的，如果元素或键本身为复合字面值的地址，当元素或键的类型为 *T 时，该元素或键可以省略 &T 。
 
 这边要多看多熟悉
-[...]Point{{1.5, -3.5}, {0, 0}}     // 同 [...]Point{Point{1.5, -3.5}, Point{0, 0}}
-[][]int{{1, 2, 3}, {4, 5}}          // 同 [][]int{[]int{1, 2, 3}, []int{4, 5}}
-[][]Point{{{0, 1}, {1, 2}}}         // 同 [][]Point{[]Point{Point{0, 1}, Point{1, 2}}}
-map[string]Point{"orig": {0, 0}}    // 同 map[string]Point{"orig": Point{0, 0}}
-map[Point]string{{0, 0}: "orig"}    // 同 map[Point]string{Point{0, 0}: "orig"}
+[...]Point\{\{1.5, -3.5}, {0, 0}\}     // 同 [...]Point{Point{1.5, -3.5}, Point{0, 0}\}
+[][]int\{\{1, 2, 3}, {4, 5}\}          // 同 [][]int{[]int{1, 2, 3}, []int{4, 5}\}
+[][]Point\{\{\{0, 1}, {1, 2}\}\}         // 同 [][]Point{[]Point{Point{0, 1}, Point{1, 2}\}\}
+map[string]Point{"orig": {0, 0}\}    // 同 map[string]Point{"orig": Point{0, 0}\}
+map[Point]string{\{0, 0}: "orig"}    // 同 map[Point]string{Point{0, 0}: "orig"}
 
 type PPoint *Point
-[2]*Point{{1.5, -3.5}, {}}          // 同 [2]*Point{&Point{1.5, -3.5}, &Point{}}
-[2]PPoint{{1.5, -3.5}, {}}          // 同 [2]PPoint{PPoint(&Point{1.5, -3.5}), PPoint(&Point{})}
+[2]*Point{\{1.5, -3.5}, {\}\}          // 同 [2]*Point{&Point{1.5, -3.5}, &Point{}\}
+[2]PPoint{\{1.5, -3.5}, {\}\}          // 同 [2]PPoint{PPoint(&Point{1.5, -3.5}), PPoint(&Point{})}
 当一个使用 LiteralType 的 TypeName 形式的复合字面值表现为一个在 关键字 和 "if" 、 "for" 或 "switch" 语句块的左花括号之间的操作数，并且该复合字面值不被圆括号、方括号或花括号所包围时，会出现一个解析歧义。在这样子一个罕见的情况下，复合字面值的左花括号错误地被解析为语句块的引入。为了解决这样子的歧义，这个复合字段必须在圆括号内。
 
 if x == (T{a,b,c}[i]) { … }
@@ -2239,7 +2239,7 @@ GoStmt = "go", Expression .
 在调用的 goroutine 中的函数值和参数是按 通常的情况来求值 的，但不同于普通调用的是，程序执行不会等待被调用的函数执行完毕。相反，在新的 goroutine 中的函数是独立执行的。当函数终止，其 goroutine 也会终止。如果函数存在任何返回值，这些值会在函数完成时被丢弃。
 
 go Server()
-go func(ch chan<- bool) { for { sleep(10); ch <- true}} (c)
+go func(ch chan<- bool) { for { sleep(10); ch <- true\}\} (c)
 Select 语句
 "select" 语句会选择一组或是 发送 或是 接收 的操作来进行。它看起来和 "switch" 语句类似，但它所有的 case 只涉及通讯操作。
 
