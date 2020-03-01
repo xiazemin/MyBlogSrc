@@ -1,0 +1,337 @@
+---
+title: vuls
+layout: post
+category: golang
+author: 夏泽民
+---
+https://github.com/future-architect/vuls
+inux vuls 漏洞扫描，有以下优点
+
+推荐几个漏洞库
+
+CVE :http://cve.mitre.org 更新快
+
+cnnvd:http://www.cnnvd.org.cn/  会定时更新CVE库， 但方便的是全中文  
+
+1、检测漏洞数量多
+可与CVE库同步。CVE库目前有1999-2018的公共漏洞库。并且CVE库会实时更新漏洞。
+
+2、可根据CVEId 查询出解决方法
+将CVEId 百度 或google都能找出对应的解决方法。(ps，更新version比较简单，但有缺点自行脑补)
+
+3、提供web界面命令行界面方便查看
+具体图文介绍请去，www.vuls.io 执行了解
+安装方式
+提前设置HTTP_PROXY！！！ 在编译时需要connect google！
+
+https://vuls.io/docs/en/abstract.html 自行查看，官方文档简洁方便
+<!-- more -->
+https://vuls.io/
+
+一. 安装
+
+系统管理员有责任定期去检查系统的弱点和更新软件, vuls 可以提供如下功能:
+
+通知管理员机器有安全隐患
+支持本地和远程扫描(需要有 ssh 权限)
+可以定期去同步最新的安全数据库
+
+
+参照官方说明在 centos 安装就可以了, 这个软件是 golang 写的所以先安装 golang
+
+https://vuls.io/docs/en/install-manually-centos.html
+
+为了使我们编译的程序可以不依赖具体的系统库文件,我们使用静态编译,这样就能在 centos6和 centos7运行了
+
+GOOS=linux GOARCH=amd64 go build -a -ldflags '-linkmode external -extldflags -static' -o vuls
+GOOS=linux GOARCH=amd64 go build -a -ldflags '-linkmode external -extldflags -static' -o go-cve-dictionary
+GOOS=linux GOARCH=amd64 go build -a -ldflags '-linkmode external -extldflags -static' -o goval-dictionary
+vulsrepo 是一个 web ui  用来更清楚的展示扫描的结果,推荐使用 https://vuls.io/docs/en/vulsrepo.html
+
+二. 使用
+
+go-cve-dictionary和goval-dictionary 这两个程序是下载 cve 和 oval 漏洞库用的
+
+在安装 vulsrepo 的文档中有个配置 如下
+$ vi vulsrepo-config.toml
+[Server]
+rootPath = "/home/vuls-user/vulsrepo"
+resultsPath  = "/opt/vuls/results"    你需要把你扫描的结果放到这个目录下,方便起见我们直接去这个目录扫描,把那两个数据库也下载到这个位置
+serverPort  = "5111"
+ 开始下载数据库
+
+cd /opt/vuls/results
+
+for i in `seq 2002 $(date +"%Y")`; do go-cve-dictionary fetchnvd -years $i; done
+
+goval-dictionary fetch-redhat 7     #如果系统是6 这里改成6
+开始扫描
+
+vuls scan 
+vuls report -format-json 
+扫描完以后的目录结构如下
+
+复制代码
+[root@kube-node-01 report]# tree . -L 2
+.
+├── config.toml
+├── cve.sqlite3
+├── cve.sqlite3-shm
+├── cve.sqlite3-wal
+├── oval.sqlite3
+└── results
+    ├── 2018-06-07T17:30:03+08:00
+    └── 2018-06-08T12:03:05+08:00
+
+[root@kube-node-01 report]# pwd
+/data/app/vulsrepo/report
+复制代码
+这时候打开浏览器 http://your_ip:5111
+
+https://www.freebuf.com/sectool/101408.html
+
+一、安装所需组件
+注意，因为需要访问外网，可能被墙，所以请自行解决科学上网问题。
+
+1.需要以下包
+
+yum -y install sqlite git gcc make wget
+wget https://dl.google.com/go/go1.10.1.linux-amd64.tar.gz
+tar -C /usr/local -xzf  go1.10.1.linux-amd64.tar.gz
+mkdir $HOME/go
+2.添加环境变量
+
+cat /etc/profile.d/goenv.sh
+export GOROOT=/usr/local/go
+export GOPATH=$HOME/go
+export PATH=$PATH:$GOROOT/bin:$GOPATH/bin
+使之生效
+source /etc/profile.d/goenv.sh
+3.部署go-cve-dictionary
+
+mkdir /var/log/vuls
+chmod 700 /var/log/vuls
+mkdir -p $GOPATH/src/github.com/kotakanbe
+cd $GOPATH/src/github.com/kotakanbe
+git clone https://github.com/kotakanbe/go-cve-dictionary.git
+cd go-cve-dictionary
+make install
+成功的标志是在$GOPATH/bin生成可执行文件
+
+获取漏洞数据
+
+$ cd $HOME
+$ for i in `seq 2002 $(date +"%Y")`; do go-cve-dictionary fetchnvd -years $i; done
+4.部署goval-dictionary
+
+mkdir -p $GOPATH/src/github.com/kotakanbe
+cd $GOPATH/src/github.com/kotakanbe
+git clone https://github.com/kotakanbe/goval-dictionary.git
+cd goval-dictionary
+make install
+成功的标志是在$GOPATH/bin生成可执行文件
+
+如果你要扫的是centos，请获取相应版本的OVAL数据，
+
+goval-dictionary fetch-redhat 5 6 7
+对应于centos5 6 7
+如果你要扫的是其他发行版，那么可以参考以下网页 https://github.com/kotakanbe/goval-dictionary#usage-fetch-oval-data-from-redhat
+
+5.部署gost
+
+mkdir /var/log/gost
+chmod 700 /var/log/gost
+mkdir -p $GOPATH/src/github.com/knqyf263
+cd $GOPATH/src/github.com/knqyf263
+git clone https://github.com/knqyf263/gost.git
+cd gost
+make install
+成功的标志是在$GOPATH/bin生成可执行文件
+
+如果你要扫的是centos，要获取相应的安全数据
+
+gost fetch redhat --after 2016-01-01 
+当然如果你想要更早的数据，变动时间即可
+其他发行版的安全数据参考以下网页 https://github.com/knqyf263/gost#fetch-debian
+
+6.部署go-exploitdb
+
+这是个模块，可以模拟代码，如果你觉得不需要，可以略过本步。
+
+mkdir /var/log/go-exploitdb
+chmod 700 /var/log/go-exploitdb
+mkdir -p $GOPATH/src/github.com/mozqnet
+cd $GOPATH/src/github.com/mozqnet
+git clone https://github.com/mozqnet/go-exploitdb.git
+cd go-exploitdb
+make install
+成功的标志是在$GOPATH/bin生成可执行文件
+
+获取***模块数据库
+go-exploitdb fetch exploitdb
+7.部署Vuls
+
+mkdir -p $GOPATH/src/github.com/future-architect
+cd $GOPATH/src/github.com/future-architect
+git clone https://github.com/future-architect/vuls.git
+cd vuls
+make install
+如果你之前装过vuls，现在想升级，那么可以
+
+rm -rf $GOPATH/pkg/linux_amd64/github.com/future-architect/vuls/
+rm -rf $GOPATH/src/github.com/future-architect/vuls/
+cd $GOPATH/src/github.com/future-architect
+git clone https://github.com/future-architect/vuls.git
+cd vuls
+make install
+成功的标志是在$GOPATH/bin生成可执行文件
+
+二、本地扫描模式
+1.启动服务
+
+[root@web05 ~]# go-cve-dictionary server
+INFO[04-04|08:43:35] Starting HTTP Server... 
+INFO[04-04|08:43:35] Listening on 127.0.0.1:1323 
+
+   ____    __
+  / __/___/ /  ___
+ / _// __/ _ \/ _ \
+/___/\__/_//_/\___/ v3.3.10-dev
+High performance, minimalist Go web framework
+https://echo.labstack.com
+____________________________________O/_______
+                                    O\
+⇨ http server started on 127.0.0.1:1323
+
+[root@web05 ~]# goval-dictionary server
+INFO[04-04|08:43:49] Starting HTTP Server... 
+INFO[04-04|08:43:49] Listening...                             URL=127.0.0.1:1324
+
+[root@web05 ~]# go-exploitdb server
+INFO[04-04|10:28:54] Opening Database.                        db=sqlite3
+INFO[04-04|10:28:54] Migrating DB.                            db=sqlite3
+INFO[04-04|10:28:54] Starting HTTP Server... 
+INFO[04-04|10:28:54] Listening...                             URL=:
+
+   ____    __
+  / __/___/ /  ___
+ / _// __/ _ \/ _ \
+/___/\__/_//_/\___/ v3.3.10-dev
+High performance, minimalist Go web framework
+https://echo.labstack.com
+____________________________________O/_______
+                                    O\
+⇨ http server started on [::]:44649
+2.编写配置文件
+
+cd $HOME
+cat config.toml
+[servers]
+
+[servers.localhost]
+host = "localhost"
+port = "local"
+3.检查配置文件
+
+$ vuls configtest
+4.开始扫描
+
+$ vuls scan
+5.用tui查看扫描结果
+
+$ vuls tui
+
+三、远程扫描模式
+为了叙述方便，安装了vuls的称为服务端，被扫描的系统称为客户端。
+
+1.服务端要能采用秘钥方式登录客户端，vuls不支持密码验证方式。
+
+(1)服务端产生秘钥对
+
+ssh-keygen -t dsa
+Generating public/private dsa key pair.
+    Enter file in which to save the key (/root/.ssh/id_dsa):      <-- 确认私钥文件所保存的路径
+    /root/.ssh/id_dsa already exists.
+    Overwrite (y/n)? y                                            <-- 如果已经存在了密钥对信息，是否进行覆盖
+    Enter passphrase (empty for no passphrase):                   <-- 确认是否给私钥设置密码信息（一般为空）
+（2）将管理主机上公钥信息发送给被管理主机
+
+ssh-copy-id -i /root/.ssh/id_dsa.pub 172.16.1.31
+（3）基于密钥方式测试
+
+ssh 172.16.1.31 &lt;-- 可以不用输入密码信息，就能登陆成功
+2.编写配置文件
+
+$ cd $HOME
+$ cat config.toml
+[servers]
+
+[servers.ubuntu]
+host         = "172.31.4.82"
+port        = "22"
+user        = "root"
+keyPath     = "/root/.ssh/id_dsa"
+3.检查配置文件
+
+vuls configtest ubuntu
+4.开始扫描
+
+（1）fast扫描模式
+
+vuls scan ubuntu
+默认是使用fast模式
+（2）fast-root扫描模式
+
+服务端与客户端都需要
+
+发行版	版本号	依赖
+Alpine	3.2 and later	-
+Ubuntu	14, 16, 18	debian-goodies
+Debian	8,9	debian-goodies, reboot-notifier
+CentOS	6,7	yum-plugin-ps
+RHEL	5,6,7	yum-plugin-ps
+Oracle	Linux 5,6,7	yum-plugin-ps
+config.toml需要加一行
+
+[root@web05 ~]# cat config.toml 
+[servers]
+
+[servers.v4]
+host         = "192.168.17.239"
+port        = "22"
+user        = "root"
+keyPath     = "/root/.ssh/id_rsa"
+scanMode    = ["fast-root"]
+后面再按照之前的，检测配置文件，扫描即可。
+
+（3）deep扫描模式
+
+官方的说法是会对客户端造成负载，扫描的也更深入。
+
+服务端与客户端都需要
+
+发行版	版本号	依赖
+Alpine	3.2 and later	-
+Ubuntu	14, 16, 18	debian-goodies
+Debian	7,8,9	aptitude, reboot-notifier, debian-goodies
+CentOS	6,7	yum-plugin-changelog, yum-plugin-ps
+RHEL	5	yum-changelog, yum-security, yum-plugin-ps
+RHEL	6,7	yum-plugin-changelog, yum-plugin-ps
+Oracle Linux	5	yum-changelog, yum-security, yum-plugin-ps
+Oracle Linux	6,7	yum-plugin-changelog, yum-plugin-ps
+配置文件如下：
+
+[root@web05 ~]# cat config.toml 
+[servers]
+
+[servers.v4]
+host         = "192.168.17.239"
+port        = "22"
+user        = "root"
+keyPath     = "/root/.ssh/id_dsa"
+scanMode    = ["deep"]
+后面再按照之前的，检测配置文件，扫描即可。
+
+vuls 英文指导网址
+
+https://vuls.io/docs/en/install-manually-centos.html
