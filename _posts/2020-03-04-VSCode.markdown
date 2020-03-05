@@ -1,0 +1,166 @@
+---
+title: VSCode 调试 Golang
+layout: post
+category: golang
+author: 夏泽民
+---
+https://gocn.vip/topics/9922
+安装 Delve
+有两种安装 Delve 的方式:
+
+支持命令Go: Install/Update Tools 选择dlv, 安装/更新 delve
+或者手动安装 delve, 参考 安装说明
+(注: 文章中提到的执行命令, 并不是在终端中执行,而是在VS Code 命令面板中执行, 打开方式:查看-> 命令面板)
+https://github.com/Microsoft/vscode-go/wiki/Debugging-Go-code-using-VS-Code
+<!-- more -->
+调试器配置说明
+调试器会使用要以下这些配置, 在通常情况下, 你不需要更改或者修改他们中的任何一项, 但是需要看一看。
+
+go.gopath. 查看GOPATH in VS Code
+go.inferGopath, 查看GOPATH in VS Code
+go.delveConfig
+apiVersion 启动 headless delve 服务, 需要指定的 delve api 版本, 默认为 2.
+dlvLoadConfig 当 apiVersion 为 1 时不适用。配置会传递给 delve, 控制 delve 的各种功能，这些功能会影响调试窗格中显示的变量。
+maxStringLen: 从字符串读取的最大字节数
+maxArrayValues: 从数组，切片或 map 中读取的最大元素数
+maxStructFields: 从结构读取的最大字段数，-1将读取所有字段
+maxVariableRecurse: 嵌套类型读取的最大层级
+虽然大多数情况下你不需要调整配置, 但在以下情况需要调整 delve 的配置
+
+在调试视图中检查变量时，可能需要更改字符串和数组的长度, 默认上限更改为 64。
+在调试视图中检查嵌套变量时，请按照实际情况进行配置。
+设置launch.json配置文件
+当 delve 安装后, 运行命令Debug: Open launch.json, 如果没有 launch.json 文件, 则会使用默认配置创建一个文件,此文件用于调试当前程序。
+
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Launch",
+            "type": "go",
+            "request": "launch",
+            "mode": "auto",
+            "program": "${fileDirname}",
+            "env": {},
+            "args": []
+        }
+    ]
+}
+以下是launch.json中的一些属性说明:
+
+属性	说明
+name	定义配置名字
+type	指定语言,这里我们填go即可
+request	launch ,attach, 当需要对一个已经运行的的程序 debug 时才使用 attach,其他时候使用launch
+mode	对于 launch 有 auto, debug, remote, test, exec, 对于 attach只有local,remote
+program	指定包, 文件或者是二进制的绝对路径
+env	调试程序时需要注入的环境变量, 例如:{ "ENVNAME": "ENVVALUE" }
+envFile	绝对路径,env的值会覆盖envFile的值
+args	需要传给调试程序的命令行参数
+showLog	布尔值，是否在调试控制台打印日志, 一般为true
+logOutput	日志输出目标, 使用逗号分隔达到使用多个组件输出日志的目的 (debugger, gdbwire, lldbout, debuglineerr, rpc), 当 showLog 为 true 有效
+buildFlags	构建程序时需要传递给 Go 编译器的 Flags
+remotePath	如果mode为remote时, 需要指定调试文件所在服务器的绝对路径
+processId	进程 id
+host	目标服务器地址
+port	目标端口
+在调试过程中使用 VS Code 变量
+${workspaceFolder} 在工作区的的根目录调试程序
+${file} 调试当前文件
+${fileDirname} 调试当前文件所属的程序包
+使用 build tags
+如果在构建时需要构建标签, (比如:go build -tags=whatever_tag ), 则需要使用标签buildFlags 并添加内容: "-tags=whatever_tag" ,如果你需要使用多个标签时, 则需要使用单引号引起来,像这样:"-tags='first_tag second_tag third_tag'"
+
+常用的launch.json 配置示例
+在编辑launch.json时, 你可以将下面这些代码片段用于调试配置。
+
+调试当前文件的配置样本
+
+{
+    "name": "Launch file",
+    "type": "go",
+    "request": "launch",
+    "mode": "auto",
+    "program": "${file}"
+}
+调试单个测试用例配置样本
+
+{
+    "name": "Launch test function",
+    "type": "go",
+    "request": "launch",
+    "mode": "test",
+    "program": "${workspaceFolder}",
+    "args": [
+        "-test.run",
+        "MyTestFunction"
+    ]
+}
+调试包内所有测试用例配置样本
+
+{
+    "name": "Launch test package",
+    "type": "go",
+    "request": "launch",
+    "mode": "test",
+    "program": "${workspaceFolder}"
+}
+调试预构建二进制配置样本
+
+{
+    "name": "Launch executable",
+    "type": "go",
+    "request": "launch",
+    "mode": "exec",
+    "program": "absolute-path-to-the-executable"
+}
+调试本地已运行进程配置样本
+
+{
+    "name": "Attach to local process",
+    "type": "go",
+    "request": "attach",
+    "mode": "local",
+    "processId": 0
+}
+远程调试
+要使用 VS Code 进行远程调试, 那么需要在远程服务器上运行 headless delve 服务。下面这个示例假定了 你要调试的程序与你在同一目录下, 如果没有, 请参考 dlv debug 命令上的用法文档。
+
+# 在远程服务器上启动 delve 服务
+$ dlv debug --headless --listen=:2345 --log --api-version=2
+如果需要传递参数到程序, 必须通过Delve 服务传递,例如:
+
+
+$ dlv debug --headless --listen=:2345 --log -- -myArg=123
+然后在 VS Code 中创建一个远程调试的launch.json
+
+{
+    "name": "Launch remote", 
+    "type": "go",
+    "request": "launch",
+    "mode": "remote",
+    "remotePath": "absolute-path-to-the-file-being-debugged-on-the-remote-machine",
+    "host": "127.0.0.1", # 目标服务器地址
+    "port": 2345, # 目标端口
+    "program": "absolute-path-to-the-file-on-the-local-machine",
+    "env": {}
+}
+remotePath 应该指向目标服务器中调试文件的绝对路径 (在源代码中)
+program 指向本地计算机上文件的绝对路径,此路径与 remotePath 对应。
+注意: 当选择了这个新的Launch remote配置启动调试器时，VS Code 会将调试命令发送到 目标服务器的 dlv, 而不是针对应用程序启动它自己的 dlv 实例。
+
+在 Docker 中调试参考:https://github.com/lukehoban/webapp-go/tree/debugging
+
+一步一步调试
+
+
+Troubleshooting
+如果在调试 Go 代码遇到问题时, 首先应该更新 delve 版本, 确保使用的是最新的 delve, 并且已使用当前的 Go 版本对其进行了编译。为确保最新版本,请执行命令 Go: Install/Update Tools 选择 dlv, 点击OK
+
+启动调试日志
+将调试配置中的showLog属性设置为true。在 delve 的调试控制台可以看到调试日志。
+将调试配置中的trace属性设置为log。在调试控制台看到日志的同时也会将日志保存在文件中,日志文件会在调试控制台开头打印出来,注意查看。
+将调试配置中的logOutput属性设置为rpc。您看到与 VS Code 和 delve 之间往返的 RPC 消息相对应的日志。需要将 showLog 设置为 true。
+logOutput属性与 delve的--log-output标志对应，使用逗号分隔可以输出到多个组价列表。
+相关资料
+一步一步 debug: https://code.visualstudio.com/docs/editor/debugging
