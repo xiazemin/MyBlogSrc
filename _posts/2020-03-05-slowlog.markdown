@@ -1,0 +1,123 @@
+---
+title: fpm slowlog
+layout: post
+category: web
+author: 夏泽民
+---
+当nginx收到如上错误码时，可以确定后端php-fpm解析php出了某种问题，比如，执行错误，执行超时。
+
+php-fpm.conf的配置文件中有一个参数request_slowlog_timeout是这样描述的
+
+; The timeout for serving a single request after which a PHP backtrace will be
+; dumped to the 'slowlog' file. A value of '0s' means 'off'.
+; Available units: s(econds)(default), m(inutes), h(ours), or d(ays)
+; Default Value: 0
+;request_slowlog_timeout = 0
+
+当request_slowlog_timeout 设为一个具体秒时request_slowlog_timeout =5，表示如果哪个脚本执行时间大于5秒，会记录这个脚本到慢日志文件中
+
+request_slowlog_timeout =0表示关闭慢日志输出。
+
+慢日志文件位置默认在php的安装目录下的log文件夹中，可以通过修改slowlog = log/$pool.log.slow参数来指定。
+
+php-fpm慢日志的例子，慢日志会记录下进程号，脚本名称，具体哪个文件哪行代码的哪个函数执行时间过长
+
+<!-- more -->
+[21-Nov-2013 14:30:38] [pool www] pid 11877
+script_filename = /usr/local/lnmp/nginx/html/www.quancha.cn/www/fyzb.php
+[0xb70fb88c] file_get_contents() /usr/local/lnmp/nginx/html/www.quancha.cn/www/fyzb.php:2
+[21-Nov-2013 14:15:23] ERROR: [pool www] 'slowlog' must be specified for use with 'request_slowlog_timeout'
+
+request_slowlog_timeout 和 slowlog需要同时设置，开启request_slowlog_timeout的同时需要开启 slowlog
+
+[21-Nov-2013 14:16:27] ERROR: Unable to create or open slowlog(/usr/local/lnmp/php/log/www.log.slow): No such file or directory (2)
+
+慢日志路径需要手动创建
+具体开启php-fpm慢日志步骤：
+
+cd /usr/local/lnmp/php
+
+vi etc/php-fpm.conf
+去掉request_slowlog_timeout 、slowlog的前缀分号';'，设置request_slowlog_timeout =5；
+:wq
+保存退出
+
+创建慢日志目录
+mkdir log
+
+重启php-fpm
+kill -INT `cat var/run/php-fpm.pid
+sbin/php-fpm
+
+慢日志路径需要手动创建
+
+具体开启php-fpm慢日志步骤：
+
+cd /usr/local/lnmp/php
+
+vi etc/php-fpm.conf
+去掉request_slowlog_timeout 、slowlog的前缀分号';'，设置request_slowlog_timeout =5；
+
+:wq
+保存退出
+
+创建慢日志目录
+mkdir log
+
+重启php-fpm
+kill -INT `cat var/run/php-fpm.pid
+sbin/php-fpm
+
+
+PHP-FPM的错误日志建议打开，这样可以看到PHP的错误信息：
+一般是这个配置路径 /etc/php/7.3/fpm/pool.d/www.conf，日志目录如果需要自己建立PHP目录，一定要把权限赋给www-data用户，否则没有创建目录的权限，就无法记录日志
+chown www-data:www-data /var/log/php/
+
+php_flag[display_errors] = on
+php_admin_value[error_log] = /var/log/php/www.error.log
+php_admin_flag[log_errors] = on
+
+还可以把php的access日志也打开，是在同一个配置文件中
+access.log = /var/log/php/www.access.log
+
+最后还有一个慢日志的记录也可以打开
+slowlog = /var/log/php/www.log.slow
+request_slowlog_timeout = 10
+
+
+配置文件：
+
+request_slowlog_timeout = 1s
+slowlog = /var/log/www.log.slow
+request_terminate_timeout = 3s
+
+查看日志文件:
+
+-rwxrwxrwx 1 www-data www-data 2663 Sep 28 09:49 fpm-php.www.log
+-rwxrwxrwx 1 www-data www-data 0 Sep 28 09:00 www.log.slow
+
+代码：
+
+<?php
+sleep(3);
+var_dump(11);
+在nginx代理下的执行结果：
+
+Status Code:502 Bad Gateway
+
+php-fpm 日志：
+
+[28-Sep-2017 11:20:04] WARNING: [pool www] child 130, script 'test.php' (request: "GET /test.php") execution timed out (2.990237 sec), terminating
+
+PS:
+1 fpm我尝试过root用户运行
+2 配置文件改成这样还是记录不了日志：
+
+request_slowlog_timeout = 1s
+
+request_terminate_timeout = 30s
+
+request_terminate_timeout = 3s
+这条语句生效。导致进程被干掉了。请求还没结束，所以慢日志还没来得及写入
+
+
