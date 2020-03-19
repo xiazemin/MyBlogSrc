@@ -1,0 +1,159 @@
+---
+title: go-cache
+layout: post
+category: golang
+author: 夏泽民
+---
+什么是go-cache
+KV存储引擎有很多，常用的如redis，rocksdb等，如果在实际使用中只是在内存中实现一个简单的kv缓存，使用上述引擎就太大费周章了。在Golang中可以使用go-cache这个package实现一个轻量级基于内存的kv存储或缓存。GitHub源码地址是：https://github.com/patrickmn/go-cache 。
+go-cache这个包实际上是在内存中实现了一个线程安全的map[string]interface{}，可以将任何类型的对象作为value，不需要通过网络序列化或传输数据，适用于单机应用。对于每组KV数据可以设置不同的TTL（也可以永久存储），并可以自动实现过期清理。
+在使用时一般都是将go-cache作为数据缓存来使用，而不是持久性的数据存储。对于停机后快速恢复的场景，go-cache支持将缓存数据保存到文件，恢复时从文件中load数据加载到内存。
+<!-- more -->
+如何使用go-cache
+常用接口分析
+对于数据库的基本操作，无外乎关心的CRUD（增删改查），对应到go-cache中的接口如下：
+
+创建对象：在使用前需要先创建cache对象
+func New(defaultExpiration, cleanupInterval time.Duration) *Cache：指定默认有效时间和清除间隔，创建cache对象。
+如果defaultExpiration<1或是NoExpiration，kv中的数据不会被清理，必须手动调用接口删除。
+如果cleanupInterval<1，不会自动触发清理逻辑，要手动触发c.DeleteExpired()。
+func NewFrom(defaultExpiration, cleanupInterval time.Duration, items map[string]Item) *Cache：与上面接口的不同是，入参增加了一个map，可以将已有数据按格式构造好，直接创建cache。
+C（Create）：增加一条数据，go-cache中有几个接口都能实现新增的功能，但使用场景不同
+func (c Cache) Add(k string, x interface{}, d time.Duration) error：只有当key不存在或key对应的value已经过期时，可以增加成功；否则，会返回error。
+func (c Cache) Set(k string, x interface{}, d time.Duration)：在cache中增加一条kv记录。
+如果key不存在，增加一个kv记录；如果key已经存在，用新的value覆盖旧的value。
+对于有效时间d，如果是0（DefaultExpiration）使用默认有效时间；如果是-1（NoExpiration），表示没有过期时间。
+func (c Cache) SetDefault(k string, x interface{})：与Set用法一样，只是这里的TTL使用默认有效时间。
+R（Read）：只支持按key进行读取
+func (c Cache) Get(k string) (interface{}, bool) ：通过key获取value，如果cache中没有key，返回的value为nil，同时返回一个bool类型的参数表示key是否存在。
+func (c Cache) GetWithExpiration(k string) (interface{}, time.Time, bool)：与Get接口的区别是，返回参数中增加了key有效期的信息，如果是不会过期的key，返回的是time.Time类型的零值。
+U（Update）：按key进行更新
+直接使用Set接口，上面提到如果key已经存在会用新的value覆盖旧的value，也可以达到更新的效果。
+func (c Cache) Replace(k string, x interface{}, d time.Duration) error：如果key存在且为过期，将对应value更新为新的值；否则返回error。
+func (c Cache) Decrement(k string, n int64) error：对于cache中value是int, int8, int16, int32, int64, uintptr, uint,uint8, uint32, or uint64, float32,float64这些类型记录，可以使用该接口，将value值减n。如果key不存在或value不是上述类型，会返回error。
+DecrementXXX：对于Decrement接口中提到的各种类型，还有对应的接口来处理，同时这些接口可以得到value变化后的结果。如func (c *cache) DecrementInt8(k string, n int8) (int8, error)，从返回值中可以获取到value-n后的结果。
+func (c Cache) Increment(k string, n int64) error：使用方法与Decrement相同，将key对应的value加n。
+IncrementXXX：使用方法与DecrementXXX相同。
+D（Delete）
+func (c Cache) Delete(k string)：按照key删除记录，如果key不存在直接忽略，不会报错。
+func (c Cache) DeleteExpired()：在cache中删除所有已经过期的记录。cache在声明的时候会指定自动清理的时间间隔，使用者也可以通过这个接口手动触发。
+func (c Cache) Flush()：将cache清空，删除所有记录。
+其他接口：
+func (c Cache) ItemCount() int：返回cache中的记录数量。需要注意的是，返回的数值可能会比实际能获取到的数值大，对于已经过期但还没有即使清理的记录也会被统计。
+func (c *cache) OnEvicted(f func(string, interface{}))：设置一个回调函数（可选项），当一条记录从cache中删除（使用者主动delete或cache自助清理过期记录）时，调用该函数。设置为nil关闭操作。
+安装go-cache包
+介绍了go-cache的常用接口，接下来从代码中看看如何使用。在coding前需要安装go-cache，命令如下。
+
+go get github.com/patrickmn/go-cache
+一个Demo
+如何在golang中使用上述接口实现kv数据库的增删改查，接下来看一个demo。其他更多接口的用法和更详细的说明，可以参考GoDoc。
+
+import (
+    "fmt"
+    "time"
+    
+    "github.com/patrickmn/go-cache" // 使用前先import包
+)
+
+func main() {
+    // 创建一个cache对象，默认ttl 5分钟，每10分钟对过期数据进行一次清理
+    c := cache.New(5*time.Minute, 10*time.Minute)
+
+    // Set一个KV，key是"foo"，value是"bar"
+    // TTL是默认值（上面创建对象的入参，也可以设置不同的值）5分钟
+    c.Set("foo", "bar", cache.DefaultExpiration)
+
+    // Set了一个没有TTL的KV，只有调用delete接口指定key时才会删除
+    c.Set("baz", 42, cache.NoExpiration)
+
+    // 从cache中获取key对应的value
+    foo, found := c.Get("foo")
+    if found {
+        fmt.Println(foo)
+    }
+
+    // 如果想提高性能，存储指针类型的值
+    c.Set("foo", &MyStruct, cache.DefaultExpiration)
+    if x, found := c.Get("foo"); found {
+        foo := x.(*MyStruct)
+            // ...
+    }
+}
+源码分析
+1. 常量：内部定义的两个常量`NoExpiration`和`DefaultExpiration`，可以作为上面接口中的入参，`NoExpiration`表示没有设置有效时间，`DefaultExpiration`表示使用New()或NewFrom()创建cache对象时传入的默认有效时间。
+const (
+    NoExpiration time.Duration = -1
+    DefaultExpiration time.Duration = 0
+)
+2.  Item：cache中存储的value类型，Object是真正的值，Expiration表示过期时间。可以使用Item的```Expired()```接口确定是否到期，实现方式是过比较当前时间和Item设置的到期时间来判断是否过期。
+type Item struct {
+    Object     interface{}
+    Expiration int64
+}
+
+func (item Item) Expired() bool {
+    if item.Expiration == 0 {
+        return false
+    }
+    return time.Now().UnixNano() > item.Expiration
+}
+3. cache：go-cache的核心数据结构，其中定义了每条记录的默认过期时间，底层的存储结构等信息。
+type cache struct {
+    defaultExpiration time.Duration              // 默认过期时间
+    items             map[string]Item            // 底层存储结构，使用map实现 
+    mu                sync.RWMutex               // map本身非线程安全，操作时需要加锁
+    onEvicted         func(string, interface{})  // 回调函数，当记录被删除时触发相应操作
+    janitor           *janitor                   // 用于定时轮询失效的key
+}
+4. janitor：用于定时轮询失效的key，其中定义了轮询的周期和一个无缓存的channel，用来接收结束信息。
+type janitor struct {
+    Interval time.Duration // 定时轮询周期
+    stop     chan bool     // 用来接收结束信息
+}
+
+func (j *janitor) Run(c *cache) {
+    ticker := time.NewTicker(j.Interval) // 创建一个timeTicker定时触发
+    for {
+        select {
+        case <-ticker.C:
+            c.DeleteExpired()            // 调用DeleteExpired接口处理删除过期记录
+        case <-j.stop:
+            ticker.Stop()
+            return
+        }
+    }
+}
+对于janitor的处理，这里使用的技巧值得学习 ，下面这段代码是在New() cache对象时，会同时开启一个goroutine跑janitor，在run之后可以看到做了runtime.SetFinalizer的处理，这样处理了可能存在的内存泄漏问题。
+
+func stopJanitor(c *Cache) {
+    c.janitor.stop <- true
+}
+
+func newCacheWithJanitor(de time.Duration, ci time.Duration, m map[string]Item) *Cache {
+    c := newCache(de, m)
+    // This trick ensures that the janitor goroutine (which--granted it
+    // was enabled--is running DeleteExpired on c forever) does not keep
+    // the returned C object from being garbage collected. When it is
+    // garbage collected, the finalizer stops the janitor goroutine, after
+    // which c can be collected.
+    C := &Cache{c}
+    if ci > 0 {
+        runJanitor(c, ci)
+        runtime.SetFinalizer(C, stopJanitor)
+    }
+    return C
+}
+可能的泄漏场景如下，使用者创建了一个cache对象，在使用后置为nil，在使用者看来在gc的时候会被回收，但是因为有goroutine在引用，在gc的时候不会被回收，因此导致了内存泄漏。
+
+    c := cache.New()
+    // do some operation
+    c = nil
+解决方案可以增加Close接口，在使用后调用Close接口，通过channel传递信息结束goroutine，但如果使用者在使用后忘了调用Close接口，还是会造成内存泄漏。
+另外一种解决方法是使用runtime.SetFinalizer，不需要用户显式关闭， gc在检查C这个对象没有引用之后， gc会执行关联的SetFinalizer函数，主动终止goroutine，并取消对象C与SetFinalizer函数的关联关系。这样下次gc时，对象C没有任何引用，就可以被gc回收了。
+
+总结
+go-cache的源码代码里很小，代码结构和处理逻辑都比较简单，可以作为golang新手阅读的很好的素材。
+对于单机轻量级的内存缓存如果仅从功能实现角度考虑，go-cache是一个不错的选择，使用简单。
+但在实际使用中需要注意：
+go-cache没有对内存使用大小或存储数量进行限制，可能会造成内存峰值较高；
+go-cache中存储的value尽量使用指针类型，相比于存储对象，不仅在性能上会提高，在内存占用上也会有优势。由于golang的gc机制，map在扩容后原来占用的内存不会立刻释放，因此如果value存储的是对象会造成占用大量内存无法释放。
