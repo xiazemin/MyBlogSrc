@@ -1,0 +1,225 @@
+---
+title: log
+layout: post
+category: golang
+author: 夏泽民
+---
+https://semaphoreci.com/community/tutorials/building-and-testing-a-rest-api-in-go-with-gorilla-mux-and-postgresql
+https://segmentfault.com/a/1190000022106356
+<!-- more -->
+依赖分布式系统的公司组织和团队经常使用Go语言编写其应用程序，以利用Go语言诸如通道和goroutine之类的并发功能。如果你负责研发或运维Go应用程序，则考虑周全的日志记录策略可以帮助你了解用户行为，定位错误并监控应用程序的性能。
+
+这篇文章将展开聊一些用于管理Go日志的工具和技术。我们将首先考虑要使用哪种日志记录包来满足各种记录要求。然后会介绍一些使日志更易于搜索和可靠，减少日志资源占用以及使日志消息标准化的技术。
+
+日志包的选择
+Go标准库的日志库非常简单,仅仅提供了print,panic和fatal三个函数对于更精细的日志级别、日志文件分割以及日志分发等方面并没有提供支持. 所以催生了很多第三方的日志库，流行的日志框架包括logrus、zap、glog等。我们先来大致看下这些日志库的特点再来根据实际应用情况选择合适的日志库。
+
+log标准库
+Go的内置日志记录库（log）带有一个默认记录器（logger），该记录器可写入标准错误并自动向记录中添加时间戳，而无需进行配置。你可以使用它日志用于本地开发，和试验性的代码段。这时从代码中获得快速反馈可能比生成丰富结构化的日志更为重要。
+
+logrus
+logrus是一个为结构化日志记录而设计的日志记录包，非常适合以JSON格式记录日志。 JSON格式使机器可以轻松解析Go日志。而且，由于JSON是定义明确的标准，因此通过包含新字段可以轻松地添加上下文，解析器能够自动提取它们。
+
+使用logrus，可以使用功能WithFields定义要添加到JSON日志中的标准字段，如下所示。然后，可以在不同日志级别调用记录器，例如Info()，Warn()和Error()。 logrus库将自动以JSON格式写入日志，并插入标准字段以及您即时定义的所有字段。
+
+package main
+import (
+  log "github.com/sirupsen/logrus"
+)
+
+func main() {
+   log.SetFormatter(&log.JSONFormatter{})
+
+   standardFields := log.Fields{
+     "hostname": "staging-1",
+     "appname":  "foo-app",
+     "session":  "1ce3f6v",
+   }
+   requestLogger := log.withFields(standardFields)
+   requestLogger.WithFields(log.Fields{"string": "foo", "int": 1, "float": 1.1}).Info("My first ssl event from Golang")
+
+}
+生成的日志将在JSON对象中包括消息，日志级别，时间戳、标准字段以及调用记录器即时写入的字段：
+
+{"appname":"foo-app","float":1.1,"hostname":"staging-1","int":1,"level":"info","msg":"My first ssl event from Golang","session":"1ce3f6v","string":"foo","time":"2019-03-06T13:37:12-05:00"}
+glog
+glog允许启用或禁用特定级别的日志记录，这对于在开发和生产环境之间切换时保持检查日志量很有用。它使您可以在命令行中使用标志（例如，-v表示详细信息）来设置运行代码时的日志记录级别。然后，可以在if语句中使用V()函数仅在特定日志级别上写入Go日志。功能Info()，Warning()，Error()和Fatal()分别指定日志级别0到3
+
+  if err != nil && glog.V(2){
+    glog.Error(err)
+  }
+日志库的选择
+上面分析了，标准库的log只适合非项目级别的代码片段的快速验证和调试。logrus在结构化日志上做的最好，有利于日志分析。glog可以减少日志占用的磁盘空间。不过相比产生的日志占用空间大的问题，利于分析的日志给应用产品带来的价值更大，所以logrus使用的更多一些。很多开源项目,如Docker,Prometheus等都是用了logrus来记录他们的日志。
+
+logrus的使用介绍
+logrus是目前Github上star数量最多的日志库,目前(2020.03)star数量为14000+,fork数为1600+。logrus功能强大，性能高效，而且具有高度灵活性，提供了自定义插件的功能。很多开源项目,如Docker,Prometheus等都是用了logrus来记录他们的日志。
+
+logrus完全兼容Go标准库日志模块,拥有六种日志级别：debug、info、warn、error、fatal和panic,这是Go标准库日志模块的API的超集.如果你的项目使用标准库日志模块,完全可以以最低的代价迁移到logrus上.
+可扩展的Hook机制：允许使用者通过hook的方式将日志分发到任意地方,如本地文件系统、标准输出、logstash、elasticsearch或者mq等。
+logrus内置了两种日志格式,JSONFormatter和TextFormatter还可以自己动手实现接口Formatter,来定义自己的日志格式。
+Field机制：logrus鼓励通过Field机制进行精细化的、结构化的日志记录,而不是通过冗长的消息来记录日志。
+Entry: logrus.WithFields会自动返回一个 *Entry,Entry会自动向日志记录里添加记录创建的时间time字段。
+基本用法
+logrus与Go标准库日志模块完全兼容， logrus可以通过简单的配置，来定义输出、格式或者日志级别等。
+
+package main
+
+import (
+    "os"
+    log "github.com/sirupsen/logrus"
+)
+
+func init() {
+    // 设置日志格式为json格式
+    log.SetFormatter(&log.JSONFormatter{})
+
+    // 设置将日志输出到指定文件（默认的输出为stderr,标准错误）
+    // 日志消息输出可以是任意的io.writer类型
+    logFile := ...
+    file, _ := os.OpenFile(logFile, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
+    log.SetOutput(file)
+
+    // 设置只记录日志级别为warn及其以上的日志
+    log.SetLevel(log.WarnLevel)
+}
+
+func main() {
+    log.WithFields(log.Fields{
+        "animal": "walrus",
+        "size":   10,
+    }).Info("A group of walrus emerges from the ocean")
+
+    log.WithFields(log.Fields{
+        "omg":    true,
+        "number": 122,
+    }).Warn("The group's number increased tremendously!")
+
+    log.WithFields(log.Fields{
+        "omg":    true,
+        "number": 100,
+    }).Fatal("The ice breaks!")
+}
+自定义Logger
+如果想在一个应用里面向多个地方写log,可以创建多个记录器Logger实例。
+
+package main
+
+import (
+    "github.com/sirupsen/logrus"
+    "os"
+)
+
+// logrus提供了New()函数来创建一个logrus的实例.
+// 项目中,可以创建任意数量的logrus实例.
+var log = logrus.New()
+
+func main() {
+    // 为当前logrus实例设置消息的输出,同样地,
+    // 可以设置logrus实例的输出到任意io.writer
+    log.Out = os.Stdout
+
+    // 为当前logrus实例设置消息输出格式为json格式.
+    // 同样地,也可以单独为某个logrus实例设置日志级别和hook,这里不详细叙述.
+    log.Formatter = &logrus.JSONFormatter{}
+
+    log.WithFields(logrus.Fields{
+        "animal": "walrus",
+        "size":   10,
+    }).Info("A group of walrus emerges from the ocean")
+}
+Fields
+logrus不推荐使用冗长的消息来记录运行信息,它推荐使用Fields来进行精细化的、结构化的信息记录. 例如下面的记录日志的方式：
+
+log.Fatalf("Failed to send event %s to topic %s with key %d", event, topic, key)
+在logrus中不太提倡,logrus鼓励使用以下方式替代之：
+
+log.WithFields(log.Fields{
+  "event": event,
+  "topic": topic,
+  "key": key,
+}).Fatal("Failed to send event")
+WithFields可以规范使用者按照其提倡的方式记录日志。但是WithFields依然是可选的,因为某些场景下，确实只需要记录一条简单的消息。
+
+Default Fields
+通常，在一个应用中、或者应用的一部分中，始终附带一些固定的记录字段会很有帮助。比如在处理用户HTTP请求时，上下文中所有的日志都会有request_id和user_ip。为了避免每次记录日志都要使用：
+
+log.WithFields(log.Fields{“request_id”: request_id, “user_ip”: user_ip})
+我们可以创建一个logrus.Entry实例，为这个实例设置默认Fields，把logrus.Entry实例设置到记录器Logger，再记录日志时每次都会附带上这些默认的字段。
+
+requestLogger := log.WithFields(log.Fields{"request_id": request_id, "user_ip": user_ip})
+requestLogger.Info("something happened on that request") # will log request_id and user_ip
+requestLogger.Warn("something not great happened")
+Hook接口
+logrus最令人心动的功能就是其可扩展的HOOK机制。通过在初始化时为logrus添加hook，logrus可以实现各种扩展功能.
+
+logrus的hook接口定义如下,其原理是每次写入日志时拦截修改logrus.Entry.
+
+// logrus在记录Levels()返回的日志级别的消息时会触发HOOK,
+// 按照Fire方法定义的内容修改logrus.Entry.
+type Hook interface {
+    Levels() []Level
+    Fire(*Entry) error
+}
+一个简单自定义hook如下，DefaultFieldHook定义会在所有级别的日志消息中加入默认字段appName=”myAppName”。
+
+type DefaultFieldHook struct {
+}
+
+func (hook *DefaultFieldHook) Fire(entry *log.Entry) error {
+    entry.Data["appName"] = "MyAppName"
+    return nil
+}
+
+func (hook *DefaultFieldHook) Levels() []log.Level {
+    return log.AllLevels
+}
+hook的使用也很简单,在初始化前调用log.AddHook(hook)添加相应的hook即可。Hook比较常见的用法是把指定错误级别的日志记录消息提醒发送到邮件组或者错误监控系统（比如sentry），起到主动错误通知的作用。
+
+logrus官方仅仅内置了syslog的hook。但Github有很多第三方的hook可供使用。比方刚才说的sentry相关的hook。
+
+sentry-hook
+Sentry是一个错误监控系统，可以使用厂商的服务也可以在自己的服务器上搭建Sentry。模式跟GitLab很像，也是提供一键安装包。为应用注册Sentry后会分配一个DSN用于连接Sentry服务。
+
+import (
+  "github.com/sirupsen/logrus"
+  "github.com/evalphobia/logrus_sentry"
+)
+
+func main() {
+  log       := logrus.New()
+  hook, err := logrus_sentry.NewSentryHook(YOUR_DSN, []logrus.Level{
+    logrus.PanicLevel,
+    logrus.FatalLevel,
+    logrus.ErrorLevel,
+  })
+
+  if err == nil {
+    log.Hooks.Add(hook)
+  }
+}
+logrus 是线程安全的
+默认情况下，Logger受mutex保护，以进行并发写入。当钩子被调用并且日志被写入时，mutex会被保持。如果确定不需要这种锁，则可以调用logger.SetNoLock()禁用该锁。
+
+不需要锁的情况包括：
+
+没有注册hook，或者hook调用是线程安全的。
+写入logger.Out是线程安全的，比如logger.Out已经被锁保护或者logger.Out是一个以Append模式打开的文件句柄。
+日志写入和存储的一些建议
+选择了项目使用的日志库后，您还需要计划在代码中调用记录器的位置，如何存储日志。在本部分中，将推荐一些整理Go日志的最佳实践，他们包括：
+
+从的主应用程序流程而不是goroutine中调用记录器。
+将日志从应用程序写入本地文件，即使以后再将其发送到日志集中化处理平台也是如此。
+定义日志的标准化默认字段
+将日志发送到日志处理平台，以便进行分析和汇总。
+使用HTTP标头携带分布式唯一ID记录微服务中的用户行为。
+避免在goroutine中使用日志记录器
+避免创建自己的goroutine来处理写日志有两个原因。首先，它可能导致并发问题，因为记录器的副本将尝试访问相同的io.Writer。其次，日志记录库通常会自己启动goroutine，在内部管理所有并发问题，而启动自己的goroutine只会造成干扰。
+
+总是将日志写入文件
+即使将日志发送到中央日志平台，我们也建议您先将日志写到本地计算机上的文件中。这确保您的日志始终在本地可用，并且不会在网络中丢失。此外，写入文件意味着您可以将写入日志的任务与将日志发送到中央日志平台的任务分开。您的应用程序本身无需建立连接或流式传输日志给日志平台，您可以将这些任务交给专业的软件处理，比如使用Elasticsearch索引日志数据的话，那么就可以用Logstash从日志文件里抽取日志数据。
+
+使用日志处理平台集中处理日志
+如果您的应用程序部署在多个主机群集中，应用的日志会分散到不同机器上。日志从本地文件传递到中央日志平台，以便进行日志数据的分析和汇总。关于日志处理服务的选择，开源的日志处理服务有ELK，各个云服务厂商也有自己的日志处理服务，根据自身情况选择即可，尽量选和云服务器同一厂商的日志服务，这样不用消耗公网的流量。
+
+使用唯一ID跨服务跟踪Go日志
+对于构建在分布式系统之上的应用，一个请求可能会流经多个服务，每个服务都会自己记录日志。这种情况下为了查询请求对应的日志，通常的解决方案是在请求头中携带唯一ID，分布式系统中所有服务的日志记录器中增加唯一ID字段，这样每条写入的日志里都会有HTTP请求的唯一ID。在统一日志平台中分析日志时，通过上游服务日志记录的请求唯一 ID 即可查询到该请求在下游所有服务中产生的日志。
