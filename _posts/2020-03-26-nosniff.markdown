@@ -1,0 +1,74 @@
+---
+title: X-Content-Type-Options nosniff
+layout: post
+category: web
+author: 夏泽民
+---
+如果服务器发送响应头 "X-Content-Type-Options: nosniff"，则 script 和 styleSheet 元素会拒绝包含错误的 MIME 类型的响应。这是一种安全功能，有助于防止基于 MIME 类型混淆的攻击。
+
+简单理解为：通过设置"X-Content-Type-Options: nosniff"响应标头，对 script 和 styleSheet 在执行是通过MIME 类型来过滤掉不安全的文件
+
+服务器发送含有 "X-Content-Type-Options: nosniff" 标头的响应时，此更改会影响浏览器的行为。
+
+
+
+如果通过 styleSheet 参考检索到的响应中接收到 "nosniff" 指令，则 Windows Internet Explorer 不会加载“stylesheet”文件，除非 MIME 类型匹配 "text/css"。
+
+如果通过 script 参考检索到的响应中接收到 "nosniff" 指令，则 Internet Explorer 不会加载“script”文件，除非 MIME 类型匹配以下值之一：
+
+
+
+"application/ecmascript"
+
+"application/javascript"
+
+"application/x-javascript"
+
+"text/ecmascript"
+
+"text/javascript"
+
+"text/jscript"
+
+"text/x-javascript"
+
+"text/vbs"
+
+"text/vbscript"
+<!-- more -->
+为了解决AppScan报告中提到的“HTTP响应缺少安全头部”的警告，Jackie在发现问题的那天早上修改了Tomcat的配置，增加了安全头部相关的过滤器，而晚上留在办公室加班，目的就是要确认前述的警告是否已消除。
+
+为了确认前述问题和HTTP安全头部的相关性，Jackie手工修改测试环境上Tomcat的配置，去掉了增加安全头部的过滤器，重启Tomcat后尝试重现问题，惊喜的发现，富文本编辑器内的图片恢复正常呈现，这说明HTTP响应增加安全头部之后，对基本功能产生了影响。
+
+当前启用了HTTP协议的安全头部的如下几个：
+
+Strict-Transport-Security
+X-Frame-Options
+X-Content-Type-Options
+X-XSS-Protection
+范围比较小，逐个排查之后，发现前述问题现象和X-Content-Type-Options相关，因此决定仍然启用HTTP安全头部的输出，但禁用X-Content-Type-Options，富文本编辑器内的图片可以正常呈现，同时不会对安全性造成很大的影响。
+
+本来觉得修改Tomcat的配置和业务不相关，不会有什么问题，也没有过基本功能，结果偏偏天不遂人愿，还真让测试MM发现个诡异问题。看来侥幸心理不能有，该做的工作不能省，否则就得加班、加倍的补回来
+
+X-Content-Type-Options
+互联网上的资源有各种类型，通常浏览器会根据响应头的Content-Type字段来分辨它们的类型。例如："text/html"代表html文档，"image/png"是PNG图片，"text/css"是CSS样式文档。然而，有些资源的Content-Type是错的或者未定义。这时，某些浏览器会启用MIME-sniffing来猜测该资源的类型，解析内容并执行。
+
+例如，我们即使给一个html文档指定Content-Type为"text/plain"，在IE8-中这个文档依然会被当做html来解析。利用浏览器的这个特性，攻击者甚至可以让原本应该解析为图片的请求被解析为JavaScript。通过下面这个响应头可以禁用浏览器的类型猜测行为：
+
+X-Content-Type-Options: nosniff
+PHP设置
+
+header("X-Content-Type-Options:nosniff");
+ 
+
+ X-XSS-Protection
+顾名思义，这个响应头是用来防范XSS的。最早我是在介绍IE8的文章里看到这个，现在主流浏览器都支持，并且默认都开启了XSS保护，用这个header可以关闭它。它有几种配置：
+
+0：禁用XSS保护；
+1：启用XSS保护；
+1; mode=block：启用XSS保护，并在检查到XSS攻击时，停止渲染页面（例如IE8中，检查到攻击时，整个页面会被一个#替换）；
+浏览器提供的XSS保护机制并不完美，但是开启后仍然可以提升攻击难度，总之没有特别的理由，不要关闭它。
+
+PHP设置
+
+header("X-XSS-Protection: 1");

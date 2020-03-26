@@ -1,0 +1,102 @@
+---
+title: Go项目简单接入travis ci
+layout: post
+category: golang
+author: 夏泽民
+---
+本文不讲述 Go 的单元测试如何编写，这里直接以filenamify（一个合法化文件路径的库）为例子。已为filenamify.go编写测试文件filenamify_test.go。只需要在tracis中执行go test -v即可。
+# https://github.com/flytam/filenamify/blob/master/.travis.yml
+language: go
+
+go:
+    - 1.13.x
+env:
+    - GO111MODULE=on
+script: go test -v
+复制代码然后给在项目中加上构建状态图标。搞定
+<!-- more -->
+这样，每次推送到远程，就会触发CI自动执行单元测试
+发布 github release
+有时候我们的 Go 项目是需要打包成可行文件直接发布到 github release 让别人下载执行的。这时候也可以使用travis实现，借助travis releases工具即可
+1、新建一个.travis.yml文件，填入基本的 Go 配置环境
+language: go
+
+go:
+    - 1.13.x
+env:
+    - GO111MODULE=on # 启用Go mod
+install:
+    - go get -v
+复制代码2、编写Makefile
+在nodejs项目中，我们一般会配置一个npm run test的命令执行测试，但是 Go 是没有npm和package.json这两个东西，这时候就需要编写Makefile来实现了（可以把Makefile看作功能类型于package.json的东西，只是使用make xxx来执行），Makefile编写可以参考。
+以blog-sync为例子，这里我是需要打包全平台的可行文件，于是Makefile如下
+GOCMD=go
+GOBUILD=$(GOCMD) build
+BINARY_NAME=bin
+NAME=blog-sync
+
+#mac
+build:
+	CGO_ENABLED=0 $(GOBUILD) -o $(BINARY_NAME)/$(NAME)-mac
+# windows
+build-linux:
+	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 $(GOBUILD) -o $(BINARY_NAME)/$(NAME)-linux
+# linux
+build-win:
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 $(GOBUILD) -o $(BINARY_NAME)/$(NAME)-win.exe
+# 全平台
+build-all:
+	make build
+	make build-win
+	make build-linux
+复制代码执行make build-all即可在bin目录下生成 3 个平台的可执行文件。
+language: go
+
+go:
+    - 1.13.x
+env:
+    - GO111MODULE=on # 启用Go mod
+install:
+    - go get -v
+before_deploy: make build-all
+deploy:
+    provider: releases
+    api_key: 自动生成的github key
+    file_glob: true
+    file: bin/*
+    skip_cleanup: true
+    on:
+        repo: flytam/blog-sync
+        tags: true
+复制代码3、使用setup初始化配置
+# 已经安装travis cli
+travis setup releases
+# 按需填写，输入github账号密码，加密key，发布文件等
+复制代码再简单定制化后，最终如下配置，releases配置可参考文档
+# https://github.com/flytam/blog-sync/blob/master/.travis.yml
+language: go
+
+go:
+    - 1.13.x
+env:
+    - GO111MODULE=on # 启用Go mod
+install:
+    - go get -v
+before_deploy: make build-all # 发布前执行生成二进制文件的命令
+deploy:
+    provider: releases
+    api_key:
+        secure: xxxx
+    # 使用glob匹配发布bin目录下的文件
+    file_glob: true
+    file: bin/*
+    skip_cleanup: true
+    on:
+        repo: flytam/blog-sync
+        # tag才触发发布
+        tags: true
+复制代码4、发布
+每次打tag推送到仓库，就会触发自动发布可执行文件到github release
+git tag 1.0.0
+git push --tags
+复制代码5、可以看到，我们的自动构建发布 release 成功了
