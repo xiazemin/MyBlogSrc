@@ -1,7 +1,7 @@
 ---
 title: subnet_mask  子网掩码
 layout: post
-category: net
+category: web
 author: 夏泽民
 ---
 子网掩码(subnet mask)是每个使用互联网的人必须要掌握的基础知识，只有掌握它，才能够真正理解TCP/IP协议的设置。

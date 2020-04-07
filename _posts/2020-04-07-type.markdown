@@ -1,0 +1,149 @@
+---
+title: go 类型转换
+layout: post
+category: golang
+author: 夏泽民
+---
+go 存在 4 种类型转换分别为：断言、强制、显式、隐式。
+
+通常说的类型转换是指断言，强制在日常不会使用到、显示是基本的类型转换、隐式使用到但是不会注意到。断言、强制、显式三类在 go 语法描述中均有说明，隐式是在日常使用过程中总结出来。
+https://gocn.vip/topics/10178
+<!-- more -->
+断言类型转换
+断言通过判断变量是否可以转换成某一个类型
+
+类型断言
+Type assertions 语法文档 镜像地址
+
+一个简单的断言表达式：
+
+var s = x.(T)
+
+如果 x 不是 nil，且 x 可以转换成 T 类型，就会断言成功，返回 T 类型的变量 s。如果 T 不是接口类型，则要求 x 的类型就是 T，如果 T 是一个接口，要求 x 实现了 T 接口。
+
+如果断言类型成立，则表达式返回值就是 T 类型的 x，如果断言失败就会触发 panic。
+
+上述表所示再断言失败就会 panic，go 提供了另外一种带返回是否成立的断言语法：
+
+s, ok := x.(T)
+
+该方法和第一种差不多一样，但是 ok 会返回是否断言成功不会出现 panic，ok 就表示是否是成功了。
+
+类型 switch
+go 语法种还提供了另外一种类型 switch 的断言方法。
+
+Type switches 语法文档 镜像地址
+
+x 断言成了 type 类型，type 类型具体值就是 switch case 的值，如果 x 成功断言成了某个 case 类型，就可以执行那个 case，此时i := x.(type)返回的 i 就是那个类型的变量了，可以直接当作 case 类型使用。
+
+switch i := x.(type) {
+case nil:
+    printString("x is nil")                // type of i is type of x (interface{})
+case int:
+    printInt(i)                            // type of i is int
+case float64:
+    printFloat64(i)                        // type of i is float64
+case func(int) float64:
+    printFunction(i)                       // type of i is func(int) float64
+case bool, string:
+    printString("type is bool or string")  // type of i is type of x (interface{})
+default:
+    printString("don't know the type")     // type of i is type of x (interface{})
+}
+强制类型转换
+强制类型转换通过修改变量类型
+
+该方法不常见，主要用于 unsafe 包和接口类型检测，需要懂得 go 变量的知识。
+
+unsafe
+本文档仅大概说明一下，具体研究请求查找相关资料。unsafe 语法文档 镜像地址
+
+var f float64
+bits = *(*uint64)(unsafe.Pointer(&f))
+
+type ptr unsafe.Pointer
+bits = *(*uint64)(ptr(&f))
+
+var p ptr = nil
+float64 就强制转换成 uint64 类型，float 的地址就是一个值但是类型是 float64，然后创建了一个 uint64 类型变量，地址值也是 float64 的地址值，两个变量值相同类型不同，强制转换了类型。
+
+unsafe 强制转换是指针的底层操作了，用 c 的朋友就很熟悉这样的指针类型转换，利用内存对齐才能保证转换可靠，例如 int 和 uint 存在符号位差别，利用 unsafe 转换后值可能不同，但是在内存存储二进制一模一样。
+
+接口类型检测
+例如下列代码：
+
+var _ Context = (*ContextBase)(nil)
+
+nil 的类型是 nil 地址值为 0，利用强制类型转换成了*ContextBase，返回的变量就是类型为*ContextBase 地址值为 0，然后Context=xx赋值如果 xx 实现了 Context 接口就没事，如果没有实现在编译时期就会报错，实现编译期间检测接口是否实现。
+
+显示类型转换
+Conversions 语法文档 镜像地址
+
+一个显式转换的表达式 T(x) ，其中 T 是一种类型并且 x 是可转换为类型的表达式 T，例如：uint(666)。
+
+在以下任何一种情况下，变量 x 都可以转换成 T 类型：
+
+x 可以分配成 T 类型。
+忽略 struct 标签 x 的类型和 T 具有相同的基础类型。
+忽略 struct 标记 x 的类型和 T 是未定义类型的指针类型，并且它们的指针基类型具有相同的基础类型。
+x 的类型和 T 都是整数或浮点类型。
+x 的类型和 T 都是复数类型。
+x 的类型是整数或 [] byte 或 [] rune，并且 T 是字符串类型。
+x 的类型是字符串，T 类型是 [] byte 或 [] rune。
+例如下列代码利用了规则进行转换，规则实现可以参考 reflect.Value.Convert 方法逻辑：
+
+int64(222)
+[]byte("ssss")
+
+type A int
+A(2)
+隐式类型转换
+隐式类型转换日常使用并不会感觉到，但是运行中确实出现了类型转换，以下列出了两种。
+
+组合间的重新断言类型
+type Reader interface {
+    Read(p []byte) (n int, err error)
+}
+type ReadCloser interface {
+    Reader
+    Close() error
+}
+var rc ReaderClose
+r := rc
+ReaderClose 接口组合了 Reader 接口，但是 r=rc 的赋值时还是类型转换了，go 使用系统内置的函数执行了类型转换。以前遇到过类似接口组合类型的变量赋值，然后使用 pprof 和 bench 测试发现了这一细节，在接口类型转移时浪费了一些性能。
+
+相同类型间赋值
+type Handler func()
+
+func NewHandler() Handler {
+    return func() {}
+}
+虽然 type 定义了 Handler 类型，但是 Handler 和 func() 是两种实际类型，类型不会相等，使用反射和断言均会出现两种类型不同。
+
+两者类型不同验证代码：
+
+package main
+
+import (
+    "fmt"
+    "reflect"
+)
+
+type Handler func()
+
+func a() Handler {
+    return func() {}
+}
+
+func main() {
+    var i interface{} = main
+    _, ok := i.(func())
+    fmt.Println(ok)
+    _, ok = i.(Handler)
+    fmt.Println(ok)
+    fmt.Println(reflect.TypeOf(main) == reflect.TypeOf((*Handler)(nil)).Elem())
+}
+
+// true
+// false
+// false

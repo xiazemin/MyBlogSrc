@@ -1,7 +1,7 @@
 ---
 title: routing_protocol 路由协议
 layout: post
-category: net
+category: web
 author: 夏泽民
 ---
 常见路由协议介绍
