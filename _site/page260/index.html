@@ -147,21 +147,40 @@
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/storage/2018/06/30/Pipeline.html">Pipeline</a>
+						<a class="post-link" href="/MyBlog/storage/2018/06/30/redis_slave.html">redis主从复制</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/storage/2018/06/30/Pipeline.html"> 夏泽民</a>
+						<a href="/MyBlog/storage/2018/06/30/redis_slave.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
 							Jun 30, 2018
 						</span>
 					</div>
-					<div class="excerpt"><p>1.1 为什么会出现Pipeline</p>
+					<div class="excerpt"><p>和MySQL主从复制的原因一样，Redis虽然读取写入的速度都特别快，但是也会产生读压力特别大的情况。为了分担读压力，Redis支持主从复制，Redis的主从结构可以采用一主多从或者级联结构，Redis主从复制可以根据是否是全量分为全量同步和增量同步。
+<!-- more -->
+1 全量同步
+　　Redis全量复制一般发生在Slave初始化阶段，这时Slave需要将Master上的所有数据都复制一份。具体步骤如下： 
+　　1）从服务器连接主服务器，发送SYNC命令； 
+　　2）主服务器接收到SYNC命名后，开始执行BGSAVE命令生成RDB文件并使用缓冲区记录此后执行的所有写命令； 
+　　3）主服务器BGSAVE执行完后，向所有从服务器发送快照文件，并在发送期间继续记录被执行的写命令； 
+　　4）从服务器收到快照文件后丢弃所有旧数据，载入收到的快照； 
+　　5）主服务器快照发送完毕后开始向从服务器发送缓冲区中的写命令； 
+　　6）从服务器完成对快照的载入，开始接收命令请求，并执行来自主服务器缓冲区的写命令； 
+完成上面几个步骤后就完成了从服务器数据初始化的所有操作，从服务器此时可以接收来自用户的读请求。
+2 增量同步
+　　Redis增量复制是指Slave初始化后开始正常工作时主服务器发生的写操作同步到从服务器的过程。 
+增量复制的过程主要是主服务器每执行一个写命令就会向从服务器发送相同的写命令，从服务器接收并执行收到的写命令。</p>
+
+<p>3 Redis主从同步策略
+　　主从刚刚连接的时候，进行全量同步；全同步结束后，进行增量同步。当然，如果有需要，slave 在任何时候都可以发起全量同步。redis 策略是，无论如何，首先会尝试进行增量同步，如不成功，要求从机进行全量同步。</p>
+
+<p>4 注意点
+如果多个Slave断线了，需要重启的时候，因为只要Slave启动，就会发送sync请求和主机全量同步，当多个同时出现的时候，可能会导致Master IO剧增宕机。</p>
 
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/storage/2018/06/30/Pipeline.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/storage/2018/06/30/redis_slave.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -171,21 +190,27 @@
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/elasticsearch/2018/06/30/Logagent.html">Logagent 日志组件对比</a>
+						<a class="post-link" href="/MyBlog/storage/2018/06/30/redis_replication.html">redis主从复制原理、断点续传、无磁盘化复制、过期key处理</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/elasticsearch/2018/06/30/Logagent.html"> 夏泽民</a>
+						<a href="/MyBlog/storage/2018/06/30/redis_replication.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
 							Jun 30, 2018
 						</span>
 					</div>
-					<div class="excerpt"><p>Logstash 也不是唯一的日志传输工具（log shipper）</p>
+					<div class="excerpt"><!-- more -->
+<p>一、redis replication概括
+1、主从架构的核心原理
+当启动一个slave node的时候，它会发送一个PSYNC命令给master node
+如果这是slave node重新连接master node，那么master node仅仅会复制给slave部分缺少的数据; 如果是slave node第一次连接master node，那么会触发一次full resynchronization(全量复制)
+开始full resynchronization的时候，master会启动一个后台线程，开始生成一份RDB快照文件，同时还会将从客户端收到的所有写命令缓存在内存中。RDB文件生成完毕之后，master会将这个RDB发送给slave，slave会先写入本地磁盘，然后再从本地磁盘加载到内存中。然后master会将内存中缓存的写命令发送给slave，slave也会同步这些数据。
+slave node如果跟master node有网络故障，断开了连接，会自动重连。master如果发现有多个slave node都来重新连接，仅仅会启动一个rdb save操作，用一份数据服务所有slave node。</p>
 
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/elasticsearch/2018/06/30/Logagent.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/storage/2018/06/30/redis_replication.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -195,77 +220,78 @@
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/elasticsearch/2018/06/29/test.html">test</a>
+						<a class="post-link" href="/MyBlog/storage/2018/06/30/redis_mysql.html">redis_mysql</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/elasticsearch/2018/06/29/test.html"> 夏泽民</a>
+						<a href="/MyBlog/storage/2018/06/30/redis_mysql.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Jun 29, 2018
+							Jun 30, 2018
+						</span>
+					</div>
+					<div class="excerpt"><p>redis的介绍：
+Redis的主从复制功能非常强大，一个master可以拥有多个slave，而一个slave又可以拥有多个slave，如此下去，形成了强大的多级服务器集群架构。下面是关于redis主从复制的一些特点：
+1.master可以有多个slave
+2.除了多个slave连到相同的master外，slave也可以连接其他slave形成图状结构
+3.主从复制不会阻塞master。也就是说当一个或多个slave与master进行初次同步数据时，master可以继续处理client发来的请求。相反slave在初次同步数据时则会阻塞不能处理client的请求。
+4.主从复制可以用来提高系统的可伸缩性,我们可以用多个slave 专门用于client的读请求，比如sort操作可以使用slave来处理。也可以用来做简单的数据冗余
+5.可以在master禁用数据持久化，只需要注释掉master 配置文件中的所有save配置，然后只在slave上配置数据持久化。</p>
+
+</div>
+					<div class="readmore" style="float: right;">
+						
+							<a href="/MyBlog/storage/2018/06/30/redis_mysql.html" style="color:green">阅读全文</a>
+						
+					</div>								
+			</div>
+			<br/>
+			<hr/>
+			<div class="post-list" style="list-style-type: none;">			
+				 	
+					<h2>
+						<img class="title-image" src="/MyBlog/img/dna.png"/>
+						<a class="post-link" href="/MyBlog/storage/2018/06/30/redis_memcache.html">redis_memcache</a>
+					</h2>
+					<div class="author" style="margin-top: -10px;">Posted by
+						<i class="fa fa-user"></i>
+						<a href="/MyBlog/storage/2018/06/30/redis_memcache.html"> 夏泽民</a>
+						<span class="post-meta"><i class="fa fa-calendar"></i> 
+							Jun 30, 2018
+						</span>
+					</div>
+					<div class="excerpt"><p>Memcached 是一个高性能的分布式内存对象缓存系统，用于动态Web应用以减轻数据库负载。它通过在内存中缓存数据和对象来减少读取数据库的次数，从而提供动态、数据库驱动网站的速度，现在已被LiveJournal、hatena、Facebook、Vox、LiveJournal等公司所使用。</p>
+
+</div>
+					<div class="readmore" style="float: right;">
+						
+							<a href="/MyBlog/storage/2018/06/30/redis_memcache.html" style="color:green">阅读全文</a>
+						
+					</div>								
+			</div>
+			<br/>
+			<hr/>
+			<div class="post-list" style="list-style-type: none;">			
+				 	
+					<h2>
+						<img class="title-image" src="/MyBlog/img/dna.png"/>
+						<a class="post-link" href="/MyBlog/storage/2018/06/30/redis.html">Redis原理及使用</a>
+					</h2>
+					<div class="author" style="margin-top: -10px;">Posted by
+						<i class="fa fa-user"></i>
+						<a href="/MyBlog/storage/2018/06/30/redis.html"> 夏泽民</a>
+						<span class="post-meta"><i class="fa fa-calendar"></i> 
+							Jun 30, 2018
 						</span>
 					</div>
 					<div class="excerpt"><!-- more -->
-<p>Elasticsearch提供了一个jar文件，可以将其添加到任何Java IDE，并可用于测试与Elasticsearch相关的代码。 可以使用Elasticsearch提供的框架执行一系列测试 -</p>
+<p>Redis本质上是一个Key-Value类型的内存数据库，很像memcached，整个数据库统统加载在内存当中进行操作，定期通过异步操作把数据库数据flush到硬盘上进行保存。因为是纯内存操作，Redis的性能非常出色，每秒可以处理超过 10万次读写操作，是已知性能最快的Key-Value DB。
+Redis的出色之处不仅仅是性能，Redis最大的魅力是支持保存多种数据结构，此外单个value的最大限制是1GB，不像 memcached只能保存1MB的数据，因此Redis可以用来实现很多有用的功能，比方说用他的List来做FIFO双向链表，实现一个轻量级的高性 能消息队列服务，用他的Set可以做高性能的tag系统等等。另外Redis也可以对存入的Key-Value设置expire时间，因此也可以被当作一 个功能加强版的memcached来用。
+Redis的主要缺点是数据库容量受到物理内存的限制，不能用作海量数据的高性能读写，因此Redis适合的场景主要局限在较小数据量的高性能操作和运算上。</p>
 
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/elasticsearch/2018/06/29/test.html" style="color:green">阅读全文</a>
-						
-					</div>								
-			</div>
-			<br/>
-			<hr/>
-			<div class="post-list" style="list-style-type: none;">			
-				 	
-					<h2>
-						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/elasticsearch/2018/06/29/map.html">map 映射</a>
-					</h2>
-					<div class="author" style="margin-top: -10px;">Posted by
-						<i class="fa fa-user"></i>
-						<a href="/MyBlog/elasticsearch/2018/06/29/map.html"> 夏泽民</a>
-						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Jun 29, 2018
-						</span>
-					</div>
-					<div class="excerpt"><p>映射是存储在索引中的文档的大纲。它定义数据类型，如geo_point或文档和规则中存在的字段的字符串和格式，以控制动态添加的字段的映射。 例如，</p>
-
-</div>
-					<div class="readmore" style="float: right;">
-						
-							<a href="/MyBlog/elasticsearch/2018/06/29/map.html" style="color:green">阅读全文</a>
-						
-					</div>								
-			</div>
-			<br/>
-			<hr/>
-			<div class="post-list" style="list-style-type: none;">			
-				 	
-					<h2>
-						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/elasticsearch/2018/06/29/logstash_elasticsearch.html">logstash输出到elasticsearch</a>
-					</h2>
-					<div class="author" style="margin-top: -10px;">Posted by
-						<i class="fa fa-user"></i>
-						<a href="/MyBlog/elasticsearch/2018/06/29/logstash_elasticsearch.html"> 夏泽民</a>
-						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Jun 29, 2018
-						</span>
-					</div>
-					<div class="excerpt"><!-- more -->
-<p>output配置中elasticsearch配置
-action
-index 给一个文档建立索引
-delete 通过id值删除一个文档（这个action需要指定一个id值）
-create 插入一条文档信息，如果这条文档信息在索引中已经存在，那么本次插入工作失败
-update 通过id值更新一个文档。更新有个特殊的案例upsert，如果被更新的文档还不存在，那么就会用到upsert
-示例：</p>
-
-</div>
-					<div class="readmore" style="float: right;">
-						
-							<a href="/MyBlog/elasticsearch/2018/06/29/logstash_elasticsearch.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/storage/2018/06/30/redis.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -1585,6 +1611,18 @@ update 通过id值更新一个文档。更新有个特殊的案例upsert，如�
 			  
 			    
 			      <a href="/MyBlog/page326/">326</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page327/">327</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page328/">328</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page329/">329</a>
 			    
 			  
 
@@ -3246,6 +3284,21 @@ update 通过id值更新一个文档。更新有个特殊的案例upsert，如�
 						  
 						
 
+						  
+							<li><a href="/MyBlog/page327">327</a></li>
+						  
+						
+
+						  
+							<li><a href="/MyBlog/page328">328</a></li>
+						  
+						
+
+						  
+							<li><a href="/MyBlog/page329">329</a></li>
+						  
+						
+
 						
 						  <li><a href="/MyBlog/page261">Next</a></li>
 						
@@ -3277,6 +3330,110 @@ update 通过id值更新一个文档。更新有个特殊的案例upsert，如�
 							var searchIndex={
 							"code" : 0 ,
 							"data" : [
+							
+							{
+							"title" : "为什么DNS使用UDP而不是TCP - ",
+							"url" : "/MyBlog/web/2020/04/18/%E4%B8%BA%E4%BB%80%E4%B9%88DNS%E4%BD%BF%E7%94%A8UDP%E8%80%8C%E4%B8%8D%E6%98%AFTCP.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "pt-online-schema-change - ",
+							"url" : "/MyBlog/storage/2020/04/18/pt-online-schema-change.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "局部敏感哈希（Locality Sensitive Hashing）和MinHash - ",
+							"url" : "/MyBlog/algorithm/2020/04/18/lsh.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "协程与线程的区别 - ",
+							"url" : "/MyBlog/golang/2020/04/18/goroutine.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "InnoDB与MyISAM 聚集索引与非聚集索引 - ",
+							"url" : "/MyBlog/storage/2020/04/18/Index.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "DNS原理和智能DNS及CDN - ",
+							"url" : "/MyBlog/web/2020/04/17/dns.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "WebRTC Gaming as a Service - ",
+							"url" : "/MyBlog/web/2020/04/17/WebRTC.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "severless - ",
+							"url" : "/MyBlog/web/2020/04/16/severless.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "Java各种规则引擎 - ",
+							"url" : "/MyBlog/web/2020/04/16/ruleEngine.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "分布式系统频次限制实现 - ",
+							"url" : "/MyBlog/algorithm/2020/04/16/rate.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "工作流与BPM - ",
+							"url" : "/MyBlog/web/2020/04/16/NPM.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "EDA事件驱动架构 - ",
+							"url" : "/MyBlog/web/2020/04/16/EDA.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "Aviator java的表达式引擎化框架 - ",
+							"url" : "/MyBlog/web/2020/04/16/Aviator.html"
+							}
+							
+							,
+							
 							
 							{
 							"title" : "字典 - ",
@@ -16423,7 +16580,7 @@ update 通过id值更新一个文档。更新有个特殊的案例upsert，如�
 								
 								
 									<a class="bold" href="/MyBlog/category/web">
-										web (262)
+										web (270)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -16495,7 +16652,7 @@ update 通过id值更新一个文档。更新有个特殊的案例upsert，如�
 								
 								
 									<a class="bold" href="/MyBlog/category/golang">
-										golang (542)
+										golang (543)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -16531,7 +16688,7 @@ update 通过id值更新一个文档。更新有个特殊的案例upsert，如�
 								
 								
 									<a class="bold" href="/MyBlog/category/storage">
-										storage (126)
+										storage (128)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -16549,7 +16706,7 @@ update 通过id值更新一个文档。更新有个特殊的案例upsert，如�
 								
 								
 									<a class="bold" href="/MyBlog/category/algorithm">
-										algorithm (90)
+										algorithm (92)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -16636,6 +16793,58 @@ update 通过id值更新一个文档。更新有个特殊的案例upsert，如�
 							<div id="tags">
 								<ul style="display:none;width:250px;height:250px;">
 								     
+								   <li>
+										<a href="/MyBlog/web/2020/04/18/%E4%B8%BA%E4%BB%80%E4%B9%88DNS%E4%BD%BF%E7%94%A8UDP%E8%80%8C%E4%B8%8D%E6%98%AFTCP.html" style="font-size:40px;"> 为什么DNS使用UDP而不是TCP</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/storage/2020/04/18/pt-online-schema-change.html" style="font-size:40px;"> pt-online-schema-change</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/algorithm/2020/04/18/lsh.html" style="font-size:40px;"> 局部敏感哈希（Locality Sensitive Hashing）和MinHash</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/golang/2020/04/18/goroutine.html" style="font-size:40px;"> 协程与线程的区别</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/storage/2020/04/18/Index.html" style="font-size:40px;"> InnoDB与MyISAM 聚集索引与非聚集索引</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/web/2020/04/17/dns.html" style="font-size:40px;"> DNS原理和智能DNS及CDN</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/web/2020/04/17/WebRTC.html" style="font-size:40px;"> WebRTC Gaming as a Service</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/web/2020/04/16/severless.html" style="font-size:40px;"> severless</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/web/2020/04/16/ruleEngine.html" style="font-size:40px;"> Java各种规则引擎</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/algorithm/2020/04/16/rate.html" style="font-size:40px;"> 分布式系统频次限制实现</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/web/2020/04/16/NPM.html" style="font-size:40px;"> 工作流与BPM</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/web/2020/04/16/EDA.html" style="font-size:40px;"> EDA事件驱动架构</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/web/2020/04/16/Aviator.html" style="font-size:40px;"> Aviator java的表达式引擎化框架</a>
+									</li>
+									  
 								   <li>
 										<a href="/MyBlog/algorithm/2020/04/15/set.html" style="font-size:40px;"> 字典</a>
 									</li>
@@ -16743,58 +16952,6 @@ update 通过id值更新一个文档。更新有个特殊的案例upsert，如�
 								   <li>
 										<a href="/MyBlog/golang/2020/04/09/goland.html" style="font-size:40px;"> goland 安装破解</a>
 									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2020/04/09/godebug.html" style="font-size:40px;"> go 远程调试</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/algorithm/2020/04/09/TreeMap.html" style="font-size:40px;"> TreeMap和HashMap的区别</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/linux/2020/04/08/tcp.html" style="font-size:40px;"> TCP协议中的疑难杂症</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/web/2020/04/08/composer.html" style="font-size:40px;"> composer</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/storage/2020/04/07/xa.html" style="font-size:40px;"> xa mysql xid</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2020/04/07/type.html" style="font-size:40px;"> go 类型转换</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2020/04/07/ticker.html" style="font-size:40px;"> ticker 导致cpu泄漏</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2020/04/07/socket.html" style="font-size:40px;"> 并发模型汇总</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/algorithm/2020/04/07/snowflake.html" style="font-size:40px;"> 分布式ID生成方案</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2020/04/07/pprof.html" style="font-size:40px;"> pprof 时间点对比</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/storage/2020/04/07/lru.html" style="font-size:40px;"> lru</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2020/04/07/io.html" style="font-size:40px;"> IO 多路复用</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/linux/2020/04/07/epoll.html" style="font-size:40px;"> Epoll的本质 内部实现原理</a>
-									</li>
 									
 								</ul>
 							</div>
@@ -16809,33 +16966,33 @@ update 通过id值更新一个文档。更新有个特殊的案例upsert，如�
                 		<ul class="posts" span="recent">  
 							  
 							   <li>  
-								   <span>15 Apr 2020</span>
-								   <a href="/MyBlog/algorithm/2020/04/15/set.html">  
-								   字典</a>  
+								   <span>18 Apr 2020</span>
+								   <a href="/MyBlog/web/2020/04/18/%E4%B8%BA%E4%BB%80%E4%B9%88DNS%E4%BD%BF%E7%94%A8UDP%E8%80%8C%E4%B8%8D%E6%98%AFTCP.html">  
+								   为什么DNS使用UDP而不是TCP</a>  
 							   </li>  
 							  
 							   <li>  
-								   <span>15 Apr 2020</span>
-								   <a href="/MyBlog/web/2020/04/15/qps.html">  
-								   线程数与QPS计算</a>  
+								   <span>18 Apr 2020</span>
+								   <a href="/MyBlog/storage/2020/04/18/pt-online-schema-change.html">  
+								   pt-online-schema-change</a>  
 							   </li>  
 							  
 							   <li>  
-								   <span>15 Apr 2020</span>
-								   <a href="/MyBlog/docker/2020/04/15/image.html">  
-								   减小Docker镜像的简单技巧</a>  
+								   <span>18 Apr 2020</span>
+								   <a href="/MyBlog/algorithm/2020/04/18/lsh.html">  
+								   局部敏感哈希（Locality Sensitive Hashing）和MinHash</a>  
 							   </li>  
 							  
 							   <li>  
-								   <span>15 Apr 2020</span>
-								   <a href="/MyBlog/algorithm/2020/04/15/hashmap.html">  
-								   HashTable</a>  
+								   <span>18 Apr 2020</span>
+								   <a href="/MyBlog/golang/2020/04/18/goroutine.html">  
+								   协程与线程的区别</a>  
 							   </li>  
 							  
 							   <li>  
-								   <span>15 Apr 2020</span>
-								   <a href="/MyBlog/golang/2020/04/15/goimports-s.html">  
-								   Goimports explained</a>  
+								   <span>18 Apr 2020</span>
+								   <a href="/MyBlog/storage/2020/04/18/Index.html">  
+								   InnoDB与MyISAM 聚集索引与非聚集索引</a>  
 							   </li>  
 							  
 						</ul>
