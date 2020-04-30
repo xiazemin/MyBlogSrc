@@ -147,21 +147,27 @@
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/web/2018/11/16/curl.html">curl get 发送post数据</a>
+						<a class="post-link" href="/MyBlog/linux/2019/01/15/jiffies.html">jiffies</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/web/2018/11/16/curl.html"> 夏泽民</a>
+						<a href="/MyBlog/linux/2019/01/15/jiffies.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Nov 16, 2018
+							Jan 15, 2019
 						</span>
 					</div>
-					<div class="excerpt"><p>出现错误：</p>
+					<div class="excerpt"><p>HZ
+Linux核心每隔固定周期会发出timer interrupt (IRQ 0)，HZ是用来定义每一秒有几次timer interrupts。举例来说，HZ为1000，代表每秒有1000次timer interrupts。 HZ可在编译核心时设定，如下所示(以核心版本2.6.20-15为例)： 
+:~$ cd /usr/src/linux 
+:/usr/src/linux$ make menuconfig 
+ Processor type and features —&gt; Timer frequency (250 HZ) —&gt; 
+ Tick
+Tick是HZ的倒数，意即timer interrupt每发生一次中断的时间。如HZ为250时，tick为4毫秒(millisecond)。</p>
 
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/web/2018/11/16/curl.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/linux/2019/01/15/jiffies.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -171,21 +177,32 @@
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/algorithm/2018/11/15/PHXIS.html">地理坐标的六边形编码(PHXIS)</a>
+						<a class="post-link" href="/MyBlog/linux/2019/01/15/clock_event_device.html">clock_event_device</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/algorithm/2018/11/15/PHXIS.html"> 夏泽民</a>
+						<a href="/MyBlog/linux/2019/01/15/clock_event_device.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Nov 15, 2018
+							Jan 15, 2019
 						</span>
 					</div>
-					<div class="excerpt"><p>计算机科学的方法并没有使用离散数学的模型来模拟一个地理信息系统(GIS)–而是建模出了一个我们真是存在的物理空间框架。实际上，大家已经接受了传统使用的球形的坐标或者凸的笛卡尔坐标系。因为这这些模型定义的是连续的点，而不是离散的一片一片，所以我们称这些模型为模拟地理参考模型（Analog Earth Reference Models）。</p>
+					<div class="excerpt"><p>早期的内核版本中，进程的调度基于一个称之为tick的时钟滴答，通常使用时钟中断来定时地产生tick信号，每次tick定时中断都会进行进程的统计和调度，并对tick进行计数，记录在一个jiffies变量中，定时器的设计也是基于jiffies。这时候的内核代码中，几乎所有关于时钟的操作都是在machine级的代码中实现，很多公共的代码要在每个平台上重复实现。随后，随着通用时钟框架的引入，内核需要支持高精度的定时器，为此，通用时间框架为定时器硬件定义了一个标准的接口：clock_event_device，machine级的代码只要按这个标准接口实现相应的硬件控制功能，剩下的与平台无关的特性则统一由通用时间框架层来实现。
+<!-- more --></p>
+<ol>
+  <li> 时钟事件软件架构
+本系列文章的第一节中，我们曾经讨论了时钟源设备：clocksource，现在又来一个时钟事件设备：clock_event_device，它们有何区别？看名字，好像都是给系统提供时钟的设备，实际上，clocksource不能被编程，没有产生事件的能力，它主要被用于timekeeper来实现对真实时间进行精确的统计，而clock_event_device则是可编程的，它可以工作在周期触发或单次触发模式，系统可以对它进行编程，以确定下一次事件触发的时间，clock_event_device主要用于实现普通定时器和高精度定时器，同时也用于产生tick事件，供给进程调度子系统使用。时钟事件设备与通用时间框架中的其他模块的关系如下图所示：
+<img src="https://xiazemin.github.io/MyBlog/img/clock_event_device.png" />
+与clocksource一样，系统中可以存在多个clock_event_device，系统会根据它们的精度和能力，选择合适的clock_event_device对系统提供时钟事件服务。在smp系统中，为了减少处理器间的通信开销，基本上每个cpu都会具备一个属于自己的本地clock_event_device，独立地为该cpu提供时钟事件服务，smp中的每个cpu基于本地的clock_event_device，建立自己的tick_device，普通定时器和高精度定时器。
+在软件架构上看，clock_event_device被分为了两层，与硬件相关的被放在了machine层，而与硬件无关的通用代码则被集中到了通用时间框架层，这符合内核对软件的设计需求，平台的开发者只需实现平台相关的接口即可，无需关注复杂的上层时间框架。
+tick_device是基于clock_event_device的进一步封装，用于代替原有的时钟滴答中断，给内核提供tick事件，以完成进程的调度和进程信息统计，负载平衡和时间更新等操作。
+struct clock_event_device
+时钟事件设备的核心数据结构是clock_event_device结构，它代表着一个时钟硬件设备，该设备就好像是一个具有事件触发能力（通常就是指中断）的clocksource，它不停地计数，当计数值达到预先编程设定的数值那一刻，会引发一个时钟事件中断，继而触发该设备的事件处理回调函数，以完成对时钟事件的处理。clock_event_device结构的定义如下：</li>
+</ol>
 
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/algorithm/2018/11/15/PHXIS.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/linux/2019/01/15/clock_event_device.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -195,21 +212,21 @@
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/storage/2018/11/11/lambda.html">大数据系统的Lambda架构</a>
+						<a class="post-link" href="/MyBlog/linux/2019/01/15/callout.html">时间轮算法</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/storage/2018/11/11/lambda.html"> 夏泽民</a>
+						<a href="/MyBlog/linux/2019/01/15/callout.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Nov 11, 2018
+							Jan 15, 2019
 						</span>
 					</div>
-					<div class="excerpt"><p>Nathan Marz的大作Big Data: Principles and best practices of scalable real-time data systems介绍了Labmda Architecture的概念，用于在大数据架构中，如何让real-time与batch job更好地结合起来，以达成对大数据的实时处理。</p>
+					<div class="excerpt"><p>内核自身的正常运行也依赖于时钟系统。Linux 是一个典型的分时系统，CPU 时间被分成多个时间片，这是多任务实现的基础。Linux 内核依赖 tick，即时钟中断来进行分时。</p>
 
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/storage/2018/11/11/lambda.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/linux/2019/01/15/callout.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -219,21 +236,21 @@
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/storage/2018/11/11/b.html">B树、B-树、B+树、B*树介绍</a>
+						<a class="post-link" href="/MyBlog/web/2019/01/13/ddd.html">ddd</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/storage/2018/11/11/b.html"> 夏泽民</a>
+						<a href="/MyBlog/web/2019/01/13/ddd.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Nov 11, 2018
+							Jan 13, 2019
 						</span>
 					</div>
-					<div class="excerpt"><p>由于索引是采用 B 树结构存储的，所以对应的索引项并不会被删除，经过一段时间的增删改操作后，数据库中就会出现大量的存储碎片， 这和磁盘碎片、内存碎片产生原理是类似的，这些存储碎片不仅占用了存储空间，而且降低了数据库运行的速度。如果发现索引中存在过多的存储碎片的话就要进行 “碎片整理”了，最方便的“碎片整理” 手段就是重建索引， 重建索引会将先前创建的索引删除然后重新创建索引，主流数据库管理系统都提供了重建索引的功能，比如 REINDEX、REBUILD 等，如果使用的数据库管理系统没有提供重建索引的功能，可以首先用DROP INDEX语句删除索引，然后用ALTER TABLE 语句重新创建索引。</p>
+					<div class="excerpt"><p>2004年Eric Evans 发表Domain-Driven Design –Tackling Complexity in the Heart of Software （领域驱动设计），简称Evans DDD。领域驱动设计分为两个阶段：</p>
 
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/storage/2018/11/11/b.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/web/2019/01/13/ddd.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -243,39 +260,21 @@
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/storage/2018/11/11/Phoenix.html">Phoenix</a>
+						<a class="post-link" href="/MyBlog/web/2019/01/13/4color.html">4色图</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/storage/2018/11/11/Phoenix.html"> 夏泽民</a>
+						<a href="/MyBlog/web/2019/01/13/4color.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Nov 11, 2018
+							Jan 13, 2019
 						</span>
 					</div>
-					<div class="excerpt"><p>一、Phoenix 介绍：
-Phoenix提供了类标准Sql的方式进行操作Hbase的数据。
-Phoenix 操作hbase有两种方式，创建表，创建视图。 
-区别如下： 
-创建表的话，就可以对HBase进行插入，查询，删除操作。 
-视图的话，一般就只可以进行查询操作。 
-虽然看起来表的功能比视图更强大一些。但就像是mysql等关系型数据库一样，删除视图操作不会影响原始表的结构。同时Phoenix的视图也支持创建二级索引相关的。 
-因为使用phoenix 创建表后，会自动和hbase建立关联映射。当你使用phoenix删除和hbase之间的关系时，就会将hbase中的表也删掉了，并将与之关联的索引表一并删除。
-二、phoenix 常用命令
-温馨提示：笔者开启了Kerberos安全认证机制，因此第一步是先对机器进行Kerberos认证；如果开启了用户访问hbase表权限相关的，通过phoenix查询hbase中的表需要开通该用户拥有访问hbase 系统表相关的权限。
-注：phoenix会将没有用双引号的表名列名等转化成大写，所以如果表名跟列名为小写需用双引号括起来。
-2.1 进入phoenix 命令行
-[root@hdp39 ~]#  cd /usr/hdp/2.5.3.0-37/phoenix/bin
-[root@hdp39 bin]# ./sqlline.py hdp39,hdp40,hdp41:2181 
-(集群采用的安全模式为kerberos,因而执行这条命令前进行kinit的用户必须拥有操作Hbase相关的权限)
-2.2、help 
-查看内置命令
-2.3、!tables
-    List all the tables in the database</p>
+					<div class="excerpt"><p>在图论的基本理论中，有加权顶点的概念。顶点具有的与之相关的数，称为权（weight）；该顶点称为加权顶点。</p>
 
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/storage/2018/11/11/Phoenix.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/web/2019/01/13/4color.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -1611,6 +1610,34 @@ Phoenix 操作hbase有两种方式，创建表，创建视图。
 			  
 			    
 			      <a href="/MyBlog/page330/">330</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page331/">331</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page332/">332</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page333/">333</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page334/">334</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page335/">335</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page336/">336</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page337/">337</a>
 			    
 			  
 
@@ -3292,6 +3319,41 @@ Phoenix 操作hbase有两种方式，创建表，创建视图。
 						  
 						
 
+						  
+							<li><a href="/MyBlog/page331">331</a></li>
+						  
+						
+
+						  
+							<li><a href="/MyBlog/page332">332</a></li>
+						  
+						
+
+						  
+							<li><a href="/MyBlog/page333">333</a></li>
+						  
+						
+
+						  
+							<li><a href="/MyBlog/page334">334</a></li>
+						  
+						
+
+						  
+							<li><a href="/MyBlog/page335">335</a></li>
+						  
+						
+
+						  
+							<li><a href="/MyBlog/page336">336</a></li>
+						  
+						
+
+						  
+							<li><a href="/MyBlog/page337">337</a></li>
+						  
+						
+
 						
 						  <li><a href="/MyBlog/page232">Next</a></li>
 						
@@ -3323,6 +3385,310 @@ Phoenix 操作hbase有两种方式，创建表，创建视图。
 							var searchIndex={
 							"code" : 0 ,
 							"data" : [
+							
+							{
+							"title" : "benchmark - ",
+							"url" : "/MyBlog/golang/2020/04/30/benchmark.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "gomod - ",
+							"url" : "/MyBlog/golang/2020/04/29/gomod.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "GraphQL - ",
+							"url" : "/MyBlog/golang/2020/04/29/GraphQL.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "json - ",
+							"url" : "/MyBlog/golang/2020/04/28/json.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "etcd3 数据不一致 bug 分析 - ",
+							"url" : "/MyBlog/storage/2020/04/28/etcd.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "go服务内存管理 - ",
+							"url" : "/MyBlog/golang/2020/04/28/MADV_FREE.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "Go Search Extension - ",
+							"url" : "/MyBlog/golang/2020/04/26/search.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "Go 协作与抢占 - ",
+							"url" : "/MyBlog/golang/2020/04/26/schdule.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "middleWare - ",
+							"url" : "/MyBlog/algorithm/2020/04/26/middleWare.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "Istio 分层架构 - ",
+							"url" : "/MyBlog/golang/2020/04/26/lstio.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "Inlining optimisations in Go - ",
+							"url" : "/MyBlog/golang/2020/04/26/inline.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "kubernetes网络 - ",
+							"url" : "/MyBlog/k8s/2020/04/26/epbf.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "dubbo-go 中如何实现路由策略功能 - ",
+							"url" : "/MyBlog/golang/2020/04/26/dubbo.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "淘宝云梯分布式计算平台架构 - ",
+							"url" : "/MyBlog/golang/2020/04/26/dbsync.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "Golang context源码阅读与分析 - ",
+							"url" : "/MyBlog/golang/2020/04/26/context.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "Colly外的又一Go爬虫框架 — Goribot - ",
+							"url" : "/MyBlog/golang/2020/04/26/Goribot.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "How to Manage Database Timeouts and Cancellations in Go - ",
+							"url" : "/MyBlog/golang/2020/04/26/Cancellations.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "binlog - ",
+							"url" : "/MyBlog/storage/2020/04/24/binlog.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "Parquet - ",
+							"url" : "/MyBlog/storage/2020/04/24/Parquet.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "argo - ",
+							"url" : "/MyBlog/golang/2020/04/23/argo.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "apitest - ",
+							"url" : "/MyBlog/golang/2020/04/23/apitest.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "pprof分析变量逃逸过程 - ",
+							"url" : "/MyBlog/golang/2020/04/22/escape.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "sqlStmt的使用以及坑 - ",
+							"url" : "/MyBlog/storage/2020/04/21/sql.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "切片 - ",
+							"url" : "/MyBlog/golang/2020/04/21/slice.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "PHP SPL（PHP 标准库） - ",
+							"url" : "/MyBlog/web/2020/04/21/getArrayCopy.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "DDL平台服务 - ",
+							"url" : "/MyBlog/architect/2020/04/21/ddl.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "autocommit - ",
+							"url" : "/MyBlog/storage/2020/04/21/autocommit.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "MyRocks - ",
+							"url" : "/MyBlog/storage/2020/04/21/MyRocks.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "HTTP3 - ",
+							"url" : "/MyBlog/web/2020/04/21/HTTP3.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "Using Go as a scripting language in Linux - ",
+							"url" : "/MyBlog/golang/2020/04/20/script.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "OPA 进阶-分布式利器 Bundle - ",
+							"url" : "/MyBlog/golang/2020/04/20/opa.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "从graphql-go转换到gqlgen - ",
+							"url" : "/MyBlog/golang/2020/04/20/gqlgen.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "eda 事件驱动架构 - ",
+							"url" : "/MyBlog/architect/2020/04/20/eda.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "binlog - ",
+							"url" : "/MyBlog/storage/2020/04/20/binlog.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "linux下使用binfmt_misc设定不同二进制的打开程序 - ",
+							"url" : "/MyBlog/linux/2020/04/20/binfmt_misc.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "云原生大型分布式监控系统 Thanos 部署与实践 - ",
+							"url" : "/MyBlog/golang/2020/04/20/Thanos.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "GTID - ",
+							"url" : "/MyBlog/storage/2020/04/20/GTID.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "DomainEvents - ",
+							"url" : "/MyBlog/architect/2020/04/20/DomainEvents.html"
+							}
+							
+							,
+							
 							
 							{
 							"title" : "二进制表示 - ",
@@ -16605,7 +16971,7 @@ Phoenix 操作hbase有两种方式，创建表，创建视图。
 								
 								
 									<a class="bold" href="/MyBlog/category/web">
-										web (270)
+										web (272)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -16650,7 +17016,7 @@ Phoenix 操作hbase有两种方式，创建表，创建视图。
 								
 								
 									<a class="bold" href="/MyBlog/category/linux">
-										linux (320)
+										linux (321)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -16677,7 +17043,7 @@ Phoenix 操作hbase有两种方式，创建表，创建视图。
 								
 								
 									<a class="bold" href="/MyBlog/category/golang">
-										golang (546)
+										golang (568)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -16713,7 +17079,7 @@ Phoenix 操作hbase有两种方式，创建表，创建视图。
 								
 								
 									<a class="bold" href="/MyBlog/category/storage">
-										storage (128)
+										storage (136)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -16731,7 +17097,7 @@ Phoenix 操作hbase有两种方式，创建表，创建视图。
 								
 								
 									<a class="bold" href="/MyBlog/category/algorithm">
-										algorithm (92)
+										algorithm (93)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -16758,7 +17124,7 @@ Phoenix 操作hbase有两种方式，创建表，创建视图。
 								
 								
 									<a class="bold" href="/MyBlog/category/k8s">
-										k8s (5)
+										k8s (6)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -16767,7 +17133,7 @@ Phoenix 操作hbase有两种方式，创建表，创建视图。
 								
 								
 									<a class="bold" href="/MyBlog/category/architect">
-										architect (5)
+										architect (8)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -16819,163 +17185,163 @@ Phoenix 操作hbase有两种方式，创建表，创建视图。
 								<ul style="display:none;width:250px;height:250px;">
 								     
 								   <li>
+										<a href="/MyBlog/golang/2020/04/30/benchmark.html" style="font-size:40px;"> benchmark</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/golang/2020/04/29/gomod.html" style="font-size:40px;"> gomod</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/golang/2020/04/29/GraphQL.html" style="font-size:40px;"> GraphQL</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/golang/2020/04/28/json.html" style="font-size:40px;"> json</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/storage/2020/04/28/etcd.html" style="font-size:40px;"> etcd3 数据不一致 bug 分析</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/golang/2020/04/28/MADV_FREE.html" style="font-size:40px;"> go服务内存管理</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/golang/2020/04/26/search.html" style="font-size:40px;"> Go Search Extension</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/golang/2020/04/26/schdule.html" style="font-size:40px;"> Go 协作与抢占</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/algorithm/2020/04/26/middleWare.html" style="font-size:40px;"> middleWare</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/golang/2020/04/26/lstio.html" style="font-size:40px;"> Istio 分层架构</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/golang/2020/04/26/inline.html" style="font-size:40px;"> Inlining optimisations in Go</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/k8s/2020/04/26/epbf.html" style="font-size:40px;"> kubernetes网络</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/golang/2020/04/26/dubbo.html" style="font-size:40px;"> dubbo-go 中如何实现路由策略功能</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/golang/2020/04/26/dbsync.html" style="font-size:40px;"> 淘宝云梯分布式计算平台架构</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/golang/2020/04/26/context.html" style="font-size:40px;"> Golang context源码阅读与分析</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/golang/2020/04/26/Goribot.html" style="font-size:40px;"> Colly外的又一Go爬虫框架 — Goribot</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/golang/2020/04/26/Cancellations.html" style="font-size:40px;"> How to Manage Database Timeouts and Cancellations in Go</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/storage/2020/04/24/binlog.html" style="font-size:40px;"> binlog</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/storage/2020/04/24/Parquet.html" style="font-size:40px;"> Parquet</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/golang/2020/04/23/argo.html" style="font-size:40px;"> argo</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/golang/2020/04/23/apitest.html" style="font-size:40px;"> apitest</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/golang/2020/04/22/escape.html" style="font-size:40px;"> pprof分析变量逃逸过程</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/storage/2020/04/21/sql.html" style="font-size:40px;"> sqlStmt的使用以及坑</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/golang/2020/04/21/slice.html" style="font-size:40px;"> 切片</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/web/2020/04/21/getArrayCopy.html" style="font-size:40px;"> PHP SPL（PHP 标准库）</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/architect/2020/04/21/ddl.html" style="font-size:40px;"> DDL平台服务</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/storage/2020/04/21/autocommit.html" style="font-size:40px;"> autocommit</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/storage/2020/04/21/MyRocks.html" style="font-size:40px;"> MyRocks</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/web/2020/04/21/HTTP3.html" style="font-size:40px;"> HTTP3</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/golang/2020/04/20/script.html" style="font-size:40px;"> Using Go as a scripting language in Linux</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/golang/2020/04/20/opa.html" style="font-size:40px;"> OPA 进阶-分布式利器 Bundle</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/golang/2020/04/20/gqlgen.html" style="font-size:40px;"> 从graphql-go转换到gqlgen</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/architect/2020/04/20/eda.html" style="font-size:40px;"> eda 事件驱动架构</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/storage/2020/04/20/binlog.html" style="font-size:40px;"> binlog</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/linux/2020/04/20/binfmt_misc.html" style="font-size:40px;"> linux下使用binfmt_misc设定不同二进制的打开程序</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/golang/2020/04/20/Thanos.html" style="font-size:40px;"> 云原生大型分布式监控系统 Thanos 部署与实践</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/storage/2020/04/20/GTID.html" style="font-size:40px;"> GTID</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/architect/2020/04/20/DomainEvents.html" style="font-size:40px;"> DomainEvents</a>
+									</li>
+									  
+								   <li>
 										<a href="/MyBlog/golang/2020/04/19/uint.html" style="font-size:40px;"> 二进制表示</a>
 									</li>
 									  
 								   <li>
 										<a href="/MyBlog/golang/2020/04/19/runqueue.html" style="font-size:40px;"> Local vs Global Runnable Queue</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2020/04/19/gc.html" style="font-size:40px;"> gc 3色标记算法</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/web/2020/04/18/%E4%B8%BA%E4%BB%80%E4%B9%88DNS%E4%BD%BF%E7%94%A8UDP%E8%80%8C%E4%B8%8D%E6%98%AFTCP.html" style="font-size:40px;"> 为什么DNS使用UDP而不是TCP</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/architect/2020/04/18/right.html" style="font-size:40px;"> 如何做权限管理系统设计</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/storage/2020/04/18/pt-online-schema-change.html" style="font-size:40px;"> pt-online-schema-change</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/algorithm/2020/04/18/lsh.html" style="font-size:40px;"> 局部敏感哈希（Locality Sensitive Hashing）和MinHash</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2020/04/18/goroutine.html" style="font-size:40px;"> 协程与线程的区别</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/storage/2020/04/18/Index.html" style="font-size:40px;"> InnoDB与MyISAM 聚集索引与非聚集索引</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/web/2020/04/17/dns.html" style="font-size:40px;"> DNS原理和智能DNS及CDN</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/web/2020/04/17/WebRTC.html" style="font-size:40px;"> WebRTC Gaming as a Service</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/web/2020/04/16/severless.html" style="font-size:40px;"> severless</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/web/2020/04/16/ruleEngine.html" style="font-size:40px;"> Java各种规则引擎</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/algorithm/2020/04/16/rate.html" style="font-size:40px;"> 分布式系统频次限制实现</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/web/2020/04/16/NPM.html" style="font-size:40px;"> 工作流与BPM</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/web/2020/04/16/EDA.html" style="font-size:40px;"> EDA事件驱动架构</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/web/2020/04/16/Aviator.html" style="font-size:40px;"> Aviator java的表达式引擎化框架</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/algorithm/2020/04/15/set.html" style="font-size:40px;"> 字典</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/web/2020/04/15/qps.html" style="font-size:40px;"> 线程数与QPS计算</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/docker/2020/04/15/image.html" style="font-size:40px;"> 减小Docker镜像的简单技巧</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/algorithm/2020/04/15/hashmap.html" style="font-size:40px;"> HashTable</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2020/04/15/goimports-s.html" style="font-size:40px;"> Goimports explained</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2020/04/15/database.html" style="font-size:40px;"> writing a SQL database from scratch in Go</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2020/04/15/craw.html" style="font-size:40px;"> craw</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2020/04/15/close_wait.html" style="font-size:40px;"> close_wait</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2020/04/15/Libcsp.html" style="font-size:40px;"> Libcsp</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2020/04/15/GO111MODULE.html" style="font-size:40px;"> GO111MODULE</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2020/04/15/Errors.html" style="font-size:40px;"> Handling Errors in Your HTTP Handlers</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/algorithm/2020/04/15/234.html" style="font-size:40px;"> 查找算法-2-3-4树和普通红黑树</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2020/04/14/vet.html" style="font-size:40px;"> vet</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/k8s/2020/04/14/k3s.html" style="font-size:40px;"> 轻量级 Kubernetes k3s 初探</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2020/04/14/graphql.html" style="font-size:40px;"> graphql-code-generator 生成graphql</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/linux/2020/04/14/debug.html" style="font-size:40px;"> Debug实现原理</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/architect/2020/04/14/category.html" style="font-size:40px;"> 品类管理</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2020/04/14/Golang.html" style="font-size:40px;"> Reflections on 2 Years of Golang</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/architect/2020/04/14/ChangeSkin.html" style="font-size:40px;"> 自动换肤系统设计</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2020/04/13/statically.html" style="font-size:40px;"> statically</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2020/04/13/TinyGo.html" style="font-size:40px;"> TinyGo</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2020/04/11/reflect.html" style="font-size:40px;"> reflect</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2020/04/11/gorpc.html" style="font-size:40px;"> dubbo-go 与 gRPC</a>
 									</li>
 									
 								</ul>
@@ -16991,33 +17357,33 @@ Phoenix 操作hbase有两种方式，创建表，创建视图。
                 		<ul class="posts" span="recent">  
 							  
 							   <li>  
-								   <span>19 Apr 2020</span>
-								   <a href="/MyBlog/golang/2020/04/19/uint.html">  
-								   二进制表示</a>  
+								   <span>30 Apr 2020</span>
+								   <a href="/MyBlog/golang/2020/04/30/benchmark.html">  
+								   benchmark</a>  
 							   </li>  
 							  
 							   <li>  
-								   <span>19 Apr 2020</span>
-								   <a href="/MyBlog/golang/2020/04/19/runqueue.html">  
-								   Local vs Global Runnable Queue</a>  
+								   <span>29 Apr 2020</span>
+								   <a href="/MyBlog/golang/2020/04/29/gomod.html">  
+								   gomod</a>  
 							   </li>  
 							  
 							   <li>  
-								   <span>19 Apr 2020</span>
-								   <a href="/MyBlog/golang/2020/04/19/gc.html">  
-								   gc 3色标记算法</a>  
+								   <span>29 Apr 2020</span>
+								   <a href="/MyBlog/golang/2020/04/29/GraphQL.html">  
+								   GraphQL</a>  
 							   </li>  
 							  
 							   <li>  
-								   <span>18 Apr 2020</span>
-								   <a href="/MyBlog/web/2020/04/18/%E4%B8%BA%E4%BB%80%E4%B9%88DNS%E4%BD%BF%E7%94%A8UDP%E8%80%8C%E4%B8%8D%E6%98%AFTCP.html">  
-								   为什么DNS使用UDP而不是TCP</a>  
+								   <span>28 Apr 2020</span>
+								   <a href="/MyBlog/golang/2020/04/28/json.html">  
+								   json</a>  
 							   </li>  
 							  
 							   <li>  
-								   <span>18 Apr 2020</span>
-								   <a href="/MyBlog/architect/2020/04/18/right.html">  
-								   如何做权限管理系统设计</a>  
+								   <span>28 Apr 2020</span>
+								   <a href="/MyBlog/storage/2020/04/28/etcd.html">  
+								   etcd3 数据不一致 bug 分析</a>  
 							   </li>  
 							  
 						</ul>

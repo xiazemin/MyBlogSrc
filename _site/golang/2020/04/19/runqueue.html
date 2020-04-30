@@ -197,20 +197,6 @@ type g struct {<br />
         pc   uintptr<br />
         ….<br />
 }<br />
-1<br />
-2<br />
-3<br />
-4<br />
-5<br />
-6<br />
-7<br />
-8<br />
-9<br />
-10<br />
-11<br />
-12<br />
-13<br />
-14<br />
 runtime 为 Goroutine 引入了类似 PID 的属性 goid ，使得每一个 Goroutine 都有全局唯一的 goid 标识。<br />
 不过官方并没有提供接口能 直接 访问当前 Goroutine 的 goid，在这种情况下我们可以通过 汇编 或者 取巧 的方式得到 goid，有些第三方 package 会利用 goid 做一些有趣的事情，比如 Goroutine local storage ，后面会介绍 runtime 是如何生成唯一的 goid 。</p><br />
 <br />
@@ -230,8 +216,10 @@ Machine 是 OS Thread，它负责执行 Goroutine。</p><br />
 <br />
 <div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    tls     [6]uintptr // thread-local storage (for x86 extern register)<br />
     p       puintptr // attached p for executing go code (nil if not executing go code)<br />
-    .... } 1 2 3 4 5 6 7 8 9 10 11 runtime 在做调度工作或者和当前 Goroutine 无关的任务时，Golang 会切换调用栈来进行相关的任务，就好像 Linux 的进程进入系统调用时会切换到内核态的调用栈一样，这么做也是为了避免影响到调度以及垃圾回收的扫描。<br />
+    .... }<br />
 </code></pre></div></div><br />
+<br />
+<p>runtime 在做调度工作或者和当前 Goroutine 无关的任务时，Golang 会切换调用栈来进行相关的任务，就好像 Linux 的进程进入系统调用时会切换到内核态的调用栈一样，这么做也是为了避免影响到调度以及垃圾回收的扫描。</p><br />
 <br />
 <p>Machine 一般会调用 systemstack 函数 来切换调用栈。<br />
 从名字可以看出，Golang 对外部 go code 的调用栈称之为 user stack ，而将运行核心 runtime 部分代码的调用栈称之为 system stack。<br />
@@ -276,40 +264,6 @@ func getg() *g</p><br />
 #define get_tls(r)      MOVQ TLS, r<br />
 #define g(r)    0(r)(TLS*1)<br />
 #endif<br />
-1<br />
-2<br />
-3<br />
-4<br />
-5<br />
-6<br />
-7<br />
-8<br />
-9<br />
-10<br />
-11<br />
-12<br />
-13<br />
-14<br />
-15<br />
-16<br />
-17<br />
-18<br />
-19<br />
-20<br />
-21<br />
-22<br />
-23<br />
-24<br />
-25<br />
-26<br />
-27<br />
-28<br />
-29<br />
-30<br />
-31<br />
-32<br />
-33<br />
-34<br />
 但是 Machine 想要执行一个 Goroutine，必须要绑定 Processor。</p><br />
 <br />
 <p>runtime 内部有些函数执行时会直接绑定 Machine，并不需要 Processor，比如 sysmon 。</p><br />
@@ -329,7 +283,7 @@ Processor 可以理解成处理器，它会维护着本地 Goroutine 队列 runq
     runqhead uint32<br />
     runqtail uint32<br />
     runq     [256]guintptr<br />
-    ... } 1 2 3 4 5 6 7 8 9 10 11 12 13 14 Processor 的数目代表着 runtime 能同时处理 Goroutine 的数目，GOMAXPROCS 环境变量是用来指定 Processor 的数目，默认状态会是 CPU 的个数。<br />
+    ... } Processor 的数目代表着 runtime 能同时处理 Goroutine 的数目，GOMAXPROCS 环境变量是用来指定 Processor 的数目，默认状态会是 CPU 的个数。<br />
 </code></pre></div></div><br />
 <br />
 <p>也正是因为 Processor 的存在，runtime 并不需要做一个集中式的 Goroutine 调度，每一个 Machine 都会在 Processor 本地队列、Global Runnable Queue 或者其他 Processor 队列中找 Goroutine 执行，减少全局锁对性能的影响，后面会对此展开说明。</p><br />
@@ -365,7 +319,7 @@ Processor 可以理解成处理器，它会维护着本地 Goroutine 队列 runq
     runqhead guintptr<br />
     runqtail guintptr<br />
     runqsize int32<br />
-    .... } 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 2. Create a Goroutine 下面那段代码非常简单，在 main 函数中产生 Goroutine 去执行 do() 这个函数。<br />
+    .... } 2. Create a Goroutine 下面那段代码非常简单，在 main 函数中产生 Goroutine 去执行 do() 这个函数。<br />
 </code></pre></div></div><br />
 <br />
 <p>➜  main cat -n main.go<br />
@@ -378,16 +332,6 @@ Processor 可以理解成处理器，它会维护着本地 Goroutine 队列 runq
      7  func main() {<br />
      8          go do()<br />
      9  }<br />
-1<br />
-2<br />
-3<br />
-4<br />
-5<br />
-6<br />
-7<br />
-8<br />
-9<br />
-10<br />
 我们编译上述代码并反汇编看看 go 关键字都做了什么。<br />
 可以看到源代码的第 8 行 go do() 编译完之后会变成 runtime.newproc 方法，下面我们来看看 runtime.newproc 都做了些什么。</p><br />
 <br />
@@ -411,35 +355,12 @@ TEXT main.main(SB) /root/workspace/main/main.go<br />
   main.go:9             0x450a9e                c3                      RET<br />
   main.go:7             0x450a9f                e88c7dffff              CALL runtime.morestack_noctxt(SB)<br />
   main.go:7             0x450aa4                ebba                    JMP main.main(SB)<br />
-1<br />
-2<br />
-3<br />
-4<br />
-5<br />
-6<br />
-7<br />
-8<br />
-9<br />
-10<br />
-11<br />
-12<br />
-13<br />
-14<br />
-15<br />
-16<br />
-17<br />
-18<br />
-19<br />
-20<br />
 2.1 创建 do() 的执行上下文<br />
 平时写代码的时候会发现，Goroutine 执行完毕之后便消失了。那么 do() 这个函数执行完毕之后返回到哪了呢？</p><br />
 <br />
 <p>➜  main go tool objdump -s “main.do” main<br />
 TEXT main.do(SB) /root/workspace/main/main.go<br />
   main.go:5             0x450a50                c3                      RET<br />
-1<br />
-2<br />
-3<br />
 根据 Intel 64 IA 32 开发指南上 Chaptor 6.3 CALLING PROCEDURES USING CALL AND RET 的说明，RET 会将栈顶的指令地址弹出到 IP 寄存器上，然后继续执行 IP 寄存器上的指令。<br />
 为了保证 Machine 执行完 Goroutine 之后，能够正常地完成一些清理工作，我们需要在构建 Goroutine 的执行上下文时指定 RET 的具体地址。</p><br />
 <br />
@@ -458,21 +379,9 @@ newg.sched.pc = funcPC(goexit) + sys.PCQuantum // +PCQuantum so that previous in
 newg.sched.g = guintptr(unsafe.Pointer(newg))<br />
 gostartcallfn(&amp;newg.sched, fn)<br />
 newg.gopc = callerpc<br />
-newg.startpc = fn.fn<br />
-1<br />
-2<br />
-3<br />
-4<br />
-5<br />
-6<br />
-7<br />
-8<br />
-9<br />
-10<br />
-11<br />
-12<br />
-13<br />
-想了解 Intel 指令的更多细节，请查看 Intel® 64 and IA-32 Architectures Developer’s Manual: Vol. 1。</p><br />
+newg.startpc = fn.fn</p><br />
+<br />
+<p>想了解 Intel 指令的更多细节，请查看 Intel® 64 and IA-32 Architectures Developer’s Manual: Vol. 1。</p><br />
 <br />
 <p>2.2 全局唯一的 goid<br />
 除了创建执行上下文以外，runtime 还会为 Goroutine 指定一个全局唯一的 id。</p><br />
@@ -496,28 +405,9 @@ newg.startpc = fn.fn<br />
         _p</em>.goidcacheend = <em>p</em>.goidcache + <em>GoidCacheBatch<br />
 }<br />
 newg.goid = int64(_p</em>.goidcache)<br />
-<em>p</em>.goidcache++<br />
-1<br />
-2<br />
-3<br />
-4<br />
-5<br />
-6<br />
-7<br />
-8<br />
-9<br />
-10<br />
-11<br />
-12<br />
-13<br />
-14<br />
-15<br />
-16<br />
-17<br />
-18<br />
-19<br />
-20<br />
-全局调度信息 sched.goidgen 是专门用来做发号器，Processor 每次可以从发号器那拿走 _GoidCacheBatch 个号，然后内部采用自增的方式来发号，这样就保证了每一个 Goroutine 都可以拥有全局唯一的 goid。</p><br />
+<em>p</em>.goidcache++</p><br />
+<br />
+<p>全局调度信息 sched.goidgen 是专门用来做发号器，Processor 每次可以从发号器那拿走 _GoidCacheBatch 个号，然后内部采用自增的方式来发号，这样就保证了每一个 Goroutine 都可以拥有全局唯一的 goid。</p><br />
 <br />
 <p>从全局调度信息那里取号的时候用原子操作来保证并发操作的正确性，而内部发号时却采用非原子操作，这是因为一个 Processor 只能被一个 Machine 绑定上，所以这里 <em>p</em>.goidcache 自增不需要要原子操作也能保证它的正确性。</p><br />
 <br />
@@ -529,9 +419,6 @@ newg.goid = int64(_p</em>.goidcache)<br />
 <p>// src/runtime/proc.go @ func newproc1</p><br />
 <br />
 <p>runqput(<em>p</em>, newg, true)<br />
-1<br />
-2<br />
-3<br />
 2.4 小结<br />
 看到这里，一般都会有以下几个疑问：</p><br />
 <br />
@@ -566,30 +453,9 @@ Local exec file:<br />
         0x00000000004c9800 - 0x00000000004cbe18 is .noptrbss<br />
         0x0000000000400fc8 - 0x0000000000401000 is .note.go.buildid<br />
 (gdb) info symbol 0x44bb80<br />
-_rt0_amd64_linux in section .text<br />
-1<br />
-2<br />
-3<br />
-4<br />
-5<br />
-6<br />
-7<br />
-8<br />
-9<br />
-10<br />
-11<br />
-12<br />
-13<br />
-14<br />
-15<br />
-16<br />
-17<br />
-18<br />
-19<br />
-20<br />
-21<br />
-22<br />
-入口函数是 _rt0_amd64_linux，需要说明的是，不同平台的入口函数名称会有所不同，全局搜索该方法之后，发现该方法会调用 runtime.rt0_go 汇编。</p><br />
+_rt0_amd64_linux in section .text</p><br />
+<br />
+<p>入口函数是 _rt0_amd64_linux，需要说明的是，不同平台的入口函数名称会有所不同，全局搜索该方法之后，发现该方法会调用 runtime.rt0_go 汇编。</p><br />
 <br />
 <p>省去了大量和硬件相关的细节后，rt0_go 做了大量的初始化工作，runtime.args 读取命令行参数、runtime.osinit 读取 CPU 数目，runtime.schedinit 初始化 Processor 数目，最大的 Machine 数目等等。</p><br />
 <br />
@@ -628,7 +494,7 @@ _rt0_amd64_linux in section .text<br />
     CALL    runtime·mstart(SB)  &lt;=== I'm here!<br />
 <br />
     MOVL    $0xf1, 0xf1  // crash<br />
-    RET 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 4. Machine — Work Stealing 在上一节查看 rt0_go 汇编代码的时候，发现最后一段代码 CALL runtime.mstart(SB) 是用来启动 Machine。<br />
+    RET 4. Machine — Work Stealing 在上一节查看 rt0_go 汇编代码的时候，发现最后一段代码 CALL runtime.mstart(SB) 是用来启动 Machine。<br />
 </code></pre></div></div><br />
 <br />
 <p>因为在 Golang 的世界里，任务的执行需要 Machine 本身自己去获取。<br />
@@ -652,18 +518,6 @@ Machine 绑定的 Processor 没有可执行的 Goroutine 时，它会去 Global 
 }</p><br />
 <br />
 <p>mstart() =&gt; schedule() =&gt; execute() =&gt; xxx() =&gt; goexit()<br />
-1<br />
-2<br />
-3<br />
-4<br />
-5<br />
-6<br />
-7<br />
-8<br />
-9<br />
-10<br />
-11<br />
-12<br />
 runtime.mstart 函数会调用 schedule 函数去寻找可执行的 Goroutine，查找顺序大致是:</p><br />
 <br />
 <p>Local Runnable Queue<br />
@@ -689,11 +543,6 @@ Other Processor’s Runnable Queue<br />
 <p>if atomic.Load(&amp;sched.npidle) != 0 &amp;&amp; atomic.Load(&amp;sched.nmspinning) == 0 &amp;&amp; runtimeInitTime != 0 {<br />
         wakep()<br />
 }<br />
-1<br />
-2<br />
-3<br />
-4<br />
-5<br />
 当 Machine 找不到可执行的 Goroutine 时，但是还在努力地寻找可执行的 Goroutine，这段时间它属于 spinning 的状态。<br />
 它实在是找不到了，它才回释放当前 Processor 进入休眠状态。</p><br />
 <br />
@@ -754,55 +603,9 @@ runtimeInitTime 会在 runtime.main 函数中被赋值，表明正式开始执�
         mp.spinning = spinning<br />
         mp.nextp.set(<em>p</em>)<br />
         notewakeup(&amp;mp.park)<br />
-}<br />
-1<br />
-2<br />
-3<br />
-4<br />
-5<br />
-6<br />
-7<br />
-8<br />
-9<br />
-10<br />
-11<br />
-12<br />
-13<br />
-14<br />
-15<br />
-16<br />
-17<br />
-18<br />
-19<br />
-20<br />
-21<br />
-22<br />
-23<br />
-24<br />
-25<br />
-26<br />
-27<br />
-28<br />
-29<br />
-30<br />
-31<br />
-32<br />
-33<br />
-34<br />
-35<br />
-36<br />
-37<br />
-38<br />
-39<br />
-40<br />
-41<br />
-42<br />
-43<br />
-44<br />
-45<br />
-46<br />
-47<br />
-在 Linux 平台上，newm 会调用 newosproc 来产生新的 OS-Thread。</p><br />
+}</p><br />
+<br />
+<p>在 Linux 平台上，newm 会调用 newosproc 来产生新的 OS-Thread。</p><br />
 <br />
 <ol><br />
   <li>Preemptive<br />
@@ -820,17 +623,9 @@ Machine 会在全局范围内查找 Goroutine 来执行，似乎还缺少角色�
                 newm(sysmon, nil)<br />
         })<br />
         …<br />
-}<br />
-1<br />
-2<br />
-3<br />
-4<br />
-5<br />
-6<br />
-7<br />
-8<br />
-9<br />
-在 runtime.main 函数中会启动新的 OS-Thread 去执行 sysmon 函数。<br />
+}</p><br />
+<br />
+<p>在 runtime.main 函数中会启动新的 OS-Thread 去执行 sysmon 函数。<br />
 该函数会以一个上帝视角去查看 Goroutine/Machine/Processor 的运行情况，并会调用 retake 去让 Machine 释放正在运行的 Goroutine。</p><br />
 <br />
 <p>// src/runtime/proc.go</p><br />
@@ -863,8 +658,11 @@ const forcePreemptNS = 10 * 1000 * 1000 // 10ms</p><br />
                     preemptone(_p_)<br />
             }<br />
     }<br />
-    ... } 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 Processor 在 Machine 上执行时间超过 10ms，Machine 会给调用 preemptone 给当前 Goroutine 加上标记：<br />
+    ... }<br />
 </code></pre></div></div><br />
+<br />
+<p>Processor 在 Machine 上执行时间超过 10ms，Machine 会给调用 preemptone<br />
+给当前 Goroutine 加上标记：</p><br />
 <br />
 <p>// src/runtime/proc.go</p><br />
 <br />
@@ -876,8 +674,10 @@ const forcePreemptNS = 10 * 1000 * 1000 // 10ms</p><br />
     // comparing the current stack pointer to gp-&gt;stackguard0.<br />
     // Setting gp-&gt;stackguard0 to StackPreempt folds<br />
     // preemption into the normal stack overflow check.<br />
-    gp.stackguard0 = stackPreempt } 1 2 3 4 5 6 7 8 9 10 11 12 可以看到它并不是直接发信号给 Machine 让它立即释放，而是让 Goroutine 自己释放，那它什么时候会释放？<br />
+    gp.stackguard0 = stackPreempt }<br />
 </code></pre></div></div><br />
+<br />
+<p>可以看到它并不是直接发信号给 Machine 让它立即释放，而是让 Goroutine 自己释放，那它什么时候会释放？</p><br />
 <br />
 <p>Golang 创建新的 Goroutine 时，都会分配有限的调用栈空间，按需进行拓展或者收缩。<br />
 所以在执行下一个函数时，它会检查调用栈是否溢出。</p><br />
@@ -898,25 +698,9 @@ TEXT main.main(SB) /root/workspace/main/main.go<br />
   main.go:9             0x450a9a                4883c418                ADDQ $0x18, SP<br />
   main.go:9             0x450a9e                c3                      RET<br />
   main.go:7             0x450a9f                e88c7dffff              CALL runtime.morestack_noctxt(SB)<br />
-  main.go:7             0x450aa4                ebba                    JMP main.main(SB)<br />
-1<br />
-2<br />
-3<br />
-4<br />
-5<br />
-6<br />
-7<br />
-8<br />
-9<br />
-10<br />
-11<br />
-12<br />
-13<br />
-14<br />
-15<br />
-16<br />
-17<br />
-gp.stackguard0 = stackPreempt 设置会让检查失败，进入 runtime.morestack_noctxt 函数。<br />
+  main.go:7             0x450aa4                ebba                    JMP main.main(SB)</p><br />
+<br />
+<p>gp.stackguard0 = stackPreempt 设置会让检查失败，进入 runtime.morestack_noctxt 函数。<br />
 它发现是因为 runtime.retake 造成，Machine 会保存当前 Goroutine 的执行上下文，重新进入 runtime.schedule。</p><br />
 <br />
 <p>你可能会问，如果这个 Goroutine 里面没有函数调用怎么办？请查看这个 issues/11462。</p><br />
@@ -950,43 +734,17 @@ Processor 的数目决定 go binary 能同时处理多少 Goroutine 的能力，
     19          })<br />
     20<br />
     21          log.Fatal(http.ListenAndServe(“:8080”, nil))<br />
-    22  }<br />
-1<br />
-2<br />
-3<br />
-4<br />
-5<br />
-6<br />
-7<br />
-8<br />
-9<br />
-10<br />
-11<br />
-12<br />
-13<br />
-14<br />
-15<br />
-16<br />
-17<br />
-18<br />
-19<br />
-20<br />
-21<br />
-22<br />
-23<br />
-Golang 提供了 GODEBUG 环境变量来观察当前 Goroutine/Processor/Machine 的状态。</p><br />
+    22  }</p><br />
+<br />
+<p>Golang 提供了 GODEBUG 环境变量来观察当前 Goroutine/Processor/Machine 的状态。</p><br />
 <br />
 <p>➜  scheduler go build<br />
 ➜  scheduler GODEBUG=schedtrace=2000 ./scheduler<br />
 SCHED 0ms: gomaxprocs=4 idleprocs=1 threads=6 spinningthreads=1 idlethreads=0 runqueue=0 [0 0 0 0]<br />
 SCHED 2008ms: gomaxprocs=4 idleprocs=4 threads=6 spinningthreads=0 idlethreads=3 runqueue=0 [0 0 0 0]<br />
-SCHED 4016ms: gomaxprocs=4 idleprocs=4 threads=6 spinningthreads=0 idlethreads=3 runqueue=0 [0 0 0 0]<br />
-1<br />
-2<br />
-3<br />
-4<br />
-5<br />
-GODEBUG=schedtrace=2000 会开启 schedtrace 模式，它会让 sysmon 中调用 schedtrace。</p><br />
+SCHED 4016ms: gomaxprocs=4 idleprocs=4 threads=6 spinningthreads=0 idlethreads=3 runqueue=0 [0 0 0 0]</p><br />
+<br />
+<p>GODEBUG=schedtrace=2000 会开启 schedtrace 模式，它会让 sysmon 中调用 schedtrace。</p><br />
 <br />
 <p>// src/runtime/proc.go</p><br />
 <br />
@@ -1002,23 +760,9 @@ threads:         共创建了多少个 Machine<br />
 spinningthreads: spinning 状态的 Machine<br />
 nmidle:          休眠状态的 Machine 数目<br />
 runqueue:        Global Runnable Queue 队列长度<br />
-[x, y, z..]:     每个 Processor 的 Local Runnable Queue 队列长度<br />
-1<br />
-2<br />
-3<br />
-4<br />
-5<br />
-6<br />
-7<br />
-8<br />
-9<br />
-10<br />
-11<br />
-12<br />
-13<br />
-14<br />
-15<br />
-下面我们会通过 wrk 对 sleep 和 echo 这两个 endpoint 进行压力测试，并关注 Machine 的数目变化。</p><br />
+[x, y, z..]:     每个 Processor 的 Local Runnable Queue 队列长度</p><br />
+<br />
+<p>下面我们会通过 wrk 对 sleep 和 echo 这两个 endpoint 进行压力测试，并关注 Machine 的数目变化。</p><br />
 <br />
 <p>➜  scheduler GODEBUG=schedtrace=2000 ./scheduler &gt; echo_result 2&gt;&amp;1 &amp;<br />
 [1] 6015<br />
@@ -1051,40 +795,9 @@ SCHED 30049ms: gomaxprocs=4 idleprocs=0 threads=13 spinningthreads=0 idlethreads
 SCHED 32058ms: gomaxprocs=4 idleprocs=0 threads=13 spinningthreads=0 idlethreads=7 runqueue=138 [40 93 63 50]<br />
 SCHED 34062ms: gomaxprocs=4 idleprocs=0 threads=13 spinningthreads=0 idlethreads=7 runqueue=266 [51 9 38 31]<br />
 SCHED 36068ms: gomaxprocs=4 idleprocs=0 threads=13 spinningthreads=0 idlethreads=7 runqueue=189 [1 3 46 14]<br />
-SCHED 38084ms: gomaxprocs=4 idleprocs=4 threads=13 spinningthreads=0 idlethreads=10 runqueue=0 [0 0 0 0]<br />
-1<br />
-2<br />
-3<br />
-4<br />
-5<br />
-6<br />
-7<br />
-8<br />
-9<br />
-10<br />
-11<br />
-12<br />
-13<br />
-14<br />
-15<br />
-16<br />
-17<br />
-18<br />
-19<br />
-20<br />
-21<br />
-22<br />
-23<br />
-24<br />
-25<br />
-26<br />
-27<br />
-28<br />
-29<br />
-30<br />
-31<br />
-32<br />
-测试 localhost:8080/echo 30s 之后，发现当前线程数目为 13。接下来再看看 localhost:8080/sleep 的情况。</p><br />
+SCHED 38084ms: gomaxprocs=4 idleprocs=4 threads=13 spinningthreads=0 idlethreads=10 runqueue=0 [0 0 0 0]</p><br />
+<br />
+<p>测试 localhost:8080/echo 30s 之后，发现当前线程数目为 13。接下来再看看 localhost:8080/sleep 的情况。</p><br />
 <br />
 <p>➜  scheduler GODEBUG=schedtrace=1000 ./scheduler &gt; sleep_result 2&gt;&amp;1 &amp;<br />
 [1] 8284<br />
@@ -1131,54 +844,9 @@ SCHED 33131ms: gomaxprocs=4 idleprocs=4 threads=403 spinningthreads=0 idlethread
 SCHED 34137ms: gomaxprocs=4 idleprocs=4 threads=403 spinningthreads=0 idlethreads=400 runqueue=0 [0 0 0 0]<br />
 SCHED 35140ms: gomaxprocs=4 idleprocs=4 threads=403 spinningthreads=0 idlethreads=400 runqueue=0 [0 0 0 0]<br />
 SCHED 36150ms: gomaxprocs=4 idleprocs=4 threads=403 spinningthreads=0 idlethreads=400 runqueue=0 [0 0 0 0]<br />
-SCHED 37155ms: gomaxprocs=4 idleprocs=4 threads=403 spinningthreads=0 idlethreads=400 runqueue=0 [0 0 0 0]<br />
-1<br />
-2<br />
-3<br />
-4<br />
-5<br />
-6<br />
-7<br />
-8<br />
-9<br />
-10<br />
-11<br />
-12<br />
-13<br />
-14<br />
-15<br />
-16<br />
-17<br />
-18<br />
-19<br />
-20<br />
-21<br />
-22<br />
-23<br />
-24<br />
-25<br />
-26<br />
-27<br />
-28<br />
-29<br />
-30<br />
-31<br />
-32<br />
-33<br />
-34<br />
-35<br />
-36<br />
-37<br />
-38<br />
-39<br />
-40<br />
-41<br />
-42<br />
-43<br />
-44<br />
-45<br />
-46<br />
-压力测试完毕之后，创建的线程明显比 localhost:8080/echo 多不少。在压测过程中采用 gdb attach + thread apply all bt 查看这些线程都在做什么:</p><br />
+SCHED 37155ms: gomaxprocs=4 idleprocs=4 threads=403 spinningthreads=0 idlethreads=400 runqueue=0 [0 0 0 0]</p><br />
+<br />
+<p>压力测试完毕之后，创建的线程明显比 localhost:8080/echo 多不少。在压测过程中采用 gdb attach + thread apply all bt 查看这些线程都在做什么:</p><br />
 <br />
 <p>…<br />
 Thread 152 (Thread 0x7f4744fb1700 (LWP 27863)):<br />
@@ -1208,34 +876,6 @@ Thread 151 (Thread 0x7f47457b2700 (LWP 27862)):<br />
 #10 0x000000c4204fd080 in ?? ()<br />
 #11 0x0000000000000000 in ?? ()<br />
 …<br />
-1<br />
-2<br />
-3<br />
-4<br />
-5<br />
-6<br />
-7<br />
-8<br />
-9<br />
-10<br />
-11<br />
-12<br />
-13<br />
-14<br />
-15<br />
-16<br />
-17<br />
-18<br />
-19<br />
-20<br />
-21<br />
-22<br />
-23<br />
-24<br />
-25<br />
-26<br />
-27<br />
-28<br />
 Red Hat 系列的机器可以直接使用 pstack 去 Dump 当前主进程内部的调用栈情况，可惜 Ubuntu 64 Bit 没有这样的包，只能自己写一个脚本去调用 gdb 来 Dump。</p><br />
 <br />
 <p>截取两个线程的调用栈信息，发现它们都在休眠状态，几乎都卡在 /usr/local/go/src/syscall/asm_linux_amd64.s 上。如果都阻塞了，那么它是怎么处理新来的请求？</p><br />
@@ -1265,34 +905,9 @@ ok:<br />
         MOVQ    DX, r2+40(FP)<br />
         MOVQ    $0, err+48(FP)<br />
         CALL    runtime·exitsyscall(SB)<br />
-        RET<br />
-1<br />
-2<br />
-3<br />
-4<br />
-5<br />
-6<br />
-7<br />
-8<br />
-9<br />
-10<br />
-11<br />
-12<br />
-13<br />
-14<br />
-15<br />
-16<br />
-17<br />
-18<br />
-19<br />
-20<br />
-21<br />
-22<br />
-23<br />
-24<br />
-25<br />
-26<br />
-Syscall 会调用 runtime.entersyscall 会将当前 Processor 的状态设置为 _Psyscall。<br />
+        RET</p><br />
+<br />
+<p>Syscall 会调用 runtime.entersyscall 会将当前 Processor 的状态设置为 _Psyscall。<br />
 当进入系统调用时间过长时，retake 函数在这些 _Psyscall Processor 的状态改为 _Pidle，防止长时间地占用 Processor 导致整体不工作。</p><br />
 <br />
 <p>进入空闲状态的 Processor 可能会被 wakep 函数创建出来的新进程绑定上，然而新的 Goroutine 可能还会陷入长时间的系统调用，这一来就进入恶性循环，导致 go binary 创建出大量的线程。</p><br />
@@ -1307,17 +922,9 @@ Syscall 会调用 runtime.entersyscall 会将当前 Processor 的状态设置为
                 print(“runtime: program exceeds “, sched.maxmcount, “-thread limit\n”)<br />
                 throw(“thread exhaustion”)<br />
         }<br />
-}<br />
-1<br />
-2<br />
-3<br />
-4<br />
-5<br />
-6<br />
-7<br />
-8<br />
-9<br />
-当 Machine 从内核态回来之后，会进入 runtime.exitsyscall。<br />
+}</p><br />
+<br />
+<p>当 Machine 从内核态回来之后，会进入 runtime.exitsyscall。<br />
 如果执行时间很短，它会尝试地夺回之前的 Processor ；或者是尝试绑定空闲的 Processor，一旦绑定上了 Processor ，它便会继续运行当前的 Goroutine。<br />
 如果都失败了，Machine 因为没有可绑定的 Processor 而将当前的 Goroutine 放回到全局队列中，将自己进入休眠状态，等待其他 Machine 来唤醒。</p><br />
 <br />
