@@ -1,0 +1,156 @@
+---
+title: go race 排查 protobuf Marshal Panic
+layout: post
+category: golang
+author: 夏泽民
+---
+https://www.cyningsun.com/05-11-2020/proto-marshal-panic.html
+背景介绍
+在斋月节大促压测期间，有一个业务压测发现，有一个RPC调用，在高并发的情况下出现panic，而panic的位置是在微服务框架序列化的位置(proto.Marshal)。但是由于框架在近期没有做什么变更，而且业务最近也没上线什么新的需求。所有的Panic仅在并发量较高的时候偶然出现，并且被框架的recover捕获，因此判定此问题已经在线上很久，只是由于出现的概率较低没有被发现。
+
+示例代码：
+
+2020/05/11 19:56:32 http: panic serving 127.0.0.1:59816: runtime error: index out of range
+goroutine 20 [running]:
+net/http.(*conn).serve.func1(0xc00015e0a0)
+	/usr/local/Cellar/go@1.12/1.12.13/libexec/src/net/http/server.go:1769 +0x139
+panic(0x13c1cc0, 0x175ad90)
+	/usr/local/Cellar/go@1.12/1.12.13/libexec/src/runtime/panic.go:522 +0x1b5
+github.com/cyningsun/go-test/20200508-go-race/pb.encodeVarintPerson(0xc000228ec0, 0x3c, 0x3c, 0x3c, 0x1f, 0x3b)
+	/Users/yinhang.sun/Documents/workspace/src/github.com/cyningsun/go-test/20200508-go-race/pb/person.pb.go:146 +0x6a
+
+		...
+		
+	/Users/yinhang.sun/Documents/workspace/src/github.com/cyningsun/go-test/20200508-go-race/pb/person.pb.go:47 +0x5b
+github.com/gogo/protobuf/proto.Marshal(0x14af2e0, 0xc0000bc040, 0x1, 0x140e400, 0xc0000bc040, 0xc00015c001, 0x0)
+
+		...
+		
+	/usr/local/Cellar/go@1.12/1.12.13/libexec/src/net/http/server.go:2884 +0x2f4
+由于报错的结构体是业务最常用的一个，且报错的接口逻辑较深，通读代码也没有发现明显的点（其实是代码量太大了，很难关注的到）。报错又出现在框架层，panic 调用栈并没有提供任何有效信息。
+<!-- more -->
+问题排查
+经过背景的一系列分析之后，所有的排查思路都被打断了。好在我们发现报错的错误类型是index out of range，通过阅读proto.Marshal的代码之后发现，此函数分为三步：
+
+siz := info.Size(pb)
+b := make([]byte, 0, siz)
+return info.Marshal(b, pb, false)
+先获取结构体 Size
+然后按照 Size 创建字节数组
+将数据序列化到字节数组中
+因此，合理猜测是再获取 Size之后，Marshal之前，结构体的大小发生了变化。将 protobuf 的类型分类，可以排除固定长度的数值类型，剩下就是变长的 string 类型和 bytes 类型。虽然有了这个推论，由于发生panic的结构体十分复杂，还是很难定位到具体是哪个字段变化导致的。最后没有办法只有使用很笨的方法，修改 vendor 中的 protobuf 代码，添加日志，使用二分法，在info.Size()和info.Marshal()中打印字段的偏移量，并且在proto.Marshal中直接捕获发生panic的协程再打印数据，避免全部打印时panic请求与日志无法对应。然后对比排查，最终定位到了出现问题的字段，然后根据相关字段搜索相关代码，最终定位到了问题所在。
+
+问题反思
+修复完问题之后，促使我们反思，难道排查类似的问题一定要如此艰难么，有没有什么通用的方案来排查类似的问题呢。从问题源头出发，该问题本质来说还是数据的协程并发访问题，有了这个结论再看我们手头的已有工具，golang race 工具 出现在眼前。
+
+理论上讲，可以在非生产环境打开 race 参数，辅助定位问题。说做就做，按照问题的原因，编写测试复现的test case
+
+进程缓存
+
+const Max = uint64(1)
+type PersonCache struct {
+	c *gocache.Cache
+}
+
+func NewPersonCache() *PersonCache {
+	one := &PersonCache{c:gocache.New(time.Minute, time.Hour)}
+	go one.load()
+	return one
+}
+
+func (p *PersonCache) load() {
+	for i:=uint64(0); i < Max; i++{
+		r :=  i % 100
+		key := strconv.FormatUint(r,10)
+		newOne := &pb.Person{
+			Id:                   proto.Uint64(r),
+			Name:                 proto.String("init Name"),
+			Age:                  proto.Uint32(rand.Uint32()),
+			Address:   proto.String("init address"),
+		}
+		p.c.Set(key, newOne, time.Minute)
+	}
+}
+
+func (p *PersonCache) Get(key string) (*pb.Person,bool) {
+	ret, ok := p.c.Get(key)
+	if !ok {
+		return nil, false
+	}
+	return ret.(*pb.Person),true
+}
+并发访问
+
+const letterBytes = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+const letterLength = len(letterBytes)
+
+var (
+	c = cache.NewPersonCache()
+)
+
+func randString(n int) string {
+	b := make([]byte, n)
+	for i := range b {
+		b[i] = letterBytes[rand.Intn(len(letterBytes))]
+	}
+	return string(b)
+}
+
+func Write(w http.ResponseWriter, req *http.Request) {
+	r := rand.Uint64() % cache.Max
+	key := strconv.FormatUint(r, 10)
+	p, ok := c.Get(key)
+	if !ok {
+		return
+	}
+	p.Name = proto.String(randString(rand.Int()%letterLength))
+	time.Sleep(time.Nanosecond)
+	p.Address = proto.String(randString(rand.Int()%letterLength))
+}
+
+func Read(w http.ResponseWriter, req *http.Request) {
+	r :=  rand.Uint64() % cache.Max
+	key := strconv.FormatUint(r,10)
+	p,ok := c.Get(key)
+	if !ok {
+		return
+	}
+	b,_ := proto.Marshal(p)
+	w.Write(b)
+}
+
+func main() {
+	http.HandleFunc("/read", Read)
+	http.HandleFunc("/write", Write)
+	fmt.Println("server is listening on 8080")
+	http.ListenAndServe(":8080", nil)
+}
+压测脚本
+
+run:
+	go run main.go &> normal.log
+
+racerun:
+	go run -race main.go &> race.log 
+
+benchmark:
+	wrk -t1 -c2 -d30s http://127.0.0.1:8080/read &
+	wrk -t1 -c2 -d30s http://127.0.0.1:8080/write &
+日志结果
+
+==================
+WARNING: DATA RACE
+Read at 0x00c000188140 by goroutine 11:
+  github.com/cyningsun/go-test/20200508-go-race/pb.(*Person).Size()
+	
+...
+
+Previous write at 0x00c000188140 by goroutine 55:
+  main.Write()
+      /Users/yinhang.sun/Documents/workspace/src/github.com/cyningsun/go-test/20200508-go-race/main.go:39 +0x271
+
+...
+通过日志，可以很轻松的发现问题的原因。
+
+总结优化
+以上过程促使我们优化非生产环境的运行脚本，通过编译参数控制 -race 参数的开关，当再遇到类似的问题时，可以快速复现、定位、修复。

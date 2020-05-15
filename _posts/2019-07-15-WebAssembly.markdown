@@ -5,6 +5,7 @@ category: golang
 author: 夏泽民
 ---
 https://github.com/WebAssembly/design
+https://juejin.im/post/5e9ee0e7e51d4546f36a5c67
 Go 语言源代码的 cmd/compile/internal 中包含了非常多机器码生成相关的包，不同类型的 CPU 分别使用了不同的包进行生成 amd64、arm、arm64、mips、mips64、ppc64、s390x、x86 和 wasm，也就是说 Go 语言能够在上述的 CPU 指令集类型上运行，其中比较有趣的就是 WebAssembly 了。
 
 作为一种在栈虚拟机上使用的二进制指令格式，它的设计的主要目标就是在 Web 浏览器上提供一种具有高可移植性的目标语言。Go 语言的编译器既然能够生成 WASM 格式的指令，那么就能够运行在常见的主流浏览器中。
