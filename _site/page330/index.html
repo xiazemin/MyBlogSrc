@@ -147,23 +147,22 @@
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/spark/2017/11/14/spark_toDF.html">spark toDF 失败原因总结</a>
+						<a class="post-link" href="/MyBlog/linux/2017/12/22/fork.html">fork</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/spark/2017/11/14/spark_toDF.html"> 夏泽民</a>
+						<a href="/MyBlog/linux/2017/12/22/fork.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Nov 14, 2017
+							Dec 22, 2017
 						</span>
 					</div>
 					<div class="excerpt"><!-- more -->
-<p>错误提示
-value toDF is not a member of org.apache.spark.rdd.RDD[(org.apache.spark.ml.</p>
+<p>一、fork入门知识</p>
 
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/spark/2017/11/14/spark_toDF.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/linux/2017/12/22/fork.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -173,35 +172,64 @@ value toDF is not a member of org.apache.spark.rdd.RDD[(org.apache.spark.ml.</p>
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/spark/2017/11/14/spark_start.html">spark_start问题原因及解决办法</a>
+						<a class="post-link" href="/MyBlog/linux/2017/12/22/exec.html">Linux进程控制——exec函数族</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/spark/2017/11/14/spark_start.html"> 夏泽民</a>
+						<a href="/MyBlog/linux/2017/12/22/exec.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Nov 14, 2017
+							Dec 22, 2017
 						</span>
 					</div>
-					<div class="excerpt"><console>:14: error: not found: value spark
-       import spark.implicits._
-              ^
-<console>:14: error: not found: value spark
-       import spark.sql
-              ^
-              
-scala&gt;  var rdd = sc.parallelize(1 to 10)
-<console>:39: error: not found: value sc
-        var rdd = sc.parallelize(1 to 10)
-        
-        
-日志：
-Caused by: java.lang.RuntimeException: java.net.ConnectException: Call From localhost/127.0.0.1 to localhost:8020 failed on connection exception: java.net.ConnectException: Connection refused; For more details see:  http://wiki.apache.org/hadoop/ConnectionRefused
+					<div class="excerpt"><p>在Linux中，并不存在exec()函数，exec指的是一组函数，一共有6个，分别是：
+ #include <unistd.h>
+extern char **environ;
+int execl(const char *path, const char *arg, ...);
+int execlp(const char *file, const char *arg, ...);
+int execle(const char *path, const char *arg, ..., char * const envp[]);
+int execv(const char *path, char *const argv[]);
+int execvp(const char *file, char *const argv[]);
+int execve(const char *path, char *const argv[], char *const envp[]);
+其中只有execve是真正意义上的系统调用，其它都是在此基础上经过包装的库函数。
+exec函数族的作用是根据指定的文件名找到可执行文件，并用它来取代调用进程的内容，换句话说，就是在调用进程内部执行一个可执行文件。这里的可执行文件既可以是二进制文件，也可以是任何Linux下可执行的脚本文件。
+函数名与参数的关系：
+细看一下，这6个函数都是以exec开头（表示属于exec函数组），前3个函数接着字母l的，后3个接着字母v的，我的理解是l表示list（列举参数），v表示vector（参数向量表）
+。它们的区别在于，execv开头的函数是以"char *argv[]"(vector)形式传递命令行参数，而execl开头的函数采用了罗列(list)的方式，把参数一个一个列出来，然后以一个NULL表示结束。这里的NULL的作用和argv数组里的NULL作用是一样的。
+字母p是指在环境变量PATH的目录里去查找要执行的可执行文件。2个以p结尾的函数execlp和execvp，看起来，和execl与execv的差别很小，事实也如此，它们的区别从第一个参数名可以看出：除 execlp和execvp之外的4个函数都要求，它们的第1个参数path必须是一个完整的路径，如"/bin/ls"；而execlp和execvp 的第1个参数file可以仅仅只是一个文件名，如"ls"，这两个函数可以自动到环境变量PATH指定的目录里去查找。
+字母e是指给可执行文件指定环境变量。在全部6个函数中，只有execle和execve使用了char *envp[]传递环境变量，其它的4个函数都没有这个参数，这并不意味着它们不传递环境变量，这4个函数将把默认的环境变量不做任何修改地传给被执行的应用程序。而execle和execve用指定的环境变量去替代默认的那些。
+返回值
+与一般情况不同，exec函数族的函数执行成功后不会返回，因为调用进程的实体，包括代码段，数据段和堆栈等都已经被新的内容取代，只有进程ID等一些表面上的信息仍保持原样。调用失败时，会设置errno并返回-1，然后从原程序的调用点接着往下执行。
+与其他系统调用比起来，exec很容易失败，被执行文件的位置，权限等很多因素都能导致调用失败。因此，使用exec函数族时，一定要加错误判断语句。最常见的错误：
+找不到文件或路径，此时errno被设置为ENOENT；
+数组argv和envp忘记用NULL结束，此时errno被设置为EFAULT；
+没有对要执行文件的运行权限，此时errno被设置为EACCES。
+2、应用
+如果一个进程想执行另一个程序，它就可以fork或vfork出一个新进程，然后调用任何一个exec函数。
+为此，Linux还专门对fork作了优化：通常fork会将调用进程的所有内容原封不动的拷贝到新产生的子进程中去，这些拷贝的动作很消耗时 间，而如果fork完之后我们马上就调用exec，那这些辛辛苦苦拷贝来的东西就会被立刻抹掉，这看起来非常不划算，于是人们设计了一种"写时复制（copy-on-write）" 技术，使得fork结束后并不立刻复制父进程的内容到子进程，而是到了真正使用时才复制，这样如果下一条语句是exec，它就不会作无用功了。其实"写时 复制"还是有复制，进程的mm结构、页表都还是被复制了（"写时复制"也必须由这些信息来支撑。否则内核捕捉到CPU访存异常，怎么区分 这是“写时复制”引起的，还是真正的越权访问呢？）。
+而vfork就把事情做绝了，所有有关于内存的东西都不复制了，父子进程的内存是完全共享的。 但是这样一来又有问题了，虽然用户程序可以设计很多方法来避免父子进程间的访存冲突。但是关键的一点，父子进程共用着栈，这可不由用户程序控制的。一个进 程进行了关于函数调用或返回的操作，则另一个进程的调用栈 （实际上就是同一个栈）也被影响了。这样的程序没法运行下去。所以，vfork有个限制，子进程生成后，父进程在vfork中被内核挂起，直到子进程有了 自己的内存空间（exec**）或退出(_exit)。并且， 在此之前，子进程不能从调用vfork的函数中返回（同时，不能修改栈上变量、不能继续调用除_exit或exec系列之外的函数，否则父进程的数据可能 被改写）。
+尽管限制很多，vfork后马上exec效率会比fork高不少。
+<!-- more -->
+fork函数是用于创建一个子进程，该子进程几乎是父进程的副本，而有时我们希望子进程去执行另外的程序，exec函数族就提供了一个在进程中启动另一个程序执行的方法。它可以根据指定的文件名或目录名找到可执行文件，并用它来取代原调用进程的数据段、代码段和堆栈段，在执行完之后，原调用进程的内容除了进程号外，其他全部被新程序的内容替换了。另外，这里的可执行文件既可以是二进制文件，也可以是Linux下任何可执行脚本文件。
+（2）在Linux中使用exec函数族主要有以下两种情况
+a. 当进程认为自己不能再为系统和用户做出任何贡献时，就可以调用任何exec 函数族让自己重生。
+b. 如果一个进程想执行另一个程序，那么它就可以调用fork函数新建一个进程，然后调用任何一个exec函数使子进程重生。
+（3）exec函数族语法
+实际上，在Linux中并没有exec函数，而是有6个以exec开头的函数族，下表列举了exec函数族的6个成员函数的语法。
+所需头文件： #include <unistd.h>
+函数说明： 执行文件
+函数原型：
+[plain] view plain copy
+int execl(const char *path, const char *arg, ...)  
+int execv(const char *path, char *const argv[])  
+int execle(const char *path, const char *arg, ..., char *const envp[])  
+int execve(const char *path, char *const argv[], char *const envp[])  
+int execlp(const char *file, const char *arg, ...)  
+int execvp(const char *file, char *const argv[])</unistd.h></unistd.h></p>
 
-</console></console></console>
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/spark/2017/11/14/spark_start.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/linux/2017/12/22/exec.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -211,76 +239,120 @@ Caused by: java.lang.RuntimeException: java.net.ConnectException: Call From loca
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/spark/2017/11/14/spark_rdd.html">spark_rdd创建转换</a>
+						<a class="post-link" href="/MyBlog/web/2017/12/13/tree.html">各种树的应用场景</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/spark/2017/11/14/spark_rdd.html"> 夏泽民</a>
+						<a href="/MyBlog/web/2017/12/13/tree.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Nov 14, 2017
-						</span>
-					</div>
-					<div class="excerpt"><p>RDD创建方式
-1）从Hadoop文件系统（如HDFS、Hive、HBase）输入创建。
-2）从父RDD转换得到新RDD。
-3）通过parallelize或makeRDD将单机数据创建为分布式RDD。
-4）基于DB(Mysql)、NoSQL(HBase)、S3(SC3)、数据流创建。</p>
-
-</div>
-					<div class="readmore" style="float: right;">
-						
-							<a href="/MyBlog/spark/2017/11/14/spark_rdd.html" style="color:green">阅读全文</a>
-						
-					</div>								
-			</div>
-			<br/>
-			<hr/>
-			<div class="post-list" style="list-style-type: none;">			
-				 	
-					<h2>
-						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/spark/2017/11/14/spark_ml_mllib.html">spark的ML和MLLib两个包区别和联系</a>
-					</h2>
-					<div class="author" style="margin-top: -10px;">Posted by
-						<i class="fa fa-user"></i>
-						<a href="/MyBlog/spark/2017/11/14/spark_ml_mllib.html"> 夏泽民</a>
-						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Nov 14, 2017
-						</span>
-					</div>
-					<div class="excerpt"><!-- more -->
-<p>ML的API是面向Dataset的（Dataframe是Dataset的子集，也就是Dataset[Row]）， mllib是面对RDD的。Dataset和RDD有啥不一样呢？Dataset的底端是RDD。Dataset对RDD进行了更深一层的优化，比如说有sql语言类似的黑魔法，Dataset支持静态类型分析所以在compile time就能报错，各种combinators（map，foreach等）性能会更好</p>
-
-</div>
-					<div class="readmore" style="float: right;">
-						
-							<a href="/MyBlog/spark/2017/11/14/spark_ml_mllib.html" style="color:green">阅读全文</a>
-						
-					</div>								
-			</div>
-			<br/>
-			<hr/>
-			<div class="post-list" style="list-style-type: none;">			
-				 	
-					<h2>
-						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/spark/2017/11/14/rdd_dataset_dataframe.html">RDD/Dataset/DataFrame互转</a>
-					</h2>
-					<div class="author" style="margin-top: -10px;">Posted by
-						<i class="fa fa-user"></i>
-						<a href="/MyBlog/spark/2017/11/14/rdd_dataset_dataframe.html"> 夏泽民</a>
-						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Nov 14, 2017
+							Dec 13, 2017
 						</span>
 					</div>
 					<div class="excerpt"><!-- more -->
-<p>1.RDD -&gt; Dataset 
-val ds = rdd.toDS()</p>
+<p>AVL树：平衡二叉树，一般是用平衡因子差值决定并通过旋转来实现，左右子树树高差不超过1，那么和红黑树比较它是严格的平衡二叉树，平衡条件非常严格（树高差只有1），只要插入或删除不满足上面的条件就要通过旋转来保持平衡。由于旋转是非常耗费时间的。我们可以推出AVL树适合用于插入删除次数比较少，但查找多的情况。</p>
 
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/spark/2017/11/14/rdd_dataset_dataframe.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/web/2017/12/13/tree.html" style="color:green">阅读全文</a>
+						
+					</div>								
+			</div>
+			<br/>
+			<hr/>
+			<div class="post-list" style="list-style-type: none;">			
+				 	
+					<h2>
+						<img class="title-image" src="/MyBlog/img/dna.png"/>
+						<a class="post-link" href="/MyBlog/spark/2017/12/13/sbt.html">sbt</a>
+					</h2>
+					<div class="author" style="margin-top: -10px;">Posted by
+						<i class="fa fa-user"></i>
+						<a href="/MyBlog/spark/2017/12/13/sbt.html"> 夏泽民</a>
+						<span class="post-meta"><i class="fa fa-calendar"></i> 
+							Dec 13, 2017
+						</span>
+					</div>
+					<div class="excerpt"><!-- more -->
+<p>SBT = (not so) Simple Build Tool,是scala的构建工具，与java的maven地位相同。其设计宗旨是让简单的项目可以简单的配置，而复杂的项目可以复杂的配置。。。
+sbt项目的目录规约
+和maven一样，sbt有约定了一个通用的目录结构，使用约定的结构会使后面的工作简单很多。
+base/<br />
+          build.sbt              //构建配置文件
+         /project                 //也是构建配置的一部分
+                      /build.scala                         //高级配置，可选
+         /src/
+                /main
+                          /scala
+                          /java
+                         /resources
+               /test
+                          /scala
+                          /java
+                         /resources
+base代表项目的根目录
+项目配置可以在build.sbt文件里定义，也可以在base/project/build.scala文件里定义，一般情况下build.sbt就已经足够，除非多工程项目或者需要很多特殊定义的项目
+常用命令
+在我读完sbt的getting started文档之前，我也经常有疑问：为什么scala不沿用maven，而要搞出sbt这么个(not so simple) Simple Build Tool ？
+在读完文档，并实际操作后，我现在感觉确实是物有所值的。
+checkout 我的sbtTemple项目后，进入命令行，进入到项目根目录，输入sbt回车进入sbt交互模式
+sbt有哪些命令可用？输入help命令查询，即会列出一堆可用的命令，比如exit,reload等，不知道某个命令的作用？help 命令名，比如输入help exit显示exit命令的作用。 
+列出的命令里并没有compile,test等常用的命令？因为那些不是sbt的命令而是当前工程的task. 输入 tasks命令，就可以看见 compile,test,package等等任务的说明了。
+想查看项目的配置？用show命令，输入show name,看当前项目的名字，输入show libraryDependencies看当前项目依赖的库，libraryDependencies太长记不住？输入lib后按tab键！ 交互窗口是有tab提示的！输入help show，你可以看到show命令的作用是显示配置的值，如果show之后跟的是任务，则执行该任务并显示任务执行的结果。 你可以试试show compile看什么结果,如果你不想执行compile，而是想看命令的说明，请用inspect命令,inspect命令比较复杂，执行后输出的结果也比较复杂，具体这个命令的作用是什么请help inspect, 不过得等理解了build definition的含义后才能看懂help说的是什么。。。
+常用的任务则有compile, test, run,package,doc等，请顾名思义或自行help之。另外这些任务常常还有些变种，比如package-doc,package-src等，用tasks命令查看任务的列表，必有一款适合您
+有一个强大的任务不得不特别拎出来说一下：console
+输入console回车，会在当前会话内启动一个REPL，不要告诉我你不知道REPL是scala解释器的意思。。。就是你在命令行下输入scala回车后进入的那个交互界面。
+强大的是，sbt会加载你的项目依赖的全部jar包和你自己的代码！ 你可以在这个解释器里实验你的半成品。 我的模板工程里有一个sample/Account.scala文件，十几行很简单的代码，你可以看一下，然后在console窗口里玩弄Account类和Account伴生对象.  不过别忘了先import sample._
+因为依赖的jar包也都被加载了，所以对于那些你可能还不熟悉的第三方库，你有可以在console里玩个痛快！这功能很给力，谁用谁知道。
+顺便在提一下，sbt命令有3种执行模式：
+1、交互式，即上文所描述的
+2、批处理式，即在命令行下输入sbt 命令名来执行，比如sbt compile就会编译代码，而不进入交互模式
+3、连绵不绝式，在命令名前加上~号，即会进入连绵不绝模式，比如~compile,会编译当前代码，然后监听代码改变，每当你编辑了代码并保存后，sbt就会自动编译代码，~test也一样，当你修改代码后自动编译并运行单元测试。按回车键可退出此模式。
+build definition释义
+你前面应该试过show name和show libraryDependencies了吧？show出来的结果就是来自你的build.sbt文件，也就是build definition了。打开build.sbt就可以看到name := “sbt11template”  还有其他的一堆xxx := xxxx，很显然的，这就是个key-value pair,  sbt就是读取配置文件并构建一个key-value的map. 但是在build.sbt里面并非key := value, 而是key := expression. 文件里的每一行其实是一句scala语句，不行你可以试试把
+name := “sbt11template” 改成
+name := {“sbt11template”.toUpperCase} 
+然后reload,  再show name,你会看到变成大写的SBT11TEMPLATE
+:=是最常用的方法，其作用就是将key设置成expression的值，相同的key如果被多次赋值，则后面的值会覆盖掉前面的值。适用于简单类型的key，比如name,version等。
+其他的常用方法有
++=，将值添加进现有值里，适用于集合类型的key，比如libraryDependencies
+++=,将一个集合值加入当前集合里
+~= ，。。这个牛X，你在~=后面写个函数，~=将key的当前值传给你的函数，然后将函数结果作为新值，比如你可以在name := xxx后面再来一句 
+name ~= { _. toUpperCase },一样是把name变成大写
+«= 将另一个key的值赋给当前key,比如auther «= name ,这个方法还有个高级用法，你可以组合多个其他key的值，赋给当前key，用文档里的例子
+name «= (name, organization, version) { (n, o, v) =&gt; “project “ + n + “ from “ + o + “ version “ + v }
+还有适用于集合类型的版本
+&lt;+= 和 &lt;++=
+这些语法的官方文档在此https://github.com/harrah/xsbt/wiki/Getting-Started-More-About-Settings</p>
+
+</div>
+					<div class="readmore" style="float: right;">
+						
+							<a href="/MyBlog/spark/2017/12/13/sbt.html" style="color:green">阅读全文</a>
+						
+					</div>								
+			</div>
+			<br/>
+			<hr/>
+			<div class="post-list" style="list-style-type: none;">			
+				 	
+					<h2>
+						<img class="title-image" src="/MyBlog/img/dna.png"/>
+						<a class="post-link" href="/MyBlog/linux/2017/12/13/radix_tree.html">radix tree</a>
+					</h2>
+					<div class="author" style="margin-top: -10px;">Posted by
+						<i class="fa fa-user"></i>
+						<a href="/MyBlog/linux/2017/12/13/radix_tree.html"> 夏泽民</a>
+						<span class="post-meta"><i class="fa fa-calendar"></i> 
+							Dec 13, 2017
+						</span>
+					</div>
+					<div class="excerpt"><p>基数树</p>
+
+</div>
+					<div class="readmore" style="float: right;">
+						
+							<a href="/MyBlog/linux/2017/12/13/radix_tree.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -1672,6 +1744,38 @@ val ds = rdd.toDS()</p>
 			  
 			    
 			      <a href="/MyBlog/page344/">344</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page345/">345</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page346/">346</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page347/">347</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page348/">348</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page349/">349</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page350/">350</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page351/">351</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page352/">352</a>
 			    
 			  
 
@@ -3423,6 +3527,46 @@ val ds = rdd.toDS()</p>
 						  
 						
 
+						  
+							<li><a href="/MyBlog/page345">345</a></li>
+						  
+						
+
+						  
+							<li><a href="/MyBlog/page346">346</a></li>
+						  
+						
+
+						  
+							<li><a href="/MyBlog/page347">347</a></li>
+						  
+						
+
+						  
+							<li><a href="/MyBlog/page348">348</a></li>
+						  
+						
+
+						  
+							<li><a href="/MyBlog/page349">349</a></li>
+						  
+						
+
+						  
+							<li><a href="/MyBlog/page350">350</a></li>
+						  
+						
+
+						  
+							<li><a href="/MyBlog/page351">351</a></li>
+						  
+						
+
+						  
+							<li><a href="/MyBlog/page352">352</a></li>
+						  
+						
+
 						
 						  <li><a href="/MyBlog/page331">Next</a></li>
 						
@@ -3454,6 +3598,342 @@ val ds = rdd.toDS()</p>
 							var searchIndex={
 							"code" : 0 ,
 							"data" : [
+							
+							{
+							"title" : "Speeding up json processing in go - ",
+							"url" : "/MyBlog/golang/2020/05/23/json.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "typeAssert - ",
+							"url" : "/MyBlog/golang/2020/05/22/typeAssert.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "sync.Mutex使用注意事项 - ",
+							"url" : "/MyBlog/golang/2020/05/22/sync.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "golang单例模式 - ",
+							"url" : "/MyBlog/golang/2020/05/22/singleton.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "map 加锁与sync.Map性能对比分析 - ",
+							"url" : "/MyBlog/golang/2020/05/22/rwmutext.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "postman - ",
+							"url" : "/MyBlog/web/2020/05/22/postman.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "补偿还是幂等来解决一致性问题 - ",
+							"url" : "/MyBlog/web/2020/05/22/equal.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "postman 压力测试 - ",
+							"url" : "/MyBlog/web/2020/05/21/postman.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "gem rvm bundle - ",
+							"url" : "/MyBlog/web/2020/05/21/gem.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "brew - ",
+							"url" : "/MyBlog/web/2020/05/21/brew.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "xdebug - ",
+							"url" : "/MyBlog/web/2020/05/20/xdebug.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "timer - ",
+							"url" : "/MyBlog/golang/2020/05/20/timer.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "mcall systemstack - ",
+							"url" : "/MyBlog/golang/2020/05/20/systemstack.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "sched_init - ",
+							"url" : "/MyBlog/linux/2020/05/20/sched_init.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "phpar - ",
+							"url" : "/MyBlog/web/2020/05/20/phpar.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "mpg 状态机队列 - ",
+							"url" : "/MyBlog/golang/2020/05/20/mpg.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "map - ",
+							"url" : "/MyBlog/golang/2020/05/20/map.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "du - ",
+							"url" : "/MyBlog/linux/2020/05/20/du.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "channel实现sync包里的同步锁 - ",
+							"url" : "/MyBlog/golang/2020/05/20/chan.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "xdebug 配置教程 - ",
+							"url" : "/MyBlog/web/2020/05/20/cdebug.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "benchmark - ",
+							"url" : "/MyBlog/golang/2020/05/20/benchmark.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "Theano - ",
+							"url" : "/MyBlog/algorithm/2020/05/20/Theano.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "webrtc - ",
+							"url" : "/MyBlog/golang/2020/05/19/webrtc.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "unsafe - ",
+							"url" : "/MyBlog/golang/2020/05/19/unsafe.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "sysmon 线程到底做了什么 - ",
+							"url" : "/MyBlog/golang/2020/05/19/sysmon.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "runtime - ",
+							"url" : "/MyBlog/golang/2020/05/19/runtime.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "pstree ps 查看线程数 - ",
+							"url" : "/MyBlog/golang/2020/05/19/pstree.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "ssm 业务应用监控 - ",
+							"url" : "/MyBlog/web/2020/05/18/ssm.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "块存储文件存储对象存储 - ",
+							"url" : "/MyBlog/storage/2020/05/18/s3.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "gdb 查看golang程序的入口和启动 流程 - ",
+							"url" : "/MyBlog/golang/2020/05/18/main.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "etcd - ",
+							"url" : "/MyBlog/storage/2020/05/18/etcd.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "cqrs 命令和查询责任分离 - ",
+							"url" : "/MyBlog/web/2020/05/18/cqrs.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "schedt systemon - ",
+							"url" : "/MyBlog/golang/2020/05/17/schedt.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "mpg - ",
+							"url" : "/MyBlog/golang/2020/05/17/mpg.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "chan - ",
+							"url" : "/MyBlog/golang/2020/05/17/chan.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "bootstrap - ",
+							"url" : "/MyBlog/golang/2020/05/17/bootstrap.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "Scheduler 原理解析 - ",
+							"url" : "/MyBlog/golang/2020/05/17/Scheduler.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "slice - ",
+							"url" : "/MyBlog/golang/2020/05/16/slice.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "race - ",
+							"url" : "/MyBlog/golang/2020/05/16/race.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "nil - ",
+							"url" : "/MyBlog/golang/2020/05/16/nil.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "lock chan - ",
+							"url" : "/MyBlog/golang/2020/05/16/lock.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "apcu - ",
+							"url" : "/MyBlog/web/2020/05/16/apcu.html"
+							}
+							
+							,
+							
 							
 							{
 							"title" : "timer - ",
@@ -17304,7 +17784,7 @@ val ds = rdd.toDS()</p>
 								
 								
 									<a class="bold" href="/MyBlog/category/web">
-										web (276)
+										web (287)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -17349,7 +17829,7 @@ val ds = rdd.toDS()</p>
 								
 								
 									<a class="bold" href="/MyBlog/category/linux">
-										linux (321)
+										linux (323)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -17376,7 +17856,7 @@ val ds = rdd.toDS()</p>
 								
 								
 									<a class="bold" href="/MyBlog/category/golang">
-										golang (596)
+										golang (622)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -17412,7 +17892,7 @@ val ds = rdd.toDS()</p>
 								
 								
 									<a class="bold" href="/MyBlog/category/storage">
-										storage (136)
+										storage (138)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -17430,7 +17910,7 @@ val ds = rdd.toDS()</p>
 								
 								
 									<a class="bold" href="/MyBlog/category/algorithm">
-										algorithm (93)
+										algorithm (94)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -17518,163 +17998,163 @@ val ds = rdd.toDS()</p>
 								<ul style="display:none;width:250px;height:250px;">
 								     
 								   <li>
-										<a href="/MyBlog/golang/2020/05/15/timer.html" style="font-size:40px;"> timer</a>
+										<a href="/MyBlog/golang/2020/05/23/json.html" style="font-size:40px;"> Speeding up json processing in go</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/golang/2020/05/15/semgrep.html" style="font-size:40px;"> semgrep</a>
+										<a href="/MyBlog/golang/2020/05/22/typeAssert.html" style="font-size:40px;"> typeAssert</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/k8s/2020/05/15/mysql.html" style="font-size:40px;"> Google Kubernetes Engine上运行HA MySQL</a>
+										<a href="/MyBlog/golang/2020/05/22/sync.html" style="font-size:40px;"> sync.Mutex使用注意事项</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/golang/2020/05/15/lwn.html" style="font-size:40px;"> lwn</a>
+										<a href="/MyBlog/golang/2020/05/22/singleton.html" style="font-size:40px;"> golang单例模式</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/golang/2020/05/15/goland.html" style="font-size:40px;"> 基于 GoLand 在 Docker 容器中调试 Go 应用程序</a>
+										<a href="/MyBlog/golang/2020/05/22/rwmutext.html" style="font-size:40px;"> map 加锁与sync.Map性能对比分析</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/golang/2020/05/15/escape.html" style="font-size:40px;"> escape Golang 性能优化实战</a>
+										<a href="/MyBlog/web/2020/05/22/postman.html" style="font-size:40px;"> postman</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/web/2020/05/15/content.html" style="font-size:40px;"> 四种常见的POST提交数据方式对应的content-type取值</a>
+										<a href="/MyBlog/web/2020/05/22/equal.html" style="font-size:40px;"> 补偿还是幂等来解决一致性问题</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/golang/2020/05/15/cola.html" style="font-size:40px;"> cola 微服务业务架构的探索</a>
+										<a href="/MyBlog/web/2020/05/21/postman.html" style="font-size:40px;"> postman 压力测试</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/golang/2020/05/15/alluxio.html" style="font-size:40px;"> 基于 Alluxio 数据缓存的大规模深度学习训练性能优化</a>
+										<a href="/MyBlog/web/2020/05/21/gem.html" style="font-size:40px;"> gem rvm bundle</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/golang/2020/05/12/race.html" style="font-size:40px;"> go race 排查 protobuf Marshal Panic</a>
+										<a href="/MyBlog/web/2020/05/21/brew.html" style="font-size:40px;"> brew</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/golang/2020/05/12/debug.html" style="font-size:40px;"> 调试golang的bug以及性能问题的实践方法</a>
+										<a href="/MyBlog/web/2020/05/20/xdebug.html" style="font-size:40px;"> xdebug</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/golang/2020/05/12/data.html" style="font-size:40px;"> Go替代Python在生产环境中进行数据分析</a>
+										<a href="/MyBlog/golang/2020/05/20/timer.html" style="font-size:40px;"> timer</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/golang/2020/05/12/assert.html" style="font-size:40px;"> 类型断言</a>
+										<a href="/MyBlog/golang/2020/05/20/systemstack.html" style="font-size:40px;"> mcall systemstack</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/golang/2020/05/12/Serverless.html" style="font-size:40px;"> 服务网格与Serverless</a>
+										<a href="/MyBlog/linux/2020/05/20/sched_init.html" style="font-size:40px;"> sched_init</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/golang/2020/05/11/script.html" style="font-size:40px;"> Go as a Scripting Language</a>
+										<a href="/MyBlog/web/2020/05/20/phpar.html" style="font-size:40px;"> phpar</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/golang/2020/05/11/dig.html" style="font-size:40px;"> Digging deeper into the analysis of Go-code</a>
+										<a href="/MyBlog/golang/2020/05/20/mpg.html" style="font-size:40px;"> mpg 状态机队列</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/golang/2020/05/11/compare.html" style="font-size:40px;"> prohibiting comparisons</a>
+										<a href="/MyBlog/golang/2020/05/20/map.html" style="font-size:40px;"> map</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/golang/2020/05/11/ast.html" style="font-size:40px;"> Take a walk the Go AST</a>
+										<a href="/MyBlog/linux/2020/05/20/du.html" style="font-size:40px;"> du</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/golang/2020/05/09/tinyscript.html" style="font-size:40px;"> 写一个语言 编译器 虚拟机</a>
+										<a href="/MyBlog/golang/2020/05/20/chan.html" style="font-size:40px;"> channel实现sync包里的同步锁</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/golang/2020/05/09/limiter.html" style="font-size:40px;"> 限流器</a>
+										<a href="/MyBlog/web/2020/05/20/cdebug.html" style="font-size:40px;"> xdebug 配置教程</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/golang/2020/05/08/pod.html" style="font-size:40px;"> 为什么需要 Pod</a>
+										<a href="/MyBlog/golang/2020/05/20/benchmark.html" style="font-size:40px;"> benchmark</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/golang/2020/05/08/gomod.html" style="font-size:40px;"> Etcd使用go module的灾难</a>
+										<a href="/MyBlog/algorithm/2020/05/20/Theano.html" style="font-size:40px;"> Theano</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/golang/2020/05/07/thl.html" style="font-size:40px;"> 深入TLS/SSL协议</a>
+										<a href="/MyBlog/golang/2020/05/19/webrtc.html" style="font-size:40px;"> webrtc</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/web/2020/05/07/system-design-primer.html" style="font-size:40px;"> system-design-primer</a>
+										<a href="/MyBlog/golang/2020/05/19/unsafe.html" style="font-size:40px;"> unsafe</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/web/2020/05/07/git.html" style="font-size:40px;"> Commit message 和 Change log 编写指南</a>
+										<a href="/MyBlog/golang/2020/05/19/sysmon.html" style="font-size:40px;"> sysmon 线程到底做了什么</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/golang/2020/05/07/context.html" style="font-size:40px;"> context取消goroutine执行的方法</a>
+										<a href="/MyBlog/golang/2020/05/19/runtime.html" style="font-size:40px;"> runtime</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/web/2020/05/07/SOFA.html" style="font-size:40px;"> SOFA</a>
+										<a href="/MyBlog/golang/2020/05/19/pstree.html" style="font-size:40px;"> pstree ps 查看线程数</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/golang/2020/05/06/sync.html" style="font-size:40px;"> Go语言sync包的应用详解</a>
+										<a href="/MyBlog/web/2020/05/18/ssm.html" style="font-size:40px;"> ssm 业务应用监控</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/golang/2020/05/06/profiling.html" style="font-size:40px;"> profiling</a>
+										<a href="/MyBlog/storage/2020/05/18/s3.html" style="font-size:40px;"> 块存储文件存储对象存储</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/golang/2020/05/06/goreplay.html" style="font-size:40px;"> goreplay 流量回放方案</a>
+										<a href="/MyBlog/golang/2020/05/18/main.html" style="font-size:40px;"> gdb 查看golang程序的入口和启动 流程</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/golang/2020/05/06/dubbo-go-D-D.html" style="font-size:40px;"> dubbo-go</a>
+										<a href="/MyBlog/storage/2020/05/18/etcd.html" style="font-size:40px;"> etcd</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/golang/2020/05/06/context.html" style="font-size:40px;"> Golang Context 原理与实战</a>
+										<a href="/MyBlog/web/2020/05/18/cqrs.html" style="font-size:40px;"> cqrs 命令和查询责任分离</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/golang/2020/05/06/Goroutine.html" style="font-size:40px;"> Goroutine的创建与销毁</a>
+										<a href="/MyBlog/golang/2020/05/17/schedt.html" style="font-size:40px;"> schedt systemon</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/golang/2020/04/30/benchmark.html" style="font-size:40px;"> benchmark</a>
+										<a href="/MyBlog/golang/2020/05/17/mpg.html" style="font-size:40px;"> mpg</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/golang/2020/04/29/gomod.html" style="font-size:40px;"> gomod</a>
+										<a href="/MyBlog/golang/2020/05/17/chan.html" style="font-size:40px;"> chan</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/golang/2020/04/29/GraphQL.html" style="font-size:40px;"> GraphQL</a>
+										<a href="/MyBlog/golang/2020/05/17/bootstrap.html" style="font-size:40px;"> bootstrap</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/golang/2020/04/28/json.html" style="font-size:40px;"> json</a>
+										<a href="/MyBlog/golang/2020/05/17/Scheduler.html" style="font-size:40px;"> Scheduler 原理解析</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/storage/2020/04/28/etcd.html" style="font-size:40px;"> etcd3 数据不一致 bug 分析</a>
+										<a href="/MyBlog/golang/2020/05/16/slice.html" style="font-size:40px;"> slice</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/golang/2020/04/28/MADV_FREE.html" style="font-size:40px;"> go服务内存管理</a>
+										<a href="/MyBlog/golang/2020/05/16/race.html" style="font-size:40px;"> race</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/golang/2020/04/26/search.html" style="font-size:40px;"> Go Search Extension</a>
+										<a href="/MyBlog/golang/2020/05/16/nil.html" style="font-size:40px;"> nil</a>
 									</li>
 									
 								</ul>
@@ -17690,33 +18170,33 @@ val ds = rdd.toDS()</p>
                 		<ul class="posts" span="recent">  
 							  
 							   <li>  
-								   <span>15 May 2020</span>
-								   <a href="/MyBlog/golang/2020/05/15/timer.html">  
-								   timer</a>  
+								   <span>23 May 2020</span>
+								   <a href="/MyBlog/golang/2020/05/23/json.html">  
+								   Speeding up json processing in go</a>  
 							   </li>  
 							  
 							   <li>  
-								   <span>15 May 2020</span>
-								   <a href="/MyBlog/golang/2020/05/15/semgrep.html">  
-								   semgrep</a>  
+								   <span>22 May 2020</span>
+								   <a href="/MyBlog/golang/2020/05/22/typeAssert.html">  
+								   typeAssert</a>  
 							   </li>  
 							  
 							   <li>  
-								   <span>15 May 2020</span>
-								   <a href="/MyBlog/k8s/2020/05/15/mysql.html">  
-								   Google Kubernetes Engine上运行HA MySQL</a>  
+								   <span>22 May 2020</span>
+								   <a href="/MyBlog/golang/2020/05/22/sync.html">  
+								   sync.Mutex使用注意事项</a>  
 							   </li>  
 							  
 							   <li>  
-								   <span>15 May 2020</span>
-								   <a href="/MyBlog/golang/2020/05/15/lwn.html">  
-								   lwn</a>  
+								   <span>22 May 2020</span>
+								   <a href="/MyBlog/golang/2020/05/22/singleton.html">  
+								   golang单例模式</a>  
 							   </li>  
 							  
 							   <li>  
-								   <span>15 May 2020</span>
-								   <a href="/MyBlog/golang/2020/05/15/goland.html">  
-								   基于 GoLand 在 Docker 容器中调试 Go 应用程序</a>  
+								   <span>22 May 2020</span>
+								   <a href="/MyBlog/golang/2020/05/22/rwmutext.html">  
+								   map 加锁与sync.Map性能对比分析</a>  
 							   </li>  
 							  
 						</ul>

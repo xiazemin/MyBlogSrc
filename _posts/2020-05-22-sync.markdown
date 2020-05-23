@@ -1,0 +1,105 @@
+---
+title: sync.Mutex使用注意事项
+layout: post
+category: golang
+author: 夏泽民
+---
+sync.Mutex的初始化注意事项
+
+type MemProvider struct {
+lock     *sync.Mutex              //用来锁
+sessions map[string]*SessionStore //用来存储在内存
+}
+
+初始化时
+
+var lockm *sync.Mutex = new(sync.Mutex)
+var memProvider = &MemProvider{sessions: make(map[string](*SessionStore)), lock: lockm}
+<!-- more -->
+现在有一个struct是Engine，它组合了sync.RWMutex
+
+type Engine struct {
+    sync.RWMutex
+
+    ID     string
+    IP     string
+    Addr   string
+}
+在构建的时候，可以不用传入sync.RWMutex的对象
+
+func main() {
+    engine := &Engine {
+            ID   : "111",
+            IP   : "192.168.59.103",
+            Addr : "localhost"}
+}
+
+为什么在这里不用对于syncRWMutex进行初始化，在Doc里看到如果组合的是Pointer的化，需要初始化。这个为什么呢
+
+golang sync.RWMutex 直接声明不用初始化就可以直接用,比如
+
+var mutex sync.RWMutex
+mutex.Lock()
+但是如果是指针的话，不对指针初始化，指针就是一个空指针，空指针当然不能直接用啦
+
+
+I think you can regard *sync.Mutex as a simple pointer. If you want to use it, you should declare and init it, but if you use sync.Mutex, it has been inited.
+
+
+为什么加锁了仍然会报cuncurrent map wirtes，
+
+主要原因是golang的struct 在赋值的时候是进行浅拷贝，把结构体的成员进行了copy，Node 结构体有两个成员
+
+type Node struct {
+	sync.Mutex
+	Data map[string]string
+}
+我们从slice中把Node拿出来的时候，其实是copy了一份Node，Map是指针类型的，所以多份copy其实是操作一份map，但是sync.Mutex类型是struct，他进行了一次copy
+所以在每个协程中取出来的时候，Mutex都进行了一次copy，Lock的时候不是同一份锁，所以会出现并发map写入。
+
+解决方法1
+把Node的成员Mutex 改成指针类型，那么在copy的时候，mutex 能保持对同一份进行Lock，代码如下
+
+package main
+
+import (
+	"fmt"
+	"strconv"
+	"sync"
+)
+
+type Node struct {
+	*sync.Mutex
+	Data map[string]string
+}
+
+var Cache []Node
+
+解决方法2 Cache中存储Node指针
+Cache中如果是Node指针类型，那么index访问的时候，拿出来是指针的副本，指向的仍然是同一份地址，加锁的时候仍然访问的是同一份资源
+代码如下
+
+package main
+
+import (
+	"fmt"
+	"strconv"
+	"sync"
+)
+
+type Node struct {
+	sync.Mutex
+	Data map[string]string
+}
+
+var Cache []*Node
+
+
+结构体用锁，可以匿名也可以非匿名，两种写法都行，注意浅拷贝问题
+type Node struct {
+	sync.Mutex
+}
+
+type Node struct {
+ mu	sync.Mutex
+}
