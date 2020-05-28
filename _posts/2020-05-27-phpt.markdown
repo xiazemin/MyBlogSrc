@@ -1,0 +1,111 @@
+---
+title: phpt 是php源码的测试文件
+layout: post
+category: web
+author: 夏泽民
+---
+http://qa.php.net/write-test.php
+phpt文件用于PHP的自动化测试，这是PHP用自己来测试自己的测试数据用例文件。测试脚本通过执行PHP源码根目录下的run-tests.php，读取phpt文件执行测试。
+phpt文件包含 TEST，FILE，EXPECT 等多个段落的文件。在各个段落中，TEST、FILE、EXPECT是基本的段落，每个测试脚本都必须至少包括这三个段落。其中：
+
+TEST段可以用来填写测试用例的名字。
+FILE段是一个 PHP 脚本实现的测试用例。
+EXPECT段则是测试用例的期待值。
+在这三个基本段落之外，还有多个段落，如作为用例输入的GET、POST、COOKIE等，此类字段最终会赋值给$env变量。比如，cookie存放在$env['HTTP_COOKIE']，$env变量将作为用例中脚本的执行环境。
+<!-- more -->
+一些主要段落说明如下表所示：
+
+PHP测试脚本中的段落说明
+
+段落名	填充内容	备注
+TEST	测试用例名称	必填段落
+FILE	测试脚本语句	必填段落。用PHP语言书写的脚本语句。其执行的结果将与 EXPECT* 段的期待结果做对比。
+ARGS	FILE 段的输入参数	选填段落
+SKIPIF	跳过这个测试的条件	选填段落
+POST	传入测试脚本的 POST 变量	选填段落。如果使用POST段，建议配合使用SKIPIF段
+GET	传入测试脚本的 GET 变量	选填段落。如果使用GET段，建议配合使用SKIPIF段。
+POST_RAW	传入测试脚本的POST内容的原生值	选填段落。比如在做文件上传测试时就需要使用此字段来模拟HTTP的POST请求。
+COOKIE	传入测试脚本的COOKIE的值	选填段落。最常见的是将PHPSESSID的值传入。
+INI	应用于测试脚本的 ini 设置	选填段落。例如 foo=bar 。其值可通过函数 ini_get(string name_entry) 获得。
+ENV	应用于测试脚本的环境设置	选填段落。例如做gzip测试，则需要设置环境HTTP_ACCEPT_ENCODING=gzip。
+EXPECT	测试脚本的预期结果 相当于测试文件的结果	必填段落
+EXPECTF	测试脚本的预期结果	选填段落。可用函数 sscanf() 中的格式表达预期结果 EXPECT 段的变体
+EXPECTREGEX	测试脚本的正则预期结果	选填段落。以正则的方式包含多个预期结果，是预期结果EXPECT段的一种变体。
+EXPECTHEADERS	测试脚本的预期头部内容	选填段落.测试脚本期待HTTP头部返回，是预期结果EXPECT段的另一种格式。验证过程中会按头部的字段一一比对测试，比如zlib扩展中，如果开启zlib.output_compression，则在EXPECTHEADERS中包含Content-Encoding: gzip作为预期结果。
+phpt文件只是用例文件，它还需要一个控制器来调用这些文件，以实现整个测试过程。PHP的测试控制器文件是源码根目录下的run-tests.php文件。此文件的作用是根据传入的参数，分析用例相关数据，执行测试过程。其大概过程如下：
+
+分析输入的命令行，根据参数配置相关参数，初始化各种信息。
+分析用例输入参数，获取需要执行的用例文件列表。PHP支持指定单文件用例执行，支持多文件用例执行，支持* .phpt多用例执行，支持* .phpt简化版本多用例执行（相当于.phpt）。
+遍历用例文件列表，执行每一个用例。对于每个用例，PHP会具体解析测试脚本中各个段落的含义，清除所有上次测试的记录与设置将准备此次的测试环境，并把各种中间文件和日志文件准备好，然后用环境变量 TEST_PHP_EXECUTABLE 指定的 PHP 可执行对象运行实际的测试语句。最后将运行后的结果和测试脚本中的预期结果（EXPECT*段）进行比较，如果比较结果一致，则测试通过；如果不一致，则测试失败，最后将结果信息一一记录到用户设置的日志文件中。
+生成测试结果。
+这仅仅是执行的过程，除此之外，还有若干准备和清理工作，如，对上次测试遗留下的环境的清理，本次测试所必须的环境变量的读取与设置，对测试参数的解析，测试脚本名的解析，各种输出文件的准备等等
+
+以测试脚本/tests/basic/001.phpt为例：
+
+[php]
+--TEST--
+Trivial "Hello World" test
+--FILE--
+<?php echo "Hello World"?>
+--EXPECT--
+Hello World
+这个用例脚本只包含必填的三项。测试控制器会执行--FILE--下面的PHP文件，如果最终的输出是--EXPECT--所期望的结果则表示这个测试通过，如果不一致，则测试不通过，最终这个用例的测试结果会汇总会所有的测试结果集中。
+
+
+当PHP编译完成后，编译程序会提示不要忘记执行make test，make test会检查编译后的程序是否有问题（PS：并不一定编译成功的程序就会没有问题了）。
+
+一、关于make test
+打开Makefile文件，找到make test对应的代码，其中
+
+$(PHP_EXECUTABLE) -n -c $(top_builddir)/tmp-php.ini $(PHP_TEST_SETTINGS) $(top_srcdir)/run-tests.php -n -c $(top_builddir)/tmp-php.ini -d extension_dir=$(top_builddir)/modules/ $(PHP_TEST_SHARED_EXTENSIONS) $(TESTS);
+
+代码是核心语句。可以看出，自动化测试是通过源代码下的run-test.php执行的。
+
+test: all
+	-@if test ! -z "$(PHP_EXECUTABLE)" && test -x "$(PHP_EXECUTABLE)"; then \
+		INI_FILE=`$(PHP_EXECUTABLE) -d 'display_errors=stderr' -r 'echo php_ini_loaded_file();' 2> /dev/null`; \
+		if test "$$INI_FILE"; then \
+			$(EGREP) -h -v $(PHP_DEPRECATED_DIRECTIVES_REGEX) "$$INI_FILE" > $(top_builddir)/tmp-php.ini; \
+		else \
+			echo > $(top_builddir)/tmp-php.ini; \
+		fi; \
+		INI_SCANNED_PATH=`$(PHP_EXECUTABLE) -d 'display_errors=stderr' -r '$$a = explode(",\n", trim(php_ini_scanned_files())); echo $$a[0];' 2> /dev/null`; \
+		if test "$$INI_SCANNED_PATH"; then \
+			INI_SCANNED_PATH=`$(top_srcdir)/build/shtool path -d $$INI_SCANNED_PATH`; \
+			$(EGREP) -h -v $(PHP_DEPRECATED_DIRECTIVES_REGEX) "$$INI_SCANNED_PATH"/*.ini >> $(top_builddir)/tmp-php.ini; \
+		fi; \
+		TEST_PHP_EXECUTABLE=$(PHP_EXECUTABLE) \
+		TEST_PHP_SRCDIR=$(top_srcdir) \
+		CC="$(CC)" \
+			$(PHP_EXECUTABLE) -n -c $(top_builddir)/tmp-php.ini $(PHP_TEST_SETTINGS) $(top_srcdir)/run-tests.php -n -c $(top_builddir)/tmp-php.ini -d extension_dir=$(top_builddir)/modules/ $(PHP_TEST_SHARED_EXTENSIONS) $(TESTS); \
+		rm $(top_builddir)/tmp-php.ini; \
+	else \
+		echo "ERROR: Cannot run tests without CLI sapi."; \
+	fi
+我们修改一下Makefile文件，将核心的语句echo出来，看看是什么样子的。
+/download/php-5.4.45/sapi/cli/php -n -c /download/php-5.4.45/tmp-php.ini -d open_basedir= -d output_buffering=0 -d memory_limit=-1 /download/php-5.4.45/run-tests.php -n -c /download/php-5.4.45/tmp-php.ini -d extension_dir=/download/php-5.4.45/modules/
+直接执行该语句，报错：
+ERROR: environment variable TEST_PHP_EXECUTABLE must be set to specify PHP executable!
+
+Makefile脚本中定义了TEST_PHP_EXECUTABLE这个变量，如果要在shell中使用，需要export这个变量。接下来，我整理一个make install后的自动化测试代码（PS：如果是CGI的话使用/usr/local/php_5.4.45/bin/php-cgi）：
+
+export TEST_PHP_EXECUTABLE=/usr/local/php_5.4.45/bin/php
+/usr/local/php_5.4.45/bin/php ./run-tests.php 
+二、关于phpt
+在执行make test过程中，可以看到实际上是执行源代码中的phpt文件。打开其中一个文件，我们看看里面的内容。
+
+--TEST--
+Trivial "Hello World" test
+--FILE--
+<?php echo "Hello World"?>
+--EXPECT--
+Hello World
+--Test--，是指测试的描述内容
+--FILE--，是指测试的PHP代码
+
+--EXPECT--，是指测试PHP代码的期望输出，如果输出不一致，则证明测试不通过
+
+可以到http://qa.php.net/write-test.php这里查看如何编写一个phpt文件
+
+https://blog.csdn.net/loophome/article/details/51823281
+

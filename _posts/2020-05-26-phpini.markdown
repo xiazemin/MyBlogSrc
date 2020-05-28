@@ -1,0 +1,780 @@
+---
+title: 解决mac 没有php.ini 文件问题
+layout: post
+category: algorithm
+author: 夏泽民
+---
+php -v
+PHP 7.2.0-dev (cli) (built: May 20 2020 23:46:30) ( NTS DEBUG )
+Copyright (c) 1997-2016 The PHP Group
+
+
+vi  test.php
+<?php
+//php -S localhost:8000  test.php
+echo phpinfo();
+var_dump($a['1213']==0);
+
+php -S localhost:8000  test.php
+<!-- more -->
+Configuration File (php.ini) Path	/usr/local/lib
+Loaded Configuration File  (none)
+
+
+ls /usr/local/lib
+确实没有php.ini,可能是老版本没有卸载干净，congfigure 的时候没有指定路径原因。
+
+查找一份可用的配置
+find /usr -name php.ini
+/usr/local/etc/php/7.0/php.ini
+cp /usr/local/etc/php/7.0/php.ini /usr/local/lib/
+
+重启问题解决
+Configuration File (php.ini) Path	/usr/local/lib
+Loaded Configuration File	/usr/local/lib/php.ini
+
+composer.phar -version
+You are running Composer with SSL/TLS protection disabled.
+Error: "curl" PHP extension not loaded; Nuwa Composer keep-alive plugin disabled.
+Error: "curl" PHP extension not loaded; Prestissmo Composer plugin disabled.
+
+
+vi /usr/local/lib/php.ini
+extension=php_curl.dll
+extension=php_openssl.dll
+
+
+OpenSSL support => disabled (install ext/openssl) apache2.4 php7.4
+
+# 编辑php.ini文件，在文件最后添加
+
+extension=openssl.so
+
+
+
+php7.2安装curl 扩展坑
+1 安装依赖yum -y install  libcurl-devel 
+
+ 需要安装第一步不然会报错
+
+2、cd /home/tmp/php-7.2.11/ext/curl/
+
+3、/usr/local/php7.2/bin/phpize (使用phpize)
+
+4、./configure --with-php-config=/usr/local/php7.2/bin/php-config
+
+5、make
+
+6、make install
+
+7、php.ini中添加extension=curl
+
+php -m 查看php扩展
+
+
+通过phpinfo()查看配置信息：
+发现Loaded Configuration File => (none) ，表明没有载入php.ini文件。然而/usr/local/php7/etc/php.ini这个文件确实是存在的。
+
+解决
+
+用strace去跟踪一下：
+
+strace /usr/local/php7/sbin/php-fpm -i 2>1.log
+
+打开文件发现：
+它会去找 /usr/local/lib/php.ini ,我也不知道为什么，我编译是有设置--with-config-file-path=/xxx/xxx 。反正找到具体路径了，把php.ini拷过去就解决了。
+
+另外我strace /usr/local/php7/bin/php -i 2>1.log发现，如果不是php-fpm而是php，它会找/usr/local/php7/bin/php.ini
+
+
+#1 启动Web服务器  服务于当前目录
+
+$ php -S localhost:8000
+
+Example #2 启动时指定根目录
+$ php -S localhost:8000 -t foo/
+
+Example #3 使用路由（Router）脚本
+$ php -S localhost:8000 router.php
+
+
+php-扩展编译安装扩展（通用版）
+这里以安装redis扩展为例，其它扩展可以大体仿照如此过程：
+
+1.到 pecl.php.net 搜索 redis
+2.下载 stable 版（稳定版）扩展
+3.解压
+4.执行 /php/path/bin/phpize (作用是检测 php 的内核版本，并为扩展生成相应的编译配置)
+5.configure --with-php-config=/php/path/bin/php-config
+6.make && make install
+引入编译出的 redis.so 插件
+编辑php.ini配置文件，
+并在
+;;;;;;;;;;;;;;;;;;;;;;
+; Dynamic Extensions ;
+;;;;;;;;;;;;;;;;;;;;;;
+下方新增：
+extension=/usr/local/php7.0.1/lib/extensions/debug-non-zts-20151012/redis.so
+
+https://www.cnblogs.com/lalalagq/p/9973716.html
+
+
+PHP Warning:  PHP Startup: Unable to load dynamic library 'ext/php_curl.dll' - dlopen(ext/php_curl.dll, 9): image not found in Unknown on line 0
+
+
+Warning: PHP Startup: Unable to load dynamic library 'ext/php_openssl.dll' - dlopen(ext/php_openssl.dll, 9): image not found in Unknown on line 0
+
+pecl install 无反应
+
+解决
+可以先去 http://pecl.php.net/ 找到源码下载地址
+
+比如redis
+找到下载链接
+pecl install http://pecl.php.net/get/redis-4.1.0RC2.tgz
+
+PECL 的全称是 The PHP Extension Community Library ，是一个开放的并通过 PEAR(PHP Extension and Application Repository，PHP 扩展和应用仓库)打包格式来打包安装的 PHP扩展库仓库。通过 PEAR 的 Package Manager 的安装管理方式，可以对 PECL 模块进行下载和安装
+
+https://pear.php.net/package/Net_Curl/download
+http://download.pear.php.net/package/Net_Curl-1.2.5.tgz
+
+1 自己从源码编译一个新的openssl
+下载源码下来解压到 /mnt/soft/openssl-1.0.2m （openssl 安装到）
+
+./config -h
+/usr/bin/perl ./Configure  -h
+
+./config shared --prefix=/usr/mylibs --openssldir=/usr/mylibs/ssl \
+-Wl,-rpath=/usr/mylibs/lib
+
+make clean
+make
+make install
+
+2 编译php_openssl，链接新的openssl
+prefix 是安装目录，openssldir 是配置文件目录，另外建议安装两次，shared 作用是生成动态连接库。
+
+wget ftp://ftp.openssl.org/source/openssl-1.0.0c.tar.gz
+tar -zxf openssl-1.0.0c.tar.gz
+cd openssl-1.0.0c/
+
+运行php安装目录下的phpize文件，这时候会在extension目录下生成相应的configure文件。(php71为指定的PHP版本)
+
+/usr/local/php71/bin/phpize
+
+
+必须：指定openssl 目录
+export PKG_CONFIG_PATH=/usr/mylibs/lib/pkgconfig  
+pkg-config --cflags --libs libssl
+
+./configure --with-openssl=/usr/mylibs --with-php-config=/usr/local/php71/bin/php-config
+
+LDFLAGS="-Wl,-rpath-link=/usr/mylibs/lib -Wl,--verbose"
+ make && make install
+
+
+ PHP Fatal error:  Allowed memory size of 1073741824 bytes exhausted at /Users/didi/PhpstormProjects/c/php-src/Zend/zend_objects.c:171 (tried to allocate 128 bytes) in phar:///Users/didi/composer.phar/src/Composer/DependencyResolver/Solver.php on line 220
+
+Fatal error: Allowed memory size of 1073741824 bytes exhausted at /Users/didi/PhpstormProjects/c/php-src/Zend/zend_objects.c:171 (tried to allocate 128 bytes) in phar:///Users/didi/composer.phar/src/Composer/DependencyResolver/Solver.php on line 220
+
+
+出错原因：
+
+因为php页面消耗的最大内存默认是为8M (在PHP的php.ini配置文件里可以看到) ,如果文件太大或图片太大，在读取的时候会发生上述提示错误。
+
+解决办法，个人目前知道的有三种解决方案：
+
+第一中解决方案是：在PHP文件中加入ini_set(”memory_limit”,”80M”);当然80M可以根据自己的情况改动，也不要太大哦，否则系统其它资源会遇到问题哦，其中-1为不设限。
+
+第二中解决方案是：修改 php.ini配置文件，在php.ini中找到
+复制代码代码如下:
+; Maximum amount of memory a script may consume (128MB)
+; http://php.net/memory-limit
+memory_limit = 16M，将前面的分号去掉，改动值的大小，将memory_limit由8M改成16M（或更大），重启apache服务即可。
+
+第三种解决方案是：修改.htaccess分布式配置文件（注意哦：前提是该目录支持.htaccess）。在文档中新增一句：php_value memory_limit 16M(或更大)
+
+
+- illuminate/support v5.5.39 requires ext-mbstring * -> the requested PHP extension mbstring is missing from your system.
+
+
+cd 
+~/PhpstormProjects/c/php-src 
+$ls ext/openssl/
+CREDITS		config.w32	openssl.c	php_openssl.h	xp_ssl.c
+README		config0.m4	openssl.mak	tests
+
+$ls ext/curl/
+CREDITS		config.w32	interface.c	package.xml	share.c
+config.m4	curl_file.c	multi.c		php_curl.h	tests
+
+执行phpize：进入解压后的包后，（如果是ext下面的扩展包直接进入）执行phpize，如果服务器上安装了多个PHP，一定要找对路径（一般都是/usr/local/php/bin/phpize,看自己的PHP安装目录写对路径即可）
+（phpize是用来扩展php扩展模块的，通过phpize可以建立php的外挂模块）
+（当php编译完成后，php的bin目录下会有phpize这个脚本文件）
+为什么要执行phpize？
+
+因为当我们需要再添加一些模块，但是又不想重新编译php时，这时我们就可以使用phpize命令。
+指定php-config路径（执行完phpize会出现这些文件：）
+
+./configure --with-php-config=/usr/local/php/bin/php-config
+1
+ps：这里还要多嘴一句：一定要找对php-config的所在位置（尤其是服务器上有多个PHP实例）
+
+make(编译) make install(安装)
+如果没有报错会提示以下信息：
+
+[root@localhost imagick-3.4.0RC4]# make install
+Installing shared extensions:     /usr/local/php/lib/php/extensions/no-debug-non-zts-20121212/
+Installing header files:          /usr/local/php/include/php/
+
+这时候扩展就安装完成啦，此时还需要在php.ini里面加入extension=xxx(扩展名)
+
+重启php，查看phpinfo
+
+
+$phpize
+Cannot find config.m4.
+Make sure that you run '/usr/local/bin/phpize' in the top level source directory of the module
+
+https://github.com/php/php-src
+
+https://pecl.php.net
+
+https://www.php.net/manual/zh/curl.installation.php
+
+
+却少这么多库一定是安装到别的位置了
+
+$sudo find / -name curl.so
+find: /dev/fd/4: No such file or directory
+/Users/didi/blog/php-src/ext/curl/.libs/curl.so
+/Users/didi/blog/php-src/ext/curl/.libs/curl.so.dSYM/Contents/Resources/DWARF/curl.so
+/Users/didi/blog/php-src/ext/curl/modules/curl.so
+
+$vi /usr/local/lib/php.ini
+extension=/Users/didi/blog/php-src/ext/curl/modules/curl.so
+
+Warning: PHP Startup: curl: Unable to initialize module
+Module compiled with module API=20151012
+PHP    compiled with module API=20160303
+
+
+https://www.cnblogs.com/cbryge/p/6140570.html
+
+https://www.laruence.com/2011/09/13/2139.html
+
+
+
+php-7.2.0源码安装及扩展安装
+https://blog.csdn.net/Just_shunjian/article/details/78686776
+
+一、安装环境
+ubuntu 16.04
+
+
+一、源码安装前准备工作
+
+
+1.1、下载源码
+下载地址：http://www.php.net/downloads.php
+可自行选择版本，这里我选择的最新版本PHP 7.2.0，下载地址为：http://cn2.php.net/distributions/php-7.2.0.tar.gz
+wget http://cn2.php.net/distributions/php-7.2.0.tar.gz
+
+1.2、解压
+tar -zxvf php-7.2.0.tar.gz
+
+1.3、准备安装目标文件夹
+mkdir /usr/local/php
+注：也就是源码安装的php到这个路径中
+
+二、编译安装
+2.1、配置
+cd cd php-7.2.0/
+
+
+A、如果PHP搭配Apache使用，那么配置如下
+./configure --prefix=/usr/local/php \
+--with-apxs2=/usr/local/apache2/bin/apxs
+
+
+注：
+/usr/local/apache2/bin/apxs，其中apxs是在安装Apache时产生的，apxs是一个为Apache HTTP服务器编译和安装扩展模块的工具，使之可以用由mod_so提供的LoadModule指令在运行时加载到Apache服务器中
+
+
+B、如果只是单独安装PHP以及MySQL的扩展，而不安装MySQL服务，那么需要添加下面的配置
+--enable-sockets=shared  \
+--with-pdo-mysql=shared,mysqlnd 或者 --with-mysql=shared,mysqlnd
+
+
+此处可以选择使用PHP的 mysql 还是 pdo 扩展，两者选择其一即可
+
+C、启动配置php-fpm
+
+--enable-fpm
+
+总结：执行A或者B此时可能出现错误
+configure: error: xml2-config not found. Please check your libxml2 installation.
+解决方法：
+CentOS
+yum install libxml2
+yum install libxml2-devel
+
+
+ubuntu：
+apt-get install libxml2
+apt-get install libxml2-dev
+
+
+安装成功后，重新运行上面的./configure命令
+
+
+
+
+示例：我安装的是不带Apache 和 Mysql 服务器，并且使用PDO扩展，那么配置如下
+./configure --prefix=/usr/local/php \
+--enable-sockets=shared  \
+--enable-fpm \
+--with-pdo-mysql=shared,mysqlnd
+
+
+2.2、编译
+make
+
+
+2.3、测试
+make test
+
+
+2.4、安装
+make install
+
+
+2.5、复制ini
+cp /php-7.2.0/php.ini-development  /usr/local/php/lib/php.ini
+    把原来位于源代码里面的php.ini-development拷贝到/usr/local/php/lib/php.ini下，并且重命名为php.ini
+
+三、把php加入到系统环境变量
+echo "export PATH=$PATH:/usr/local/php/bin/php"  >> /etc/profile
+source /etc/profile
+
+
+四、查看php版本
+/usr/local/php/bin/php --version
+
+五、安装扩展
+首先，请确保已经安装了autoconf，如未安装，请执行apt-get install autoconf
+编译完成之后，将会自动把mysql.so放到了默认的php扩展目录下（phpinfo可查看，我的为 /usr/local/php/lib/php/extensions/no-debug-zts-20090626），再修改php.ini
+修改php.ini,添加一句extension=mbstring.so
+
+
+5.1、mbstring扩展
+1、进入源码mbstring文件夹
+cd /php-7.2.0/ext/mbstring
+2、执行生成configure（假设php安装在/usr/local/php目录下）
+/usr/local/php/bin/phpize 
+3、生成makefile文件
+./configure --with-php-config=/usr/local/php/bin/php-config
+4、编译&安装
+make && make install
+
+5.2、pdo_mysql扩展
+1、进入源码pdo_mysql文件夹
+cd /php-7.2.0/ext/pdo_mysql
+2、执行生成configure（假设php安装在/usr/local/php目录下）
+/usr/local/php/bin/phpize 
+3、生成makefile文件
+./configure --with-php-config=/usr/local/php/bin/php-config
+假如你在本地安装了mysql服务，那么需执行下面命令
+./configure --with-php-config=/usr/local/php/bin/php-config --with-pdo-mysql=/usr/local/mysql/
+4、编译&安装
+make && make install
+5、修改php.ini,添加一句extension=pdo_mysql.so
+
+5.3、zlib扩展
+此扩展进入源码/php-7.2.0/ext/zlib安装会出错，因此先执行下面语句
+1、 http://www.zlib.net/下载zlib源码
+wget http://www.zlib.net/zlib-1.2.11.tar.gz
+2、解压，配置，编译，安装
+tar -zxvf zlib-1.2.11.tar.gz
+cd zlib-1.2.11/
+./configure --prefix=/usr/local/zlib
+make && make install
+3、重新配置、编译、安装PHP,增加参数--with-zlib-dir=/usr/local/zlib
+./configure --prefix=/usr/local/php \
+--enable-sockets=shared  \
+--with-pdo-mysql=shared,mysqlnd \
+--with-zlib-dir=/usr/local/zlib 
+
+5.4、curl扩展
+方法一：
+1、去网站 http://curl.haxx.se/download/ 
+下载libcurl源码。我用的版本是curl-7.28.0.tar.gz
+    2、解压，配置，编译，安装
+tar -zxvf curl-7.28.0.tar.gz
+cd usr/src/curl-7.28.0
+./configure --prefix=/usr/local/curl；
+make && make install
+   （3）重新编译php，增加参数--with-curl=/usr/local/curl
+./configure --prefix=/usr/local/php \
+--enable-sockets=shared  \
+--with-pdo-mysql=shared,mysqlnd \
+--with-zlib-dir=/usr/local/zlib  \
+--with-curl=/usr/local/curl
+
+方法二：
+1、安装apt-get install libcurl4-gnutls-dev，如果出错，请先apt-get update
+2、进入源码curl文件夹
+cd /php-7.2.0/ext/curl
+3、执行生成configure（假设php安装在/usr/local/php目录下）
+/usr/local/php/bin/phpize 
+4、生成makefile文件
+./configure --with-php-config=/usr/local/php/bin/php-config
+5、编译&安装
+make && make install
+6、修改php.ini,添加一句extension=curl.so
+
+5.5、pcntl扩展
+1、进入源码pcntl文件夹
+cd /php-7.2.0/ext/pcntl
+2、执行生成configure（假设php安装在/usr/local/php目录下）
+/usr/local/php/bin/phpize 
+3、生成makefile文件
+./configure --with-php-config=/usr/local/php/bin/php-config
+4、编译&安装
+make && make install
+5、修改php.ini,添加一句extension=pcntl.so
+
+5.6、libevent/event 扩展
+由于PHP5.7以后只支持event，因此我安装的event，但是libevent的安装方法和event方法一样
+扩展依赖于原始的libevent库，必须先把libevent库安装
+1)、安装libevent库(http://libevent.org/)
+1. wget https://github.com/libevent/libevent/releases/download/release-2.1.8-stable/libevent-2.1.8-stable.tar.gz
+2. tar -zxvf libevent-2.1.8-stable.tar.gz
+3. cd libevent-2.1.8-stable/
+4. ./configure --prefix=/usr/local/libevent-2.1.8/
+5. make && make install
+2)、安装event扩展(http://pecl.php.net/package/event)
+1、wget http://pecl.php.net/get/event-2.3.0.tgz
+2、tar -zxvf event-2.3.0.tgz 
+3、cd event-2.3.0/
+4、/usr/local/php/bin/phpize 
+5、./configure --with-php-config=/usr/local/php/bin/php-config --with-event-libevent-dir=/usr/local/libevent-2.1.8/
+如果是libevent
+./configure --with-php-config=/usr/local/php/bin/php-config --with-libevent=/usr/local/libevent-2.1.8/
+6、make && make install
+
+注：此处安装可能遇到的问题及解决方案
+问题1：configure: error: Cannot find OpenSSL's <evp.h>
+解决方案：apt-get install libssl-dev
+
+问题2：configure: error: Cannot find OpenSSL's libraries
+解决方案：
+find / -name libssl.so
+输出结果为：/usr/lib/x86_64-linux-gnu/libssl.so
+初步判断它可能只会在 /usr/lib/ 下寻找 libssl.so 文件，于是：
+ln -s/usr/lib/x86_64-linux-gnu/libssl.so /usr/lib
+重新编译安装即通过。
+
+5.7、redis扩展(phpredis)
+1、下载源码https://github.com/phpredis/phpredis/releases
+wget https://github.com/phpredis/phpredis/archive/3.1.4.tar.gz
+2、mv 3.1.4.tar.gz phpredis.tar.gz
+3、tar -zxvf phpredis.tar.gz
+4、cd phpredis-3.1.4/
+5、/usr/local/php/bin/phpize 
+6、./configure --with-php-config=/usr/local/php/bin/php-config
+7、 make && make install 
+
+5.8、openssl扩展
+1、进入源码openssl文件夹
+cd /php-7.2.0/ext/openssl
+2、执行生成configure（假设php安装在/usr/local/php目录下）
+cp config0.m4 config.m4
+/usr/local/php/bin/phpize 
+3、生成makefile文件
+./configure --with-php-config=/usr/local/php/bin/php-config
+4、编译&安装
+make && make install
+
+注：此处安装可能遇到的问题及解决方案
+问题1：configure: error: Cannot find OpenSSL's <evp.h>
+解决方案：apt-get install libssl-dev
+
+问题2：configure: error: Cannot find OpenSSL's libraries
+解决方案：
+find / -name libssl.so
+输出结果为：/usr/lib/x86_64-linux-gnu/libssl.so
+初步判断它可能只会在 /usr/lib/ 下寻找 libssl.so 文件，于是：
+ln -s/usr/lib/x86_64-linux-gnu/libssl.so /usr/lib
+重新编译安装即通过。
+
+
+
+~/PhpstormProjects/c/php-src/ext/mbstring
+
+$phpize
+Configuring for:
+PHP Api Version:         20151012
+Zend Module Api No:      20160303
+Zend Extension Api No:   320160303
+Cannot find autoconf. Please check your autoconf installation and the
+$PHP_AUTOCONF environment variable. Then, rerun this script.
+
+
+$brew install autoconf
+$phpize
+Configuring for:
+PHP Api Version:         20151012
+Zend Module Api No:      20160303
+Zend Extension Api No:   320160303
+
+$ ./configure --with-php-config=/usr/local/php/man/man1/php-config.1
+configure: WARNING: unrecognized options: --with-php-config
+checking for grep that handles long lines and -e... /usr/bin/grep
+checking for egrep... /usr/bin/grep -E
+
+configure: error: Cannot find php-config. Please use --with-php-config=PATH
+
+$which php-config
+/usr/local/bin/php-config
+
+$./configure --with-php-config=/usr/local/php/man/man1/php-config.1 -with-php-config=/usr/local/bin/php-config
+
+$make
+Build complete.
+Don't forget to run 'make test'.
+
+$make install
+Installing shared extensions:     /usr/local/lib/php/extensions/debug-non-zts-20160303/
+
+$vi /usr/local/lib/php.ini
+extension=/usr/local/lib/php/extensions/debug-non-zts-20160303/curl.so
+
+
+cURL support	enabled
+
+~/PhpstormProjects/c/php-src/ext/openssl$
+
+可能会报错：Cannot find config.m4. 其实该目录下面的config0.m4就是，所以将config0.m4改名为config.m4：
+
+
+$phpize
+Cannot find config.m4.
+Make sure that you run '/usr/local/bin/phpize' in the top level source directory of the module
+
+$cp config0.m4 config.m4
+
+$phpize
+Configuring for:
+PHP Api Version:         20151012
+Zend Module Api No:      20160303
+Zend Extension Api No:   320160303
+
+
+./configure --with-php-config=/usr/local/php/man/man1/php-config.1 -with-php-config=/usr/local/bin/php-config
+
+checking for RAND_egd... no
+checking for pkg-config... no
+configure: error: Cannot find OpenSSL's <evp.h>
+
+configure: error: Cannot find OpenSSL's <evp.h> 错误解决
+
+开始以为是没有安装openssl, openssl-devel，安装后发现还是提示这个错误，搜索了一下evp.h，这个文件也存在。
+GOOGLE 了一下，在stackoverflow，找到了答案，原来是 phpize 生成的configure脚本有问题。
+
+解决方法：
+
+export PHP_OPENSSL_DIR=yes
+./configure -with-openssl-dir=/usr/include/openssl
+
+$   which openssl
+/usr/bin/openssl
+
+$./configure --with-php-config=/usr/local/php/man/man1/php-config.1 -with-php-config=/usr/local/bin/php-config -with-openssl-dir=/usr/bin/openssl
+
+失败了
+
+$sudo find / -name openssl
+find: /dev/fd/4: No such file or directory
+find: /home: No such file or directory
+find: /Library: No such file or directory
+find: /net: No such file or directory
+find: /Network: No such file or directory
+find: /opt: No such file or directory
+find: /private: No such file or directory
+find: /sbin: No such file or directory
+find: /System: No such file or directory
+find: /Users: No such file or directory
+find: /usr: No such file or directory
+find: /Volumes: No such file or directory
+08:29:53-didi@localhost:~/PhpstormProjects/c/php-src/ext/openssl$sudo find /usr/local -name openssl
+/usr/local/etc/openssl
+/usr/local/Homebrew/Library/Homebrew/vendor/portable-ruby/2.6.3/lib/ruby/2.6.0/openssl
+/usr/local/Homebrew/Library/Taps/homebrew/homebrew-core/Aliases/openssl
+/usr/local/lib/python2.7/site-packages/cryptography/hazmat/backends/openssl
+/usr/local/lib/python2.7/site-packages/cryptography/hazmat/bindings/openssl
+/usr/local/octave/3.8.0/bin/openssl
+/usr/local/octave/3.8.0/etc/openssl
+/usr/local/octave/3.8.0/include/openssl
+
+
+$ls /usr/local/octave/3.8.0/include/openssl/evp.h
+/usr/local/octave/3.8.0/include/openssl/evp.h
+
+./configure --with-php-config=/usr/local/php/man/man1/php-config.1 -with-php-config=/usr/local/bin/php-config -with-openssl-dir=/usr/local/octave/3.8.0/include/openssl
+
+失败
+
+https://blog.csdn.net/Leadyang/article/details/89966697
+$ find / -name libssl.so
+
+$gem env
+得到gem的PATH路径，比如
+  - GEM PATHS:
+     - /Users/didi/.rvm/gems/ruby-2.4.1
+     - /Users/didi/.rvm/rubies/ruby-2.4.1/lib/ruby/gems/2.4.0
+
+将其下的cache目录删除，再次执行gem安装的时候就不会出错了
+ls /Users/didi/.rvm/rubies/ruby-2.4.1/lib/ruby/gems/2.4.0/cache/
+
+rm -rf  /Users/didi/.rvm/rubies/ruby-2.4.1/lib/ruby/gems/2.4.0/cache
+
+
+
+$brew install openssl
+==> Downloading https://www.openssl.org/source/openssl-1.1.1g.tar.gz
+Already downloaded: /Users/didi/Library/Caches/Homebrew/downloads/1178a9e293b3f8231b3a09a91b1a4cc8bf765526148a37a720ba4a89d49e3aff--openssl-1.1.1g.tar.gz
+Error: An exception occurred within a child process:
+  NoMethodError: undefined method `source' for nil:NilClass
+  
+$brew upgrade openssl
+Error: openssl not installed
+
+https://blog.csdn.net/Just_shunjian/article/details/78686776
+
+开始以为是没有安装openssl, openssl-devel，安装后发现还是提示这个错误，搜索了一下evp.h，这个文件也存在。GOOGLE 了一下，在stackoverflow，找到了答案，原来是 phpize 生成的configure脚本有问题。
+
+解决方法：修改configure 文件加入  export PHP_OPENSSL_DIR=yes
+
+https://www.jb51.net/article/37487.htm
+
+vi configure ＋17
+17 export PHP_OPENSSL_DIR=yes
+
+
+源码安装openssl
+
+下载openssl 地址 ftp://ftp.openssl.org/source/openssl-1.0.1c.tar.gz
+tar -zxf openssl-1.0.1c.tar.gz
+cd openssl-1.0.1c/
+./config --prefix=/usr/local --openssldir=/usr/local/ssl
+sudo make && sudo make install
+./config shared --prefix=/usr/local --openssldir=/usr/local/ssl
+sudo make clean
+sudo make && sudo make install
+命令使用
+
+openssl genrsa -des3 -out server.key 1024
+openssl req -new -key server.key -out server.csr
+openssl x509 -req -days 365 -in server.csr -signkey server.key -out
+server.crt
+
+
+旧版mac  brew 支持不是特别好，还是选择源码安装吧
+cp /Users/didi/Library/Caches/Homebrew/downloads/1178a9e293b3f8231b3a09a91b1a4cc8bf765526148a37a720ba4a89d49e3aff--openssl-1.1.1g.tar.gz /Users/didi/PhpstormProjects/c/
+
+tar -zxvf 1178a9e293b3f8231b3a09a91b1a4cc8bf765526148a37a720ba4a89d49e3aff--openssl-1.1.1g.tar.gz
+
+$cd openssl-1.1.1g/
+
+$./config --prefix=/usr/local --openssldir=/usr/local/ssl
+
+sudo make && sudo make install
+
+./config shared --prefix=/usr/local --openssldir=/usr/local/ssl
+
+sudo make clean
+sudo make && sudo make install
+
+
+
+~/PhpstormProjects/c/php-src/ext/openssl$./configure --with-php-config=/usr/local/php/man/man1/php-config.1 -with-php-config=/usr/local/bin/php-config
+
+成功了
+
+make & $make install
+Installing shared extensions:     /usr/local/lib/php/extensions/debug-non-zts-20160303/
+
+vi /usr/local/lib/php.ini
+extension=/usr/local/lib/php/extensions/debug-non-zts-20160303/openssl.so
+
+php -v
+Warning: PHP Startup: Unable to load dynamic library 'ext/php_openssl.dll' - dlopen(ext/php_openssl.dll, 9): image not found in Unknown on line 0
+Segmentation fault: 11
+
+vi /usr/local/lib/php.ini 注释掉
+;extension=php_curl.dll
+;extension=php_openssl.dll
+;extension=php_mbstring.dll
+
+php 需要 openssl.so 模块，于是去 php.net 下载了源码编译出，配置好以后，就出现这个报错了，运行什么命令都是Segmentation fault: 11报错，
+
+特别补充， 扩展的加载顺序也会导致 php 报 segment fault 错误。 需要先加载 openssl 模块再加载其他模块。
+
+vi /usr/local/lib/php.ini  把openssl.so放到前面
+extension=/usr/local/lib/php/extensions/debug-non-zts-20160303/openssl.so
+extension=/usr/local/lib/php/extensions/debug-non-zts-20160303/curl.so
+
+
+
+OpenSSL support	enabled
+OpenSSL Library Version	OpenSSL 1.1.1g 21 Apr 2020
+
+问题解决
+
+
+cd ../mbstring/
+autoconf
+phpize
+./configure --with-php-config=/usr/local/php/man/man1/php-config.1 -with-php-config=/usr/local/bin/php-config
+  615  make & make install
+
+libtool: link: `libmbfl/filters/mbfilter_cp936.lo' is not a valid libtool object
+make: *** [mbstring.la] Error 1
+libtool: link: `libmbfl/filters/mbfilter_cp936.lo' is not a valid libtool object
+make: *** [mbstring.la] Error 1
+[1]+  Exit 2                  make
+
+$make clean
+$make & make install
+
+libtool: link: `oniguruma/regparse.lo' is not a valid libtool object
+make: *** [mbstring.la] Error 1
+
+make clean 
+make
+问题解决
+
+$make install
+Installing shared extensions:     /usr/local/lib/php/extensions/debug-non-zts-20160303/
+Installing header files:           /usr/local/include/php/
+
+vi /usr/local/lib/php.ini
+extension=/usr/local/lib/php/extensions/debug-non-zts-20160303/mbstring.so
+
+ Update failed (unable to decompress gzipped phar archive "xxx" to temporary file, enable zlib extension in php.ini)
+ 
+ https://stackoverflow.com/questions/24988022/php-enable-bz2-extension-in-php-ini
+ 
+cd ../zlib/
+$autoconf
+autoconf: error: no input file
+cp config0.m4 config.m4
+$phpize 
+./configure --with-php-config=/usr/local/php/man/man1/php-config.1 -with-php-config=/usr/local/bin/php-config
+ 
+make & make install
+
+Installing shared extensions:     /usr/local/lib/php/extensions/debug-non-zts-20160303/
+
+ 
