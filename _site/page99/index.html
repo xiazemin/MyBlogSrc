@@ -147,392 +147,24 @@
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/linux/2020/01/05/socket.html">UNIX域套接字传递描述符的应用</a>
+						<a class="post-link" href="/MyBlog/golang/2020/02/03/executable.html">Why are my Go executable files so large</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/linux/2020/01/05/socket.html"> 夏泽民</a>
+						<a href="/MyBlog/golang/2020/02/03/executable.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Jan 5, 2020
+							Feb 3, 2020
 						</span>
 					</div>
-					<div class="excerpt"><p> 传送文件描述符是高并发网络服务编程的一种常见实现方式。Nebula 高性能通用网络框架即采用了UNIX域套接字传递文件描述符设计和实现
- https://github.com/Bwar/Nebula
+					<div class="excerpt"><p>https://www.cockroachlabs.com/blog/go-file-size
+https://github.com/knz/go-binsize-viz
 <!-- more -->
- 在Unix 域套接字概述一节中介绍了什么是 Unix 及相关函数，本文将继续介绍 Unix 域套接字在进程间传递描述符的应用。
-        在进程间传递打开的描述符时通常会采用如下两种方法：
-        （1）fork 调用返回后，子进程自动共享父进程的所有打开的描述符。
-        （2）exec 调用执行后，所有描述符通常保持打开状态不变。
-        第一种方法中，进程先打开一个描述符，再调用 fork，之后父进程关闭这个描述符，子进程则处理该描述符。这样一个打开的描述符就从父进程传递到子进程。不过有时候可能想让子进程打开一个描述符并把他传递给父进程。
-        使用 Unix 域套接字，可以从一个进程向任一其他进程传递打开的描述符，而无需这两个进程之间存在亲缘关系。这种技术要求首先在这两个进程之间创建一个 Unix 域套接字，然后使用 sendmsg 跨这个套接字发送一个特殊消息。该消息由内核来专门处理，会把打开的描述符从发送进程传递到接收进程。
-        使用 Unix 域套接字在两个进程之间传递描述符涉及的步骤如下。
-        （1）创建一个字节流或数据报的 Unix 域套接字。如果目标是让子进程将打开的描述符传递回父进程，则父进程可以预先调用 socketpair 函数创建一个可用于在父子进程之间交换描述符的流管道。如果进程间没有亲缘关系，则服务器进程必须先创建一个 Unix 域字节流套接字（也可以是 Unix 域数据报套接字，不过这没什么好处，而且数据报还存在被丢弃的可能性），然后 bind 一个路径名到该套接字，以允许客户进程 connect 到套接字，发送一个打开某个描述符的请求。
-        （2）发送进程通过调用返回描述符的任一 Unix 函数（如 open、pipe、mkfifo、socket 和 accept，可以在进程之间传递的描述符不限类型）打开一个描述符。
-        （3）发送进程创建一个 msghdr 结构，其中含有待传递的描述符。POSIX 规定描述符作为辅助数据（msghdr 结构的 msg_control 成员，见辅助数据）发送。发送进程调用 sendmsg 跨来自步骤 1 的 Unix 域套接字发送该描述符。至此，称这个描述符“在飞行中（in flight）”。即使发送进程在调用 sendmsg 之后但在接收进程调用 recvmsg 之前关闭了该描述符，对于接收进程它仍然保持打开状态。发送一个描述符会使该描述符的引用计数加一。
-        （4）接收进程调用 recvmsg 在来自步骤 1 的 Unix 域套接字上接收这个描述符。这个描述符在接收进程中的描述符号不同于它在发送进程中的描述符号是正常的，因为传递一个描述符并不是传递一个描述符号，而是涉及在接收进程中创建一个新的描述符，该描述符和发送进程中飞行前的那个描述符指向内核中相同的文件表项。</p>
-
-<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    参考文献：1） 《Unix网络编程》
-    2）  http://book.51cto.com/art/200912/168560.htm
-</code></pre></div></div>
-
-<p>最近学习了使用Unix域套接字在进程间传递文件描述符，仿照参考资料，自己也写了简单的程序来实践这种技术。</p>
-
-<p>其他不多说了，具体理论知识参见参考资料，开始我自己的程序介绍（在OpenSolaris 2009.06平台上测试）：</p>
-
-<p>1  程序作用说明：父进程，子进程以及另外一个进程向同一个文件的文件描述符向这个文件中写内容。
-   具体如下：
-   1）父进程指定要打开的文件名，打开权限，打开模式；
-   2）fork一个子进程；
-   3）子进程调用execl函数来执行程序openfile：该新程序取得指定文件的文件描述符；向指定文件中写入“openfileprog write test”；向父进程返回该文件描述符；
-   4）父进程收到该文件描述符后，向文件中写“paraent process write ppp”；
-   5）父进程作为server端建立域socket等待客户端进程连接；
-   6）客户端进程连接父进程；
-   7）父进程向该客户端进程返回从子进程得到的文件描述符；
-   8）客户端进程收到该文件描述符后使用它在文件中写“this is client process ccc”；</p>
-
-<p>其中父子进程传递文件描述符通过建立的一对套接字管道，父进程和客户端进程传递文件描述符通过Unix域套接字。</p>
-
-<p>2 具体代码说明：</p>
-
-<p>1） 首先看openfile程序，这时子进程通过调用execl执行的。调用方法如下：
-  execl(“./openfileprog”, “openfileprog”, permit, mode, argsockfd, (char *)NULL);
-其中参数1： openfile程序路径；
-   参数2： openfile程序名；
-   参数3： 待打开文件的权限；
-   参数4： 待打开文件模式；
-   参数5： 父进程建立的一对套接字管道的其中之一；</p>
-
-<p>作为openfile程序，主要按照execl传的参数，打开指定文件，取得文件描述符；向该文件中写入内容；然后调用func_send_fd函数通过argsockfd把取得的文件描述符传给父进程。该程序代码如下：</p>
-
-<p>int main(int argc, char <em>argv[]) /</em> openfileprog <em>/
-{
- int i, fd, ret;
- ssize_t size;
- size_t buflen;
- char data[10];
- char buf[] = “openfileprog write test\n”; /</em> 向文件中写入的内容 <em>/
-        /</em> execl(“./openfileprog”, permit, mode, argsockfd, (char *)NULL); */
-  fd = -1;
- if((fd = open(“./file”, atoi(argv[1]), atoi(argv[2]))) &lt; 0)
- {
-  printf(“in openfileprog, open failed\n”);
-  exit(-1);
- }</p>
-
-<p>size = -1;
- buflen = sizeof(buf);
- if((size = write(fd, buf, buflen)) &lt;= 0)
- {
-  printf(“in openfileprog, write failed\n”);
- }</p>
-
-<p>/* 把设定的data信息也传给父进程 */
- ret = ‘a’;
- for(i = 0; i &lt; sizeof(data); i++, ret++)
- {
-  data[i] = ret;
- }
- data[sizeof(data) - 1] = ‘\0’;</p>
-
-<p>ret = -1;
- if(0 &gt; (ret = func_send_fd(atoi(argv[3]), fd, data, 10)))
- {
-  printf(“in openfileprog, func_send_fd failed\n”);
- }</p>
-
-<p>close(fd);</p>
-
-<p>return 0; 
-}</p>
-
-<p>func_send_fd函数负责把取得的文件描述符传出去：</p>
-
-<p>int func_send_fd(int send_sock, int send_fd, void *data, int bytes)
-{
-    struct msghdr msghead; 
- struct iovec passdata[1];
- int ret;</p>
-
-<p>/* 填充msghead结构 */
- msghead.msg_accrights = (caddr_t)&amp;send_fd;
- msghead.msg_accrightslen = sizeof(send_fd);</p>
-
-<p>msghead.msg_name = NULL;
- msghead.msg_namelen = 0;
- passdata[0].iov_base = data;
- passdata[0].iov_len = bytes;</p>
-
-<p>msghead.msg_iov = passdata;
- msghead.msg_iovlen = 1;</p>
-
-<p>/* 发送信息 */
- if(0 &gt; (ret = sendmsg(send_sock, &amp;msghead, 0)))
- {
-  printf(“in func_send, send_fd is %d, sendsock is %d, sendmsg failed,errno is %d\n”, send_fd,send_sock,errno);
-  return -1;
- }</p>
-
-<p>return ret;
-}</p>
-
-<p>在上述两个函数之前，加上以下必要头文件和宏：</p>
-
-<p>#include
-#include
-#include
-#include
-#include
-#include
-#include
-#define SLEEPTIME  3
-#define ARGLEN     20</p>
-
-<p>以上作为一个c文件。</p>
-
-<p>2）然后看父进程代码</p>
-
-<p>下面是父进程程序：</p>
-
-<p>int main(int argc, char *argv)
-{
- int status,sockfd[2];
- char permit[ARGLEN];
- char mode[ARGLEN];
- char argsockfd[ARGLEN];
- int recvfd;
- char data[20];
- int bytes;
- int ret,i;
- ssize_t size;
- int buflen;
- pid_t pid,chldpid;</p>
-
-<p>/* 以下几行是使用域套接字必要变量 */
- int fdsock, fdaccept;
- struct sockaddr_un addr_server; <br />
- int len; <br />
- const char path[] = “/export/home/temp/test/other_prog/fengxianzhong”;</p>
-
-<p>/* 以下是父进程写入文件的内容 */  <br />
- char buf[] = “paraent process write ppp\n”;</p>
-
-<p>/* 父进程同时向处理向client发送的数据 */
- char datasend[] = “send by myopen\n”;</p>
-
-<p>memset(permit, ‘\0’, sizeof(permit));
- memset(mode, ‘\0’, sizeof(mode));
- memset(argsockfd, ‘\0’, sizeof(argsockfd));
- memset(data, ‘\0’, sizeof(data));</p>
-
-<p>printf(“now it is parent process,now will fork a child process\n”);
- sleep(SLEEPTIME);</p>
-
-<p>/* 设置文件权限和打开模式 */ 
-snprintf(permit, sizeof(permit), “%d”,PERMIT);
- snprintf(mode, sizeof(mode), “%d”,MODE); 
- // printf(“in myopen %s, %s\n”, permit, mode);</p>
-
-<p>/* 建立和子进程通信的socket套接字管道 */
- ret = socketpair(AF_UNIX,SOCK_STREAM,0,sockfd);
- if(0 &gt; ret)
- {
-  printf(“socketpair failed,errno is %d \n”,errno);
- }</p>
-
-<p>/* fork 子进程 <em>/
- if(0 == (chldpid = fork())) /</em> child process */
- {
-  printf(“now it is child process, sendsock is %d\n”,sockfd[1]);
-  close(sockfd[0]);
-  snprintf(argsockfd, sizeof(argsockfd), “%d”, sockfd[1]);</p>
-
-<p>/* 子进程中执行新程序openfile */
-  execl(“./openfileprog”, “openfileprog”, permit, mode, argsockfd, (char *)NULL);
-  printf(“execl failed, perimit is %s, mode is %s\n”,permit, mode);
-  exit(-1);
- }</p>
-
-<p>/* paraent process start to write the file opened by child process */</p>
-
-<p>printf(“now it is parent process\n”);
- close(sockfd[1]);
- bytes = sizeof(data);</p>
-
-<p>/* 等待子进程结束 <em>/
- pid = wait(&amp;status);
- if((status = WEXITSTATUS(status)) == 0) /</em> child process terminate */
- {
-  printf(“child %d process terminate,now parent will write file …\n”,pid);
- }</p>
-
-<p>/* 从子进程取得文件描述符 <em>/
- recvfd = -1;
- // printf(“recv sock is %d\n”, sockfd[0]);
- ret = func_recv_fd(sockfd[0], &amp;recvfd, data, bytes);
- if(ret &lt; 0)
- {
-  printf(“paraent recv failed\n”);
- }
- /</em>
- else
- {
-  printf(“fd %d paraent recv %d bytes data is %s\n”, recvfd,strlen(data),data);
- }
- */</p>
-
-<p>/* 向文件写入数据  */
- size = -1;
- buflen = sizeof(buf);</p>
-
-<p>if((size = write(recvfd, buf, buflen)) &lt;= 0)
- {
-  printf(“in openfileprog, write failed\n”);
- }</p>
-
-<p>/* 父进程作为server建立域套接字，等待client连接 */
-  printf(“parent write over! Accept other process ……\n”);</p>
-
-<p>fdsock = socket(AF_UNIX, SOCK_STREAM, 0);
- if(-1 == fdsock)
- {
-  printf(“myopen creat socket error!errno is %d\n”, errno);
- }</p>
-
-<p>unlink(path);</p>
-
-<p>memset(&amp;addr_server, 0, sizeof(addr_server));
- addr_server.sun_family = AF_UNIX;
- strcpy(addr_server.sun_path, path);
- len = sizeof(struct sockaddr_un);</p>
-
-<p>ret = bind(fdsock, (struct sockaddr*)&amp;addr_server, len);
- if(-1 == ret)
- {
-  printf(“in myopen bind error, errorno is %d\n”,errno);
-  close(fdsock);
-  unlink(path);
- }</p>
-
-<p>ret = listen(fdsock,1);
- if(-1 == ret)
- {
-  printf(“in myopen listen error, errorno is %d\n”,errno);
-  close(fdsock);
-  unlink(path);
- }</p>
-
-<p>fdaccept = accept(fdsock, (struct sockaddr*)&amp;addr_server, &amp;len);
- if(-1 == ret)
- {
-  printf(“in myopen accept error, errorno is %d\n”,errno);
-  close(fdsock);
-  unlink(path);
- }</p>
-
-<p>/* 向已经连接的client传递该文件描述符 */
- ret = func_send_fd(fdaccept, recvfd, datasend, sizeof(datasend));
- if(0 &gt; ret)
- {
-  printf(“in myopen, func_send_fd failed\n”);
- }</p>
-
-<p>printf(“send fd over! Will sleep 10s \n”);</p>
-
-<p>sleep(10);</p>
-
-<p>exit(0);</p>
-
-<p>}</p>
-
-<p>func_recv_fd函数负责从子进程接受文件描述符：</p>
-
-<p>int func_recv_fd(int recv_sock, int *recvfd, void *data, int bytes)
-{
- struct msghdr msghead; 
- struct iovec passdata[1];
- int ret;
- int temp;
- int newfd;</p>
-
-<p>struct cmsghdr  *msgptr1;</p>
-
-<p>struct cmsghdr  *msgptr = NULL;</p>
-
-<p>memset(&amp;msghead, 0, sizeof(msghead));</p>
-
-<p>/* 同func_send_fd ，填充所需要的结构 */
- msghead.msg_accrights = (caddr_t)&amp;newfd;
- msghead.msg_accrightslen = sizeof(recvfd);</p>
-
-<p>msghead.msg_name = NULL;
- msghead.msg_namelen = 0;
- passdata[0].iov_base = data;
- passdata[0].iov_len = bytes;</p>
-
-<p>msghead.msg_iov = passdata;
- msghead.msg_iovlen = 1;</p>
-
-<p>/* 接收信息（文件描述符 ）*/
- if(0 &gt; (ret = recvmsg(recv_sock, &amp;msghead, 0)))
- {
-  printf(“in func_recv_fd, recvmsg failed\n”);
-  return -1;
- }</p>
-
-<p>if(msghead.msg_accrightslen == sizeof(recvfd))
- {
-  <em>recvfd = newfd;  /</em> 文件描述符 */
- }</p>
-
-<p>return ret;
-}</p>
-
-<p>其中父进程向client进程发送文件描述符也使用了func_send_fd函数，该函数在此c文件中重新写了一遍；其实没有必要这样重复。我们可以把它作为一个库来使用；不过这里暂且这样使用。函数代码参考上面所写的。</p>
-
-<p>在这个c文件中还要加入以下头文件和宏定义：</p>
-
-<p>#include
-#include
-#include
-#include
-#include
-#include
-#include
-#include
-#include
-#include
-#define SLEEPTIME  3
-#define ARGLEN     20
-#define MODE       S_IRUSR | S_IWUSR | S_IXUSR | S_IRGRP | S_IROTH    /* -rwxr–r– <em>/
-#define PERMIT     O_RDWR | O_APPEND | O_CREAT                         /</em> if the file not exit ,creat it , data written to it append */</p>
-
-<p>3）最后看client进程代码：</p>
-
-<p>int main()
-{
- int sockfd, recvfd,ret;</p>
-
-<p>struct sockaddr_un addr_client; <br />
- int length,buflen; 
- char data[10]; 
- ssize_t size;
- const char path[] = “/export/home/temp/test/other_prog/fengxianzhong”; <br />
- char buf[] = “this is client process ccc\n” ;</p>
-
-<p>sockfd = socket(AF_UNIX, SOCK_STREAM, 0);
- if(-1 == sockfd)
- {
-  printf(“client creat socket error!errno is %d\n”, errno);
- }</p>
-
-<p>addr_client.sun_family = AF_UNIX;
-    strcpy(addr_client.sun_path, path);
-    length = sizeof(addr_client.sun_family) + sizeof(addr_client.sun_path);</p>
+I built some tooling to extract details about the contents of a Go executable file, and a small D3 application to visualize this information interactively as zoomable tree maps.</p>
 
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/linux/2020/01/05/socket.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/golang/2020/02/03/executable.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -542,25 +174,21 @@ snprintf(permit, sizeof(permit), “%d”,PERMIT);
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/golang/2020/01/05/rest.html">rest</a>
+						<a class="post-link" href="/MyBlog/web/2020/02/03/ddd.html">ddd</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/golang/2020/01/05/rest.html"> 夏泽民</a>
+						<a href="/MyBlog/web/2020/02/03/ddd.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Jan 5, 2020
+							Feb 3, 2020
 						</span>
 					</div>
-					<div class="excerpt"><p>https://github.com/emicklei/go-restful-swagger12
-https://github.com/emicklei/go-restful-openapi
-https://github.com/emicklei/go-restful
-https://github.com/ant0ine/go-json-rest/
-go-restful库：https://github.com/emicklei/go-restful</p>
+					<div class="excerpt"><p>DDD</p>
 
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/golang/2020/01/05/rest.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/web/2020/02/03/ddd.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -570,22 +198,22 @@ go-restful库：https://github.com/emicklei/go-restful</p>
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/algorithm/2020/01/05/rainbow.html">rainbow table 彩虹表</a>
+						<a class="post-link" href="/MyBlog/storage/2020/02/03/data.html">为什么数据库会丢失数据</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/algorithm/2020/01/05/rainbow.html"> 夏泽民</a>
+						<a href="/MyBlog/storage/2020/02/03/data.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Jan 5, 2020
+							Feb 3, 2020
 						</span>
 					</div>
-					<div class="excerpt"><p>如何存储密码才是安全的？
-密码存储有几种方式：</p>
+					<div class="excerpt"><p>https://draveness.me/whys-the-database-data-loss
+数据库管理系统在今天已经是软件的重要组成部分，开源的 MySQL、PostgreSQL 以及商业化的 Oracle 等数据库已经随处可见，几乎所有的服务都需要依赖数据库管理系统存储数据。</p>
 
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/algorithm/2020/01/05/rainbow.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/storage/2020/02/03/data.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -595,21 +223,21 @@ go-restful库：https://github.com/emicklei/go-restful</p>
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/algorithm/2020/01/05/pki.html">pki Public Key Infrastructure</a>
+						<a class="post-link" href="/MyBlog/golang/2020/02/03/close_wait.html">close_wait</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/algorithm/2020/01/05/pki.html"> 夏泽民</a>
+						<a href="/MyBlog/golang/2020/02/03/close_wait.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Jan 5, 2020
+							Feb 3, 2020
 						</span>
 					</div>
-					<div class="excerpt"><p>公开密钥基础建设（英语：Public Key Infrastructure，缩写：PKI），又称公开密钥基础架构、公钥基础建设、公钥基础设施、公开密码匙基础建设或公钥基础架构，是一组由硬件、软件、参与者、管理政策与流程组成的基础架构，其目的在于创造、管理、分配、使用、存储以及撤销数字证书。</p>
+					<div class="excerpt"><p>我们发现一个有意思的现象，CLOSE_WAIT 是被动关闭连接的状态，主动关闭连接的状态应该是 FIN_WAIT1。比较了两种状态连接数不是一个数量级，CLOSE_WAIT 将近1w个，而 FIN_WAIT1 只有几个，同时 FIN_WAIT2 只有几十个，TIME_WAIT一个没有。</p>
 
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/algorithm/2020/01/05/pki.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/golang/2020/02/03/close_wait.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -619,27 +247,23 @@ go-restful库：https://github.com/emicklei/go-restful</p>
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/storage/2020/01/05/mysqldump.html">mysqldump Mysql 大量数据快速导出</a>
+						<a class="post-link" href="/MyBlog/golang/2020/02/03/automic.html">Go 语言标准库中 atomic.Value</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/storage/2020/01/05/mysqldump.html"> 夏泽民</a>
+						<a href="/MyBlog/golang/2020/02/03/automic.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Jan 5, 2020
+							Feb 3, 2020
 						</span>
 					</div>
-					<div class="excerpt"><p>mysqldump -u root -p -q -e -t  webgps4 dn_location2 &gt; dn_location2.sql 
-mysqldump -u root -p -q -e -t –single-transaction  webgps4 dn_location2 &gt; dn_location2.sql
-source dn_location2.sql
-以上是导入导出数据的语句，该方法15分钟导出1.6亿条记录，导出的文件中平均7070条记录拼成一个insert语句，通过source进行批量插入，导入1.6亿条数据耗时将近5小时。平均速度：3200W条/h。后来尝试加上–single-transaction参数，结果影响不大。另外，若在导出时增加-w参数，表示对导出数据进行筛选，那么导入导出的速度基本不变，筛选出的数据量越大，时间越慢而已。对于其中的参数这里进行说明：
+					<div class="excerpt"><p>sync/atomic包将底层硬件提供的原子操作封装成了 Go 的函数。但这些操作只支持几种基本数据类型，因此为了扩大原子操作的适用范围，Go 语言在 1.4 版本的时候向sync/atomic包中添加了一个新的类型Value。此类型的值相当于一个容器，可以被用来“原子地”存储（Store）和加载（Load）任意类型的值。
 <!-- more -->
-–quick，-q
-该选项在导出大表时很有用，它强制 mysqldump 从服务器查询取得记录直接输出而不是取得所有记录后将它们缓存到内存中。</p>
+我在golang-dev邮件列表中翻到了14年的这段讨论，有用户报告了encoding/gob包在多核机器上（80-core）上的性能问题，认为encoding/gob之所以不能完全利用到多核的特性是因为它里面使用了大量的互斥锁（mutex），如果把这些互斥锁换成用atomic.LoadPointer/StorePointer来做并发控制，那性能将能提升20倍。</p>
 
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/storage/2020/01/05/mysqldump.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/golang/2020/02/03/automic.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -2063,6 +1687,50 @@ source dn_location2.sql
 			  
 			    
 			      <a href="/MyBlog/page352/">352</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page353/">353</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page354/">354</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page355/">355</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page356/">356</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page357/">357</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page358/">358</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page359/">359</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page360/">360</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page361/">361</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page362/">362</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page363/">363</a>
 			    
 			  
 
@@ -3854,6 +3522,61 @@ source dn_location2.sql
 						  
 						
 
+						  
+							<li><a href="/MyBlog/page353">353</a></li>
+						  
+						
+
+						  
+							<li><a href="/MyBlog/page354">354</a></li>
+						  
+						
+
+						  
+							<li><a href="/MyBlog/page355">355</a></li>
+						  
+						
+
+						  
+							<li><a href="/MyBlog/page356">356</a></li>
+						  
+						
+
+						  
+							<li><a href="/MyBlog/page357">357</a></li>
+						  
+						
+
+						  
+							<li><a href="/MyBlog/page358">358</a></li>
+						  
+						
+
+						  
+							<li><a href="/MyBlog/page359">359</a></li>
+						  
+						
+
+						  
+							<li><a href="/MyBlog/page360">360</a></li>
+						  
+						
+
+						  
+							<li><a href="/MyBlog/page361">361</a></li>
+						  
+						
+
+						  
+							<li><a href="/MyBlog/page362">362</a></li>
+						  
+						
+
+						  
+							<li><a href="/MyBlog/page363">363</a></li>
+						  
+						
+
 						
 						  <li><a href="/MyBlog/page100">Next</a></li>
 						
@@ -3885,6 +3608,422 @@ source dn_location2.sql
 							var searchIndex={
 							"code" : 0 ,
 							"data" : [
+							
+							{
+							"title" : "sed 替换括号 - ",
+							"url" : "/MyBlog/linux/2020/05/31/sed.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "raw 解决括号冲突问题 - ",
+							"url" : "/MyBlog/jekyll/2020/05/31/raw.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "php_json_encode_zval - ",
+							"url" : "/MyBlog/web/2020/05/31/php_json_encode_zval.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "clion - ",
+							"url" : "/MyBlog/algorithm/2020/05/31/clion.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "cJSON c语言json库 - ",
+							"url" : "/MyBlog/web/2020/05/31/cJSON.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "ZEND_HASH_FOREACH_KEY_VAL - ",
+							"url" : "/MyBlog/web/2020/05/31/ZEND_HASH_FOREACH_KEY_VAL.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "PHP 调试技巧 扩展调试 - ",
+							"url" : "/MyBlog/web/2020/05/30/xdebug.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "interface - ",
+							"url" : "/MyBlog/golang/2020/05/30/interface.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "Bus error 10 - ",
+							"url" : "/MyBlog/linux/2020/05/30/buserror.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "make - ",
+							"url" : "/MyBlog/linux/2020/05/29/make.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "文件句柄泄漏 - ",
+							"url" : "/MyBlog/linux/2020/05/29/handler.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "mac上分析coredump文件 - ",
+							"url" : "/MyBlog/linux/2020/05/29/gdbcore.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "mac gdb 安装 - ",
+							"url" : "/MyBlog/linux/2020/05/29/gdb.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "core 文件 调试 追踪 Segmentation fault 11 - ",
+							"url" : "/MyBlog/linux/2020/05/29/core.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "brew install 问题解决 - ",
+							"url" : "/MyBlog/web/2020/05/29/brew.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "PHP 接口调用报错 502 Bad Gateway - ",
+							"url" : "/MyBlog/web/2020/05/29/502.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "BOOT_LDFLAGS - ",
+							"url" : "/MyBlog/web/2020/05/29/10-didi.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "zend_execute_ex - ",
+							"url" : "/MyBlog/web/2020/05/28/zend_execute_ex.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "zend_execute_data - ",
+							"url" : "/MyBlog/web/2020/05/28/zend_execute_data.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "PHP打印调用堆栈的三种方法 - ",
+							"url" : "/MyBlog/web/2020/05/28/stack.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "php7 基础上编译扩展，hack文件操作 - ",
+							"url" : "/MyBlog/web/2020/05/28/php_ext.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "extension php扩展和zend扩展区别 - ",
+							"url" : "/MyBlog/web/2020/05/28/extension.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "yaf - ",
+							"url" : "/MyBlog/web/2020/05/27/yaf.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "wechat - ",
+							"url" : "/MyBlog/web/2020/05/27/wechat.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "stackpreempt 抢占调度 - ",
+							"url" : "/MyBlog/golang/2020/05/27/stackpreempt.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "php.ini中session的配置 - ",
+							"url" : "/MyBlog/web/2020/05/27/session.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "phpt 是php源码的测试文件 - ",
+							"url" : "/MyBlog/web/2020/05/27/phpt.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "如何判断interface为nil - ",
+							"url" : "/MyBlog/golang/2020/05/27/nil.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "golang 最新文章 - ",
+							"url" : "/MyBlog/golang/2020/05/27/newa.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "log 高性能 线程安全 zap logrus - ",
+							"url" : "/MyBlog/golang/2020/05/27/log.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "goroutine - ",
+							"url" : "/MyBlog/golang/2020/05/27/goroutine.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "gocheck - ",
+							"url" : "/MyBlog/golang/2020/05/27/gocheck.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "gh-ost mysql binlog同步工具 - ",
+							"url" : "/MyBlog/golang/2020/05/27/ghost.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "php 扩展编写ext - ",
+							"url" : "/MyBlog/web/2020/05/27/ext.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "books - ",
+							"url" : "/MyBlog/web/2020/05/27/books.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "如何保证系统高可用总结 - ",
+							"url" : "/MyBlog/web/2020/05/27/avaliablity.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "PHP严格模式 Strict standards - ",
+							"url" : "/MyBlog/web/2020/05/27/Strict.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "解决mac 没有php.ini 文件问题 - ",
+							"url" : "/MyBlog/algorithm/2020/05/26/phpini.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "golang如何修改json文件内容 - ",
+							"url" : "/MyBlog/golang/2020/05/26/json.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "find - ",
+							"url" : "/MyBlog/linux/2020/05/26/find.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "composer replace - ",
+							"url" : "/MyBlog/web/2020/05/26/composer_replace.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "composer openssl extension is required - ",
+							"url" : "/MyBlog/web/2020/05/26/composer.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "sync.pool - ",
+							"url" : "/MyBlog/golang/2020/05/25/pool.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "goroutine 启动运行详细过程 - ",
+							"url" : "/MyBlog/golang/2020/05/25/goroutine.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "fault - ",
+							"url" : "/MyBlog/golang/2020/05/25/fault.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "DNS support edns-client-subnet - ",
+							"url" : "/MyBlog/golang/2020/05/25/edns.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "configMap - ",
+							"url" : "/MyBlog/k8s/2020/05/25/configMap.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "基于Docker的Golang交叉编译 - ",
+							"url" : "/MyBlog/docker/2020/05/25/build.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "LDAP in go - ",
+							"url" : "/MyBlog/golang/2020/05/25/LDAP.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "Bazel - ",
+							"url" : "/MyBlog/golang/2020/05/25/Bazel.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "rsync scp sftp 文件同步方式 - ",
+							"url" : "/MyBlog/linux/2020/05/24/rsync.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "golang 父类调用子类方法 继承多态的实现方式 - ",
+							"url" : "/MyBlog/golang/2020/05/24/interface.html"
+							}
+							
+							,
+							
 							
 							{
 							"title" : "Speeding up json processing in go - ",
@@ -18035,7 +18174,7 @@ source dn_location2.sql
 								
 								
 									<a class="bold" href="/MyBlog/category/jekyll">
-										jekyll (41)
+										jekyll (42)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -18071,7 +18210,7 @@ source dn_location2.sql
 								
 								
 									<a class="bold" href="/MyBlog/category/web">
-										web (287)
+										web (309)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -18116,7 +18255,7 @@ source dn_location2.sql
 								
 								
 									<a class="bold" href="/MyBlog/category/linux">
-										linux (323)
+										linux (332)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -18143,7 +18282,7 @@ source dn_location2.sql
 								
 								
 									<a class="bold" href="/MyBlog/category/golang">
-										golang (622)
+										golang (638)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -18152,7 +18291,7 @@ source dn_location2.sql
 								
 								
 									<a class="bold" href="/MyBlog/category/docker">
-										docker (53)
+										docker (54)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -18197,7 +18336,7 @@ source dn_location2.sql
 								
 								
 									<a class="bold" href="/MyBlog/category/algorithm">
-										algorithm (94)
+										algorithm (96)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -18224,7 +18363,7 @@ source dn_location2.sql
 								
 								
 									<a class="bold" href="/MyBlog/category/k8s">
-										k8s (7)
+										k8s (8)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -18285,163 +18424,163 @@ source dn_location2.sql
 								<ul style="display:none;width:250px;height:250px;">
 								     
 								   <li>
-										<a href="/MyBlog/golang/2020/05/23/json.html" style="font-size:40px;"> Speeding up json processing in go</a>
+										<a href="/MyBlog/linux/2020/05/31/sed.html" style="font-size:40px;"> sed 替换括号</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/golang/2020/05/22/typeAssert.html" style="font-size:40px;"> typeAssert</a>
+										<a href="/MyBlog/jekyll/2020/05/31/raw.html" style="font-size:40px;"> raw 解决括号冲突问题</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/golang/2020/05/22/sync.html" style="font-size:40px;"> sync.Mutex使用注意事项</a>
+										<a href="/MyBlog/web/2020/05/31/php_json_encode_zval.html" style="font-size:40px;"> php_json_encode_zval</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/golang/2020/05/22/singleton.html" style="font-size:40px;"> golang单例模式</a>
+										<a href="/MyBlog/algorithm/2020/05/31/clion.html" style="font-size:40px;"> clion</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/golang/2020/05/22/rwmutext.html" style="font-size:40px;"> map 加锁与sync.Map性能对比分析</a>
+										<a href="/MyBlog/web/2020/05/31/cJSON.html" style="font-size:40px;"> cJSON c语言json库</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/web/2020/05/22/postman.html" style="font-size:40px;"> postman</a>
+										<a href="/MyBlog/web/2020/05/31/ZEND_HASH_FOREACH_KEY_VAL.html" style="font-size:40px;"> ZEND_HASH_FOREACH_KEY_VAL</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/web/2020/05/22/equal.html" style="font-size:40px;"> 补偿还是幂等来解决一致性问题</a>
+										<a href="/MyBlog/web/2020/05/30/xdebug.html" style="font-size:40px;"> PHP 调试技巧 扩展调试</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/web/2020/05/21/postman.html" style="font-size:40px;"> postman 压力测试</a>
+										<a href="/MyBlog/golang/2020/05/30/interface.html" style="font-size:40px;"> interface</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/web/2020/05/21/gem.html" style="font-size:40px;"> gem rvm bundle</a>
+										<a href="/MyBlog/linux/2020/05/30/buserror.html" style="font-size:40px;"> Bus error 10</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/web/2020/05/21/brew.html" style="font-size:40px;"> brew</a>
+										<a href="/MyBlog/linux/2020/05/29/make.html" style="font-size:40px;"> make</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/web/2020/05/20/xdebug.html" style="font-size:40px;"> xdebug</a>
+										<a href="/MyBlog/linux/2020/05/29/handler.html" style="font-size:40px;"> 文件句柄泄漏</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/golang/2020/05/20/timer.html" style="font-size:40px;"> timer</a>
+										<a href="/MyBlog/linux/2020/05/29/gdbcore.html" style="font-size:40px;"> mac上分析coredump文件</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/golang/2020/05/20/systemstack.html" style="font-size:40px;"> mcall systemstack</a>
+										<a href="/MyBlog/linux/2020/05/29/gdb.html" style="font-size:40px;"> mac gdb 安装</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/linux/2020/05/20/sched_init.html" style="font-size:40px;"> sched_init</a>
+										<a href="/MyBlog/linux/2020/05/29/core.html" style="font-size:40px;"> core 文件 调试 追踪 Segmentation fault 11</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/web/2020/05/20/phpar.html" style="font-size:40px;"> phpar</a>
+										<a href="/MyBlog/web/2020/05/29/brew.html" style="font-size:40px;"> brew install 问题解决</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/golang/2020/05/20/mpg.html" style="font-size:40px;"> mpg 状态机队列</a>
+										<a href="/MyBlog/web/2020/05/29/502.html" style="font-size:40px;"> PHP 接口调用报错 502 Bad Gateway</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/golang/2020/05/20/map.html" style="font-size:40px;"> map</a>
+										<a href="/MyBlog/web/2020/05/29/10-didi.html" style="font-size:40px;"> BOOT_LDFLAGS</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/linux/2020/05/20/du.html" style="font-size:40px;"> du</a>
+										<a href="/MyBlog/web/2020/05/28/zend_execute_ex.html" style="font-size:40px;"> zend_execute_ex</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/golang/2020/05/20/chan.html" style="font-size:40px;"> channel实现sync包里的同步锁</a>
+										<a href="/MyBlog/web/2020/05/28/zend_execute_data.html" style="font-size:40px;"> zend_execute_data</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/web/2020/05/20/cdebug.html" style="font-size:40px;"> xdebug 配置教程</a>
+										<a href="/MyBlog/web/2020/05/28/stack.html" style="font-size:40px;"> PHP打印调用堆栈的三种方法</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/golang/2020/05/20/benchmark.html" style="font-size:40px;"> benchmark</a>
+										<a href="/MyBlog/web/2020/05/28/php_ext.html" style="font-size:40px;"> php7 基础上编译扩展，hack文件操作</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/algorithm/2020/05/20/Theano.html" style="font-size:40px;"> Theano</a>
+										<a href="/MyBlog/web/2020/05/28/extension.html" style="font-size:40px;"> extension php扩展和zend扩展区别</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/golang/2020/05/19/webrtc.html" style="font-size:40px;"> webrtc</a>
+										<a href="/MyBlog/web/2020/05/27/yaf.html" style="font-size:40px;"> yaf</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/golang/2020/05/19/unsafe.html" style="font-size:40px;"> unsafe</a>
+										<a href="/MyBlog/web/2020/05/27/wechat.html" style="font-size:40px;"> wechat</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/golang/2020/05/19/sysmon.html" style="font-size:40px;"> sysmon 线程到底做了什么</a>
+										<a href="/MyBlog/golang/2020/05/27/stackpreempt.html" style="font-size:40px;"> stackpreempt 抢占调度</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/golang/2020/05/19/runtime.html" style="font-size:40px;"> runtime</a>
+										<a href="/MyBlog/web/2020/05/27/session.html" style="font-size:40px;"> php.ini中session的配置</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/golang/2020/05/19/pstree.html" style="font-size:40px;"> pstree ps 查看线程数</a>
+										<a href="/MyBlog/web/2020/05/27/phpt.html" style="font-size:40px;"> phpt 是php源码的测试文件</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/web/2020/05/18/ssm.html" style="font-size:40px;"> ssm 业务应用监控</a>
+										<a href="/MyBlog/golang/2020/05/27/nil.html" style="font-size:40px;"> 如何判断interface为nil</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/storage/2020/05/18/s3.html" style="font-size:40px;"> 块存储文件存储对象存储</a>
+										<a href="/MyBlog/golang/2020/05/27/newa.html" style="font-size:40px;"> golang 最新文章</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/golang/2020/05/18/main.html" style="font-size:40px;"> gdb 查看golang程序的入口和启动 流程</a>
+										<a href="/MyBlog/golang/2020/05/27/log.html" style="font-size:40px;"> log 高性能 线程安全 zap logrus</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/storage/2020/05/18/etcd.html" style="font-size:40px;"> etcd</a>
+										<a href="/MyBlog/golang/2020/05/27/goroutine.html" style="font-size:40px;"> goroutine</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/web/2020/05/18/cqrs.html" style="font-size:40px;"> cqrs 命令和查询责任分离</a>
+										<a href="/MyBlog/golang/2020/05/27/gocheck.html" style="font-size:40px;"> gocheck</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/golang/2020/05/17/schedt.html" style="font-size:40px;"> schedt systemon</a>
+										<a href="/MyBlog/golang/2020/05/27/ghost.html" style="font-size:40px;"> gh-ost mysql binlog同步工具</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/golang/2020/05/17/mpg.html" style="font-size:40px;"> mpg</a>
+										<a href="/MyBlog/web/2020/05/27/ext.html" style="font-size:40px;"> php 扩展编写ext</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/golang/2020/05/17/chan.html" style="font-size:40px;"> chan</a>
+										<a href="/MyBlog/web/2020/05/27/books.html" style="font-size:40px;"> books</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/golang/2020/05/17/bootstrap.html" style="font-size:40px;"> bootstrap</a>
+										<a href="/MyBlog/web/2020/05/27/avaliablity.html" style="font-size:40px;"> 如何保证系统高可用总结</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/golang/2020/05/17/Scheduler.html" style="font-size:40px;"> Scheduler 原理解析</a>
+										<a href="/MyBlog/web/2020/05/27/Strict.html" style="font-size:40px;"> PHP严格模式 Strict standards</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/golang/2020/05/16/slice.html" style="font-size:40px;"> slice</a>
+										<a href="/MyBlog/algorithm/2020/05/26/phpini.html" style="font-size:40px;"> 解决mac 没有php.ini 文件问题</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/golang/2020/05/16/race.html" style="font-size:40px;"> race</a>
+										<a href="/MyBlog/golang/2020/05/26/json.html" style="font-size:40px;"> golang如何修改json文件内容</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/golang/2020/05/16/nil.html" style="font-size:40px;"> nil</a>
+										<a href="/MyBlog/linux/2020/05/26/find.html" style="font-size:40px;"> find</a>
 									</li>
 									
 								</ul>
@@ -18457,33 +18596,33 @@ source dn_location2.sql
                 		<ul class="posts" span="recent">  
 							  
 							   <li>  
-								   <span>23 May 2020</span>
-								   <a href="/MyBlog/golang/2020/05/23/json.html">  
-								   Speeding up json processing in go</a>  
+								   <span>31 May 2020</span>
+								   <a href="/MyBlog/linux/2020/05/31/sed.html">  
+								   sed 替换括号</a>  
 							   </li>  
 							  
 							   <li>  
-								   <span>22 May 2020</span>
-								   <a href="/MyBlog/golang/2020/05/22/typeAssert.html">  
-								   typeAssert</a>  
+								   <span>31 May 2020</span>
+								   <a href="/MyBlog/jekyll/2020/05/31/raw.html">  
+								   raw 解决括号冲突问题</a>  
 							   </li>  
 							  
 							   <li>  
-								   <span>22 May 2020</span>
-								   <a href="/MyBlog/golang/2020/05/22/sync.html">  
-								   sync.Mutex使用注意事项</a>  
+								   <span>31 May 2020</span>
+								   <a href="/MyBlog/web/2020/05/31/php_json_encode_zval.html">  
+								   php_json_encode_zval</a>  
 							   </li>  
 							  
 							   <li>  
-								   <span>22 May 2020</span>
-								   <a href="/MyBlog/golang/2020/05/22/singleton.html">  
-								   golang单例模式</a>  
+								   <span>31 May 2020</span>
+								   <a href="/MyBlog/algorithm/2020/05/31/clion.html">  
+								   clion</a>  
 							   </li>  
 							  
 							   <li>  
-								   <span>22 May 2020</span>
-								   <a href="/MyBlog/golang/2020/05/22/rwmutext.html">  
-								   map 加锁与sync.Map性能对比分析</a>  
+								   <span>31 May 2020</span>
+								   <a href="/MyBlog/web/2020/05/31/cJSON.html">  
+								   cJSON c语言json库</a>  
 							   </li>  
 							  
 						</ul>

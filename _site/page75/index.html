@@ -147,72 +147,66 @@
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/golang/2020/02/21/ParseInt.html">ParseInt 的坑</a>
+						<a class="post-link" href="/MyBlog/golang/2020/02/29/delay.html">golang的简单分布式延时队列服务</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/golang/2020/02/21/ParseInt.html"> 夏泽民</a>
+						<a href="/MyBlog/golang/2020/02/29/delay.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Feb 21, 2020
+							Feb 29, 2020
 						</span>
 					</div>
-					<div class="excerpt"><p>当整数超过6位的时候，marshal 会变成浮点数，然后parseInt 会失败
-strconv.ParseInt: parsing “1.04746e+06”: invalid syntax</p>
-
-</div>
-					<div class="readmore" style="float: right;">
-						
-							<a href="/MyBlog/golang/2020/02/21/ParseInt.html" style="color:green">阅读全文</a>
-						
-					</div>								
-			</div>
-			<br/>
-			<hr/>
-			<div class="post-list" style="list-style-type: none;">			
-				 	
-					<h2>
-						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/golang/2020/02/21/Concurrency.html">Concurrency</a>
-					</h2>
-					<div class="author" style="margin-top: -10px;">Posted by
-						<i class="fa fa-user"></i>
-						<a href="/MyBlog/golang/2020/02/21/Concurrency.html"> 夏泽民</a>
-						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Feb 21, 2020
-						</span>
-					</div>
-					<div class="excerpt"><p>https://encore.dev/blog/advanced-go-concurrency</p>
-
-</div>
-					<div class="readmore" style="float: right;">
-						
-							<a href="/MyBlog/golang/2020/02/21/Concurrency.html" style="color:green">阅读全文</a>
-						
-					</div>								
-			</div>
-			<br/>
-			<hr/>
-			<div class="post-list" style="list-style-type: none;">			
-				 	
-					<h2>
-						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/golang/2020/02/20/test.html">Testing in Go Clean Tests Using t Cleanup</a>
-					</h2>
-					<div class="author" style="margin-top: -10px;">Posted by
-						<i class="fa fa-user"></i>
-						<a href="/MyBlog/golang/2020/02/20/test.html"> 夏泽民</a>
-						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Feb 20, 2020
-						</span>
-					</div>
-					<div class="excerpt"><p>https://ieftimov.com/post/testing-in-go-clean-tests-using-t-cleanup/
+					<div class="excerpt"><p>我们在做系统时，很多时候是处理实时的任务，请求来了马上就处理，然后立刻给用户以反馈。但有时也会遇到非实时的任务，比如确定的时间点发布重要公告。或者需要在用户做了一件事情的X分钟/Y小时后，EG:        “PM：我们需要在这个用户通话开始10分钟后给予提醒给他们发送奖励”对其特定动作，比如通知、发券等等。一般我接触到的解决方法中在比较小的服务里都会自己维护一个backend，但是随着这种backend和server增多，这种方法很大程度和本身业务耦合在一起，所以这时需要一个延时队列服务。
 <!-- more -->
-Go v1.14 ships with improvements across different aspects of the language. Two of them are brand new t.Cleanup, and b.Cleanup methods, added to the testing package.</p>
+topic_list队列：每一个来的延时请求都应该又一个延时主题参考kafka，在逻辑上划分出一个队列出来每个业务分开处理；        topic_info队列：每一个队列topic都存在一个新的队列里，每次扫描topic信息检测新的topic建立与销毁管理服务协程数量；        offset：当前消费的进度；        new_offset：新消费的进度，预备更迭offset；        topic_offset_lock：分布式锁。二、设计目标功能清单1、延时信息添加接口基于http调用2、拥有存储队列特性，可保存近3天内的队列消费数据3、提供消费功能4、延时通知性能指标预计接口的调用量：单秒单类任务数3500，多秒单类任务数1300压测结果：简单压测wrk写入qps：259.3s 写入9000条记录 单线程 无并发触发性能/准确率：单秒1000，在测试机无延长。单秒3000时，偶尔出现1-2秒延迟。受内存和cpu影响。三、系统设计交互流程    时序图​        本设计基于http接口调用，当向topic存在的队列中添加消息的时候，消息会被添加到相应topic队列的末尾储存，当添加到不存在的相应topic队列时，首先建立新topic队列，当定时器触发的时候或者分布式锁，抢到锁的实例先获得相应队列的offset，设置新offset，就可以释放锁了让给其他实例争抢，弹出队列头一定数量元素，然后拿到offset段的实例去存储中拿详细信息，在协程中处理，主要协程等待下次触发。然后添加协程去监控触发。模块划分    1、队列存储模块        1·delay下的delay.base模块，主要负责接收写请求，将队列信息写入存储，不负责backend逻辑，调用存储模块    2、backend模块。delay下的delay.backend模块，负责时间触发扫描对应的topic队列，调用存储模块，主要负责访问读取存储模块，调用callback模块        1·扫描topic添加groutine        2·扫描topic_list消费信息        3·扫描topic_list如果一定时间没有消费到则关闭groutine    3、callback模块，主要负责发送已经到时间的数据，向相应服务通知    3、存储模块        1·分布式锁模块，系统多机部署，保证每次消费的唯一性，对每次topic消费的offset段进行上锁offset到new_offset段单机独享        2·topic管理列表，管理topic数量控制协程数        3·topic_list，消息队列        4·topic_info，消息实体，可能需要回调中会携带一些信息统一处理    4、唯一号生成模块。五、缓存设计目前使用全缓存模式key设计:topic管理list key: XX:DELAY_TOPIC_LIST type:listtopic_list key: XX:DELAY_SIMPLE_TOPIC_TASK-%s(根据topic分key) type:zsettopic_info key: XX:DELAY_REALL_TOPIC_TASK-%s(根据topic分key)  type:hashtopic_offset key: XX:DELAY_TOPIC_OFFSET-%s(根据topic分key) type:stringtopic_lock key: xx:DELAY_TOPIC_RELOAD_LOCK-%s(根据topic分key) type:string六、接口设计delay.task.addv1 (延时队列添加v1)请求示例curl -d 
+‘{
+    “topic”: “xxx”, 								// 业务topic
+    “timing_moment”: ,							        // 单位秒,要定时时刻
+    “content”: “{}”								// 消息体,json串
+}’
+‘http://127.0.0.1:xxxx/delay/task/add’复制代码返回示例{
+    “dm_error”: 0,
+    “error_msg”: “操作成功”,
+    “task_id”:112345465765
+}复制代码pull回调方式返回（v2不再支持）请求示例curl -d 
+‘{
+    “topic”: “xxxx”, 								// 业务topic
+    “task_id”:1324568798765							// taskid,选填，有则返回特定消息
+}’
+‘http://127.0.0.1:xxxx/delay/task/pull’复制代码返回示例{
+    “dm_error”: 0,
+    “error_msg”: “操作成功”
+    “content”:”{“\xxx”}”
+}复制代码delay.task.addv2 (延时队列添加v2)请求示例curl -d 
+‘{
+    “topic”: “xxx”, 						// 业务topic
+    “timing_moment”: ,						// 单位秒,要定时时刻
+    “content”: “{                                               // 消息内容(json string)
+	“sn”:”message.call”,                                    // 服务发现名字（或为配置服务名）
+	“url”:”/ev/tp/xxxx”,                                    // 回调url
+	“xxx”:”xxx”                                             // 其他字段
+    }”
+}’
+‘http://127.0.0.1:xxxx/delay/task/add’复制代码示例curl -d ‘{
+    “topic”:”xxxx_push”,
+    “content”:”{
+        “uid”:”111111”,
+        “sn”:”other.server”,
+        “url”:”/xxxx/callback”,
+        “msg_type”:”gift”,
+    }”,
+    “timing_moment”:1565700615
+}’ 
+http://127.0.0.1:xxxx/delay/task/add复制代码返回示例{
+    “dm_error”: 0,
+    “error_msg”: “操作成功”,
+    “task_id”:112345465765
+}复制代码七、MQ设计(v2不再支持)关于kafka消费方式返回：topic: delay_base_push</p>
 
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/golang/2020/02/20/test.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/golang/2020/02/29/delay.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -222,32 +216,48 @@ Go v1.14 ships with improvements across different aspects of the language. Two o
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/golang/2020/02/20/golang_spec.html">Go 编程语言规范</a>
+						<a class="post-link" href="/MyBlog/golang/2020/02/29/channel.html">channel</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/golang/2020/02/20/golang_spec.html"> 夏泽民</a>
+						<a href="/MyBlog/golang/2020/02/29/channel.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Feb 20, 2020
+							Feb 29, 2020
 						</span>
 					</div>
-					<div class="excerpt"><p>https://moego.me/golang_spec.html
-https://golang.org/ref/spec
+					<div class="excerpt"><p>channel 是 Golang 中一个非常重要的特性，也是 Golang CSP 并发模型的一个重要体现。简单来说就是，goroutine 之间可以通过 channel 进行通信。</p>
+
+</div>
+					<div class="readmore" style="float: right;">
+						
+							<a href="/MyBlog/golang/2020/02/29/channel.html" style="color:green">阅读全文</a>
+						
+					</div>								
+			</div>
+			<br/>
+			<hr/>
+			<div class="post-list" style="list-style-type: none;">			
+				 	
+					<h2>
+						<img class="title-image" src="/MyBlog/img/dna.png"/>
+						<a class="post-link" href="/MyBlog/golang/2020/02/27/zen.html">zen of go</a>
+					</h2>
+					<div class="author" style="margin-top: -10px;">Posted by
+						<i class="fa fa-user"></i>
+						<a href="/MyBlog/golang/2020/02/27/zen.html"> 夏泽民</a>
+						<span class="post-meta"><i class="fa fa-calendar"></i> 
+							Feb 27, 2020
+						</span>
+					</div>
+					<div class="excerpt"><p>https://dave.cheney.net/2020/02/23/the-zen-of-go
 <!-- more -->
-本文翻译自 The Go Programming Language Specification (https://golang.org/ref/spec)，原文采用 Creative Commons Attribution 3.0 协议，文档内代码采用 BSD 协议 (https://golang.org/LICENSE)。 本文采用 Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International 许可协议，文档内代码继用相同协议，如果你需要发布本文（或衍生品），也需要注明本文原始链接 (https://moego.me/golang_spec.html) 及译者 Bekcpear。
-对应英文原版 为 2019 年 07 月 31 日 版本: golang.org/ref/spec
-翻译中针对可能有歧义/不明确/翻译后不易于理解的单词将直接使用原词汇
-为了行文工整，代码块内可能使用英文表述
-因为学习语言需要，所以翻译
-有些翻译可能比较迷糊，我会在进一步学习后完善它们
-文中实参仅代表 argument；参数仅代表 parameter，有时候也会译为形参
-介绍
-这是一篇 Go 编程语言的参考手册。访问 golang.org 以获取更多信息及其它文档。</p>
+How should I write good code?
+Something that I’ve been thinking about a lot recently, when reflecting on the body of my own work, is a common subtitle, how should I write good code? Given nobody actively seeks to write bad code, this leads to the question; how do you know when you’ve written good Go code?</p>
 
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/golang/2020/02/20/golang_spec.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/golang/2020/02/27/zen.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -257,21 +267,49 @@ https://golang.org/ref/spec
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/golang/2020/02/20/compile.html">golang 编译链接</a>
+						<a class="post-link" href="/MyBlog/golang/2020/02/27/timer.html">go1.14基于netpoll优化timer定时器实现原理</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/golang/2020/02/20/compile.html"> 夏泽民</a>
+						<a href="/MyBlog/golang/2020/02/27/timer.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Feb 20, 2020
+							Feb 27, 2020
 						</span>
 					</div>
-					<div class="excerpt"><p>本文的目标是希望读者对go语言的编译过程有一个全面的理解</p>
+					<div class="excerpt"><p>http://xiaorui.cc/2020/02/11/go1-14%e5%9f%ba%e4%ba%8enetpoll%e4%bc%98%e5%8c%96timer%e5%ae%9a%e6%97%b6%e5%99%a8%e5%ae%9e%e7%8e%b0%e5%8e%9f%e7%90%86/
+golang1.14版的rc已经发布有些日子了，在官方go1.14的介绍里有说优化了timer定时器。golang的定时器已经经历了几版的优化，但在依赖定时器的高性能场景，还是成为一个大的性能杀手。
+<!-- more -->
+go1.13和go1.14的区别？</p>
 
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/golang/2020/02/20/compile.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/golang/2020/02/27/timer.html" style="color:green">阅读全文</a>
+						
+					</div>								
+			</div>
+			<br/>
+			<hr/>
+			<div class="post-list" style="list-style-type: none;">			
+				 	
+					<h2>
+						<img class="title-image" src="/MyBlog/img/dna.png"/>
+						<a class="post-link" href="/MyBlog/golang/2020/02/27/sigurg.html">go1.14 基于信号的抢占式调度实现原理</a>
+					</h2>
+					<div class="author" style="margin-top: -10px;">Posted by
+						<i class="fa fa-user"></i>
+						<a href="/MyBlog/golang/2020/02/27/sigurg.html"> 夏泽民</a>
+						<span class="post-meta"><i class="fa fa-calendar"></i> 
+							Feb 27, 2020
+						</span>
+					</div>
+					<div class="excerpt"><p>https://gocn.vip/topics/9884
+go 1.14 中比较大的更新有信号的抢占调度、defer 内联优化，定时器优化等。前几天刚写完了 golang 1.14 timer 定时器的优化，有兴趣的朋友可以看看go1.14 基于 netpoll 优化 timer 定时器实现原理</p>
+
+</div>
+					<div class="readmore" style="float: right;">
+						
+							<a href="/MyBlog/golang/2020/02/27/sigurg.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -1695,6 +1733,50 @@ https://golang.org/ref/spec
 			  
 			    
 			      <a href="/MyBlog/page352/">352</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page353/">353</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page354/">354</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page355/">355</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page356/">356</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page357/">357</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page358/">358</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page359/">359</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page360/">360</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page361/">361</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page362/">362</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page363/">363</a>
 			    
 			  
 
@@ -3486,6 +3568,61 @@ https://golang.org/ref/spec
 						  
 						
 
+						  
+							<li><a href="/MyBlog/page353">353</a></li>
+						  
+						
+
+						  
+							<li><a href="/MyBlog/page354">354</a></li>
+						  
+						
+
+						  
+							<li><a href="/MyBlog/page355">355</a></li>
+						  
+						
+
+						  
+							<li><a href="/MyBlog/page356">356</a></li>
+						  
+						
+
+						  
+							<li><a href="/MyBlog/page357">357</a></li>
+						  
+						
+
+						  
+							<li><a href="/MyBlog/page358">358</a></li>
+						  
+						
+
+						  
+							<li><a href="/MyBlog/page359">359</a></li>
+						  
+						
+
+						  
+							<li><a href="/MyBlog/page360">360</a></li>
+						  
+						
+
+						  
+							<li><a href="/MyBlog/page361">361</a></li>
+						  
+						
+
+						  
+							<li><a href="/MyBlog/page362">362</a></li>
+						  
+						
+
+						  
+							<li><a href="/MyBlog/page363">363</a></li>
+						  
+						
+
 						
 						  <li><a href="/MyBlog/page76">Next</a></li>
 						
@@ -3517,6 +3654,422 @@ https://golang.org/ref/spec
 							var searchIndex={
 							"code" : 0 ,
 							"data" : [
+							
+							{
+							"title" : "sed 替换括号 - ",
+							"url" : "/MyBlog/linux/2020/05/31/sed.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "raw 解决括号冲突问题 - ",
+							"url" : "/MyBlog/jekyll/2020/05/31/raw.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "php_json_encode_zval - ",
+							"url" : "/MyBlog/web/2020/05/31/php_json_encode_zval.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "clion - ",
+							"url" : "/MyBlog/algorithm/2020/05/31/clion.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "cJSON c语言json库 - ",
+							"url" : "/MyBlog/web/2020/05/31/cJSON.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "ZEND_HASH_FOREACH_KEY_VAL - ",
+							"url" : "/MyBlog/web/2020/05/31/ZEND_HASH_FOREACH_KEY_VAL.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "PHP 调试技巧 扩展调试 - ",
+							"url" : "/MyBlog/web/2020/05/30/xdebug.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "interface - ",
+							"url" : "/MyBlog/golang/2020/05/30/interface.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "Bus error 10 - ",
+							"url" : "/MyBlog/linux/2020/05/30/buserror.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "make - ",
+							"url" : "/MyBlog/linux/2020/05/29/make.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "文件句柄泄漏 - ",
+							"url" : "/MyBlog/linux/2020/05/29/handler.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "mac上分析coredump文件 - ",
+							"url" : "/MyBlog/linux/2020/05/29/gdbcore.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "mac gdb 安装 - ",
+							"url" : "/MyBlog/linux/2020/05/29/gdb.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "core 文件 调试 追踪 Segmentation fault 11 - ",
+							"url" : "/MyBlog/linux/2020/05/29/core.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "brew install 问题解决 - ",
+							"url" : "/MyBlog/web/2020/05/29/brew.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "PHP 接口调用报错 502 Bad Gateway - ",
+							"url" : "/MyBlog/web/2020/05/29/502.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "BOOT_LDFLAGS - ",
+							"url" : "/MyBlog/web/2020/05/29/10-didi.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "zend_execute_ex - ",
+							"url" : "/MyBlog/web/2020/05/28/zend_execute_ex.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "zend_execute_data - ",
+							"url" : "/MyBlog/web/2020/05/28/zend_execute_data.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "PHP打印调用堆栈的三种方法 - ",
+							"url" : "/MyBlog/web/2020/05/28/stack.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "php7 基础上编译扩展，hack文件操作 - ",
+							"url" : "/MyBlog/web/2020/05/28/php_ext.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "extension php扩展和zend扩展区别 - ",
+							"url" : "/MyBlog/web/2020/05/28/extension.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "yaf - ",
+							"url" : "/MyBlog/web/2020/05/27/yaf.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "wechat - ",
+							"url" : "/MyBlog/web/2020/05/27/wechat.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "stackpreempt 抢占调度 - ",
+							"url" : "/MyBlog/golang/2020/05/27/stackpreempt.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "php.ini中session的配置 - ",
+							"url" : "/MyBlog/web/2020/05/27/session.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "phpt 是php源码的测试文件 - ",
+							"url" : "/MyBlog/web/2020/05/27/phpt.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "如何判断interface为nil - ",
+							"url" : "/MyBlog/golang/2020/05/27/nil.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "golang 最新文章 - ",
+							"url" : "/MyBlog/golang/2020/05/27/newa.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "log 高性能 线程安全 zap logrus - ",
+							"url" : "/MyBlog/golang/2020/05/27/log.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "goroutine - ",
+							"url" : "/MyBlog/golang/2020/05/27/goroutine.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "gocheck - ",
+							"url" : "/MyBlog/golang/2020/05/27/gocheck.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "gh-ost mysql binlog同步工具 - ",
+							"url" : "/MyBlog/golang/2020/05/27/ghost.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "php 扩展编写ext - ",
+							"url" : "/MyBlog/web/2020/05/27/ext.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "books - ",
+							"url" : "/MyBlog/web/2020/05/27/books.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "如何保证系统高可用总结 - ",
+							"url" : "/MyBlog/web/2020/05/27/avaliablity.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "PHP严格模式 Strict standards - ",
+							"url" : "/MyBlog/web/2020/05/27/Strict.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "解决mac 没有php.ini 文件问题 - ",
+							"url" : "/MyBlog/algorithm/2020/05/26/phpini.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "golang如何修改json文件内容 - ",
+							"url" : "/MyBlog/golang/2020/05/26/json.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "find - ",
+							"url" : "/MyBlog/linux/2020/05/26/find.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "composer replace - ",
+							"url" : "/MyBlog/web/2020/05/26/composer_replace.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "composer openssl extension is required - ",
+							"url" : "/MyBlog/web/2020/05/26/composer.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "sync.pool - ",
+							"url" : "/MyBlog/golang/2020/05/25/pool.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "goroutine 启动运行详细过程 - ",
+							"url" : "/MyBlog/golang/2020/05/25/goroutine.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "fault - ",
+							"url" : "/MyBlog/golang/2020/05/25/fault.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "DNS support edns-client-subnet - ",
+							"url" : "/MyBlog/golang/2020/05/25/edns.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "configMap - ",
+							"url" : "/MyBlog/k8s/2020/05/25/configMap.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "基于Docker的Golang交叉编译 - ",
+							"url" : "/MyBlog/docker/2020/05/25/build.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "LDAP in go - ",
+							"url" : "/MyBlog/golang/2020/05/25/LDAP.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "Bazel - ",
+							"url" : "/MyBlog/golang/2020/05/25/Bazel.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "rsync scp sftp 文件同步方式 - ",
+							"url" : "/MyBlog/linux/2020/05/24/rsync.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "golang 父类调用子类方法 继承多态的实现方式 - ",
+							"url" : "/MyBlog/golang/2020/05/24/interface.html"
+							}
+							
+							,
+							
 							
 							{
 							"title" : "Speeding up json processing in go - ",
@@ -17667,7 +18220,7 @@ https://golang.org/ref/spec
 								
 								
 									<a class="bold" href="/MyBlog/category/jekyll">
-										jekyll (41)
+										jekyll (42)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -17703,7 +18256,7 @@ https://golang.org/ref/spec
 								
 								
 									<a class="bold" href="/MyBlog/category/web">
-										web (287)
+										web (309)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -17748,7 +18301,7 @@ https://golang.org/ref/spec
 								
 								
 									<a class="bold" href="/MyBlog/category/linux">
-										linux (323)
+										linux (332)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -17775,7 +18328,7 @@ https://golang.org/ref/spec
 								
 								
 									<a class="bold" href="/MyBlog/category/golang">
-										golang (622)
+										golang (638)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -17784,7 +18337,7 @@ https://golang.org/ref/spec
 								
 								
 									<a class="bold" href="/MyBlog/category/docker">
-										docker (53)
+										docker (54)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -17829,7 +18382,7 @@ https://golang.org/ref/spec
 								
 								
 									<a class="bold" href="/MyBlog/category/algorithm">
-										algorithm (94)
+										algorithm (96)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -17856,7 +18409,7 @@ https://golang.org/ref/spec
 								
 								
 									<a class="bold" href="/MyBlog/category/k8s">
-										k8s (7)
+										k8s (8)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -17917,163 +18470,163 @@ https://golang.org/ref/spec
 								<ul style="display:none;width:250px;height:250px;">
 								     
 								   <li>
-										<a href="/MyBlog/golang/2020/05/23/json.html" style="font-size:40px;"> Speeding up json processing in go</a>
+										<a href="/MyBlog/linux/2020/05/31/sed.html" style="font-size:40px;"> sed 替换括号</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/golang/2020/05/22/typeAssert.html" style="font-size:40px;"> typeAssert</a>
+										<a href="/MyBlog/jekyll/2020/05/31/raw.html" style="font-size:40px;"> raw 解决括号冲突问题</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/golang/2020/05/22/sync.html" style="font-size:40px;"> sync.Mutex使用注意事项</a>
+										<a href="/MyBlog/web/2020/05/31/php_json_encode_zval.html" style="font-size:40px;"> php_json_encode_zval</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/golang/2020/05/22/singleton.html" style="font-size:40px;"> golang单例模式</a>
+										<a href="/MyBlog/algorithm/2020/05/31/clion.html" style="font-size:40px;"> clion</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/golang/2020/05/22/rwmutext.html" style="font-size:40px;"> map 加锁与sync.Map性能对比分析</a>
+										<a href="/MyBlog/web/2020/05/31/cJSON.html" style="font-size:40px;"> cJSON c语言json库</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/web/2020/05/22/postman.html" style="font-size:40px;"> postman</a>
+										<a href="/MyBlog/web/2020/05/31/ZEND_HASH_FOREACH_KEY_VAL.html" style="font-size:40px;"> ZEND_HASH_FOREACH_KEY_VAL</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/web/2020/05/22/equal.html" style="font-size:40px;"> 补偿还是幂等来解决一致性问题</a>
+										<a href="/MyBlog/web/2020/05/30/xdebug.html" style="font-size:40px;"> PHP 调试技巧 扩展调试</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/web/2020/05/21/postman.html" style="font-size:40px;"> postman 压力测试</a>
+										<a href="/MyBlog/golang/2020/05/30/interface.html" style="font-size:40px;"> interface</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/web/2020/05/21/gem.html" style="font-size:40px;"> gem rvm bundle</a>
+										<a href="/MyBlog/linux/2020/05/30/buserror.html" style="font-size:40px;"> Bus error 10</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/web/2020/05/21/brew.html" style="font-size:40px;"> brew</a>
+										<a href="/MyBlog/linux/2020/05/29/make.html" style="font-size:40px;"> make</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/web/2020/05/20/xdebug.html" style="font-size:40px;"> xdebug</a>
+										<a href="/MyBlog/linux/2020/05/29/handler.html" style="font-size:40px;"> 文件句柄泄漏</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/golang/2020/05/20/timer.html" style="font-size:40px;"> timer</a>
+										<a href="/MyBlog/linux/2020/05/29/gdbcore.html" style="font-size:40px;"> mac上分析coredump文件</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/golang/2020/05/20/systemstack.html" style="font-size:40px;"> mcall systemstack</a>
+										<a href="/MyBlog/linux/2020/05/29/gdb.html" style="font-size:40px;"> mac gdb 安装</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/linux/2020/05/20/sched_init.html" style="font-size:40px;"> sched_init</a>
+										<a href="/MyBlog/linux/2020/05/29/core.html" style="font-size:40px;"> core 文件 调试 追踪 Segmentation fault 11</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/web/2020/05/20/phpar.html" style="font-size:40px;"> phpar</a>
+										<a href="/MyBlog/web/2020/05/29/brew.html" style="font-size:40px;"> brew install 问题解决</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/golang/2020/05/20/mpg.html" style="font-size:40px;"> mpg 状态机队列</a>
+										<a href="/MyBlog/web/2020/05/29/502.html" style="font-size:40px;"> PHP 接口调用报错 502 Bad Gateway</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/golang/2020/05/20/map.html" style="font-size:40px;"> map</a>
+										<a href="/MyBlog/web/2020/05/29/10-didi.html" style="font-size:40px;"> BOOT_LDFLAGS</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/linux/2020/05/20/du.html" style="font-size:40px;"> du</a>
+										<a href="/MyBlog/web/2020/05/28/zend_execute_ex.html" style="font-size:40px;"> zend_execute_ex</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/golang/2020/05/20/chan.html" style="font-size:40px;"> channel实现sync包里的同步锁</a>
+										<a href="/MyBlog/web/2020/05/28/zend_execute_data.html" style="font-size:40px;"> zend_execute_data</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/web/2020/05/20/cdebug.html" style="font-size:40px;"> xdebug 配置教程</a>
+										<a href="/MyBlog/web/2020/05/28/stack.html" style="font-size:40px;"> PHP打印调用堆栈的三种方法</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/golang/2020/05/20/benchmark.html" style="font-size:40px;"> benchmark</a>
+										<a href="/MyBlog/web/2020/05/28/php_ext.html" style="font-size:40px;"> php7 基础上编译扩展，hack文件操作</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/algorithm/2020/05/20/Theano.html" style="font-size:40px;"> Theano</a>
+										<a href="/MyBlog/web/2020/05/28/extension.html" style="font-size:40px;"> extension php扩展和zend扩展区别</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/golang/2020/05/19/webrtc.html" style="font-size:40px;"> webrtc</a>
+										<a href="/MyBlog/web/2020/05/27/yaf.html" style="font-size:40px;"> yaf</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/golang/2020/05/19/unsafe.html" style="font-size:40px;"> unsafe</a>
+										<a href="/MyBlog/web/2020/05/27/wechat.html" style="font-size:40px;"> wechat</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/golang/2020/05/19/sysmon.html" style="font-size:40px;"> sysmon 线程到底做了什么</a>
+										<a href="/MyBlog/golang/2020/05/27/stackpreempt.html" style="font-size:40px;"> stackpreempt 抢占调度</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/golang/2020/05/19/runtime.html" style="font-size:40px;"> runtime</a>
+										<a href="/MyBlog/web/2020/05/27/session.html" style="font-size:40px;"> php.ini中session的配置</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/golang/2020/05/19/pstree.html" style="font-size:40px;"> pstree ps 查看线程数</a>
+										<a href="/MyBlog/web/2020/05/27/phpt.html" style="font-size:40px;"> phpt 是php源码的测试文件</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/web/2020/05/18/ssm.html" style="font-size:40px;"> ssm 业务应用监控</a>
+										<a href="/MyBlog/golang/2020/05/27/nil.html" style="font-size:40px;"> 如何判断interface为nil</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/storage/2020/05/18/s3.html" style="font-size:40px;"> 块存储文件存储对象存储</a>
+										<a href="/MyBlog/golang/2020/05/27/newa.html" style="font-size:40px;"> golang 最新文章</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/golang/2020/05/18/main.html" style="font-size:40px;"> gdb 查看golang程序的入口和启动 流程</a>
+										<a href="/MyBlog/golang/2020/05/27/log.html" style="font-size:40px;"> log 高性能 线程安全 zap logrus</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/storage/2020/05/18/etcd.html" style="font-size:40px;"> etcd</a>
+										<a href="/MyBlog/golang/2020/05/27/goroutine.html" style="font-size:40px;"> goroutine</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/web/2020/05/18/cqrs.html" style="font-size:40px;"> cqrs 命令和查询责任分离</a>
+										<a href="/MyBlog/golang/2020/05/27/gocheck.html" style="font-size:40px;"> gocheck</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/golang/2020/05/17/schedt.html" style="font-size:40px;"> schedt systemon</a>
+										<a href="/MyBlog/golang/2020/05/27/ghost.html" style="font-size:40px;"> gh-ost mysql binlog同步工具</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/golang/2020/05/17/mpg.html" style="font-size:40px;"> mpg</a>
+										<a href="/MyBlog/web/2020/05/27/ext.html" style="font-size:40px;"> php 扩展编写ext</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/golang/2020/05/17/chan.html" style="font-size:40px;"> chan</a>
+										<a href="/MyBlog/web/2020/05/27/books.html" style="font-size:40px;"> books</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/golang/2020/05/17/bootstrap.html" style="font-size:40px;"> bootstrap</a>
+										<a href="/MyBlog/web/2020/05/27/avaliablity.html" style="font-size:40px;"> 如何保证系统高可用总结</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/golang/2020/05/17/Scheduler.html" style="font-size:40px;"> Scheduler 原理解析</a>
+										<a href="/MyBlog/web/2020/05/27/Strict.html" style="font-size:40px;"> PHP严格模式 Strict standards</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/golang/2020/05/16/slice.html" style="font-size:40px;"> slice</a>
+										<a href="/MyBlog/algorithm/2020/05/26/phpini.html" style="font-size:40px;"> 解决mac 没有php.ini 文件问题</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/golang/2020/05/16/race.html" style="font-size:40px;"> race</a>
+										<a href="/MyBlog/golang/2020/05/26/json.html" style="font-size:40px;"> golang如何修改json文件内容</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/golang/2020/05/16/nil.html" style="font-size:40px;"> nil</a>
+										<a href="/MyBlog/linux/2020/05/26/find.html" style="font-size:40px;"> find</a>
 									</li>
 									
 								</ul>
@@ -18089,33 +18642,33 @@ https://golang.org/ref/spec
                 		<ul class="posts" span="recent">  
 							  
 							   <li>  
-								   <span>23 May 2020</span>
-								   <a href="/MyBlog/golang/2020/05/23/json.html">  
-								   Speeding up json processing in go</a>  
+								   <span>31 May 2020</span>
+								   <a href="/MyBlog/linux/2020/05/31/sed.html">  
+								   sed 替换括号</a>  
 							   </li>  
 							  
 							   <li>  
-								   <span>22 May 2020</span>
-								   <a href="/MyBlog/golang/2020/05/22/typeAssert.html">  
-								   typeAssert</a>  
+								   <span>31 May 2020</span>
+								   <a href="/MyBlog/jekyll/2020/05/31/raw.html">  
+								   raw 解决括号冲突问题</a>  
 							   </li>  
 							  
 							   <li>  
-								   <span>22 May 2020</span>
-								   <a href="/MyBlog/golang/2020/05/22/sync.html">  
-								   sync.Mutex使用注意事项</a>  
+								   <span>31 May 2020</span>
+								   <a href="/MyBlog/web/2020/05/31/php_json_encode_zval.html">  
+								   php_json_encode_zval</a>  
 							   </li>  
 							  
 							   <li>  
-								   <span>22 May 2020</span>
-								   <a href="/MyBlog/golang/2020/05/22/singleton.html">  
-								   golang单例模式</a>  
+								   <span>31 May 2020</span>
+								   <a href="/MyBlog/algorithm/2020/05/31/clion.html">  
+								   clion</a>  
 							   </li>  
 							  
 							   <li>  
-								   <span>22 May 2020</span>
-								   <a href="/MyBlog/golang/2020/05/22/rwmutext.html">  
-								   map 加锁与sync.Map性能对比分析</a>  
+								   <span>31 May 2020</span>
+								   <a href="/MyBlog/web/2020/05/31/cJSON.html">  
+								   cJSON c语言json库</a>  
 							   </li>  
 							  
 						</ul>
