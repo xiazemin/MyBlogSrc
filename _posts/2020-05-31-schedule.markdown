@@ -1,0 +1,685 @@
+---
+title: schedule 工作线程的执行流程与调度循环
+layout: post
+category: golang
+author: 夏泽民
+---
+本文内容主要分为三部分：
+
+main goroutine 的调度运行
+非 main goroutine 的退出流程
+工作线程的执行流程与调度循环。
+main goroutine 的调度运行#
+runtime·rt0_go中在调用完runtime.newproc创建main goroutine后，就调用了runtime.mstart。让我们来分析一下这个函数。
+
+mstart#
+mstart没什么太多工作，然后就调用了mstart1。
+
+Copy
+func mstart() {
+	_g_ := getg()
+        // 在启动阶段，_g_.stack早就完成了初始化，所以osStack是false，下面被省略的也不会执行。
+	osStack := _g_.stack.lo == 0 
+	......
+	_g_.stackguard0 = _g_.stack.lo + _StackGuard
+	_g_.stackguard1 = _g_.stackguard0
+	mstart1()
+        ......
+	mexit(osStack)
+}
+mstart1#
+调用save保存g0的状态
+处理信号相关
+调用 schedule 开始调度
+Copy
+func mstart1() {
+	_g_ := getg()
+
+	if _g_ != _g_.m.g0 {
+		throw("bad runtime·mstart")
+	}
+	save(getcallerpc(), getcallersp())	// 保存调用mstart1的函数（mstart）的 pc 和 sp。
+	asminit()				// 空函数
+	minit()					// 信号相关
+
+	if _g_.m == &m0 {			// 初始化时会执行这里，也是信号相关
+		mstartm0()
+	}
+
+	if fn := _g_.m.mstartfn; fn != nil {	// 初始化时 fn = nil，不会执行这里
+		fn()
+	}
+
+	if _g_.m != &m0 {			// 不是m0的话，没有p。绑定一个p
+		acquirep(_g_.m.nextp.ptr())
+		_g_.m.nextp = 0
+	}
+	schedule()
+}
+save(pc, sp uintptr) 保存调度信息#
+保存当前g（初始化时为g0）的状态到sched字段中。
+
+Copy
+func save(pc, sp uintptr) {
+	_g_ := getg()
+	_g_.sched.pc = pc
+	_g_.sched.sp = sp
+	_g_.sched.lr = 0
+	_g_.sched.ret = 0
+	_g_.sched.g = guintptr(unsafe.Pointer(_g_))
+	if _g_.sched.ctxt != nil {
+		badctxt()
+	}
+}
+schedule 开始调度#
+调用globrunqget、runqget、findrunnable获取一个可执行的g
+
+Copy
+func schedule() {
+	_g_ := getg()	// g0
+        ......
+	var gp *g	// 初始化时，经过下面一系列查找，会找到main goroutine，因为目前为止整个运行时只有这一个g（除了g0）。
+	var inheritTime bool
+        ......
+	if gp == nil {
+                // 该p上每进行61次就从全局队列中获取一个g
+		if _g_.m.p.ptr().schedtick%61 == 0 && sched.runqsize > 0 {
+			lock(&sched.lock)
+			gp = globrunqget(_g_.m.p.ptr(), 1)
+			unlock(&sched.lock)
+		}
+	}
+	if gp == nil {
+                // 从p的runq中获取一个g
+		gp, inheritTime = runqget(_g_.m.p.ptr())
+		// We can see gp != nil here even if the M is spinning,
+		// if checkTimers added a local goroutine via goready.
+	}
+	if gp == nil {
+                // 寻找可执行的g，会尝试从本地，全局运行对列获取，如果没有，从其他p那里偷取。
+		gp, inheritTime = findrunnable() // blocks until work is available
+	}
+	......
+	execute(gp, inheritTime)
+}
+execute：安排g在当前m上运行#
+被调度的 g 与 m 相互绑定
+更改g的状态为 _Grunning
+调用 gogo 切换到被调度的g上
+Copy
+func execute(gp *g, inheritTime bool) {
+	_g_ := getg()	// g0
+
+	_g_.m.curg = gp	// 与下面一行是 gp 和 m 相互绑定。gp 其实就是 main goroutine
+	gp.m = _g_.m
+	casgstatus(gp, _Grunnable, _Grunning)	// 更改状态
+	gp.waitsince = 0
+	gp.preempt = false
+	gp.stackguard0 = gp.stack.lo + _StackGuard
+	if !inheritTime {
+		_g_.m.p.ptr().schedtick++
+	}
+	......
+	gogo(&gp.sched)
+}
+gogo(buf *gobuf)#
+在本方法下面的讲解中将使用newg代指被调度的g。
+
+gogo函数是用汇编实现的。其作用是：加载newg的上下文，跳转到gobuf.pc指向的函数。
+
+Copy
+// go/src/runtime/asm_amd64.s
+TEXT runtime·gogo(SB), NOSPLIT, $16-8
+	MOVQ	buf+0(FP), BX		// bx = &gp.sched
+	MOVQ	gobuf_g(BX), DX		// dx = gp.sched.g ，也就是存储的 newg 指针
+	MOVQ	0(DX), CX		// make sure g != nil
+	get_tls(CX)
+	MOVQ	DX, g(CX)		// newg指针设置到tls
+	MOVQ	gobuf_sp(BX), SP	// 下面四条是加载上下文到cpu寄存器。
+	MOVQ	gobuf_ret(BX), AX
+	MOVQ	gobuf_ctxt(BX), DX
+	MOVQ	gobuf_bp(BX), BP
+	MOVQ	$0, gobuf_sp(BX)	// 下面四条是清零，减少gc的工作量。
+	MOVQ	$0, gobuf_ret(BX)
+	MOVQ	$0, gobuf_ctxt(BX)
+	MOVQ	$0, gobuf_bp(BX)
+	MOVQ	gobuf_pc(BX), BX	// gobuf.pc 存储的是要执行的函数指针，初始化时此函数为runtime.main
+	JMP	BX			// 跳转到要执行的函数
+runtime.main：main函数的执行#
+在上面gogo执行最后的JMP指令，其实就是跳转到了runtime.main。
+
+Copy
+func main() {
+	g := getg()		// 获取当前g，已经不是g0了，我们暂且称为maing
+        
+	if sys.PtrSize == 8 {	// 64位系统，栈最大为1GB
+		maxstacksize = 1000000000
+	} else {
+		maxstacksize = 250000000
+	}
+	mainStarted = true
+        // 启动监控进程，抢占调度就是在这里实现的
+	if GOARCH != "wasm" { // no threads on wasm yet, so no sysmon
+		systemstack(func() {
+			newm(sysmon, nil)
+		})
+	}
+        ......
+	doInit(&runtime_inittask)	// 调用runtime的初始化函数
+        ......
+	runtimeInitTime = nanotime()	// 记录世界开始时间
+	gcenable()			// 开启gc
+	......
+	doInit(&main_inittask)		// 调用main的初始化函数
+        ......
+	fn := main_main			// 调用main.main，也就是我们经常写hello world的main。
+	fn()
+        ......
+	exit(0)				// 退出
+}
+runtime.main主要做了以下的工作：
+
+启动监控进程。
+调用runtime的初始化函数。
+开启gc。
+调用main的初始化函数。
+调用main.main，执行完后退出。
+非 main goroutine 的退出流程#
+首先明确一点，无论是main goroutine还是非main goroutine的都是调用newproc创建的，所以在调度上基本是一致的。
+
+之前的文章中说过，在gostartcall函数中，会将goroutine要执行的函数fn伪造成是被goexit调用的。但是，当fn是runtime.main的时候是没有用的，因为在runtime.main末尾会调用exit(0)退出程序。所以，这只对非main goroutine起作用。让我们简单验证一下。
+
+先给出一个简单的例子：
+
+Copy
+package main
+
+import "fmt"
+
+func main() {
+	ch := make(chan int)
+	go foo(ch)
+	fmt.Println(<-ch)
+}
+
+func foo(ch chan int) {
+	ch <- 1
+}
+dlv调试一波：
+
+Copy
+root@xiamin:~/study# dlv debug foo.go
+(dlv) b main.foo // 打个断点
+Breakpoint 1 set at 0x4ad86f for main.foo() ./foo.go:11
+(dlv) c
+> main.foo() ./foo.go:11 (hits goroutine(6):1 total:1) (PC: 0x4ad86f)
+     6:		ch := make(chan int)
+     7:		go foo(ch)
+     8:		fmt.Println(<-ch)
+     9:	}
+    10:
+=>  11:	func foo(ch chan int) {
+    12:		ch <- 1
+    13:	}
+(dlv) bt // 可以看到调用栈中确实存在goexit
+0  0x00000000004ad86f in main.foo
+   at ./foo.go:11
+1  0x0000000000463df1 in runtime.goexit
+   at /root/go/src/runtime/asm_amd64.s:1373
+
+// 此处执行三次 s，得到以下结果，确实是回到了goexit。
+
+> runtime.goexit() /root/go/src/runtime/asm_amd64.s:1374 (PC: 0x463df1)
+  1370:	// The top-most function running on a goroutine
+  1371:	// returns to goexit+PCQuantum.
+  1372:	TEXT runtime·goexit(SB),NOSPLIT,$0-0
+  1373:		BYTE	$0x90	// NOP
+=>1374:		CALL	runtime·goexit1(SB)	// does not return
+  1375:		// traceback from goexit1 must hit code range of goexit
+  1376:		BYTE	$0x90	// NOP
+我们暂且将关联foo的g称之为foog，接下来我们看一下它的退出流程。
+
+goexit#
+Copy
+TEXT runtime·goexit(SB),NOSPLIT,$0-0
+	BYTE	$0x90	// NOP
+	CALL	runtime·goexit1(SB)	// does not return
+	// traceback from goexit1 must hit code range of goexit
+	BYTE	$0x90	// NOP
+goexit1#
+Copy
+func goexit1() {
+	if raceenabled {
+		racegoend()
+	}
+	if trace.enabled {
+		traceGoEnd()
+	}
+	mcall(goexit0)
+}
+goexit和goexit1没什么可说的，看一下mcall
+
+mcall(fn func(*g))#
+mcall的参数是个函数fn，而fn有个参数是*g，此处fn是goexit0。
+
+mcall是由汇编编写的：
+
+Copy
+TEXT runtime·mcall(SB), NOSPLIT, $0-8
+	MOVQ	fn+0(FP), DI	// 此处 di 存储的是 funcval 结构体指针，funcval.fn 指向的是 goexit0。
+
+	get_tls(CX)
+	MOVQ	g(CX), AX	// 此处 ax 中存储的是foog
+
+        // 保存foog的上下文
+	MOVQ	0(SP), BX	// caller's PC。mcall的返回地址，此处就是 goexit1 调用 mcall 时的pc
+	MOVQ	BX, (g_sched+gobuf_pc)(AX)	// foog.sched.pc = caller's PC
+	LEAQ	fn+0(FP), BX			// caller's SP。
+	MOVQ	BX, (g_sched+gobuf_sp)(AX)	// foog.sched.sp = caller's SP
+	MOVQ	AX, (g_sched+gobuf_g)(AX)	// foog.sched.g = foog
+	MOVQ	BP, (g_sched+gobuf_bp)(AX)	// foog.sched.bp = bp
+
+        // 切换到m.g0和它的栈，调用fn。
+	MOVQ	g(CX), BX			// 此处 bx 中存储的是foog
+	MOVQ	g_m(BX), BX			// bx = foog.m
+	MOVQ	m_g0(BX), SI			// si = m.g0
+	CMPQ	SI, AX				// if g == m->g0 call badmcall
+	JNE	3(PC)				// 上面的结果不相等就跳转到下面第三行。
+	MOVQ	$runtime·badmcall(SB), AX
+	JMP	AX
+	MOVQ	SI, g(CX)			// g = m->g0。m.g0设置到tls
+	MOVQ	(g_sched+gobuf_sp)(SI), SP	// sp = m->g0->sched.sp。设置g0栈.
+	PUSHQ	AX				// fn的参数压栈，ax = foog
+	MOVQ	DI, DX
+	MOVQ	0(DI), DI			// 读取 funcval 结构的第一个成员，也就是 funcval.fn，此处是goexit0。
+	CALL	DI				// 调用 goexit0(foog)。
+	POPQ	AX
+	MOVQ	$runtime·badmcall2(SB), AX
+	JMP	AX
+	RET
+在此场景下，mcall做了以下工作：保存foog的上下文。切换到g0及其栈，调用传入的方法，并将foog作为参数。
+
+可以看到mcall与gogo的作用正好相反：
+
+gogo实现了从g0切换到某个goroutine，执行关联函数。
+mcall实现了保存某个goroutine，切换到g0及其栈，并调用fn函数，其参数就是被保存的goroutine指针。
+goexit0#
+Copy
+func goexit0(gp *g) {
+	_g_ := getg()	// g0
+
+	casgstatus(gp, _Grunning, _Gdead)	// 更改gp状态为_Gdead
+	if isSystemGoroutine(gp, false) {
+		atomic.Xadd(&sched.ngsys, -1)
+	}
+        // 下面的一段就是清零gp的属性
+	gp.m = nil
+	locked := gp.lockedm != 0
+	gp.lockedm = 0
+	_g_.m.lockedg = 0
+	gp.preemptStop = false
+	gp.paniconfault = false
+	gp._defer = nil // should be true already but just in case.
+	gp._panic = nil // non-nil for Goexit during panic. points at stack-allocated data.
+	gp.writebuf = nil
+	gp.waitreason = 0
+	gp.param = nil
+	gp.labels = nil
+	gp.timer = nil
+	......
+	dropg()				// 解绑gp与当前m。_g_.m.curg.m = nil ; _g_.m.curg = nil 。
+        ......
+	gfput(_g_.m.p.ptr(), gp)	// 放入空闲列表。如果本地队列太多，会转移一部分到全局队列。
+	......
+	schedule()			// 重新调度
+}
+goexit0做了以下工作：
+
+将gp属性清零与m解绑
+gfput 放入空闲列表
+schedule 重新调度
+工作线程的执行流程与调度循环#
+以下给出一个工作线程的执行流程简图：
+
+
+可以看到工作线程的执行是从mstart开始的。schedule->......->goexit0->schedule形成了一个调度循环。
+
+高度概括一下执行流程与调度循环：
+
+mstart：主要是设置g0.stackguard0，g0.stackguard1。
+mstart1：调用save保存callerpc和callerpc到g0.sched。然后调用schedule开始调度循环。
+schedule：获得一个可执行的g。下面用gp代指。
+execute(gp *g, inheritTime bool)：绑定gp与当前m，状态改为_Grunning。
+gogo(buf *gobuf)：加载gp的上下文，跳转到buf.pc指向的函数。
+执行buf.pc指向函数。
+goexit->goexit1：调用mcall(goexit0)。
+mcall(fn func(*g))：保存当前g（也就是gp）的上下文；切换到g0及其栈，调用fn，参数为gp。
+goexit0(gp *g)：清零gp的属性，状态_Grunning改为_Gdead；dropg解绑m和gp；gfput放入队列；schedule重新调度。
+<!-- more -->
+Linux系统调用#
+概念：系统调用为用户态进程提供了硬件的抽象接口。并且是用户空间访问内核的唯一手段，除异常和陷入外，它们是内核唯一的合法入口。保证系统的安全和稳定。
+
+调用号：在Linux中，每个系统调用被赋予一个独一无二的系统调用号。当用户空间的进程执行一个系统调用时，会使用调用号指明系统调用。
+
+syscall指令：因为用户代码特权级较低，无权访问需要最高特权级才能访问的内核地址空间的代码和数据。所以需要特殊指令，在golang中是syscall。
+
+参数设置#
+x86-64中通过syscall指令执行系统调用的参数设置
+
+rax存放系统调用号，调用返回值也会放在rax中
+当系统调用参数小于等于6个时，参数则须按顺序放到寄存器 rdi，rsi，rdx，r10，r8，r9中。
+如果系统调用的参数数量大于6个，需将参数保存在一块连续的内存中，并将地址存入rbx中。
+Golang中调用系统调用#
+给个简单的例子。
+
+Copy
+package main
+
+import (
+	"fmt"
+	"os"
+)
+
+func main() {
+	f, _ := os.Open("read.go")
+	buf := make([]byte, 1000)
+	f.Read(buf)
+	fmt.Printf("%s", buf)
+}
+通过 IDE 跟踪得到调用路径：
+
+Copy
+os/file.go：(*File).Read() -> os/file_unix.go：(*File).read() -> internal/poll/fd_unix.go：(*File).pfd.Read()
+
+->syscall/syscall_unix.go：Read() -> syscall/zsyscall_linux_amd64.go：read() -> syscall/syscall_unix.go：Syscall()
+
+// syscall/zsyscall_linux_amd64.go
+func read(fd int, p []byte) (n int, err error) {
+        ......
+	r0, _, e1 := Syscall(SYS_READ, uintptr(fd), uintptr(_p0), uintptr(len(p)))
+        ......
+}
+可以看到 f.Read(buf) 最终调用了 syscall/syscall_unix.go 文件中的 Syscall 函数。我们忽略中间的具体执行逻辑。
+
+SYS_READ 定义的是 read 的系统调用号，定义在 syscall/zsysnum_linux_amd64.go。
+
+Copy
+package syscall
+
+const (
+	SYS_READ                   = 0
+	SYS_WRITE                  = 1
+	SYS_OPEN                   = 2
+	SYS_CLOSE                  = 3
+	SYS_STAT                   = 4
+	SYS_FSTAT                  = 5
+        ......
+）
+Syscall系列函数#
+虽然在上面看到了 Syscall 函数，但执行系统调用的防止并不知道它一个。它们的定义如下：
+
+Copy
+// src/syscall/syscall_unix.go
+
+func Syscall(trap, a1, a2, a3 uintptr) (r1, r2 uintptr, err Errno)
+func Syscall6(trap, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2 uintptr, err Errno)
+func RawSyscall(trap, a1, a2, a3 uintptr) (r1, r2 uintptr, err Errno)
+func RawSyscall6(trap, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2 uintptr, err Errno)
+Syscall 与 Syscall6 的区别：只是参数个数的不同，其他都相同。
+
+Syscall 与 RawSyscall 的区别：Syscall 开始会调用 runtime·entersyscall ，结束时会调用 runtime·exitsyscall；而 RawSyscall 没有。这意味着 Syscall 是受调度器控制的，RawSyscall不受。因此 RawSyscall 可能会造成阻塞。
+
+下面来看一下源代码：
+
+Copy
+// src/syscall/asm_linux_amd64.s
+// func Syscall(trap int64, a1, a2, a3 uintptr) (r1, r2, err uintptr);
+// Trap # in AX, args in DI SI DX R10 R8 R9, return in AX DX
+// Note that this differs from "standard" ABI convention, which
+// would pass 4th arg in CX, not R10.
+
+TEXT ·Syscall(SB),NOSPLIT,$0-56
+	CALL	runtime·entersyscall(SB)	// 进入系统调用
+        // 准备参数，执行系统调用
+	MOVQ	a1+8(FP), DI
+	MOVQ	a2+16(FP), SI
+	MOVQ	a3+24(FP), DX
+	MOVQ	trap+0(FP), AX			// syscall entry
+	SYSCALL
+	CMPQ	AX, $0xfffffffffffff001		// 对比返回结果
+	JLS	ok
+	MOVQ	$-1, r1+32(FP)
+	MOVQ	$0, r2+40(FP)
+	NEGQ	AX
+	MOVQ	AX, err+48(FP)
+	CALL	runtime·exitsyscall(SB)		// 退出系统调用
+	RET
+ok:
+	MOVQ	AX, r1+32(FP)
+	MOVQ	DX, r2+40(FP)
+	MOVQ	$0, err+48(FP)
+	CALL	runtime·exitsyscall(SB)		// 退出系统调用
+	RET
+
+// func Syscall6(trap, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2, err uintptr)
+TEXT ·Syscall6(SB),NOSPLIT,$0-80
+	CALL	runtime·entersyscall(SB)
+	MOVQ	a1+8(FP), DI
+	MOVQ	a2+16(FP), SI
+	MOVQ	a3+24(FP), DX
+	MOVQ	a4+32(FP), R10
+	MOVQ	a5+40(FP), R8
+	MOVQ	a6+48(FP), R9
+	MOVQ	trap+0(FP), AX	// syscall entry
+	SYSCALL
+	CMPQ	AX, $0xfffffffffffff001
+	JLS	ok6
+	MOVQ	$-1, r1+56(FP)
+	MOVQ	$0, r2+64(FP)
+	NEGQ	AX
+	MOVQ	AX, err+72(FP)
+	CALL	runtime·exitsyscall(SB)
+	RET
+ok6:
+	MOVQ	AX, r1+56(FP)
+	MOVQ	DX, r2+64(FP)
+	MOVQ	$0, err+72(FP)
+	CALL	runtime·exitsyscall(SB)
+	RET
+
+// func RawSyscall(trap, a1, a2, a3 uintptr) (r1, r2, err uintptr)
+TEXT ·RawSyscall(SB),NOSPLIT,$0-56
+	MOVQ	a1+8(FP), DI
+	MOVQ	a2+16(FP), SI
+	MOVQ	a3+24(FP), DX
+	MOVQ	trap+0(FP), AX	// syscall entry
+	SYSCALL
+	CMPQ	AX, $0xfffffffffffff001
+	JLS	ok1
+	MOVQ	$-1, r1+32(FP)
+	MOVQ	$0, r2+40(FP)
+	NEGQ	AX
+	MOVQ	AX, err+48(FP)
+	RET
+ok1:
+	MOVQ	AX, r1+32(FP)
+	MOVQ	DX, r2+40(FP)
+	MOVQ	$0, err+48(FP)
+	RET
+
+// func RawSyscall6(trap, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2, err uintptr)
+TEXT ·RawSyscall6(SB),NOSPLIT,$0-80
+        ......
+	RET
+系统调用前函数（entersyscall -> reentersyscall）#
+在执行系统调用前调用 entersyscall 和 reentersyscall，reentersyscall的主要功能：
+
+因为要开始系统调用，所以当前G和和P的状态分别变为了 _Gsyscall 和 _Psyscall
+而P不会等待M，所以P和M相互解绑
+但是M会保留P到 m.oldp 中，在系统调用结束后尝试与P重新绑定。
+本节及后面会涉及到一些之前分析过的函数，这里给出链接，就不重复分析了。
+
+wirep
+mcall
+Copy
+func entersyscall() {
+	reentersyscall(getcallerpc(), getcallersp())
+}
+func reentersyscall(pc, sp uintptr) {
+	_g_ := getg()
+	_g_.m.locks++
+	_g_.stackguard0 = stackPreempt
+	_g_.throwsplit = true
+
+	// Leave SP around for GC and traceback.
+	save(pc, sp)
+	_g_.syscallsp = sp
+	_g_.syscallpc = pc
+	casgstatus(_g_, _Grunning, _Gsyscall)	// 当前g的状态由 _Grunning 改为 _Gsyscall
+	......
+	_g_.m.syscalltick = _g_.m.p.ptr().syscalltick
+	_g_.sysblocktraced = true
+	_g_.m.mcache = nil
+	pp := _g_.m.p.ptr()
+	pp.m = 0				// 当前 p 解绑 m
+	_g_.m.oldp.set(pp)			// 将当前 p 赋值给 m.oldp。会在 exitsyscall 中用到。
+	_g_.m.p = 0				// 当前 m 解绑 p
+	atomic.Store(&pp.status, _Psyscall)	// 将当前 p 的状态改为 _Psyscall
+        ......
+	_g_.m.locks--
+}
+
+系统调用退出后函数（exitsyscall）#
+主要功能是：
+
+先尝试绑定oldp，如果不允许，则绑定任意空闲P
+未能绑定P，则解绑G和M；睡眠工作线程；重新调度。
+Copy
+func exitsyscall() {
+	_g_ := getg()
+        ......
+	_g_.waitsince = 0
+	oldp := _g_.m.oldp.ptr()	// reentersyscall 函数中存储的P
+	_g_.m.oldp = 0
+	if exitsyscallfast(oldp) {	// 尝试给当前M绑定个P，下有分析。绑定成功后执行 if 中的语句。
+		_g_.m.p.ptr().syscalltick++
+		casgstatus(_g_, _Gsyscall, _Grunning) // 更改G的状态
+		_g_.syscallsp = 0
+		_g_.m.locks--
+		if _g_.preempt {
+			_g_.stackguard0 = stackPreempt
+		} else {
+			_g_.stackguard0 = _g_.stack.lo + _StackGuard
+		}
+		_g_.throwsplit = false
+		return
+	}
+	......
+	mcall(exitsyscall0)	// 下有分析
+	......
+}
+尝试为当前M绑定P（exitsyscallfast）#
+该函数的主要目的是尝试为当前M绑定一个P，分为两种情况。
+
+第一：如果oldp（也就是当前M的元配）存在，并且状态可以从 _Psyscall 变更到 _Pidle，则此P与M相互绑定，返回true。
+
+第二：oldp条件不允许，则尝试获取任何空闲的P并与当前M绑定。具体实现是：exitsyscallfast_pidle 调用 pidleget，不为nil，则调用 acquirep。
+
+Copy
+func exitsyscallfast(oldp *p) bool {
+	_g_ := getg()
+	// 尝试与oldp绑定
+	if oldp != nil && oldp.status == _Psyscall && atomic.Cas(&oldp.status, _Psyscall, _Pidle) {
+		// There's a cpu for us, so we can run.
+		wirep(oldp)
+		exitsyscallfast_reacquired()
+		return true
+	}
+	// 尝试获取任何空闲的P
+	if sched.pidle != 0 {
+		var ok bool
+		systemstack(func() {
+			ok = exitsyscallfast_pidle()
+                         ......
+		})
+		if ok {
+			return true
+		}
+	}
+	return false
+}
+M解绑G，重新调度（mcall(exitsyscall0)）#
+Copy
+func exitsyscall0(gp *g) {
+	_g_ := getg()	// g0
+	casgstatus(gp, _Gsyscall, _Grunnable)
+	dropg()	// 解绑 gp 与 M
+	lock(&sched.lock)
+	var _p_ *p
+	if schedEnabled(_g_) {
+		_p_ = pidleget()
+	}
+	if _p_ == nil {
+		globrunqput(gp)	// 未获取到空闲P，将gp放入sched.runq
+	} else if atomic.Load(&sched.sysmonwait) != 0 {
+		atomic.Store(&sched.sysmonwait, 0)
+		notewakeup(&sched.sysmonnote)
+	}
+	unlock(&sched.lock)
+	if _p_ != nil {
+		acquirep(_p_)
+		execute(gp, false) // 有P，与当前M绑定，执行gp，进入调度循环。
+	}
+	if _g_.m.lockedg != 0 {
+		// Wait until another thread schedules gp and so m again.
+		stoplockedm()
+		execute(gp, false) // Never returns.
+	}
+	stopm()		// 没有新工作之前停止M的执行。睡眠工作线程。在获得P并且唤醒之后会继续执行
+	schedule()	// 能走到这里说明M以获得P，并且被唤醒，可以寻找一个G，继续调度了。
+}
+exitsyscall0 -> stopm#
+主要内容是将 M 放回 sched.midle，并通过futex系统调用挂起线程。
+
+Copy
+func stopm() {
+	_g_ := getg()
+
+	if _g_.m.locks != 0 {
+		throw("stopm holding locks")
+	}
+	if _g_.m.p != 0 {
+		throw("stopm holding p")
+	}
+	if _g_.m.spinning {
+		throw("stopm spinning")
+	}
+
+	lock(&sched.lock)
+	mput(_g_.m)		// M 放回 sched.midle
+	unlock(&sched.lock)
+	notesleep(&_g_.m.park)	// notesleep->futexsleep->runtime.futex->futex系统调用。
+	noteclear(&_g_.m.park)
+	acquirep(_g_.m.nextp.ptr())
+	_g_.m.nextp = 0
+}
+总结#
+在系统调用之前调用：entersyscall。
+
+更改P和G的状态为_Psyscall和_Gsyscall
+解绑P和M
+将P存入m.oldp
+在系统调用之后调用：exitsyscall。
+
+exitsyscallfast：尝试为当前M绑定一个P，成功了会return退出exitsyscall。
+
+如果oldp符合条件则wirep
+否则尝试获取任何空闲的P并与当前M绑定
+exitsyscall0：进入调度循环
+
+更改gp状态为_Grunnable
+dropg解绑gp和M
+尝试获取p，获取到则acquirep绑定P和M；execute进入调度循环。
+未获取到则globrunqput将gp放入sched.runq；stopm将M放入sched.midle、挂起工作线程；此M被唤醒后schedule进入调度循环。
+https://www.cnblogs.com/flhs/p/12709962.html
+https://www.cnblogs.com/flhs/p/12682881.html
