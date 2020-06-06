@@ -1,7 +1,7 @@
 ---
 title: zend_execute_data
 layout: post
-category: web
+category: php
 author: 夏泽民
 ---
 研究下PHP Generator的实现，发现对于Generator很重要的一个数据结构为_zend_execute_data，在PHP源码中通常是一个execute_data变量，与该变量相关的宏是#define EX(element) execute_data.element。

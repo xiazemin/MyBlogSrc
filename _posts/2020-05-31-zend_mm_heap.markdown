@@ -1,7 +1,7 @@
 ---
 title: zend_mm_heap corrupted
 layout: post
-category: web
+category: php
 author: 夏泽民
 ---
 PHP7+Swoole开启opcache，运行时出现zend_mm_heap corrupted。这个问题的主要原因是PHP7增加了一个优化项，如果PHP代码中一个数组只声明一次，并且没有对数据进行修改操作。PHP7会将此数组转为immutable类型，此数组仅作为只读。

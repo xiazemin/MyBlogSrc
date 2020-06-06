@@ -1,7 +1,7 @@
 ---
 title: zend_execute_ex
 layout: post
-category: web
+category: php
 author: 夏泽民
 ---
 解释器引擎最终执行op的函数是zend_execute，实际上zend_execute是一个函数指针，在引擎初始化的时候zend_execute默认指向了execute,这个execute定义在{PHPSRC}/Zend/zend_vm_execute.h

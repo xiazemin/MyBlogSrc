@@ -1,7 +1,7 @@
 ---
 title: ZEND_HASH_FOREACH_KEY_VAL php扩展hashtable操作
 layout: post
-category: web
+category: php
 author: 夏泽民
 ---
 php7的遍历数组和php5差很多，7提供了一些专门的宏来遍历元素（或keys）。宏的第一个参数是HashTable，其他的变量被分配到每一步迭代：

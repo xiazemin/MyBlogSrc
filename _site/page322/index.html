@@ -147,22 +147,310 @@
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/golang/2018/03/17/unsafe.html">unsafe cgo</a>
+						<a class="post-link" href="/MyBlog/linux/2018/04/29/cgroup.html">linux cgroup</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/golang/2018/03/17/unsafe.html"> 夏泽民</a>
+						<a href="/MyBlog/linux/2018/04/29/cgroup.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Mar 17, 2018
+							Apr 29, 2018
 						</span>
 					</div>
-					<div class="excerpt"><!-- more -->
-<p>unsafe包是一个采用特殊方式实现的包。虽然它可以和普通包一样的导入和使用，但它实际上是由编译器实现的。unsafe包被广泛地用于比较低级的包, 例如runtime、os、syscall还有net包等，因为它们需要和操作系统密切配合，但是对于普通的程序一般是不需要使用unsafe包的。</p>
-
+					<div class="excerpt"><p>Namespace解决的问题主要是环境隔离的问题，这只是虚拟化中最最基础的一步，我们还需要解决对计算机资源使用上的隔离。也就是说，虽然你通过Namespace把我Jail到一个特定的环境中去了，但是我在其中的进程使用用CPU、内存、磁盘等这些计算资源其实还是可以随心所欲的。所以，我们希望对进程进行资源利用上的限制或控制。这就是Linux CGroup出来了的原因。
+Linux CGroup全称Linux Control Group， 是Linux内核的一个功能，用来限制，控制与分离一个进程组群的资源（如CPU、内存、磁盘输入输出等）。这个项目最早是由Google的工程师在2006年发起（主要是Paul Menage和Rohit Seth），最早的名称为进程容器（process containers）。在2007年时，因为在Linux内核中，容器（container）这个名词太过广泛，为避免混乱，被重命名为cgroup，并且被合并到2.6.24版的内核中去。然后，其它开始了他的发展。
+Linux CGroupCgroup 可​​​让​​​您​​​为​​​系​​​统​​​中​​​所​​​运​​​行​​​任​​​务​​​（进​​​程​​​）的​​​用​​​户​​​定​​​义​​​组​​​群​​​分​​​配​​​资​​​源​​​ — 比​​​如​​​ CPU 时​​​间​​​、​​​系​​​统​​​内​​​存​​​、​​​网​​​络​​​带​​​宽​​​或​​​者​​​这​​​些​​​资​​​源​​​的​​​组​​​合​​​。​​​您​​​可​​​以​​​监​​​控​​​您​​​配​​​置​​​的​​​ cgroup，拒​​​绝​​​ cgroup 访​​​问​​​某​​​些​​​资​​​源​​​，甚​​​至​​​在​​​运​​​行​​​的​​​系​​​统​​​中​​​动​​​态​​​配​​​置​​​您​​​的​​​ cgroup。
+主要提供了如下功能：
+Resource limitation: 限制资源使用，比如内存使用上限以及文件系统的缓存限制。
+Prioritization: 优先级控制，比如：CPU利用和磁盘IO吞吐。
+Accounting: 一些审计或一些统计，主要目的是为了计费。
+Control: 挂起进程，恢复执行进程。
+使​​​用​​​ cgroup，系​​​统​​​管​​​理​​​员​​​可​​​更​​​具​​​体​​​地​​​控​​​制​​​对​​​系​​​统​​​资​​​源​​​的​​​分​​​配​​​、​​​优​​​先​​​顺​​​序​​​、​​​拒​​​绝​​​、​​​管​​​理​​​和​​​监​​​控​​​。​​​可​​​更​​​好​​​地​​​根​​​据​​​任​​​务​​​和​​​用​​​户​​​分​​​配​​​硬​​​件​​​资​​​源​​​，提​​​高​​​总​​​体​​​效​​​率​​​。
+在实践中，系统管理员一般会利用CGroup做下面这些事（有点像为某个虚拟机分配资源似的）：
+隔离一个进程集合（比如：nginx的所有进程），并限制他们所消费的资源，比如绑定CPU的核。
+为这组进程 分配其足够使用的内存
+为这组进程分配相应的网络带宽和磁盘存储限制
+限制访问某些设备（通过设置设备的白名单）
+<!-- more -->
+Linux把CGroup这个事实现成了一个file system，你可以mount。在我的Ubuntu 14.04下，你输入以下命令你就可以看到cgroup已为你mount好了。
+ $ mount -t cgroup
+cgroup on /sys/fs/cgroup/cpuset type cgroup (rw,relatime,cpuset)
+cgroup on /sys/fs/cgroup/cpu type cgroup (rw,relatime,cpu)
+cgroup on /sys/fs/cgroup/cpuacct type cgroup (rw,relatime,cpuacct)
+cgroup on /sys/fs/cgroup/memory type cgroup (rw,relatime,memory)
+cgroup on /sys/fs/cgroup/devices type cgroup (rw,relatime,devices)
+cgroup on /sys/fs/cgroup/freezer type cgroup (rw,relatime,freezer)
+cgroup on /sys/fs/cgroup/blkio type cgroup (rw,relatime,blkio)
+cgroup on /sys/fs/cgroup/net_prio type cgroup (rw,net_prio)
+cgroup on /sys/fs/cgroup/net_cls type cgroup (rw,net_cls)
+cgroup on /sys/fs/cgroup/perf_event type cgroup (rw,relatime,perf_event)
+cgroup on /sys/fs/cgroup/hugetlb type cgroup (rw,relatime,hugetlb)
+或者使用lssubsys命令：
+$ lssubsys  -m
+cpuset /sys/fs/cgroup/cpuset
+cpu /sys/fs/cgroup/cpu
+cpuacct /sys/fs/cgroup/cpuacct
+memory /sys/fs/cgroup/memory
+devices /sys/fs/cgroup/devices
+freezer /sys/fs/cgroup/freezer
+blkio /sys/fs/cgroup/blkio
+net_cls /sys/fs/cgroup/net_cls
+net_prio /sys/fs/cgroup/net_prio
+perf_event /sys/fs/cgroup/perf_event
+hugetlb /sys/fs/cgroup/hugetlb
+我们可以看到，在/sys/fs下有一个cgroup的目录，这个目录下还有很多子目录，比如： cpu，cpuset，memory，blkio……这些，这些都是cgroup的子系统。分别用于干不同的事的。
+如果你没有看到上述的目录，你可以自己mount，下面给了一个示例：
+mkdir cgroup
+mount -t tmpfs cgroup_root ./cgroup
+mkdir cgroup/cpuset
+mount -t cgroup -ocpuset cpuset ./cgroup/cpuset/
+mkdir cgroup/cpu
+mount -t cgroup -ocpu cpu ./cgroup/cpu/
+mkdir cgroup/memory
+mount -t cgroup -omemory memory ./cgroup/memory/
+一旦mount成功，你就会看到这些目录下就有好文件了，比如，如下所示的cpu和cpuset的子系统：
+ $ ls /sys/fs/cgroup/cpu /sys/fs/cgroup/cpuset/
+/sys/fs/cgroup/cpu:
+cgroup.clone_children  cgroup.sane_behavior  cpu.shares         release_agent
+cgroup.event_control   cpu.cfs_period_us     cpu.stat           tasks
+cgroup.procs           cpu.cfs_quota_us      notify_on_release  user
+/sys/fs/cgroup/cpuset/:
+cgroup.clone_children  cpuset.mem_hardwall             cpuset.sched_load_balance
+cgroup.event_control   cpuset.memory_migrate           cpuset.sched_relax_domain_level
+cgroup.procs           cpuset.memory_pressure          notify_on_release
+cgroup.sane_behavior   cpuset.memory_pressure_enabled  release_agent
+cpuset.cpu_exclusive   cpuset.memory_spread_page       tasks
+cpuset.cpus            cpuset.memory_spread_slab       user
+cpuset.mem_exclusive   cpuset.mems
+你可以到/sys/fs/cgroup的各个子目录下去make个dir，你会发现，一旦你创建了一个子目录，这个子目录里又有很多文件了。
+hchen@ubuntu:/sys/fs/cgroup/cpu$ sudo mkdir haoel
+[sudo] password for hchen: 
+~:/sys/fs/cgroup/cpu$ ls ./haoel
+cgroup.clone_children  cgroup.procs       cpu.cfs_quota_us  cpu.stat           tasks
+cgroup.event_control   cpu.cfs_period_us  cpu.shares        notify_on_release
+好了，我们来看几个示例。
+CPU 限制
+假设，我们有一个非常吃CPU的程序，叫deadloop，其源码如下：
+DEADLOOP.C
+int main(void)
+{
+    int i = 0;
+    for(;;) i++;
+    return 0;
+}
+用sudo执行起来后，毫无疑问，CPU被干到了100%（下面是top命令的输出）
+PID USER      PR  NI    VIRT    RES    SHR S %CPU %MEM     TIME+ COMMAND   <br />
+3529 root      20   0    4196    736    656 R 99.6  0.1   0:23.13 deadloop
+然后，我们这前不是在/sys/fs/cgroup/cpu下创建了一个haoel的group。我们先设置一下这个group的cpu利用的限制：
+ # cat /sys/fs/cgroup/cpu/haoel/cpu.cfs_quota_us 
+-1
+ # echo 20000 &gt; /sys/fs/cgroup/cpu/haoel/cpu.cfs_quota_us
+我们看到，这个进程的PID是3529，我们把这个进程加到这个cgroup中：</p>
+<h1 id="echo-3529-sysfscgroupcpuhaoeltasks">echo 3529 » /sys/fs/cgroup/cpu/haoel/tasks</h1>
+<p>然后，就会在top中看到CPU的利用立马下降成20%了。（前面我们设置的20000就是20%的意思）
+PID USER      PR  NI    VIRT    RES    SHR S %CPU %MEM     TIME+ COMMAND   <br />
+3529 root      20   0    4196    736    656 R 19.9  0.1   8:06.11 deadloop
+然后，在我们另外一边：</p>
+<h1 id="创建memory-cgroup">创建memory cgroup</h1>
+<p>$ mkdir /sys/fs/cgroup/memory/haoel
+$ echo 64k &gt; /sys/fs/cgroup/memory/haoel/memory.limit_in_bytes</p>
+<h1 id="把上面的进程的pid加入这个cgroup">把上面的进程的pid加入这个cgroup</h1>
+<p>$ echo [pid] &gt; /sys/fs/cgroup/memory/haoel/tasks
+你会看到，一会上面的进程就会因为内存问题被kill掉了。
+磁盘I/O限制
+我们先看一下我们的硬盘IO，我们的模拟命令如下：（从/dev/sda1上读入数据，输出到/dev/null上）
+sudo dd if=/dev/sda1 of=/dev/null
+我们通过iotop命令我们可以看到相关的IO速度是55MB/s（虚拟机内）：
+TID  PRIO  USER     DISK READ  DISK WRITE  SWAPIN     IO&gt;    COMMAND        <br />
+8128 be/4 root       55.74 M/s    0.00 B/s  0.00 % 85.65 % dd if=/de~=/dev/null…
+然后，我们先创建一个blkio（块设备IO）的cgroup
+mkdir /sys/fs/cgroup/blkio/haoel
+并把读IO限制到1MB/s，并把前面那个dd命令的pid放进去（注：8:0 是设备号，你可以通过ls -l /dev/sda1获得）：
+ # echo ‘8:0 1048576’  &gt; /sys/fs/cgroup/blkio/haoel/blkio.throttle.read_bps_device 
+ # echo 8128 &gt; /sys/fs/cgroup/blkio/haoel/tasks
+再用iotop命令，你马上就能看到读速度被限制到了1MB/s左右。
+TID  PRIO  USER     DISK READ  DISK WRITE  SWAPIN     IO&gt;    COMMAND        <br />
+8128 be/4 root      973.20 K/s    0.00 B/s  0.00 % 94.41 % dd if=/de~=/dev/null…
+CGroup的子系统
+好了，有了以上的感性认识我们来，我们来看看control group有哪些子系统：
+blkio — 这​​​个​​​子​​​系​​​统​​​为​​​块​​​设​​​备​​​设​​​定​​​输​​​入​​​/输​​​出​​​限​​​制​​​，比​​​如​​​物​​​理​​​设​​​备​​​（磁​​​盘​​​，固​​​态​​​硬​​​盘​​​，USB 等​​​等​​​）。
+cpu — 这​​​个​​​子​​​系​​​统​​​使​​​用​​​调​​​度​​​程​​​序​​​提​​​供​​​对​​​ CPU 的​​​ cgroup 任​​​务​​​访​​​问​​​。​​​
+cpuacct — 这​​​个​​​子​​​系​​​统​​​自​​​动​​​生​​​成​​​ cgroup 中​​​任​​​务​​​所​​​使​​​用​​​的​​​ CPU 报​​​告​​​。​​​
+cpuset — 这​​​个​​​子​​​系​​​统​​​为​​​ cgroup 中​​​的​​​任​​​务​​​分​​​配​​​独​​​立​​​ CPU（在​​​多​​​核​​​系​​​统​​​）和​​​内​​​存​​​节​​​点​​​。​​​
+devices — 这​​​个​​​子​​​系​​​统​​​可​​​允​​​许​​​或​​​者​​​拒​​​绝​​​ cgroup 中​​​的​​​任​​​务​​​访​​​问​​​设​​​备​​​。​​​
+freezer — 这​​​个​​​子​​​系​​​统​​​挂​​​起​​​或​​​者​​​恢​​​复​​​ cgroup 中​​​的​​​任​​​务​​​。​​​
+memory — 这​​​个​​​子​​​系​​​统​​​设​​​定​​​ cgroup 中​​​任​​​务​​​使​​​用​​​的​​​内​​​存​​​限​​​制​​​，并​​​自​​​动​​​生​​​成​​​​​内​​​存​​​资​​​源使用​​​报​​​告​​​。​​​
+net_cls — 这​​​个​​​子​​​系​​​统​​​使​​​用​​​等​​​级​​​识​​​别​​​符​​​（classid）标​​​记​​​网​​​络​​​数​​​据​​​包​​​，可​​​允​​​许​​​ Linux 流​​​量​​​控​​​制​​​程​​​序​​​（tc）识​​​别​​​从​​​具​​​体​​​ cgroup 中​​​生​​​成​​​的​​​数​​​据​​​包​​​。​​​
+net_prio — 这个子系统用来设计网络流量的优先级
+hugetlb — 这个子系统主要针对于HugeTLB系统进行限制，这是一个大页文件系统。
+注意，你可能在Ubuntu 14.04下看不到net_cls和net_prio这两个cgroup，你需要手动mount一下：
+$ sudo modprobe cls_cgroup
+$ sudo mkdir /sys/fs/cgroup/net_cls
+$ sudo mount -t cgroup -o net_cls none /sys/fs/cgroup/net_cls 
+$ sudo modprobe netprio_cgroup
+$ sudo mkdir /sys/fs/cgroup/net_prio
+$ sudo mount -t cgroup -o net_prio none /sys/fs/cgroup/net_prio
+关于各个子系统的参数细节，以及更多的Linux CGroup的文档，你可以看看下面的文档：
+Linux Kernel的官方文档
+Redhat的官方文档
+CGroup的术语
+CGroup有下述术语：
+任务（Tasks）：就是系统的一个进程。
+控制组（Control Group）：一组按照某种标准划分的进程，比如官方文档中的Professor和Student，或是WWW和System之类的，其表示了某进程组。Cgroups中的资源控制都是以控制组为单位实现。一个进程可以加入到某个控制组。而资源的限制是定义在这个组上，就像上面示例中我用的haoel一样。简单点说，cgroup的呈现就是一个目录带一系列的可配置文件。
+层级（Hierarchy）：控制组可以组织成hierarchical的形式，既一颗控制组的树（目录结构）。控制组树上的子节点继承父结点的属性。简单点说，hierarchy就是在一个或多个子系统上的cgroups目录树。
+子系统（Subsystem）：一个子系统就是一个资源控制器，比如CPU子系统就是控制CPU时间分配的一个控制器。子系统必须附加到一个层级上才能起作用，一个子系统附加到某个层级以后，这个层级上的所有控制族群都受到这个子系统的控制。Cgroup的子系统可以有很多，也在不断增加中。
+下一代的CGroup
+上面，我们可以看到，CGroup的一些常用方法和相关的术语。一般来说，这样的设计在一般情况下还是没什么问题的，除了操作上的用户体验不是很好，但基本满足我们的一般需求了。
+不过，对此，有个叫Tejun Heo的同学非常不爽，他在Linux社区里对cgroup吐了一把槽，还引发了内核组的各种讨论。
+对于Tejun Heo同学来说，cgroup设计的相当糟糕。他给出了些例子，大意就是说，如果有多种层级关系，也就是说有多种对进程的分类方式，比如，我们可以按用户来分，分成Professor和Student，同时，也有按应用类似来分的，比如WWW和NFS等。那么，当一个进程即是Professor的，也是WWW的，那么就会出现多层级正交的情况，从而出现对进程上管理的混乱。另外，一个case是，如果有一个层级A绑定cpu，而层级B绑定memory，还有一个层级C绑定cputset，而有一些进程有的需要AB，有的需要AC，有的需要ABC，管理起来就相当不易。
+层级操作起来比较麻烦，而且如果层级变多，更不易于操作和管理，虽然那种方式很好实现，但是在使用上有很多的复杂度。你可以想像一个图书馆的图书分类问题，你可以有各种不同的分类，分类和图书就是一种多对多的关系。
+所以，在Kernel 3.16后，引入了unified hierarchy的新的设计，这个东西引入了一个叫__DEVEL__sane_behavior的特性（这个名字很明显意味目前还在开发试验阶段），它可以把所有子系统都挂载到根层级下，只有叶子节点可以存在tasks，非叶子节点只进行资源控制。
+我们mount一下看看：
+$ sudo mount -t cgroup -o __DEVEL__sane_behavior cgroup ./cgroup
+$ ls ./cgroup
+cgroup.controllers  cgroup.procs  cgroup.sane_behavior  cgroup.subtree_control 
+$ cat ./cgroup/cgroup.controllers
+cpuset cpu cpuacct memory devices freezer net_cls blkio perf_event net_prio hugetlb
+我们可以看到有四个文件，然后，你在这里mkdir一个子目录，里面也会有这四个文件。上级的cgroup.subtree_control控制下级的cgroup.controllers。
+cgroup只有上线控制下级，无法传递到下下级。所以，C和D中没有memory的限制，E中没有blkio和memory的限制。而本层的cgroup.controllers文件是个只读的，其中的内容就看上级的subtree_control里有什么了。
+任何被配置过subtree_control的目录都不能绑定进程，根结点除外。所以，A,C,D,E可以绑上进程，但是B不行。
+我们可以看到，这种方式干净的区分开了两个事，一个是进程的分组，一个是对分组的资源控制（以前这两个事完全混在一起），在目录继承上增加了些限制，这样可以避免一些模棱两可的情况。
+当然，这个事还在演化中，cgroup的这些问题这个事目前由cgroup的吐槽人Tejun Heo和华为的Li Zefan同学负责解决中。总之，这是一个系统管理上的问题，而且改变会影响很多东西，但一旦方案确定，老的cgroup方式将一去不复返。
+Cgroup是进行分组化管理的Linux内核功能，具体的资源管理是通过子系统来完成的。可以理解为子系统就是资源控制器，每种子系统就是一个资源的分配器，比如cpu子系统是控制cpu时间分配的，使用方式如下
+安装（ubuntu）
+#apt-get install cgroup-bin
+基本命令
+cgclassify – cgclassify命令是用来将运行的任务移动到一个或者多个cgroup。
+cgclear – cgclear 命令是用来删除层级中的所有cgroup。
+cgconfig.conf – 在cgconfig.conf文件中定义cgroup。
+cgconfigparser – cgconfigparser命令解析cgconfig.conf文件和并挂载层级。
+cgcreate – cgcreate在层级中创建新cgroup。
+cgdelete – cgdelete命令删除指定的cgroup。
+cgexec – cgexec命令在指定的cgroup中运行任务。
+cgget – cgget命令显示cgroup参数。
+cgred.conf – cgred.conf是cgred服务的配置文件。
+cgrules.conf – cgrules.conf 包含用来决定何时任务术语某些 cgroup的规则。
+cgrulesengd – cgrulesengd 在 cgroup 中发布任务。
+cgset – cgset 命令为 cgroup 设定参数。
+lscgroup – lscgroup 命令列出层级中的 cgroup。
+lssubsys – lssubsys 命令列出包含指定子系统的层级
+子系统说明
+可以使用lssubsys -a来列出系统支持多少种子系统，和：比如cpu是控制cpu时间片的，memory是控制内存使用的
+#lssubsys -a
+cpuset
+cpu,cpuacct
+memory
+devices
+freezer
+net_cls,net_prio
+blkio
+perf_event
+hugetlb
+主要的几种子系统说明如下：
+blkio 这个子系统设置限制每个块设备的输入输出控制。例如:磁盘，光盘以及usb等等。
+cpu 这个子系统使用调度程序为cgroup任务提供cpu的访问。
+cpuacct 产生cgroup任务的cpu资源报告。
+cpuset 如果是多核心的cpu，这个子系统会为cgroup任务分配单独的cpu和内存。
+devices 允许或拒绝cgroup任务对设备的访问。
+freezer 暂停和恢复cgroup任务。
+memory 设置每个cgroup的内存限制以及产生内存资源报告。
+net_cls 标记每个网络包以供cgroup方便使用。
+ns 名称空间子系统
+perf_event: 增加了对每group的监测跟踪的能力，即可以监测属于某个特定的group的所有线程以及运行在特定CPU上的线程
+要为Cgroup分配限制的资源,首先要挂载子系统，然后才有控制组，比如想要对目标程序进行内存限制，那就需要挂载memory子系统
+使用lssubsys -am来显示已经挂载的子系统
+#lssubsys -am
+cpuset /sys/fs/cgroup/cpuset
+cpu,cpuacct /sys/fs/cgroup/cpu,cpuacct
+memory /sys/fs/cgroup/memory
+devices /sys/fs/cgroup/devices
+freezer /sys/fs/cgroup/freezer
+net_cls,net_prio /sys/fs/cgroup/net_cls,net_prio
+blkio /sys/fs/cgroup/blkio
+perf_event /sys/fs/cgroup/perf_event
+hugetlb /sys/fs/cgroup/hugetlb
+可以手动挂载或者卸载子系统，如执行umount /sys/fs/cgroup/memory，memory子系统就被卸载了，这时候手动执行# mount -t cgroup -o memory memory /sys/fs/cgroup/memory就又挂载上了。 
+要确保需要的子系统都挂上了，不然创建控制组的时候会报错 is not mounted
+#cgcreate -g memory,cpu:/hzmali_test
+cgcreate: can’t create cgroup /hzmali_test: Cgroup one of the needed subsystems is not mounted
+如何创建control group（即需要资源管理的组）呢, 这里用cgcreate命令，当然也有其他方法, 如cgconfig.conf等
+#cgcreate -g memory,cpu:/hzmali_test
+这里有个重要特性：一个组可以同时做多个资源的限制，如这里我同时限制了memory和cpu，然后memory和cpu子系统目录下会自动生成这个组的目录和些文件，如memory
+#/sys/fs/cgroup/memory/hzmali_test$ ls -lrt
+文件很多，选几个重要的讲下：
+tasks 可以将想要限制资源的进程都加到这个文件中
+memory.max_usage_in_bytes内存的最大使用量，用来限制资源 
+-memory.soft_limit_in_bytes 和 memory.limit_in_bytes 的差异是，这个限制并不会阻止进程使用超过限额的内存，只是在系统内存不足时，会优先回收超过限额的进程占用的内存，使之向限定值靠拢。
+memory.oom_control 
+包含一个标志（0或1）来开启或者关闭cgroup的OOM killer。如果开启（1），任务如果尝试申请内存超过允许，就会被系统OOM killer终止。OOM killer在每个使用cgroup内存子系统中都是默认开启的。如果需要关闭，则可以向memory.oom_control文件写入1：
+ # echo 1 &gt; /sys/fs/cgroup/memory.oom_control 
+如果OOM killer关闭，那么进程尝试申请的内存超过允许，那么它就会被暂停，直到额外的内存被释放
+memory.mem.usage_in_bytes 当前进程内存用量，因为现在还没有进程加到组里，就是0了
+memory.mem.failcnt显示内存达到限制值的次数
+Cgroup文档
+Cgroup的使用细节，子系统和参数设置都可以可以在https://www.kernel.org/doc/Documentation/cgroups/中找到，继承等特性由于篇幅所限，可以看下文档
+Cgroup实战
+内存限制测试
+用控制组限制目标程序内存使用为1000000 byte，当然，需要root执行 
+echo “1000000” &gt;memory.limit_in_bytes
+一般更推荐用cgset来设置数值
+cgset -r memory.limit_in_bytes=1000000 hzmali_test
+然后构造一个吃内存的程序，每运行一次内存使用就大幅增加
+如果我不想把机器跑死，这里想要限制组里的进程的CPU使用，有2种做法 
+1.在cpu子系统中控制cpu调度的配额 
+先看下当前cpu分配情况
+cat /sys/fs/cgroup/cpu/hzmali_test/cpu.cfs_quota_us
+-1
+cat /sys/fs/cgroup/cpu/hzmali_test/cpu.cfs_period_us
+100000
+-1表示无限制，这里改为50000，即相对于cpu.cfs_period_us 来说为50000/100000约占1个核50%的cpu时间
+ #./cpu_test.sh &amp;
+[1] 17709
+ # echo 17709 &gt;/sys/fs/cgroup/cpu/hzmali_test/tasks
+或者直接使用命令cgexec执行
+cgexec -g cpu:hzmali_test ./cpu_test.sh
+top了下基本上就是在50%的cpu占用
+%Cpu0 : 50.5 us, 0.0 sy, 0.0 ni, 49.5 id, 0.0 wa, 0.0 hi, 0.0 si, 0.0 st
+%Cpu1 : 0.0 us, 0.3 sy, 0.0 ni, 99.7 id, 0.0 wa, 0.0 hi, 0.0 si, 0.0 st
+PID USER PR NI VIRT RES SHR S %CPU %MEM TIME+ COMMAND 17709 root 20 0 25368 2020 1764 R 50.2 0.1 1:14.74 bash
+2.在cpuset控制物理cpu的分配 
+当前使用了上面的方法后，我们发现进程的CPU使用都在Cpu0上，这次希望只用Cpu1来跑这个小程序 
+所以把控制组也加到cpuset
+ # cgcreate -g cpuset:/hzmali_test
+看一下现在使用的cpu的设置
+ # cat /sys/fs/cgroup/cpuset/hzmali_test/cpuset.cpus
+0-1
+改为只用Cpu1，输入以下命令
+ # echo 1 &gt; /sys/fs/cgroup/cpuset/hzmali_test/cpuset.cpus
+ # echo 17709 &gt; /sys/fs/cgroup/cpuset/hzmali_test/tasks
+或用命令
+ # cgset -r cpuset.cpus=’1’ hzmali_test
+ # cgclassify -g cpu,cpuset:hzmali_test 17709
+top一下，内存的使用从CPU0到CPU1了
+%Cpu0 : 0.0 us, 0.0 sy, 0.0 ni, 99.7 id, 0.0 wa, 0.0 hi, 0.3 si, 0.0 st
+%Cpu1 : 50.3 us, 0.0 sy, 0.0 ni, 49.7 id, 0.0 wa, 0.0 hi, 0.0 si, 0.0 st
+PID USER PR NI VIRT RES SHR S %CPU %MEM TIME+ COMMAND
+17709 root 20 0 25368 2108 2076 R 50.1 0.1 8:56.78 bash
+IO限制测试
+用dd对硬盘进行写操作
+ # dd if=/dev/sda of=/dev/null &amp;
+打开iotop看下IO速度
+Total DISK READ : 100.37 M/s | Total DISK WRITE : 0.00 B/s
+Actual DISK READ: 100.37 M/s | Actual DISK WRITE: 0.00 B/s
+TID PRIO USER DISK READ DISK WRITE SWAPIN IO&gt; COMMAND
+18081 be/4 root 100.37 M/s 0.00 B/s 0.00 % 1.34 % dd if=/dev/sda of=/dev/null
+为了控制IO速度，在blkio上创建控制组
+ # cgcreate -g blkio:/hzmali_test
+查看下硬盘号
+ # ls -l /dev/sda
+brw-rw—- 1 root disk 8, 0 Jul 25 22:46 /dev/sda
+设置硬盘号和对应的读取速度限制，然后执行同样的命令
+ # cgset -r blkio.throttle.read_bps_device=”8:0 1000000” hzmali_test
+ # cgexec -g blkio:hzmali_test “dd if=/dev/sda of=/dev/null”
+用iotop查看下，速度果然就降到1M以下</p>
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/golang/2018/03/17/unsafe.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/linux/2018/04/29/cgroup.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -172,22 +460,21 @@
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/cryptology/2018/03/17/signature.html">数字签名及应用</a>
+						<a class="post-link" href="/MyBlog/linux/2018/04/29/bridge.html">bridge</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/cryptology/2018/03/17/signature.html"> 夏泽民</a>
+						<a href="/MyBlog/linux/2018/04/29/bridge.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Mar 17, 2018
+							Apr 29, 2018
 						</span>
 					</div>
-					<div class="excerpt"><!-- more -->
-<p>签名的作用有两点，一是因为自己的签名难以否认，从而可以确认文件已经签署的事实，即保证文件的不可否认性；二是因为签名不易仿冒，从而可以确定文件是真的这一事实，即保证文件的真实性。网络安全防范中的数字签名(Digital Signature)与书面文件签名有相同之处，它也能确认两点：其一，信息是由签名者发送的；其二，信息自签发后到收到为止未曾作过任何修改。这样，数字签名就可以用来防止网上电子信息因容易修改而被人破坏或作伪，或冒用别人名义发送信息，或者，在发出或收到信件后又加以否认等情况发生。</p>
+					<div class="excerpt"><p>网桥设备作为一个虚拟设备，用于连接多个端口，可以构建一个局域网。与之相似的是vlan设备，在linux中，vlan设备是为了处理802.1q的添加和去除TAG的问题，这和传统交换机中vlan的功能—划分局域网，不太一样，在这里仅仅是处理了消息头，只是实现了隔离功能，并未实现交换功能，如果需要vlan内的数据转发，可以把vlan子接口挂接在网桥设备下。</p>
 
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/cryptology/2018/03/17/signature.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/linux/2018/04/29/bridge.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -197,21 +484,23 @@
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/golang/2018/03/17/reflect.html">reflect</a>
+						<a class="post-link" href="/MyBlog/golang/2018/04/24/flag.html">flag</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/golang/2018/03/17/reflect.html"> 夏泽民</a>
+						<a href="/MyBlog/golang/2018/04/24/flag.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Mar 17, 2018
+							Apr 24, 2018
 						</span>
 					</div>
 					<div class="excerpt"><!-- more -->
+<p>一、命令行语法
+命令行语法主要有以下几种形式：</p>
 
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/golang/2018/03/17/reflect.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/golang/2018/04/24/flag.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -221,21 +510,75 @@
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/golang/2018/03/17/package.html">go package</a>
+						<a class="post-link" href="/MyBlog/linux/2018/04/22/expect.html">expect</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/golang/2018/03/17/package.html"> 夏泽民</a>
+						<a href="/MyBlog/linux/2018/04/22/expect.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Mar 17, 2018
+							Apr 22, 2018
 						</span>
 					</div>
-					<div class="excerpt"><!-- more -->
+					<div class="excerpt"><p>expect是一个自动交互功能的工具。expect是开了一个子进程，通过spawn来执行shell脚本，监测到脚本的返回结果，通过expect判断要进行的交互输入内容（send）
+1.安装expect 
+需要先安装tcl：apt-get install tcl
+apt-get install expect
+2.expect使用
+2.1一个简单的输入密码操作</p>
+
+<figure class="highlight"><pre><code class="language-bash" data-lang="bash"><table class="rouge-table"><tbody><tr><td class="gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+</pre></td><td class="code"><pre> <span class="c">#！/usr/bin/expect</span>
+<span class="nb">set </span>timeout 100
+<span class="nb">set </span>password <span class="s2">"123456"</span>
+spawn <span class="nb">sudo </span>rm <span class="nt">-rf</span> zzlogic
+expect <span class="s2">"root123456"</span>
+send <span class="s2">"</span><span class="nv">$password</span><span class="se">\n</span><span class="s2">"</span>
+interact</pre></td></tr></tbody></table></code></pre></figure>
+
+<p>说明：
+第一行#！/usr/bin/expect表示使用expect的shell交互模式
+set是对变量password赋值
+set timeout 100：设置超时时间为100秒，如果要执行的shell命令很长可以设置超时时间长一些。expect超过超时时间没有监测到要找的字符串，则不执行，默认timeout为10秒
+spawn在expect下执行shell脚本
+expect对通过spawn执行的shell脚本的返回进行判断，是否包含“”中的字段
+send：如果expect监测到了包含的字符串，将输入send中的内容，\n相当于回车
+interact：退出expect返回终端，可以继续输入，否则将一直在expect不能退出到终端
+2.2expect的命令行参数
+[lindex $argv n]获得index为n的参数（index从0开始计算）
+$argc为命令行参数的个数
+[lrange $argv 0 0]表示第一个参数
+[lrange $argv 0 3]表示第1到第3个参数
+例如scp_service.sh文件，可以./scp_service.sh -rm来执行，这时是赋值了一个参数
+set option  [lindex $argv 0]（获得第一个参数存到变量option中，参数是的index是从0开始计算的）
+2.3if…elif…else…
+expect支持if语句，
+if {条件1} {
+     条件1执行语句
+} elif {条件2} {
+     条件2执行语句
+} else {
+     其他情况执行语句
+}
+说明：
+1.if的条件用{}来包含条件
+2.if和后面的{}必须有空格隔开
+3.两个花括号之间必须有空格隔开，比如if {} {}，否则会报错 expect:extra characters after close-brace
+3.使用{来衔接下一行，所以if的条件后需要加左花括号{
+4.else不能单独放一行，所以else要跟在}后面
+2.4 expect {}，多行期望，匹配到哪条执行哪条
+背景：有时执行shell后预期结果是不固定的，有可能是询问是yes/no，有可能是去输入密码，所以可以用expect{}
+花括号内放多行语句，从上至下匹配，匹配到哪个expect执行哪句。</p>
 
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/golang/2018/03/17/package.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/linux/2018/04/22/expect.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -245,25 +588,24 @@
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/golang/2018/03/17/goroutine.html">goroutine</a>
+						<a class="post-link" href="/MyBlog/web/2018/04/21/zq.html">站群</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/golang/2018/03/17/goroutine.html"> 夏泽民</a>
+						<a href="/MyBlog/web/2018/04/21/zq.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Mar 17, 2018
+							Apr 21, 2018
 						</span>
 					</div>
-					<div class="excerpt"><!-- more -->
-<ol>
-  <li>动态栈
-每一个OS线程都有一个固定大小的内存块(一般会是2MB)来做栈，这个栈会用来存储当前正在被调用或挂起(指在调用其它函数时)的函数的内部变量。这个固定大小的栈同时很大又很小。因为2MB的栈对于一个小小的goroutine来说是很大的内存浪费，比如对于我们用到的，一个只是用来WaitGroup之后关闭channel的goroutine来说。而对于go程序来说，同时创建成百上千个goroutine是非常普遍的，如果每一个goroutine都需要这么大的栈的话，那这么多的goroutine就不太可能了。除去大小的问题之外，固定大小的栈对于更复杂或者更深层次的递归函数调用来说显然是不够的。修改固定的大小可以提升空间的利用率允许创建更多的线程，并且可以允许更深的递归调用，不过这两者是没法同时兼备的。</li>
-</ol>
+					<div class="excerpt"><p>站群通常由几个到几百个网站组成，站群最简单的理解就是一群网站。而这些网站都是属于一个人的。那么这些网站就称之为此站长的站群。
+站群，即一个人或一个团队操作多个网站，目的是通过搜索引擎获得大量流量，或者是将链接指向同一个网站，以提高搜索排名。
+推广类站群系统的盈利模式其实很简单，就是通过聚集大量网站的流量做广告联盟，我们说站群系统做出来的网站，大部分是垃圾站，部分的站群系统也可以做正规站，是经过优化而成的！单价高的广告联盟要数百度联盟和谷歌联盟。主要还是做百度、谷歌的收录，一旦收录上去了，自然盈利的方法就多了！
+由于搜索优化是需要分不同网站和分不同IP多域名的，为实现集成化管理与分站技术；因此要求我们的主要管理系统是要部署在一台服务器中方便管理，要具有数据采集自动化智能处理等功能，而子站部署再需要在不同的服务器和不同的空间上，并每个空间单独绑定域名。</p>
 
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/golang/2018/03/17/goroutine.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/web/2018/04/21/zq.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -1735,6 +2077,30 @@
 			  
 			    
 			      <a href="/MyBlog/page364/">364</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page365/">365</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page366/">366</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page367/">367</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page368/">368</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page369/">369</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page370/">370</a>
 			    
 			  
 
@@ -3586,6 +3952,36 @@
 						  
 						
 
+						  
+							<li><a href="/MyBlog/page365">365</a></li>
+						  
+						
+
+						  
+							<li><a href="/MyBlog/page366">366</a></li>
+						  
+						
+
+						  
+							<li><a href="/MyBlog/page367">367</a></li>
+						  
+						
+
+						  
+							<li><a href="/MyBlog/page368">368</a></li>
+						  
+						
+
+						  
+							<li><a href="/MyBlog/page369">369</a></li>
+						  
+						
+
+						  
+							<li><a href="/MyBlog/page370">370</a></li>
+						  
+						
+
 						
 						  <li><a href="/MyBlog/page323">Next</a></li>
 						
@@ -3619,6 +4015,206 @@
 							"data" : [
 							
 							{
+							"title" : "valgrind - ",
+							"url" : "/MyBlog/php/2020/06/06/valgrind.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "phpdbg gdb - ",
+							"url" : "/MyBlog/php/2020/06/06/phpdbg.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "gdb 调试动态链接库 - ",
+							"url" : "/MyBlog/php/2020/06/06/gdbso.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "current_execute_data - ",
+							"url" : "/MyBlog/php/2020/06/06/current_execute_data.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "bz2 Mac 文件解压缩 - ",
+							"url" : "/MyBlog/linux/2020/06/06/bz2.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "valgrind - ",
+							"url" : "/MyBlog/php/2020/06/05/valgrind.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "strlen - ",
+							"url" : "/MyBlog/php/2020/06/05/strlen.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "gdb调试 php - ",
+							"url" : "/MyBlog/php/2020/06/05/gdb.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "zend_string char - ",
+							"url" : "/MyBlog/php/2020/06/03/zend_string.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "usr2 - ",
+							"url" : "/MyBlog/linux/2020/06/03/usr2.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "sub_array - ",
+							"url" : "/MyBlog/php/2020/06/03/sub_array.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "interface - ",
+							"url" : "/MyBlog/golang/2020/06/03/interface.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "bash if - ",
+							"url" : "/MyBlog/linux/2020/06/03/if.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "go mod - ",
+							"url" : "/MyBlog/golang/2020/06/03/gomod.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "go 1.14 变化 - ",
+							"url" : "/MyBlog/golang/2020/06/03/go.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "gin - ",
+							"url" : "/MyBlog/golang/2020/06/03/gin.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "goroutine和channel - ",
+							"url" : "/MyBlog/golang/2020/06/03/channel.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "扩展回调php函数 - ",
+							"url" : "/MyBlog/php/2020/06/03/callback.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "检测三种不同操作系统的Bash脚本 - ",
+							"url" : "/MyBlog/linux/2020/06/03/bash.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "Jupiter - ",
+							"url" : "/MyBlog/golang/2020/06/03/Jupiter.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "stacktrace - ",
+							"url" : "/MyBlog/php/2020/06/02/stacktrace.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "execute_data - ",
+							"url" : "/MyBlog/php/2020/06/02/execute_data.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "call_user_function - ",
+							"url" : "/MyBlog/php/2020/06/02/call_user_function.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "tcmalloc - ",
+							"url" : "/MyBlog/golang/2020/06/01/tcmalloc.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "JSON Web Token - ",
+							"url" : "/MyBlog/golang/2020/06/01/jwt.html"
+							}
+							
+							,
+							
+							
+							{
 							"title" : "goland 激活 - ",
 							"url" : "/MyBlog/golang/2020/06/01/goland.html"
 							}
@@ -3627,8 +4223,24 @@
 							
 							
 							{
+							"title" : "gdb - ",
+							"url" : "/MyBlog/algorithm/2020/06/01/gdb.html"
+							}
+							
+							,
+							
+							
+							{
 							"title" : "ZEND_HASH_FOREACH_KEY_VAL php扩展hashtable操作 - ",
-							"url" : "/MyBlog/web/2020/06/01/ZEND_HASH_FOREACH_KEY_VAL.html"
+							"url" : "/MyBlog/php/2020/06/01/ZEND_HASH_FOREACH_KEY_VAL.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "Container - ",
+							"url" : "/MyBlog/golang/2020/06/01/Container.html"
 							}
 							
 							,
@@ -3636,7 +4248,7 @@
 							
 							{
 							"title" : "zval 替代char 解决返回字符串内存泄漏问题 - ",
-							"url" : "/MyBlog/web/2020/05/31/zval.html"
+							"url" : "/MyBlog/php/2020/05/31/zval.html"
 							}
 							
 							,
@@ -3644,7 +4256,7 @@
 							
 							{
 							"title" : "zend_mm_heap corrupted - ",
-							"url" : "/MyBlog/web/2020/05/31/zend_mm_heap.html"
+							"url" : "/MyBlog/php/2020/05/31/zend_mm_heap.html"
 							}
 							
 							,
@@ -3716,7 +4328,7 @@
 							
 							{
 							"title" : "PHP7扩展开发之数组处理 - ",
-							"url" : "/MyBlog/web/2020/05/31/array.html"
+							"url" : "/MyBlog/php/2020/05/31/array.html"
 							}
 							
 							,
@@ -3724,7 +4336,7 @@
 							
 							{
 							"title" : "ZEND_HASH_FOREACH_KEY_VAL - ",
-							"url" : "/MyBlog/web/2020/05/31/ZEND_HASH_FOREACH_KEY_VAL.html"
+							"url" : "/MyBlog/php/2020/05/31/ZEND_HASH_FOREACH_KEY_VAL.html"
 							}
 							
 							,
@@ -3732,7 +4344,7 @@
 							
 							{
 							"title" : "PHP 调试技巧 扩展调试 - ",
-							"url" : "/MyBlog/web/2020/05/30/xdebug.html"
+							"url" : "/MyBlog/php/2020/05/30/xdebug.html"
 							}
 							
 							,
@@ -3804,7 +4416,7 @@
 							
 							{
 							"title" : "PHP 接口调用报错 502 Bad Gateway - ",
-							"url" : "/MyBlog/web/2020/05/29/502.html"
+							"url" : "/MyBlog/php/2020/05/29/502.html"
 							}
 							
 							,
@@ -3820,7 +4432,7 @@
 							
 							{
 							"title" : "zend_execute_ex - ",
-							"url" : "/MyBlog/web/2020/05/28/zend_execute_ex.html"
+							"url" : "/MyBlog/php/2020/05/28/zend_execute_ex.html"
 							}
 							
 							,
@@ -3828,7 +4440,7 @@
 							
 							{
 							"title" : "zend_execute_data - ",
-							"url" : "/MyBlog/web/2020/05/28/zend_execute_data.html"
+							"url" : "/MyBlog/php/2020/05/28/zend_execute_data.html"
 							}
 							
 							,
@@ -3836,7 +4448,7 @@
 							
 							{
 							"title" : "PHP打印调用堆栈的三种方法 - ",
-							"url" : "/MyBlog/web/2020/05/28/stack.html"
+							"url" : "/MyBlog/php/2020/05/28/stack.html"
 							}
 							
 							,
@@ -3844,7 +4456,7 @@
 							
 							{
 							"title" : "php7 基础上编译扩展，hack文件操作 - ",
-							"url" : "/MyBlog/web/2020/05/28/php_ext.html"
+							"url" : "/MyBlog/php/2020/05/28/php_ext.html"
 							}
 							
 							,
@@ -3852,7 +4464,7 @@
 							
 							{
 							"title" : "extension php扩展和zend扩展区别 - ",
-							"url" : "/MyBlog/web/2020/05/28/extension.html"
+							"url" : "/MyBlog/php/2020/05/28/extension.html"
 							}
 							
 							,
@@ -3860,7 +4472,7 @@
 							
 							{
 							"title" : "yaf - ",
-							"url" : "/MyBlog/web/2020/05/27/yaf.html"
+							"url" : "/MyBlog/php/2020/05/27/yaf.html"
 							}
 							
 							,
@@ -3892,7 +4504,7 @@
 							
 							{
 							"title" : "phpt 是php源码的测试文件 - ",
-							"url" : "/MyBlog/web/2020/05/27/phpt.html"
+							"url" : "/MyBlog/php/2020/05/27/phpt.html"
 							}
 							
 							,
@@ -3972,7 +4584,7 @@
 							
 							{
 							"title" : "PHP严格模式 Strict standards - ",
-							"url" : "/MyBlog/web/2020/05/27/Strict.html"
+							"url" : "/MyBlog/php/2020/05/27/Strict.html"
 							}
 							
 							,
@@ -3980,7 +4592,7 @@
 							
 							{
 							"title" : "解决mac 没有php.ini 文件问题 - ",
-							"url" : "/MyBlog/algorithm/2020/05/26/phpini.html"
+							"url" : "/MyBlog/php/2020/05/26/phpini.html"
 							}
 							
 							,
@@ -4180,7 +4792,7 @@
 							
 							{
 							"title" : "xdebug - ",
-							"url" : "/MyBlog/web/2020/05/20/xdebug.html"
+							"url" : "/MyBlog/php/2020/05/20/xdebug.html"
 							}
 							
 							,
@@ -18283,7 +18895,7 @@
 								
 								
 									<a class="bold" href="/MyBlog/category/web">
-										web (313)
+										web (297)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -18328,7 +18940,7 @@
 								
 								
 									<a class="bold" href="/MyBlog/category/linux">
-										linux (333)
+										linux (337)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -18355,7 +18967,7 @@
 								
 								
 									<a class="bold" href="/MyBlog/category/golang">
-										golang (641)
+										golang (650)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -18427,7 +19039,7 @@
 								
 								
 									<a class="bold" href="/MyBlog/category/php">
-										php (4)
+										php (34)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -18497,19 +19109,127 @@
 								<ul style="display:none;width:250px;height:250px;">
 								     
 								   <li>
+										<a href="/MyBlog/php/2020/06/06/valgrind.html" style="font-size:40px;"> valgrind</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/php/2020/06/06/phpdbg.html" style="font-size:40px;"> phpdbg gdb</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/php/2020/06/06/gdbso.html" style="font-size:40px;"> gdb 调试动态链接库</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/php/2020/06/06/current_execute_data.html" style="font-size:40px;"> current_execute_data</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/linux/2020/06/06/bz2.html" style="font-size:40px;"> bz2 Mac 文件解压缩</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/php/2020/06/05/valgrind.html" style="font-size:40px;"> valgrind</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/php/2020/06/05/strlen.html" style="font-size:40px;"> strlen</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/php/2020/06/05/gdb.html" style="font-size:40px;"> gdb调试 php</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/php/2020/06/03/zend_string.html" style="font-size:40px;"> zend_string char</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/linux/2020/06/03/usr2.html" style="font-size:40px;"> usr2</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/php/2020/06/03/sub_array.html" style="font-size:40px;"> sub_array</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/golang/2020/06/03/interface.html" style="font-size:40px;"> interface</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/linux/2020/06/03/if.html" style="font-size:40px;"> bash if</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/golang/2020/06/03/gomod.html" style="font-size:40px;"> go mod</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/golang/2020/06/03/go.html" style="font-size:40px;"> go 1.14 变化</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/golang/2020/06/03/gin.html" style="font-size:40px;"> gin</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/golang/2020/06/03/channel.html" style="font-size:40px;"> goroutine和channel</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/php/2020/06/03/callback.html" style="font-size:40px;"> 扩展回调php函数</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/linux/2020/06/03/bash.html" style="font-size:40px;"> 检测三种不同操作系统的Bash脚本</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/golang/2020/06/03/Jupiter.html" style="font-size:40px;"> Jupiter</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/php/2020/06/02/stacktrace.html" style="font-size:40px;"> stacktrace</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/php/2020/06/02/execute_data.html" style="font-size:40px;"> execute_data</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/php/2020/06/02/call_user_function.html" style="font-size:40px;"> call_user_function</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/golang/2020/06/01/tcmalloc.html" style="font-size:40px;"> tcmalloc</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/golang/2020/06/01/jwt.html" style="font-size:40px;"> JSON Web Token</a>
+									</li>
+									  
+								   <li>
 										<a href="/MyBlog/golang/2020/06/01/goland.html" style="font-size:40px;"> goland 激活</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/web/2020/06/01/ZEND_HASH_FOREACH_KEY_VAL.html" style="font-size:40px;"> ZEND_HASH_FOREACH_KEY_VAL php扩展hashtable操作</a>
+										<a href="/MyBlog/algorithm/2020/06/01/gdb.html" style="font-size:40px;"> gdb</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/web/2020/05/31/zval.html" style="font-size:40px;"> zval 替代char 解决返回字符串内存泄漏问题</a>
+										<a href="/MyBlog/php/2020/06/01/ZEND_HASH_FOREACH_KEY_VAL.html" style="font-size:40px;"> ZEND_HASH_FOREACH_KEY_VAL php扩展hashtable操作</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/web/2020/05/31/zend_mm_heap.html" style="font-size:40px;"> zend_mm_heap corrupted</a>
+										<a href="/MyBlog/golang/2020/06/01/Container.html" style="font-size:40px;"> Container</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/php/2020/05/31/zval.html" style="font-size:40px;"> zval 替代char 解决返回字符串内存泄漏问题</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/php/2020/05/31/zend_mm_heap.html" style="font-size:40px;"> zend_mm_heap corrupted</a>
 									</li>
 									  
 								   <li>
@@ -18545,115 +19265,7 @@
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/web/2020/05/31/array.html" style="font-size:40px;"> PHP7扩展开发之数组处理</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/web/2020/05/31/ZEND_HASH_FOREACH_KEY_VAL.html" style="font-size:40px;"> ZEND_HASH_FOREACH_KEY_VAL</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/web/2020/05/30/xdebug.html" style="font-size:40px;"> PHP 调试技巧 扩展调试</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2020/05/30/interface.html" style="font-size:40px;"> interface</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/linux/2020/05/30/buserror.html" style="font-size:40px;"> Bus error 10</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/linux/2020/05/29/make.html" style="font-size:40px;"> make</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/linux/2020/05/29/handler.html" style="font-size:40px;"> 文件句柄泄漏</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/linux/2020/05/29/gdbcore.html" style="font-size:40px;"> mac上分析coredump文件</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/linux/2020/05/29/gdb.html" style="font-size:40px;"> mac gdb 安装</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/linux/2020/05/29/core.html" style="font-size:40px;"> core 文件 调试 追踪 Segmentation fault 11</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/web/2020/05/29/brew.html" style="font-size:40px;"> brew install 问题解决</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/web/2020/05/29/502.html" style="font-size:40px;"> PHP 接口调用报错 502 Bad Gateway</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/web/2020/05/29/10-didi.html" style="font-size:40px;"> BOOT_LDFLAGS</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/web/2020/05/28/zend_execute_ex.html" style="font-size:40px;"> zend_execute_ex</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/web/2020/05/28/zend_execute_data.html" style="font-size:40px;"> zend_execute_data</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/web/2020/05/28/stack.html" style="font-size:40px;"> PHP打印调用堆栈的三种方法</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/web/2020/05/28/php_ext.html" style="font-size:40px;"> php7 基础上编译扩展，hack文件操作</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/web/2020/05/28/extension.html" style="font-size:40px;"> extension php扩展和zend扩展区别</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/web/2020/05/27/yaf.html" style="font-size:40px;"> yaf</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/web/2020/05/27/wechat.html" style="font-size:40px;"> wechat</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2020/05/27/stackpreempt.html" style="font-size:40px;"> stackpreempt 抢占调度</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/web/2020/05/27/session.html" style="font-size:40px;"> php.ini中session的配置</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/web/2020/05/27/phpt.html" style="font-size:40px;"> phpt 是php源码的测试文件</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2020/05/27/nil.html" style="font-size:40px;"> 如何判断interface为nil</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2020/05/27/newa.html" style="font-size:40px;"> golang 最新文章</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2020/05/27/log.html" style="font-size:40px;"> log 高性能 线程安全 zap logrus</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2020/05/27/goroutine.html" style="font-size:40px;"> goroutine</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2020/05/27/gocheck.html" style="font-size:40px;"> gocheck</a>
+										<a href="/MyBlog/php/2020/05/31/array.html" style="font-size:40px;"> PHP7扩展开发之数组处理</a>
 									</li>
 									
 								</ul>
@@ -18669,33 +19281,33 @@
                 		<ul class="posts" span="recent">  
 							  
 							   <li>  
-								   <span>01 Jun 2020</span>
-								   <a href="/MyBlog/golang/2020/06/01/goland.html">  
-								   goland 激活</a>  
+								   <span>06 Jun 2020</span>
+								   <a href="/MyBlog/php/2020/06/06/valgrind.html">  
+								   valgrind</a>  
 							   </li>  
 							  
 							   <li>  
-								   <span>01 Jun 2020</span>
-								   <a href="/MyBlog/web/2020/06/01/ZEND_HASH_FOREACH_KEY_VAL.html">  
-								   ZEND_HASH_FOREACH_KEY_VAL php扩展hashtable操作</a>  
+								   <span>06 Jun 2020</span>
+								   <a href="/MyBlog/php/2020/06/06/phpdbg.html">  
+								   phpdbg gdb</a>  
 							   </li>  
 							  
 							   <li>  
-								   <span>31 May 2020</span>
-								   <a href="/MyBlog/web/2020/05/31/zval.html">  
-								   zval 替代char 解决返回字符串内存泄漏问题</a>  
+								   <span>06 Jun 2020</span>
+								   <a href="/MyBlog/php/2020/06/06/gdbso.html">  
+								   gdb 调试动态链接库</a>  
 							   </li>  
 							  
 							   <li>  
-								   <span>31 May 2020</span>
-								   <a href="/MyBlog/web/2020/05/31/zend_mm_heap.html">  
-								   zend_mm_heap corrupted</a>  
+								   <span>06 Jun 2020</span>
+								   <a href="/MyBlog/php/2020/06/06/current_execute_data.html">  
+								   current_execute_data</a>  
 							   </li>  
 							  
 							   <li>  
-								   <span>31 May 2020</span>
-								   <a href="/MyBlog/linux/2020/05/31/sed.html">  
-								   sed 替换括号</a>  
+								   <span>06 Jun 2020</span>
+								   <a href="/MyBlog/linux/2020/06/06/bz2.html">  
+								   bz2 Mac 文件解压缩</a>  
 							   </li>  
 							  
 						</ul>

@@ -147,22 +147,92 @@
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/linux/2017/12/06/linux_cow.html">linux_cow</a>
+						<a class="post-link" href="/MyBlog/linux/2017/12/24/select_poll.html">IO多路复用之select、poll、epoll</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/linux/2017/12/06/linux_cow.html"> 夏泽民</a>
+						<a href="/MyBlog/linux/2017/12/24/select_poll.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Dec 6, 2017
+							Dec 24, 2017
 						</span>
 					</div>
 					<div class="excerpt"><!-- more -->
-<p>在Linux程序中，fork（）会产生一个和父进程完全相同的子进程，但子进程在此后多会exec系统调用，出于效率考虑，linux中引入了“写时复制“技术，也就是只有进程空间的各段的内容要发生变化时，才会将父进程的内容复制一份给子进程。</p>
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code> 目前支持I/O多路复用的系统调用有 select，pselect，poll，epoll，I/O多路复用就是通过一种机制，一个进程可以监视多个描述符，一旦某个描述符就绪（一般是读就绪或者写就绪），能够通知程序进行相应的读写操作。但select，pselect，poll，epoll本质上都是同步I/O，因为他们都需要在读写事件就绪后自己负责进行读写，也就是说这个读写过程是阻塞的，而异步I/O则无需自己负责进行读写，异步I/O的实现会负责把数据从内核拷贝到用户空间。
+ 与多进程和多线程技术相比，I/O多路复用技术的最大优势是系统开销小，系统不必创建进程/线程，也不必维护这些进程/线程，从而大大减小了系统的开销。
+</code></pre></div></div>
+
+<p>一、使用场景
+IO多路复用是指内核一旦发现进程指定的一个或者多个IO条件准备读取，它就通知该进程。IO多路复用适用如下场合：
+　　1）当客户处理多个描述符时（一般是交互式输入和网络套接口），必须使用I/O复用。
+　　2）当一个客户同时处理多个套接口时，这种情况是可能的，但很少出现。
+　　3）如果一个TCP服务器既要处理监听套接口，又要处理已连接套接口，一般也要用到I/O复用。
+　　4）如果一个服务器即要处理TCP，又要处理UDP，一般要使用I/O复用。
+　　5）如果一个服务器要处理多个服务或多个协议，一般要使用I/O复用。</p>
+
+<p>二、select、poll、epoll简介
+　　epoll跟select都能提供多路I/O复用的解决方案。在现在的Linux内核里有都能够支持，其中epoll是Linux所特有，而select则应该是POSIX所规定，一般操作系统均有实现。
+1、select
+基本原理：select 函数监视的文件描述符分3类，分别是writefds、readfds、和exceptfds。调用后select函数会阻塞，直到有描述符就绪（有数据 可读、可写、或者有except），或者超时（timeout指定等待时间，如果立即返回设为null即可），函数返回。当select函数返回后，可以通过遍历fdset，来找到就绪的描述符。</p>
+
+<p>基本流程，如图所示：
+	<img src="https://xiazemin.github.io/MyBlog/img/ioMutex.png" /></p>
+
+<p>　　select目前几乎在所有的平台上支持，其良好跨平台支持也是它的一个优点。select的一个缺点在于单个进程能够监视的文件描述符的数量存在最大限制，在Linux上一般为1024，可以通过修改宏定义甚至重新编译内核的方式提升这一限制，但是这样也会造成效率的降低。</p>
+
+<p>select本质上是通过设置或者检查存放fd标志位的数据结构来进行下一步处理。这样所带来的缺点是：
+1、select最大的缺陷就是单个进程所打开的FD是有一定限制的，它由FD_SETSIZE设置，默认值是1024。
+　　一般来说这个数目和系统内存关系很大，具体数目可以cat /proc/sys/fs/file-max察看。32位机默认是1024个。64位机默认是2048.
+2、对socket进行扫描时是线性扫描，即采用轮询的方法，效率较低。
+　　当套接字比较多的时候，每次select()都要通过遍历FD_SETSIZE个Socket来完成调度，不管哪个Socket是活跃的，都遍历一遍。这会浪费很多CPU时间。如果能给套接字注册某个回调函数，当他们活跃时，自动完成相关操作，那就避免了轮询，这正是epoll与kqueue做的。
+3、需要维护一个用来存放大量fd的数据结构，这样会使得用户空间和内核空间在传递该结构时复制开销大。</p>
+
+<p>2、poll
+基本原理：poll本质上和select没有区别，它将用户传入的数组拷贝到内核空间，然后查询每个fd对应的设备状态，如果设备就绪则在设备等待队列中加入一项并继续遍历，如果遍历完所有fd后没有发现就绪设备，则挂起当前进程，直到设备就绪或者主动超时，被唤醒后它又要再次遍历fd。这个过程经历了多次无谓的遍历。</p>
+
+<p>它没有最大连接数的限制，原因是它是基于链表来存储的，但是同样有一个缺点：
+1）大量的fd的数组被整体复制于用户态和内核地址空间之间，而不管这样的复制是不是有意义。
+2）poll还有一个特点是“水平触发”，如果报告了fd后，没有被处理，那么下次poll时会再次报告该fd。</p>
+
+<p>注意：从上面看，select和poll都需要在返回后，通过遍历文件描述符来获取已经就绪的socket。事实上，同时连接的大量客户端在一时刻可能只有很少的处于就绪状态，因此随着监视的描述符数量的增长，其效率也会线性下降。</p>
+
+<p>3、epoll
+　　epoll是在2.6内核中提出的，是之前的select和poll的增强版本。相对于select和poll来说，epoll更加灵活，没有描述符限制。epoll使用一个文件描述符管理多个描述符，将用户关系的文件描述符的事件存放到内核的一个事件表中，这样在用户空间和内核空间的copy只需一次。</p>
+
+<p>基本原理：epoll支持水平触发和边缘触发，最大的特点在于边缘触发，它只告诉进程哪些fd刚刚变为就绪态，并且只会通知一次。还有一个特点是，epoll使用“事件”的就绪通知方式，通过epoll_ctl注册fd，一旦该fd就绪，内核就会采用类似callback的回调机制来激活该fd，epoll_wait便可以收到通知。</p>
+
+<p>epoll的优点：
+1、没有最大并发连接的限制，能打开的FD的上限远大于1024（1G的内存上能监听约10万个端口）。
+2、效率提升，不是轮询的方式，不会随着FD数目的增加效率下降。
+　　只有活跃可用的FD才会调用callback函数；即Epoll最大的优点就在于它只管你“活跃”的连接，而跟连接总数无关，因此在实际的网络环境中，Epoll的效率就会远远高于select和poll。
+3、内存拷贝，利用mmap()文件映射内存加速与内核空间的消息传递；即epoll使用mmap减少复制开销。</p>
+
+<p>epoll对文件描述符的操作有两种模式：LT（level trigger）和ET（edge trigger）。LT模式是默认模式，LT模式与ET模式的区别如下：
+LT模式：当epoll_wait检测到描述符事件发生并将此事件通知应用程序，应用程序可以不立即处理该事件。下次调用epoll_wait时，会再次响应应用程序并通知此事件。
+ET模式：当epoll_wait检测到描述符事件发生并将此事件通知应用程序，应用程序必须立即处理该事件。如果不处理，下次调用epoll_wait时，不会再次响应应用程序并通知此事件。
+1、LT模式
+　　LT(level triggered)是缺省的工作方式，并且同时支持block和no-block socket。在这种做法中，内核告诉你一个文件描述符是否就绪了，然后你可以对这个就绪的fd进行IO操作。如果你不作任何操作，内核还是会继续通知你的。
+2、ET模式
+　　ET(edge-triggered)是高速工作方式，只支持no-block socket。在这种模式下，当描述符从未就绪变为就绪时，内核通过epoll告诉你。然后它会假设你知道文件描述符已经就绪，并且不会再为那个文件描述符发送更多的就绪通知，直到你做了某些操作导致那个文件描述符不再为就绪状态了(比如，你在发送，接收或者接收请求，或者发送接收的数据少于一定量时导致了一个EWOULDBLOCK 错误）。但是请注意，如果一直不对这个fd作IO操作(从而导致它再次变成未就绪)，内核不会发送更多的通知(only once)。
+　　ET模式在很大程度上减少了epoll事件被重复触发的次数，因此效率要比LT模式高。epoll工作在ET模式的时候，必须使用非阻塞套接口，以避免由于一个文件句柄的阻塞读/阻塞写操作把处理多个文件描述符的任务饿死。
+3、在select/poll中，进程只有在调用一定的方法后，内核才对所有监视的文件描述符进行扫描，而epoll事先通过epoll_ctl()来注册一个文件描述符，一旦基于某个文件描述符就绪时，内核会采用类似callback的回调机制，迅速激活这个文件描述符，当进程调用epoll_wait()时便得到通知。(此处去掉了遍历文件描述符，而是通过监听回调的的机制。这正是epoll的魅力所在。)
+注意：如果没有大量的idle-connection或者dead-connection，epoll的效率并不会比select/poll高很多，但是当遇到大量的idle-connection，就会发现epoll的效率大大高于select/poll。</p>
+
+<p>三、select、poll、epoll区别
+1、支持一个进程所能打开的最大连接数
+ 	<img src="https://xiazemin.github.io/MyBlog/img/selectPoolConnect.png" />
+2、FD剧增后带来的IO效率问题
+ 	<img src="https://xiazemin.github.io/MyBlog/img/selectPollFd.png" />
+3、消息传递方式
+ 	<img src="https://xiazemin.github.io/MyBlog/img/selectPollMmap.png" /></p>
+
+<p>综上，在选择select，poll，epoll时要根据具体的使用场合以及这三种方式的自身特点：
+1、表面上看epoll的性能最好，但是在连接数少并且连接都十分活跃的情况下，select和poll的性能可能比epoll好，毕竟epoll的通知机制需要很多函数回调。
+2、select低效是因为每次它都需要轮询。但低效也是相对的，视情况而定，也可通过良好的设计改善。</p>
 
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/linux/2017/12/06/linux_cow.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/linux/2017/12/24/select_poll.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -172,22 +242,24 @@
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/spark/2017/12/06/Kibana.html">Kibana</a>
+						<a class="post-link" href="/MyBlog/linux/2017/12/24/goroutine.html">goroutine</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/spark/2017/12/06/Kibana.html"> 夏泽民</a>
+						<a href="/MyBlog/linux/2017/12/24/goroutine.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Dec 6, 2017
+							Dec 24, 2017
 						</span>
 					</div>
-					<div class="excerpt"><!-- more -->
-<p>ibana是一个针对Elasticsearch的开源分析及可视化平台，用来搜索、查看交互存储在Elasticsearch索引中的数据。使用Kibana，可以通过各种图表进行高级数据分析及展示。</p>
+					<div class="excerpt"><p>Go runtime的调度器：在了解Go的运行时的scheduler之前，需要先了解为什么需要它，因为我们可能会想，OS内核不是已经有一个线程scheduler了嘛？熟悉POSIX API的人都知道，POSIX的方案在很大程度上是对Unix process进场模型的一个逻辑描述和扩展，两者有很多相似的地方。 Thread有自己的信号掩码，CPU affinity等。但是很多特征对于Go程序来说都是累赘。 尤其是context上下文切换的耗时。另一个原因是Go的垃圾回收需要所有的goroutine停止，使得内存在一个一致的状态。垃圾回收的时间点是不确定的，如果依靠OS自身的scheduler来调度，那么会有大量的线程需要停止工作。 单独的开发一个GO得调度器，可以是其知道在什么时候内存状态是一致的，也就是说，当开始垃圾回收时，运行时只需要为当时正在CPU核上运行的那个线程等待即可，而不是等待所有的线程。用户空间线程和内核空间线程之间的映射关系有：N:1,1:1和M:NN:1是说，多个（N）用户线程始终在一个内核线程上跑，context上下文切换确实很快，但是无法真正的利用多核。1：1是说，一个用户线程就只在一个内核线程上跑，这时可以利用多核，但是上下文switch很慢。M:N是说， 多个goroutine在多个内核线程上跑，这个看似可以集齐上面两者的优势，但是无疑增加了调度的难度。
+Go的调度器内部有三个重要的结构：M，P，G
+M:代表真正的内核OS线程，和POSIX里的thread差不多，真正干活的人G:代表一个goroutine，它有自己的栈，instruction pointer和其他信息（正在等待的channel等等），用于调度。P:代表调度的上下文，可以把它看做一个局部的调度器，使go代码在一个线程上跑，它是实现从N:1到N:M映射的关键。
+有2个物理线程M，每一个M都拥有一个context（P），每一个也都有一个正在运行的goroutine。P的数量可以通过GOMAXPROCS()来设置，它其实也就代表了真正的并发度，即有多少个goroutine可以同时运行。图中灰色的那些goroutine并没有运行，而是出于ready的就绪态，正在等待被调度。P维护着这个队列（称之为runqueue），Go语言里，启动一个goroutine很容易：go function 就行，所以每有一个go语句被执行，runqueue队列就在其末尾加入一个goroutine，在下一个调度点，就从runqueue中取出（如何决定取哪个goroutine？）一个goroutine执行。为何要维护多个上下文P？因为当一个OS线程被阻塞时，P可以转而投奔另一个OS线程！图中看到，当一个OS线程M0陷入阻塞时，P转而在OS线程M1上运行。调度器保证有足够的线程来运行所以的context P。</p>
 
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/spark/2017/12/06/Kibana.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/linux/2017/12/24/goroutine.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -197,29 +269,29 @@
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/linux/2017/12/05/linux_memory.html">linux_memory</a>
+						<a class="post-link" href="/MyBlog/web/2017/12/24/goclipse.html">goclipse eclipse go 开发环境搭建＋跳转支持</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/linux/2017/12/05/linux_memory.html"> 夏泽民</a>
+						<a href="/MyBlog/web/2017/12/24/goclipse.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Dec 5, 2017
+							Dec 24, 2017
 						</span>
 					</div>
 					<div class="excerpt"><!-- more -->
-<p>TLB(Translation Lookaside Buffer)转换检测缓冲区是一个内存管理单元,用于改进虚拟地址到物理地址转换速度的缓存。
-TLB是一个小的，虚拟寻址的缓存，其中每一行都保存着一个由单个PTE(Page Table Entry,页表项)组成的块。如果没有TLB，则每次取数据都需要两次访问内存，即查页表获得物理地址和取数据。
-当cpu要访问一个虚拟地址/线性地址时，CPU会首先根据虚拟地址的高20位（20是x86特定的，不同架构有不同的值）在TLB中查找。如果是表中没有相应的表项，称为TLB miss，需要通过访问慢速RAM中的页表计算出相应的物理地址。同时，物理地址被存放在一个TLB表项中，以后对同一线性地址的访问，直接从TLB表项中获取物理地址即可，称为TLB hit。
-Linux把物理内存划分为三个层次来管理
-存储节点(Node)	CPU被划分为多个节点(node), 内存则被分簇, 每个CPU对应一个本地物理内存, 即一个CPU-node对应一个内存簇bank，即每个内存簇被认为是一个节点
-管理区(Zone)	每个物理内存节点node被划分为多个内存管理区域, 用于表示不同范围的内存, 内核可以使用不同的映射方式映射物理内存
-页面(Page)	内存被细分为多个页面帧, 页面是最基本的页面分配的单位　
-为了支持NUMA模型，也即CPU对不同内存单元的访问时间可能不同，此时系统的物理内存被划分为几个节点(node), 一个node对应一个内存簇bank，即每个内存簇被认为是一个节点</p>
+<p>Eclipse Mars (4.5)  下载地址：https://www.eclipse.org/mars/
+golang 1.6.0rc2 下载地址：http://www.golangtc.com/download
+goclipse 0.14.1 下载地址: https://github.com/GoClipse/goclipse
+eclipse在线安装地址：http://goclipse.github.io/releases/
+eclipse+goclipse安装后不能联想和跳转问题解决
+Window-&gt;Preferences-&gt;Go
+指定$GOPATH 和$GOROOT
+<img src="https://xiazemin.github.io/MyBlog/img/goclipse.png" /></p>
 
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/linux/2017/12/05/linux_memory.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/web/2017/12/24/goclipse.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -229,40 +301,22 @@ Linux把物理内存划分为三个层次来管理
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/web/2017/12/02/server_tyrp.html">server格式</a>
+						<a class="post-link" href="/MyBlog/web/2017/12/22/tcp_flag.html">tcp_flag</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/web/2017/12/02/server_tyrp.html"> 夏泽民</a>
+						<a href="/MyBlog/web/2017/12/22/tcp_flag.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Dec 2, 2017
+							Dec 22, 2017
 						</span>
 					</div>
 					<div class="excerpt"><!-- more -->
-<div class="container">
-	<div class="row">
-CGI程序不是放在服务器上就能顺利运行，如果要想使其在服务器上顺利的运行并准确的处理用户的请求，则须对所使用的服务器进行必要的设置。
-配置：根据所使用的服务器类型以及它的设置把CGI程序放在某一特定的目录中或使其带有特定的扩展名。
-⑴CREN格式服务器的配置：
-编辑CREN格式服务器的配置文件（通常为/etc/httpd.conf）在文件中加入：Exec cgi-bin/*/home/www/cgi-bin/*.exec。命令中出现的第一个参数cgi-bin/*指出了在URL中出现的目录名字，并表示它出现在系统主机后的第一个目录中，如：http://edgar.stern.nyn.***/cgi-bin/。命令中的第二个参数表示CGI程序目录放在系统中的真实路径。
-CGI目录除了可以跟网络文件放在同一目录中，也可以放在系统的其它目录中，但必须保证在你的系统中也具有同样的目录。在对服务器完成设置后，须重新启动服务器（除非HTTP服务器是用inetd启动的）。
-⑵NCSA格式服务器的配置
-在NCSA格式服务器上有两种方法进行设置：
-①在srm.conf文件（通常在conf目录下）中加入：Script Alias/cgi-bin/cgi-bin/。Script Alias命令指出某一目录下的文件是可执行程序，且这个命令是用来执行这些程序的；此命令的两个参数与CERN格式服务器中的Exec命令的参数的含意一样。
-②在srm.conf文件加入：Add type application/x-httpd-cgi.cgi。此命令表示在服务器上增加了一种新的文件类型，其后第一个参数为CGI程序的MIME类型，第二个参数是文件的扩展名，表示以这一扩展名为扩展名的文件是CGI程序。
-在用上述方法之一设置服务器后，都得重新启动服务器（除非HTTP服务器是用inetd启动的）。
-编写语言
-CGI可以用任何一种语言编写，只要这种语言具有标准输入、输出和环境变量。对初学者来说，最好选用易于归档和能有效表示大量数据结构的语言，例如UNIX环境中：
-· Perl (Practical Extraction and Report Language)
-· Bourne Shell或者Tcl (Tool Command Language)
-· PHP(Hypertext Preprocessor))
-由于C语言有较强的平台无关性，所以也是编写CGI程序的首选。
-	</div>
-</div>
+<p>在TCP层，有个FLAGS字段，这个字段有以下几个标识：SYN, FIN, ACK, PSH, RST, URG.</p>
+
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/web/2017/12/02/server_tyrp.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/web/2017/12/22/tcp_flag.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -272,29 +326,22 @@ CGI可以用任何一种语言编写，只要这种语言具有标准输入、�
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/web/2017/12/02/nginx_ssi.html">nginx_ssi</a>
+						<a class="post-link" href="/MyBlog/web/2017/12/22/short_url.html">url短链</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/web/2017/12/02/nginx_ssi.html"> 夏泽民</a>
+						<a href="/MyBlog/web/2017/12/22/short_url.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Dec 2, 2017
+							Dec 22, 2017
 						</span>
 					</div>
-					<div class="excerpt"><!-- more -->
-<div class="container">
-什么是SSI
-Server Side Include，通常称为服务器端嵌入，是一种类似于ASP的基于服务器的网页制作技术。大多数（尤其是基于Unix平台）的WEB服务器如Netscape Enterprise Server等均支持SSI命令。
-为什么要用SSI
-用个例子来说明，一个静态化的页面中，需要嵌入一小块实时变化的内容，。例如首页，大部分的页面内容需要缓存但是用户登录后的个人信息是动态信息，不能缓存。那么如何解决这个”页面部分缓存”问题，利用SSI就可以解决，在首页的静态页面中嵌入个人信息的动态页，由于是服务器端的嵌入，所以用户浏览的时候都是一个嵌入后的页面。
-用途
-主要有以下几种用途：
+					<div class="excerpt"><p>什么是短链接 🔗
+就是把普通网址，转换成比较短的网址。比如：http://t.cn/RlB2PdD 这种，在微博这些限制字数的应用里。好处不言而喻。短、字符少、美观、便于发布、传播。</p>
 
-</div>
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/web/2017/12/02/nginx_ssi.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/web/2017/12/22/short_url.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -1766,6 +1813,30 @@ Server Side Include，通常称为服务器端嵌入，是一种类似于ASP的�
 			  
 			    
 			      <a href="/MyBlog/page364/">364</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page365/">365</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page366/">366</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page367/">367</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page368/">368</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page369/">369</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page370/">370</a>
 			    
 			  
 
@@ -3617,6 +3688,36 @@ Server Side Include，通常称为服务器端嵌入，是一种类似于ASP的�
 						  
 						
 
+						  
+							<li><a href="/MyBlog/page365">365</a></li>
+						  
+						
+
+						  
+							<li><a href="/MyBlog/page366">366</a></li>
+						  
+						
+
+						  
+							<li><a href="/MyBlog/page367">367</a></li>
+						  
+						
+
+						  
+							<li><a href="/MyBlog/page368">368</a></li>
+						  
+						
+
+						  
+							<li><a href="/MyBlog/page369">369</a></li>
+						  
+						
+
+						  
+							<li><a href="/MyBlog/page370">370</a></li>
+						  
+						
+
 						
 						  <li><a href="/MyBlog/page347">Next</a></li>
 						
@@ -3650,6 +3751,206 @@ Server Side Include，通常称为服务器端嵌入，是一种类似于ASP的�
 							"data" : [
 							
 							{
+							"title" : "valgrind - ",
+							"url" : "/MyBlog/php/2020/06/06/valgrind.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "phpdbg gdb - ",
+							"url" : "/MyBlog/php/2020/06/06/phpdbg.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "gdb 调试动态链接库 - ",
+							"url" : "/MyBlog/php/2020/06/06/gdbso.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "current_execute_data - ",
+							"url" : "/MyBlog/php/2020/06/06/current_execute_data.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "bz2 Mac 文件解压缩 - ",
+							"url" : "/MyBlog/linux/2020/06/06/bz2.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "valgrind - ",
+							"url" : "/MyBlog/php/2020/06/05/valgrind.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "strlen - ",
+							"url" : "/MyBlog/php/2020/06/05/strlen.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "gdb调试 php - ",
+							"url" : "/MyBlog/php/2020/06/05/gdb.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "zend_string char - ",
+							"url" : "/MyBlog/php/2020/06/03/zend_string.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "usr2 - ",
+							"url" : "/MyBlog/linux/2020/06/03/usr2.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "sub_array - ",
+							"url" : "/MyBlog/php/2020/06/03/sub_array.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "interface - ",
+							"url" : "/MyBlog/golang/2020/06/03/interface.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "bash if - ",
+							"url" : "/MyBlog/linux/2020/06/03/if.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "go mod - ",
+							"url" : "/MyBlog/golang/2020/06/03/gomod.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "go 1.14 变化 - ",
+							"url" : "/MyBlog/golang/2020/06/03/go.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "gin - ",
+							"url" : "/MyBlog/golang/2020/06/03/gin.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "goroutine和channel - ",
+							"url" : "/MyBlog/golang/2020/06/03/channel.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "扩展回调php函数 - ",
+							"url" : "/MyBlog/php/2020/06/03/callback.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "检测三种不同操作系统的Bash脚本 - ",
+							"url" : "/MyBlog/linux/2020/06/03/bash.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "Jupiter - ",
+							"url" : "/MyBlog/golang/2020/06/03/Jupiter.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "stacktrace - ",
+							"url" : "/MyBlog/php/2020/06/02/stacktrace.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "execute_data - ",
+							"url" : "/MyBlog/php/2020/06/02/execute_data.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "call_user_function - ",
+							"url" : "/MyBlog/php/2020/06/02/call_user_function.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "tcmalloc - ",
+							"url" : "/MyBlog/golang/2020/06/01/tcmalloc.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "JSON Web Token - ",
+							"url" : "/MyBlog/golang/2020/06/01/jwt.html"
+							}
+							
+							,
+							
+							
+							{
 							"title" : "goland 激活 - ",
 							"url" : "/MyBlog/golang/2020/06/01/goland.html"
 							}
@@ -3658,8 +3959,24 @@ Server Side Include，通常称为服务器端嵌入，是一种类似于ASP的�
 							
 							
 							{
+							"title" : "gdb - ",
+							"url" : "/MyBlog/algorithm/2020/06/01/gdb.html"
+							}
+							
+							,
+							
+							
+							{
 							"title" : "ZEND_HASH_FOREACH_KEY_VAL php扩展hashtable操作 - ",
-							"url" : "/MyBlog/web/2020/06/01/ZEND_HASH_FOREACH_KEY_VAL.html"
+							"url" : "/MyBlog/php/2020/06/01/ZEND_HASH_FOREACH_KEY_VAL.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "Container - ",
+							"url" : "/MyBlog/golang/2020/06/01/Container.html"
 							}
 							
 							,
@@ -3667,7 +3984,7 @@ Server Side Include，通常称为服务器端嵌入，是一种类似于ASP的�
 							
 							{
 							"title" : "zval 替代char 解决返回字符串内存泄漏问题 - ",
-							"url" : "/MyBlog/web/2020/05/31/zval.html"
+							"url" : "/MyBlog/php/2020/05/31/zval.html"
 							}
 							
 							,
@@ -3675,7 +3992,7 @@ Server Side Include，通常称为服务器端嵌入，是一种类似于ASP的�
 							
 							{
 							"title" : "zend_mm_heap corrupted - ",
-							"url" : "/MyBlog/web/2020/05/31/zend_mm_heap.html"
+							"url" : "/MyBlog/php/2020/05/31/zend_mm_heap.html"
 							}
 							
 							,
@@ -3747,7 +4064,7 @@ Server Side Include，通常称为服务器端嵌入，是一种类似于ASP的�
 							
 							{
 							"title" : "PHP7扩展开发之数组处理 - ",
-							"url" : "/MyBlog/web/2020/05/31/array.html"
+							"url" : "/MyBlog/php/2020/05/31/array.html"
 							}
 							
 							,
@@ -3755,7 +4072,7 @@ Server Side Include，通常称为服务器端嵌入，是一种类似于ASP的�
 							
 							{
 							"title" : "ZEND_HASH_FOREACH_KEY_VAL - ",
-							"url" : "/MyBlog/web/2020/05/31/ZEND_HASH_FOREACH_KEY_VAL.html"
+							"url" : "/MyBlog/php/2020/05/31/ZEND_HASH_FOREACH_KEY_VAL.html"
 							}
 							
 							,
@@ -3763,7 +4080,7 @@ Server Side Include，通常称为服务器端嵌入，是一种类似于ASP的�
 							
 							{
 							"title" : "PHP 调试技巧 扩展调试 - ",
-							"url" : "/MyBlog/web/2020/05/30/xdebug.html"
+							"url" : "/MyBlog/php/2020/05/30/xdebug.html"
 							}
 							
 							,
@@ -3835,7 +4152,7 @@ Server Side Include，通常称为服务器端嵌入，是一种类似于ASP的�
 							
 							{
 							"title" : "PHP 接口调用报错 502 Bad Gateway - ",
-							"url" : "/MyBlog/web/2020/05/29/502.html"
+							"url" : "/MyBlog/php/2020/05/29/502.html"
 							}
 							
 							,
@@ -3851,7 +4168,7 @@ Server Side Include，通常称为服务器端嵌入，是一种类似于ASP的�
 							
 							{
 							"title" : "zend_execute_ex - ",
-							"url" : "/MyBlog/web/2020/05/28/zend_execute_ex.html"
+							"url" : "/MyBlog/php/2020/05/28/zend_execute_ex.html"
 							}
 							
 							,
@@ -3859,7 +4176,7 @@ Server Side Include，通常称为服务器端嵌入，是一种类似于ASP的�
 							
 							{
 							"title" : "zend_execute_data - ",
-							"url" : "/MyBlog/web/2020/05/28/zend_execute_data.html"
+							"url" : "/MyBlog/php/2020/05/28/zend_execute_data.html"
 							}
 							
 							,
@@ -3867,7 +4184,7 @@ Server Side Include，通常称为服务器端嵌入，是一种类似于ASP的�
 							
 							{
 							"title" : "PHP打印调用堆栈的三种方法 - ",
-							"url" : "/MyBlog/web/2020/05/28/stack.html"
+							"url" : "/MyBlog/php/2020/05/28/stack.html"
 							}
 							
 							,
@@ -3875,7 +4192,7 @@ Server Side Include，通常称为服务器端嵌入，是一种类似于ASP的�
 							
 							{
 							"title" : "php7 基础上编译扩展，hack文件操作 - ",
-							"url" : "/MyBlog/web/2020/05/28/php_ext.html"
+							"url" : "/MyBlog/php/2020/05/28/php_ext.html"
 							}
 							
 							,
@@ -3883,7 +4200,7 @@ Server Side Include，通常称为服务器端嵌入，是一种类似于ASP的�
 							
 							{
 							"title" : "extension php扩展和zend扩展区别 - ",
-							"url" : "/MyBlog/web/2020/05/28/extension.html"
+							"url" : "/MyBlog/php/2020/05/28/extension.html"
 							}
 							
 							,
@@ -3891,7 +4208,7 @@ Server Side Include，通常称为服务器端嵌入，是一种类似于ASP的�
 							
 							{
 							"title" : "yaf - ",
-							"url" : "/MyBlog/web/2020/05/27/yaf.html"
+							"url" : "/MyBlog/php/2020/05/27/yaf.html"
 							}
 							
 							,
@@ -3923,7 +4240,7 @@ Server Side Include，通常称为服务器端嵌入，是一种类似于ASP的�
 							
 							{
 							"title" : "phpt 是php源码的测试文件 - ",
-							"url" : "/MyBlog/web/2020/05/27/phpt.html"
+							"url" : "/MyBlog/php/2020/05/27/phpt.html"
 							}
 							
 							,
@@ -4003,7 +4320,7 @@ Server Side Include，通常称为服务器端嵌入，是一种类似于ASP的�
 							
 							{
 							"title" : "PHP严格模式 Strict standards - ",
-							"url" : "/MyBlog/web/2020/05/27/Strict.html"
+							"url" : "/MyBlog/php/2020/05/27/Strict.html"
 							}
 							
 							,
@@ -4011,7 +4328,7 @@ Server Side Include，通常称为服务器端嵌入，是一种类似于ASP的�
 							
 							{
 							"title" : "解决mac 没有php.ini 文件问题 - ",
-							"url" : "/MyBlog/algorithm/2020/05/26/phpini.html"
+							"url" : "/MyBlog/php/2020/05/26/phpini.html"
 							}
 							
 							,
@@ -4211,7 +4528,7 @@ Server Side Include，通常称为服务器端嵌入，是一种类似于ASP的�
 							
 							{
 							"title" : "xdebug - ",
-							"url" : "/MyBlog/web/2020/05/20/xdebug.html"
+							"url" : "/MyBlog/php/2020/05/20/xdebug.html"
 							}
 							
 							,
@@ -18314,7 +18631,7 @@ Server Side Include，通常称为服务器端嵌入，是一种类似于ASP的�
 								
 								
 									<a class="bold" href="/MyBlog/category/web">
-										web (313)
+										web (297)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -18359,7 +18676,7 @@ Server Side Include，通常称为服务器端嵌入，是一种类似于ASP的�
 								
 								
 									<a class="bold" href="/MyBlog/category/linux">
-										linux (333)
+										linux (337)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -18386,7 +18703,7 @@ Server Side Include，通常称为服务器端嵌入，是一种类似于ASP的�
 								
 								
 									<a class="bold" href="/MyBlog/category/golang">
-										golang (641)
+										golang (650)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -18458,7 +18775,7 @@ Server Side Include，通常称为服务器端嵌入，是一种类似于ASP的�
 								
 								
 									<a class="bold" href="/MyBlog/category/php">
-										php (4)
+										php (34)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -18528,19 +18845,127 @@ Server Side Include，通常称为服务器端嵌入，是一种类似于ASP的�
 								<ul style="display:none;width:250px;height:250px;">
 								     
 								   <li>
+										<a href="/MyBlog/php/2020/06/06/valgrind.html" style="font-size:40px;"> valgrind</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/php/2020/06/06/phpdbg.html" style="font-size:40px;"> phpdbg gdb</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/php/2020/06/06/gdbso.html" style="font-size:40px;"> gdb 调试动态链接库</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/php/2020/06/06/current_execute_data.html" style="font-size:40px;"> current_execute_data</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/linux/2020/06/06/bz2.html" style="font-size:40px;"> bz2 Mac 文件解压缩</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/php/2020/06/05/valgrind.html" style="font-size:40px;"> valgrind</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/php/2020/06/05/strlen.html" style="font-size:40px;"> strlen</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/php/2020/06/05/gdb.html" style="font-size:40px;"> gdb调试 php</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/php/2020/06/03/zend_string.html" style="font-size:40px;"> zend_string char</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/linux/2020/06/03/usr2.html" style="font-size:40px;"> usr2</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/php/2020/06/03/sub_array.html" style="font-size:40px;"> sub_array</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/golang/2020/06/03/interface.html" style="font-size:40px;"> interface</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/linux/2020/06/03/if.html" style="font-size:40px;"> bash if</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/golang/2020/06/03/gomod.html" style="font-size:40px;"> go mod</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/golang/2020/06/03/go.html" style="font-size:40px;"> go 1.14 变化</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/golang/2020/06/03/gin.html" style="font-size:40px;"> gin</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/golang/2020/06/03/channel.html" style="font-size:40px;"> goroutine和channel</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/php/2020/06/03/callback.html" style="font-size:40px;"> 扩展回调php函数</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/linux/2020/06/03/bash.html" style="font-size:40px;"> 检测三种不同操作系统的Bash脚本</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/golang/2020/06/03/Jupiter.html" style="font-size:40px;"> Jupiter</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/php/2020/06/02/stacktrace.html" style="font-size:40px;"> stacktrace</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/php/2020/06/02/execute_data.html" style="font-size:40px;"> execute_data</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/php/2020/06/02/call_user_function.html" style="font-size:40px;"> call_user_function</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/golang/2020/06/01/tcmalloc.html" style="font-size:40px;"> tcmalloc</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/golang/2020/06/01/jwt.html" style="font-size:40px;"> JSON Web Token</a>
+									</li>
+									  
+								   <li>
 										<a href="/MyBlog/golang/2020/06/01/goland.html" style="font-size:40px;"> goland 激活</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/web/2020/06/01/ZEND_HASH_FOREACH_KEY_VAL.html" style="font-size:40px;"> ZEND_HASH_FOREACH_KEY_VAL php扩展hashtable操作</a>
+										<a href="/MyBlog/algorithm/2020/06/01/gdb.html" style="font-size:40px;"> gdb</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/web/2020/05/31/zval.html" style="font-size:40px;"> zval 替代char 解决返回字符串内存泄漏问题</a>
+										<a href="/MyBlog/php/2020/06/01/ZEND_HASH_FOREACH_KEY_VAL.html" style="font-size:40px;"> ZEND_HASH_FOREACH_KEY_VAL php扩展hashtable操作</a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/web/2020/05/31/zend_mm_heap.html" style="font-size:40px;"> zend_mm_heap corrupted</a>
+										<a href="/MyBlog/golang/2020/06/01/Container.html" style="font-size:40px;"> Container</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/php/2020/05/31/zval.html" style="font-size:40px;"> zval 替代char 解决返回字符串内存泄漏问题</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/php/2020/05/31/zend_mm_heap.html" style="font-size:40px;"> zend_mm_heap corrupted</a>
 									</li>
 									  
 								   <li>
@@ -18576,115 +19001,7 @@ Server Side Include，通常称为服务器端嵌入，是一种类似于ASP的�
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/web/2020/05/31/array.html" style="font-size:40px;"> PHP7扩展开发之数组处理</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/web/2020/05/31/ZEND_HASH_FOREACH_KEY_VAL.html" style="font-size:40px;"> ZEND_HASH_FOREACH_KEY_VAL</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/web/2020/05/30/xdebug.html" style="font-size:40px;"> PHP 调试技巧 扩展调试</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2020/05/30/interface.html" style="font-size:40px;"> interface</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/linux/2020/05/30/buserror.html" style="font-size:40px;"> Bus error 10</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/linux/2020/05/29/make.html" style="font-size:40px;"> make</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/linux/2020/05/29/handler.html" style="font-size:40px;"> 文件句柄泄漏</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/linux/2020/05/29/gdbcore.html" style="font-size:40px;"> mac上分析coredump文件</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/linux/2020/05/29/gdb.html" style="font-size:40px;"> mac gdb 安装</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/linux/2020/05/29/core.html" style="font-size:40px;"> core 文件 调试 追踪 Segmentation fault 11</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/web/2020/05/29/brew.html" style="font-size:40px;"> brew install 问题解决</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/web/2020/05/29/502.html" style="font-size:40px;"> PHP 接口调用报错 502 Bad Gateway</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/web/2020/05/29/10-didi.html" style="font-size:40px;"> BOOT_LDFLAGS</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/web/2020/05/28/zend_execute_ex.html" style="font-size:40px;"> zend_execute_ex</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/web/2020/05/28/zend_execute_data.html" style="font-size:40px;"> zend_execute_data</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/web/2020/05/28/stack.html" style="font-size:40px;"> PHP打印调用堆栈的三种方法</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/web/2020/05/28/php_ext.html" style="font-size:40px;"> php7 基础上编译扩展，hack文件操作</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/web/2020/05/28/extension.html" style="font-size:40px;"> extension php扩展和zend扩展区别</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/web/2020/05/27/yaf.html" style="font-size:40px;"> yaf</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/web/2020/05/27/wechat.html" style="font-size:40px;"> wechat</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2020/05/27/stackpreempt.html" style="font-size:40px;"> stackpreempt 抢占调度</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/web/2020/05/27/session.html" style="font-size:40px;"> php.ini中session的配置</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/web/2020/05/27/phpt.html" style="font-size:40px;"> phpt 是php源码的测试文件</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2020/05/27/nil.html" style="font-size:40px;"> 如何判断interface为nil</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2020/05/27/newa.html" style="font-size:40px;"> golang 最新文章</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2020/05/27/log.html" style="font-size:40px;"> log 高性能 线程安全 zap logrus</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2020/05/27/goroutine.html" style="font-size:40px;"> goroutine</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2020/05/27/gocheck.html" style="font-size:40px;"> gocheck</a>
+										<a href="/MyBlog/php/2020/05/31/array.html" style="font-size:40px;"> PHP7扩展开发之数组处理</a>
 									</li>
 									
 								</ul>
@@ -18700,33 +19017,33 @@ Server Side Include，通常称为服务器端嵌入，是一种类似于ASP的�
                 		<ul class="posts" span="recent">  
 							  
 							   <li>  
-								   <span>01 Jun 2020</span>
-								   <a href="/MyBlog/golang/2020/06/01/goland.html">  
-								   goland 激活</a>  
+								   <span>06 Jun 2020</span>
+								   <a href="/MyBlog/php/2020/06/06/valgrind.html">  
+								   valgrind</a>  
 							   </li>  
 							  
 							   <li>  
-								   <span>01 Jun 2020</span>
-								   <a href="/MyBlog/web/2020/06/01/ZEND_HASH_FOREACH_KEY_VAL.html">  
-								   ZEND_HASH_FOREACH_KEY_VAL php扩展hashtable操作</a>  
+								   <span>06 Jun 2020</span>
+								   <a href="/MyBlog/php/2020/06/06/phpdbg.html">  
+								   phpdbg gdb</a>  
 							   </li>  
 							  
 							   <li>  
-								   <span>31 May 2020</span>
-								   <a href="/MyBlog/web/2020/05/31/zval.html">  
-								   zval 替代char 解决返回字符串内存泄漏问题</a>  
+								   <span>06 Jun 2020</span>
+								   <a href="/MyBlog/php/2020/06/06/gdbso.html">  
+								   gdb 调试动态链接库</a>  
 							   </li>  
 							  
 							   <li>  
-								   <span>31 May 2020</span>
-								   <a href="/MyBlog/web/2020/05/31/zend_mm_heap.html">  
-								   zend_mm_heap corrupted</a>  
+								   <span>06 Jun 2020</span>
+								   <a href="/MyBlog/php/2020/06/06/current_execute_data.html">  
+								   current_execute_data</a>  
 							   </li>  
 							  
 							   <li>  
-								   <span>31 May 2020</span>
-								   <a href="/MyBlog/linux/2020/05/31/sed.html">  
-								   sed 替换括号</a>  
+								   <span>06 Jun 2020</span>
+								   <a href="/MyBlog/linux/2020/06/06/bz2.html">  
+								   bz2 Mac 文件解压缩</a>  
 							   </li>  
 							  
 						</ul>

@@ -1,7 +1,7 @@
 ---
 title: extension php扩展和zend扩展区别
 layout: post
-category: web
+category: php
 author: 夏泽民
 ---
 myFile.so doesn't appear to be a valid Zend extension

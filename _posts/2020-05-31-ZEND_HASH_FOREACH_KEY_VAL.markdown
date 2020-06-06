@@ -1,7 +1,7 @@
 ---
 title: ZEND_HASH_FOREACH_KEY_VAL
 layout: post
-category: web
+category: php
 author: 夏泽民
 ---
 1、zend_hash_num_elements 获取数组元素个数。宏定义如下：
