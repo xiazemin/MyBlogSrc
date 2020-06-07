@@ -1,7 +1,7 @@
 ---
 title: composer replace
 layout: post
-category: web
+category: php
 author: 夏泽民
 ---
 原始解释：
