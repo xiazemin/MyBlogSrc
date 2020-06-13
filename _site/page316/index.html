@@ -147,50 +147,26 @@
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/zookeeper/2018/06/10/raft.html">Paxos、Raft、Zab和VR</a>
+						<a class="post-link" href="/MyBlog/web/2018/06/23/Nutch.html">Nutch</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/zookeeper/2018/06/10/raft.html"> 夏泽民</a>
+						<a href="/MyBlog/web/2018/06/23/Nutch.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Jun 10, 2018
+							Jun 23, 2018
 						</span>
 					</div>
 					<div class="excerpt"><!-- more -->
-<p>Raft
-Paxos偏向于理论、对如何应用到工程实践提及较少。理解的难度加上现实的骨感，在生产环境中基于Paxos实现一个正确的分布式系统非常难[1]：
-There are significant gaps between the description of the Paxos algorithm and the needs of a real-world system. In order to build a real-world system, an expert needs to use numerous ideas scattered in the literature and make several relatively small protocol extensions. The cumulative effort will be substantial and the final system will be based on an unproven protocol.
-Raft[2][3]在2013年提出，提出的时间虽然不长，但已经有很多系统基于Raft实现。相比Paxos，Raft的买点就是更利于理解、更易于实行。
-为达到更容易理解和实行的目的，Raft将问题分解和具体化：Leader统一处理变更操作请求，一致性协议的作用具化为保证节点间操作日志副本(log replication)一致，以term作为逻辑时钟(logical clock)保证时序，节点运行相同状态机(state machine)[4]得到一致结果。Raft协议具体过程如下：
-Client发起请求，每一条请求包含操作指令
-请求交由Leader处理，Leader将操作指令(entry)追加(append)至操作日志，紧接着对Follower发起AppendEntries请求、尝试让操作日志副本在Follower落地
-如果Follower多数派(quorum)同意AppendEntries请求，Leader进行commit操作、把指令交由状态机处理
-状态机处理完成后将结果返回给Client
-指令通过log index(指令id)和term number保证时序，正常情况下Leader、Follower状态机按相同顺序执行指令，得出相同结果、状态一致。
-宕机、网络分化等情况可引起Leader重新选举(每次选举产生新Leader的同时，产生新的term)、Leader/Follower间状态不一致。Raft中Leader为自己和所有Follower各维护一个nextIndex值，其表示Leader紧接下来要处理的指令id以及将要发给Follower的指令id，LnextIndex不等于FnextIndex时代表Leader操作日志和Follower操作日志存在不一致，这时将从Follower操作日志中最初不一致的地方开始，由Leader操作日志覆盖Follower，直到LnextIndex、FnextIndex相等。
-Paxos中Leader的存在是为了提升决议效率，Leader的有无和数目并不影响决议一致性，Raft要求具备唯一Leader，并把一致性问题具体化为保持日志副本的一致性，以此实现相较Paxos而言更容易理解、更容易实现的目标。
-Zab
-Zab[5][6]的全称是Zookeeper atomic broadcast protocol，是Zookeeper内部用到的一致性协议。相比Paxos，Zab最大的特点是保证强一致性(strong consistency，或叫线性一致性linearizable consistency)。
-和Raft一样，Zab要求唯一Leader参与决议，Zab可以分解成discovery、sync、broadcast三个阶段：
-discovery: 选举产生PL(prospective leader)，PL收集Follower epoch(cepoch)，根据Follower的反馈PL产生newepoch(每次选举产生新Leader的同时产生新epoch，类似Raft的term)
-sync: PL补齐相比Follower多数派缺失的状态、之后各Follower再补齐相比PL缺失的状态，PL和Follower完成状态同步后PL变为正式Leader(established leader)
-broadcast: Leader处理Client的写操作，并将状态变更广播至Follower，Follower多数派通过之后Leader发起将状态变更落地(deliver/commit)
-Leader和Follower之间通过心跳判别健康状态，正常情况下Zab处在broadcast阶段，出现Leader宕机、网络隔离等异常情况时Zab重新回到discovery阶段。
-了解完Zab的基本原理，我们再来看Zab怎样保证强一致性，Zab通过约束事务先后顺序达到强一致性，先广播的事务先commit、FIFO，Zab称之为primary order(以下简称PO)。实现PO的核心是zxid。
-Zab中每个事务对应一个zxid，它由两部分组成：&lt;e, c&gt;，e即Leader选举时生成的epoch，c表示当次epoch内事务的编号、依次递增。假设有两个事务的zxid分别是z、z’，当满足 z.e &lt; z’.e 或者 z.e = z’.e &amp;&amp; z.c &lt; z’.c 时，定义z先于z’发生(z &lt; z’)。
-为实现PO，Zab对Follower、Leader有以下约束：
-有事务z和z’，如果Leader先广播z，则Follower需保证先commit z对应的事务
-有事务z和z’，z由Leader p广播，z’由Leader q广播，Leader p先于Leader q，则Follower需保证先commit z对应的事务
-有事务z和z’，z由Leader p广播，z’由Leader q广播，Leader p先于Leader q，如果Follower已经commit z，则q需保证已commit z才能广播z’
-第1、2点保证事务FIFO，第3点保证Leader上具备所有已commit的事务。
-相比Paxos，Zab约束了事务顺序、适用于有强一致性需求的场景。
-Paxos、Raft、Zab再比较
-除Paxos、Raft和Zab外，Viewstamped Replication(简称VR)[7][8]也是讨论比较多的一致性协议。这些协议包含很多共同的内容(Leader、quorum、state machine等)，因而我们不禁要问：Paxos、Raft、Zab和VR等分布式一致性协议区别到底在哪，还是根本就是一回事？[9]</p>
+<p>Nutch是一个开源Java实现的搜索引擎。它提供了我们运行自己的搜索引擎所需的全部工具。包括全文搜索和Web爬虫。
+Nutch的组成：
+    爬虫crawler和查询searcher。Crawler主要用于从网络上抓取网页并为这些网页建立索引。Searcher主要利用这些索引检索用户的查找关键词来产生查找结果。两者之间的接口是索引，所以除去索引部分，两者之间的耦合度很低。
+    Crawler和Searcher两部分尽量分开的目的主要是为了使两部分可以分布式配置在硬件平台上，例如将Crawler和Searcher分别放在两个主机上，这样可以提升性能
+Nutch的目标：</p>
 
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/zookeeper/2018/06/10/raft.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/web/2018/06/23/Nutch.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -200,22 +176,22 @@ Paxos、Raft、Zab再比较
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/zookeeper/2018/06/10/quorum.html">quorum</a>
+						<a class="post-link" href="/MyBlog/web/2018/06/16/lsm.html">lsm</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/zookeeper/2018/06/10/quorum.html"> 夏泽民</a>
+						<a href="/MyBlog/web/2018/06/16/lsm.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Jun 10, 2018
+							Jun 16, 2018
 						</span>
 					</div>
 					<div class="excerpt"><!-- more -->
-<p>在分布式系统中有个CAP理论，对于P（分区容忍性）而言，是实际存在 从而无法避免的。因为，分布系统中的处理不是在本机，而是网络中的许多机器相互通信，故网络分区、网络通信故障问题无法避免。因此，只能尽量地在C 和 A 之间寻求平衡。对于数据存储而言，为了提高可用性（Availability），采用了副本备份，比如对于HDFS，默认每块数据存三份。某数据块所在的机器宕机了，就去该数据块副本所在的机器上读取（从这可以看出，数据分布方式是按“数据块”为单位分布的）</p>
+<p>十年前，谷歌发表了 “BigTable” 的论文，论文中很多很酷的方面之一就是它所使用的文件组织方式，这个方法更一般的名字叫 Log Structured-Merge Tree。</p>
 
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/zookeeper/2018/06/10/quorum.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/web/2018/06/16/lsm.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -225,77 +201,93 @@ Paxos、Raft、Zab再比较
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/zookeeper/2018/06/10/paxos_quorum.html">Paxos和Quorum</a>
+						<a class="post-link" href="/MyBlog/elasticsearch/2018/06/16/logstash.html">logstash  日志收集</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/zookeeper/2018/06/10/paxos_quorum.html"> 夏泽民</a>
+						<a href="/MyBlog/elasticsearch/2018/06/16/logstash.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Jun 10, 2018
-						</span>
-					</div>
-					<div class="excerpt"><p>为什么需要Paxos或Quorum算法？分布式系统实现数据存储，是通过多份数据副本来保证可靠，假设部分节点访问数据失败，还有其他节点提供一致的数据返回给用户。对数据存储而言，怎样保证副本数据的一致性当属分布式存储最重要的问题。 一致性是分布式理论中的根本性问题，近半个世纪以来，科学家们围绕着一致性问题提出了很多理论模型，依据这些理论模型，业界也出现了很多工程实践投影。何为一致性问题？简而言之，一致性问题就是相互独立的节点之间，在可控的时间范围内如何达成一项决议的问题。</p>
-
-</div>
-					<div class="readmore" style="float: right;">
-						
-							<a href="/MyBlog/zookeeper/2018/06/10/paxos_quorum.html" style="color:green">阅读全文</a>
-						
-					</div>								
-			</div>
-			<br/>
-			<hr/>
-			<div class="post-list" style="list-style-type: none;">			
-				 	
-					<h2>
-						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/elasticsearch/2018/06/10/lucence.html">lucence  elasticsearch</a>
-					</h2>
-					<div class="author" style="margin-top: -10px;">Posted by
-						<i class="fa fa-user"></i>
-						<a href="/MyBlog/elasticsearch/2018/06/10/lucence.html"> 夏泽民</a>
-						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Jun 10, 2018
-						</span>
-					</div>
-					<div class="excerpt"><p>lucene，最先进、功能最强大的搜索库，直接基于lucene开发，非常复杂，api复杂（实现一些简单的功能，写大量的java代码），需要深入理解原理（各种索引结构）
-elasticsearch，基于lucene，隐藏复杂性，提供简单易用的restful api接口、java api接口（还有其他语言的api接口）
-（1）分布式的文档存储引擎
-（2）分布式的搜索引擎和分析引擎
-（3）分布式，支持PB级数据
-开箱即用，优秀的默认参数，不需要任何额外设置，完全开源
-<!-- more -->
-Lucene概述</p>
-
-</div>
-					<div class="readmore" style="float: right;">
-						
-							<a href="/MyBlog/elasticsearch/2018/06/10/lucence.html" style="color:green">阅读全文</a>
-						
-					</div>								
-			</div>
-			<br/>
-			<hr/>
-			<div class="post-list" style="list-style-type: none;">			
-				 	
-					<h2>
-						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/zookeeper/2018/06/10/jndi.html">jndi</a>
-					</h2>
-					<div class="author" style="margin-top: -10px;">Posted by
-						<i class="fa fa-user"></i>
-						<a href="/MyBlog/zookeeper/2018/06/10/jndi.html"> 夏泽民</a>
-						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Jun 10, 2018
+							Jun 16, 2018
 						</span>
 					</div>
 					<div class="excerpt"><!-- more -->
-<p>JNDI是 Java 命名与目录接口（Java Naming and Directory Interface），在J2EE规范中是重要的规范之一，不少专家认为，没有透彻理解JNDI的意义和作用，就没有真正掌握J2EE特别是EJB的知识。</p>
+<p>首先看下一般的log框架是如何输出日志的：</p>
 
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/zookeeper/2018/06/10/jndi.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/elasticsearch/2018/06/16/logstash.html" style="color:green">阅读全文</a>
+						
+					</div>								
+			</div>
+			<br/>
+			<hr/>
+			<div class="post-list" style="list-style-type: none;">			
+				 	
+					<h2>
+						<img class="title-image" src="/MyBlog/img/dna.png"/>
+						<a class="post-link" href="/MyBlog/web/2018/06/16/ldap.html">ldap 轻量目录访问协议</a>
+					</h2>
+					<div class="author" style="margin-top: -10px;">Posted by
+						<i class="fa fa-user"></i>
+						<a href="/MyBlog/web/2018/06/16/ldap.html"> 夏泽民</a>
+						<span class="post-meta"><i class="fa fa-calendar"></i> 
+							Jun 16, 2018
+						</span>
+					</div>
+					<div class="excerpt"><ol>
+  <li>目录服务
+目录是一个为查询、浏览和搜索而优化的专业分布式数据库，它呈树状结构组织数据，就好象Linux/Unix系统中的文件目录一样。目录数据库和关系数据库不同，它有优异的读性能，但写性能差，并且没有事务处理、回滚等复杂功能，不适于存储修改频繁的数据。所以目录天生是用来查询的，就好象它的名字一样。</li>
+</ol>
+
+</div>
+					<div class="readmore" style="float: right;">
+						
+							<a href="/MyBlog/web/2018/06/16/ldap.html" style="color:green">阅读全文</a>
+						
+					</div>								
+			</div>
+			<br/>
+			<hr/>
+			<div class="post-list" style="list-style-type: none;">			
+				 	
+					<h2>
+						<img class="title-image" src="/MyBlog/img/dna.png"/>
+						<a class="post-link" href="/MyBlog/web/2018/06/16/gitEditHistory.html">查看某行代码的git修改历史</a>
+					</h2>
+					<div class="author" style="margin-top: -10px;">Posted by
+						<i class="fa fa-user"></i>
+						<a href="/MyBlog/web/2018/06/16/gitEditHistory.html"> 夏泽民</a>
+						<span class="post-meta"><i class="fa fa-calendar"></i> 
+							Jun 16, 2018
+						</span>
+					</div>
+					<div class="excerpt"><p>使用:  ~/gitEditHis.sh file code
+<!-- more --></p>
+
+<figure class="highlight"><pre><code class="language-bash" data-lang="bash"><table class="rouge-table"><tbody><tr><td class="gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+9
+</pre></td><td class="code"><pre> <span class="c">#!/bin/bash</span>
+<span class="nv">version</span><span class="o">=</span><span class="sb">`</span>git log <span class="nv">$1</span>  |grep commit |awk <span class="s1">'{print $2}'</span> <span class="sb">`</span>
+<span class="k">for </span>i <span class="k">in</span> <span class="nv">$version</span><span class="p">;</span>
+<span class="k">do
+ </span><span class="nb">echo</span> <span class="nv">$i</span> <span class="p">;</span>
+ git checkout <span class="nv">$i</span><span class="p">;</span>
+git blame <span class="nv">$1</span>  |grep <span class="nv">$2</span><span class="p">;</span>
+ <span class="k">done
+</span>git checkout master</pre></td></tr></tbody></table></code></pre></figure>
+
+</div>
+					<div class="readmore" style="float: right;">
+						
+							<a href="/MyBlog/web/2018/06/16/gitEditHistory.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -1807,6 +1799,14 @@ Lucene概述</p>
 			  
 			    
 			      <a href="/MyBlog/page374/">374</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page375/">375</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page376/">376</a>
 			    
 			  
 
@@ -3708,6 +3708,16 @@ Lucene概述</p>
 						  
 						
 
+						  
+							<li><a href="/MyBlog/page375">375</a></li>
+						  
+						
+
+						  
+							<li><a href="/MyBlog/page376">376</a></li>
+						  
+						
+
 						
 						  <li><a href="/MyBlog/page317">Next</a></li>
 						
@@ -3741,8 +3751,88 @@ Lucene概述</p>
 							"data" : [
 							
 							{
+							"title" : "sso - ",
+							"url" : "/MyBlog/golang/2020/06/13/sso.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "golang http句柄泄露 - ",
+							"url" : "/MyBlog/golang/2020/06/13/http.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "携程在 CAT 性能优化 - ",
+							"url" : "/MyBlog/golang/2020/06/13/cat.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "go test - ",
+							"url" : "/MyBlog/golang/2020/06/12/test.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "zepto vscode-go - ",
+							"url" : "/MyBlog/golang/2020/06/11/zepto.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "graphQL - ",
+							"url" : "/MyBlog/web/2020/06/11/graphQL.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "dubbo dubbo-go-proxy - ",
+							"url" : "/MyBlog/golang/2020/06/11/dubbo.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "PySaprk - ",
+							"url" : "/MyBlog/storage/2020/06/11/PySaprk.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "validator - ",
+							"url" : "/MyBlog/golang/2020/06/10/validator.html"
+							}
+							
+							,
+							
+							
+							{
 							"title" : "Go 内存池对象池技术 - ",
 							"url" : "/MyBlog/golang/2020/06/10/pool.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "k8s+docker部署Golang项目 - ",
+							"url" : "/MyBlog/golang/2020/06/10/docker.html"
 							}
 							
 							,
@@ -3757,8 +3847,24 @@ Lucene概述</p>
 							
 							
 							{
+							"title" : "atomic - ",
+							"url" : "/MyBlog/golang/2020/06/10/atomic.html"
+							}
+							
+							,
+							
+							
+							{
 							"title" : "容器内存占用 OOM - ",
 							"url" : "/MyBlog/golang/2020/06/10/OOM.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "Context - ",
+							"url" : "/MyBlog/golang/2020/06/10/Context.html"
 							}
 							
 							,
@@ -18789,7 +18895,7 @@ Lucene概述</p>
 								
 								
 									<a class="bold" href="/MyBlog/category/web">
-										web (297)
+										web (298)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -18861,7 +18967,7 @@ Lucene概述</p>
 								
 								
 									<a class="bold" href="/MyBlog/category/golang">
-										golang (669)
+										golang (679)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -18897,7 +19003,7 @@ Lucene概述</p>
 								
 								
 									<a class="bold" href="/MyBlog/category/storage">
-										storage (138)
+										storage (139)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -19003,7 +19109,47 @@ Lucene概述</p>
 								<ul style="display:none;width:250px;height:250px;">
 								     
 								   <li>
+										<a href="/MyBlog/golang/2020/06/13/sso.html" style="font-size:40px;"> sso</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/golang/2020/06/13/http.html" style="font-size:40px;"> golang http句柄泄露</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/golang/2020/06/13/cat.html" style="font-size:40px;"> 携程在 CAT 性能优化</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/golang/2020/06/12/test.html" style="font-size:40px;"> go test</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/golang/2020/06/11/zepto.html" style="font-size:40px;"> zepto vscode-go</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/web/2020/06/11/graphQL.html" style="font-size:40px;"> graphQL</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/golang/2020/06/11/dubbo.html" style="font-size:40px;"> dubbo dubbo-go-proxy</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/storage/2020/06/11/PySaprk.html" style="font-size:40px;"> PySaprk</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/golang/2020/06/10/validator.html" style="font-size:40px;"> validator</a>
+									</li>
+									  
+								   <li>
 										<a href="/MyBlog/golang/2020/06/10/pool.html" style="font-size:40px;"> Go 内存池对象池技术</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/golang/2020/06/10/docker.html" style="font-size:40px;"> k8s+docker部署Golang项目</a>
 									</li>
 									  
 								   <li>
@@ -19011,7 +19157,15 @@ Lucene概述</p>
 									</li>
 									  
 								   <li>
+										<a href="/MyBlog/golang/2020/06/10/atomic.html" style="font-size:40px;"> atomic</a>
+									</li>
+									  
+								   <li>
 										<a href="/MyBlog/golang/2020/06/10/OOM.html" style="font-size:40px;"> 容器内存占用 OOM</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/golang/2020/06/10/Context.html" style="font-size:40px;"> Context</a>
 									</li>
 									  
 								   <li>
@@ -19113,54 +19267,6 @@ Lucene概述</p>
 								   <li>
 										<a href="/MyBlog/php/2020/06/05/strlen.html" style="font-size:40px;"> strlen</a>
 									</li>
-									  
-								   <li>
-										<a href="/MyBlog/php/2020/06/05/gdb.html" style="font-size:40px;"> gdb调试 php</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/php/2020/06/03/zend_string.html" style="font-size:40px;"> zend_string char</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/linux/2020/06/03/usr2.html" style="font-size:40px;"> usr2</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/php/2020/06/03/sub_array.html" style="font-size:40px;"> sub_array</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2020/06/03/interface.html" style="font-size:40px;"> interface</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/linux/2020/06/03/if.html" style="font-size:40px;"> bash if</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2020/06/03/gomod.html" style="font-size:40px;"> go mod</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2020/06/03/go.html" style="font-size:40px;"> go 1.14 变化</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2020/06/03/gin.html" style="font-size:40px;"> gin</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2020/06/03/channel.html" style="font-size:40px;"> goroutine和channel</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/php/2020/06/03/callback.html" style="font-size:40px;"> 扩展回调php函数</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/linux/2020/06/03/bash.html" style="font-size:40px;"> 检测三种不同操作系统的Bash脚本</a>
-									</li>
 									
 								</ul>
 							</div>
@@ -19175,33 +19281,33 @@ Lucene概述</p>
                 		<ul class="posts" span="recent">  
 							  
 							   <li>  
-								   <span>10 Jun 2020</span>
-								   <a href="/MyBlog/golang/2020/06/10/pool.html">  
-								   Go 内存池对象池技术</a>  
+								   <span>13 Jun 2020</span>
+								   <a href="/MyBlog/golang/2020/06/13/sso.html">  
+								   sso</a>  
 							   </li>  
 							  
 							   <li>  
-								   <span>10 Jun 2020</span>
-								   <a href="/MyBlog/golang/2020/06/10/cli.html">  
-								   cli</a>  
+								   <span>13 Jun 2020</span>
+								   <a href="/MyBlog/golang/2020/06/13/http.html">  
+								   golang http句柄泄露</a>  
 							   </li>  
 							  
 							   <li>  
-								   <span>10 Jun 2020</span>
-								   <a href="/MyBlog/golang/2020/06/10/OOM.html">  
-								   容器内存占用 OOM</a>  
+								   <span>13 Jun 2020</span>
+								   <a href="/MyBlog/golang/2020/06/13/cat.html">  
+								   携程在 CAT 性能优化</a>  
 							   </li>  
 							  
 							   <li>  
-								   <span>09 Jun 2020</span>
-								   <a href="/MyBlog/golang/2020/06/09/tag.html">  
-								   tag</a>  
+								   <span>12 Jun 2020</span>
+								   <a href="/MyBlog/golang/2020/06/12/test.html">  
+								   go test</a>  
 							   </li>  
 							  
 							   <li>  
-								   <span>09 Jun 2020</span>
-								   <a href="/MyBlog/golang/2020/06/09/sched.html">  
-								   调度器工作原理</a>  
+								   <span>11 Jun 2020</span>
+								   <a href="/MyBlog/golang/2020/06/11/zepto.html">  
+								   zepto vscode-go</a>  
 							   </li>  
 							  
 						</ul>
