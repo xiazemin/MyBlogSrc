@@ -1,0 +1,268 @@
+---
+title: phytrix
+layout: post
+category: php
+author: 夏泽民
+---
+About Phystrix
+在具有PHP前端的分布式系统中，应用程序与许多远程服务进行通信。无论是您自己的一组服务，第三方RESTful API还是需要网络交互的传统组件：在复杂的高负载系统中，偶尔的故障是无法避免的。Phystrix通过跟踪各种指标并防止重复性故障来保护对远程资源的访问点。如果服务失败的情况太频繁，为了不使情况更糟，Phystrix将暂时停止向它发出请求。当服务恢复生机时，Phystrix允许客户端应用程序再次访问它。
+
+Understanding Phystrix
+不仅Phystrix受到了Netflix令人惊叹的Hystrix Java库的启发，它还试图遵循图书馆设置的最佳实践。您会注意到配置参数与内部工作方式相同。即使目前在Phystrix的文档方面没有太多可用，您也可以使用Hystrix wiki作为额外的信息来源，以了解某些内容的工作原理等。
+
+Installation
+安装Phystrix的推荐方法是使用Composer：
+
+"require": {
+     "odesk/phystrix": "dev-master"
+}
+要在请求之间存储和共享指标，Phystrix使用APC，因此请确保已启用PHP扩展。
+
+PHP 7.2
+在php 7中，apcu的API发生了变化。除了apcu之外，您还需要安装apcu-bc才能使用Phystrix。必须在apcu后加载向后兼容层扩展。
+
+Usage
+为了保护远程服务的访问点，我们使用命令模式。以下是最小实现的外观：
+
+<!-- more -->
+use Odesk\Phystrix\AbstractCommand;
+ 
+/**
+ * All commands must extends Phystrix's AbstractCommand
+ */
+class MyCommand extends AbstractCommand
+{
+    protected $name;
+ 
+    public function __construct($name)
+    {
+        $this->name = $name;
+    }
+ 
+    /**
+     * This function is called internally by Phystrix, only if the request is allowed
+     *
+     * @return mixed
+     */
+    protected function run()
+    {
+        return 'Hello ' . $this->name;
+    }
+}
+要使用Phystrix特定的依赖项预先配置命令，您需要从与对象共享的特殊工厂中获取该命令。例如，在您的控制器中，您可以：
+
+请注意，传递给工厂的getCommand方法的额外参数将转发到命令的构造函数。工厂实例化如下：
+
+use Zend\Config\Config;
+use Odesk\Phystrix\ApcStateStorage;
+use Odesk\Phystrix\CircuitBreakerFactory;
+use Odesk\Phystrix\CommandMetricsFactory;
+use Odesk\Phystrix\CommandFactory;
+ 
+$config = new Config(require 'phystrix-config.php');
+ 
+$stateStorage = new ApcStateStorage();
+$circuitBreakerFactory = new CircuitBreakerFactory($stateStorage);
+$commandMetricsFactory = new CommandMetricsFactory($stateStorage);
+ 
+$phystrix = new CommandFactory(
+    $config, new \Zend\Di\ServiceLocator(), $circuitBreakerFactory, $commandMetricsFactory,
+    new \Odesk\Phystrix\RequestCache(), new \Odesk\Phystrix\RequestLog()
+);
+存储配置文件的方式取决于您。Phystrix依靠Zend \ Config来管理配置。在这种情况下，phystrix-config.php是一个PHP数组：
+
+return array(
+    'default' => array( // Default command configuration
+        'fallback' => array(
+            // Whether fallback logic of the phystrix command is enabled
+            'enabled' => true,
+        ),
+        'circuitBreaker' => array(
+            // Whether circuit breaker is enabled, if not Phystrix will always allow a request
+            'enabled' => true,
+            // How many failed request it might be before we open the circuit (disallow consecutive requests)
+            'errorThresholdPercentage' => 50,
+            // If true, the circuit breaker will always be open regardless the metrics
+            'forceOpen' => false,
+            // If true, the circuit breaker will always be closed, allowing all requests, regardless the metrics
+            'forceClosed' => false,
+            // How many requests we need minimally before we can start making decisions about service stability
+            'requestVolumeThreshold' => 10,
+            // For how long to wait before attempting to access a failing service
+            'sleepWindowInMilliseconds' => 5000,
+        ),
+        'metrics' => array(
+            // This is for caching metrics so they are not recalculated more often than needed
+            'healthSnapshotIntervalInMilliseconds' => 1000,
+            // The period of time within which we the stats are collected
+            'rollingStatisticalWindowInMilliseconds' => 1000,
+            // The more buckets the more precise and actual the stats and slower the calculation.
+            'rollingStatisticalWindowBuckets' => 10,
+        ),
+        'requestCache' => array(
+            // Request cache, if enabled and a command has getCacheKey implemented
+            // caches results within current http request
+            'enabled' => true,
+        ),
+        'requestLog' => array(
+            // Request log collects all commands executed within current http request
+            'enabled' => false,
+        ),
+    ),
+    'MyCommand' => array( // Command specific configuration
+        'fallback' => array(
+            'enabled' => false
+        )
+    )
+);
+特定于命令的配置在实例化时与默认配置合并。在这种情况下，“MyCommand”是命令键。默认情况下它与命令的类相同，但您可以通过覆盖getCommandKey受保护的方法来自行设置它：
+
+/**
+     * This function defines the command key to use for this command
+     *
+     * @return string
+     */
+    protected function getCommandKey()
+    {
+        return 'CustomCommandKey';
+    }
+Phystrix仅适用于命令键。如果您有两个具有相同命令键的不同命令 -  Phystrix将收集指标，禁用和启用请求，就像单个实体一样。这可以用于分组命令。有时，在特定上下文中使用命令时，可能需要更改参数：
+
+use Zend\Config\Config;
+$myCommand = $phystrix->getCommand('MyCommand', 'Alex');
+$myCommand->setConfig(new Config(array('requestCache' => array('enabled' => false))));
+$result = $myCommand->execute();
+请注意，您设置的配置与先前设置的值合并。
+
+Features
+一、Fallback
+
+倒退对于命令，您可以指定回退逻辑，在发生故障时执行或远程服务被阻止时执行：
+
+class GetAvatarUrlCommand extends AbstractCommand
+{
+    protected $user;
+ 
+    public function __construct($user)
+    {
+        $this->user = $user;
+    }
+ 
+    protected function run()
+    {
+        $remoteAvatarService = $this->serviceLocator->get('avatarService');
+        return $remoteAvatarService->getUrlByUser($this->user);
+    }
+ 
+    /**
+     * When __run__ fails for some reason, or when Phystrix doesn't allow the request in the first place,
+     * this function result will be returned instead
+     *
+     * @return string
+     */
+    protected function getFallback()
+    {
+        // we failed getting user's picture, so showing a generic no-photo placeholder instead.
+        return 'http://example/avatars/no-photo.jpg';
+    }
+}
+如果您想使用需要网络连接的逻辑，请确保将其“包装”到自己的Phystrix命令中。
+
+二、Request cache
+
+请求缓存，在启用时，将命令执行结果缓存在单个HTTP请求中，因此您不必担心通过网络加载数据超过需要。
+
+每个缓存键的每个命令键缓存结果。要定义缓存密钥生成逻辑，请实现getCacheKey protected方法：
+
+protected function getCacheKey()
+    {
+        return 'cache_' . $this->user;
+    }
+三、Timeout
+
+Hystrix for Java允许您设置允许命令运行的特定时间。它的作用是限制运行命令的线程的时间。
+
+但是，在PHP中我们不能这样做，因为我们只有一个当前线程的上下文。建议的方法是在用于访问远程服务的库中手动配置超时。
+
+假设你有MyCommand的这个Phystrix配置：
+
+'MyCommand' => array(
+        'fallback' => array(
+            'enabled' => false
+        ),
+        'timeout' => 2000, // milliseconds
+    )
+其中“timeout”是Phystrix没有使用的自定义参数。您可以在Phystrix配置中指定任意参数，它们将在命令中可用：
+
+ protected function run()
+    {
+        $remoteAvatarService = $this->serviceLocator->get('avatarService');
+        return $remoteAvatarService->getUrlByUser($this->user);
+    }
+ 
+    /**
+     * Custom preparation logic, preceding command execution
+     */
+    protected function prepare()
+    {
+        $remoteAvatarService = $this->serviceLocator->get('avatarService');
+        if ($this->config->__isset('timeout')) {
+            // if the timeout is exceeded an exception will be thrown
+            $remoteAvatarService->setTimeout($this->config->get('timeout'));
+        }
+    }
+客户端可能是您下载的第三个库，或者来自Zend Framework或Symfony等框架的http客户端实例，或者您自己编写的内容。当然，必须将其添加到每个命令中将是次优的。通常，您将拥有一组特定于您的用例的抽象命令。例如。你可能有GenericCurlCommand或GenericGoogleApiCommand，而MyCommand会扩展其中一个。
+
+四、Custom dependencies
+
+由于您从特殊工厂获取命令，因此需要一种方法将自定义依赖项注入命令，例如HTTP客户端实例。
+
+一种方法是扩展Odesk \ Phystrix \ CommandFactory，创建自己的工厂并让它注入你需要的东西。或者，配置Odesk \ Phystrix \ CommandFactory在构造函数中接受的定位器实例。
+
+服务定位器可以是任何东西，实现非常基本的Zend \ Di \ LocatorInterface。您可以注入一个IoC容器，它将根据需要懒惰地实例化实例，或者您可以使用Zend \ Di \ ServiceLocator的更简单，预配置的实例：
+
+$serviceLocator = \Zend\Di\ServiceLocator();
+$googleApiRemoteService = new GoogleApi(...);
+$serviceLocator->set('googleApi', $googleApiRemoteService);
+ 
+$phystrix = new CommandFactory(
+    $config, $serviceLocator, $circuitBreakerFactory,
+    $commandMetricsFactory, new \Odesk\Phystrix\RequestCache()
+);
+您可以从命令中访问服务定位器，如下所示：
+
+protected function run()
+    {
+        $googleApi = $this->serviceLocator->get('googleApi');
+        return $googleApi->fetchAllEmail();
+    }
+五、Request Log
+
+性能监控的一个有用功能。启用后，允许您检索当前HTTP请求期间执行的命令列表：
+
+/** @var RequestLog $requestLog */
+$commands = $requestLog->getExecutedCommands();
+你得到的是一系列实际的命令实例。对于每个命令，您可以以毫秒为单位获取执行时间：
+
+$command->getExecutionTimeInMilliseconds();
+和事件列表，例如“SUCCESS”，“FAILURE”，“TIMEOUT”，“SHORT_CIRCUITED”，“FALLBACK_SUCCESS”，“FALLBACK_FAILURE”，“EXCEPTION_THROWN”，“RESPONSE_FROM_CACHE”：
+
+$command->getExecutionEvents();
+
+https://blog.csdn.net/u013702678/article/details/88764958
+
+https://www.jianshu.com/p/25ca85448b71
+
+https://www.cnblogs.com/yepei/p/7169127.html
+https://github.com/upwork/phystrix
+
+http://www.dataguru.cn/article-12505-1.html
+https://blog.csdn.net/hjq_ku/article/details/89520168
+https://github.com/upwork/phystrix
+
+http://slides.com/acanimal/resiliency-php-apps/embed#/18
+
+https://www.jianshu.com/p/25ca85448b71
+
+https://github.com/upwork/phystrix-dashboard
+https://www.iteye.com/blog/fobject-2337582

@@ -1,0 +1,266 @@
+---
+title: gval
+layout: post
+category: golang
+author: 夏泽民
+---
+https://github.com/PaesslerAG/gval
+https://godoc.org/github.com/PaesslerAG/gval#example-Evaluable
+https://github.com/tidwall/gjson
+
+官方的json库, 只支持整体的序列化与反序列化. 像其它语言的库, json库都支持单个getValue/setValue这类操作.
+找了下golang相关的开源json库, GJSON star数不错，支持的查询功能很丰富. 但是没有写入接口. 
+<!-- more -->
+https://www.jianshu.com/p/623f8ca5ec12
+获取值
+Get查询指定路径, 通过.来区分. 比如"name.last"或者"age". 如果找到了匹配路径, 将返回结果.
+
+同时有 GetMany 方法批量获取值, 也有 GetBytes 方法获取字节切片.
+
+package main
+
+import "github.com/tidwall/gjson"
+
+const json = `{"name":{"first":"Janet","last":"Prichard"},"age":47}`
+
+func main() {
+    value := gjson.Get(json, "name.last")
+    println(value.String())
+    results := gjson.GetMany(json, "name.last", "age")
+    for _, result := range results {
+        println(result.String())
+    }
+    value = gjson.GetBytes([]byte(json), "name.last")
+    println(value.String())
+}
+
+遍历
+例1.
+package main
+
+import "github.com/tidwall/gjson"
+
+const json1 = `{"name":{"name":"zhangsan","age":47},"name1":{"name":"lisi","age":42}}`
+
+func main() {
+    gjson.Get(json1, "name1").ForEach(printKeyValue())
+}
+
+func printKeyValue() func(key gjson.Result, value gjson.Result) bool {
+    return func(key, value gjson.Result) bool {
+        println(key.String(), ":", value.String())
+        return true
+    }
+}
+
+例2.
+package main
+
+import "github.com/tidwall/gjson"
+
+const json = `{"name":"zhangsan","age":47}`
+
+func main() {
+    gjson.Parse(json).ForEach(printKeyValue())
+
+}
+
+func printKeyValue() func(key gjson.Result, value gjson.Result) bool {
+    return func(key, value gjson.Result) bool {
+        println(key.String(), ":", value.String())
+        return true
+    }
+}
+JSON数组
+获取值
+例1.
+package main
+
+import "github.com/tidwall/gjson"
+
+const jsonArray = `{
+  "names": [
+    {
+      "name": "zhangsan"
+    },
+    {
+      "name": "lisi"
+    }
+  ]
+}`
+
+func main() {
+    value := gjson.Get(jsonArray, "names.0.name")
+    println(value.String())
+    value = gjson.Get(jsonArray, "names.1.name")
+    println(value.String())
+}
+例2.
+package main
+
+import (
+    "fmt"
+    "github.com/tidwall/gjson"
+)
+
+const jsonArray = `[
+    {
+      "name": "zhangsan",
+      "address": "beijing"
+    },
+    {
+      "name": "lisi",
+      "address": "tianjin"
+    }
+  ]
+`
+
+func main() {
+    valur := gjson.Get(jsonArray, "0.name")
+    fmt.Println(valur.String())
+}
+遍历
+例1.
+package main
+
+import (
+    "fmt"
+    "github.com/tidwall/gjson"
+)
+
+const jsonArray = `{
+  "names": [
+    {
+      "name": "zhangsan",
+      "address": "beijing"
+    },
+    {
+      "name": "lisi",
+      "address": "tianjin"
+    }
+  ]
+}`
+
+func main() {
+    for _, res := range gjson.Get(jsonArray, "names").Array() {
+        res.ForEach(func(key, value gjson.Result) bool {
+            fmt.Println(key.String(), ":", value.String())
+            return true
+        })
+    }
+}
+例2.
+package main
+
+import (
+    "fmt"
+    "github.com/tidwall/gjson"
+)
+
+const jsonArray = `[
+    {
+      "name": "zhangsan",
+      "address": "beijing"
+    },
+    {
+      "name": "lisi",
+      "address": "tianjin"
+    }
+  ]
+`
+
+func main() {
+    for _, res := range gjson.Parse(jsonArray).Array() {
+        res.ForEach(func(key, value gjson.Result) bool {
+            fmt.Println(key.String(), ":", value.String())
+            return true
+        })
+    }
+}
+路径解析
+路径是一系列被.分隔的key拼接而成.
+路径可能包含通配符'*'和'?'.
+通过下标访问数组值.
+通过'#'来获取值在元素中的排位或访问子路径.
+.和通配符可以通过''来转义.
+{
+  "name": {"first": "Tom", "last": "Anderson"},
+  "age":37,
+  "children": ["Sara","Alex","Jack"],
+  "fav.movie": "Deer Hunter",
+  "friends": [
+    {"first": "Dale", "last": "Murphy", "age": 44},
+    {"first": "Roger", "last": "Craig", "age": 68},
+    {"first": "Jane", "last": "Murphy", "age": 47}
+  ]
+}
+
+"name.last"          >> "Anderson"
+"age"                >> 37
+"children"           >> ["Sara","Alex","Jack"]
+"children.#"         >> 3
+"children.1"         >> "Alex"
+"child*.2"           >> "Jack"
+"c?ildren.0"         >> "Sara"
+"fav\.movie"         >> "Deer Hunter"
+"friends.#.first"    >> ["Dale","Roger","Jane"]
+"friends.1.last"     >> "Craig"
+
+同样能通过#[...]来查询数组中的第一个匹配的项, 或通过'#[...]#'查询所有匹配的项.
+查询支持==, !=, <, <=, >, >=比较运算符和'%'模糊匹配.
+
+friends.#[last=="Murphy"].first    >> "Dale"
+friends.#[last=="Murphy"]#.first   >> ["Dale","Jane"]
+friends.#[age>45]#.last            >> ["Craig","Murphy"]
+friends.#[first%"D*"].last         >> "Murphy"
+JSON行
+同样支持JSON Lines, 使用 .. 前缀, 把多行文档视作数组.
+
+比如:
+
+{"name": "Gilbert", "age": 61}
+{"name": "Alexa", "age": 34}
+{"name": "May", "age": 57}
+{"name": "Deloise", "age": 44}
+
+..#                   >> 4
+..1                   >> {"name": "Alexa", "age": 34}
+..3                   >> {"name": "Deloise", "age": 44}
+..#.name              >> ["Gilbert","Alexa","May","Deloise"]
+..#[name="May"].age   >> 57
+ForEachLines 方法可以迭代json.
+例1.
+package main
+
+import "github.com/tidwall/gjson"
+
+const jsonRow = `{"name": "Gilbert", "age": 61}
+{"name": "Alexa", "age": 34}
+{"name": "May", "age": 57}
+{"name": "Deloise", "age": 44}`
+
+func main() {
+    println(gjson.Get(jsonRow, "..1").String())
+}
+
+例2.
+
+package main
+
+import "github.com/tidwall/gjson"
+
+const jsonRow = `{"name": "Gilbert", "age": 61}
+{"name": "Alexa", "age": 34}
+{"name": "May", "age": 57}
+{"name": "Deloise", "age": 44}`
+
+func main() {
+    gjson.ForEachLine(jsonRow, func(line gjson.Result) bool {
+        println(line.Get("name").String())
+        return true
+    })
+
+https://www.cnblogs.com/mafly/p/gson.html
+https://blog.csdn.net/kakaxi1o1/article/details/79643399
+https://www.jianshu.com/p/0e40a52c0063
+https://www.jianshu.com/p/75a50aa0cad1

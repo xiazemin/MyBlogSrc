@@ -1,0 +1,130 @@
+---
+title: 操作结构体的非导出字段
+layout: post
+category: golang
+author: 夏泽民
+---
+https://gocn.vip/topics/10553
+我们都知道Go的struct里，小写字段是非导出的，即不可从包外部访问。
+
+但非导出字段在外部也并不是没有办法访问，也不是不可以修改。
+
+今天看下reflect包如何在包外操作非导出字段。
+
+取地址访问
+先来看第一个函数NewAt：
+
+对于结构体，通过其底层地址（指针 p）和类型，返回指向该结构体的一个指针，
+
+该值是可寻址的（addressable），即可访问该结构体
+
+// reflect/value.go
+// NewAt returns a Value representing a pointer to a value of the
+// specified type, using p as that pointer.
+func NewAt(typ Type, p unsafe.Pointer) Value {
+  fl := flag(Ptr)
+  t := typ.(*rtype)
+  return Value{t.ptrTo(), p, fl}
+}
+有个这个方法，就可以通过struct的反射获取非导出字段
+<!-- more -->
+比如访问，对于如下含有非导出字段的结构体Example
+
+package testData
+type Example struct {
+  a string
+}
+便可以通过对结构体eg取地址的方式，获取其非导出字段a的内容
+
+这里Elem是获取其底层数据对象的方式，
+
+如果知道类型，也可显示指定调用，如reflect.value.Interface,reflect.value.Int...
+
+var eg testData.Example
+a:=GetStructPtrUnExportedField(&eg, "a").String()
+
+func GetStructPtrUnExportedField(source interface{}, fieldName string) reflect.Value {
+  // 获取非导出字段反射对象
+  v := reflect.ValueOf(source).Elem().FieldByName(fieldName)
+  // 构建指向该字段的可寻址（addressable）反射对象
+  return reflect.NewAt(v.Type(), unsafe.Pointer(v.UnsafeAddr())).Elem()
+}
+这里注意必须要对eg取地址, 否则会panic:
+
+panic: reflect: call of reflect.Value.Elem on struct Value
+
+因为reflect.Value.Elem需要reflect.Value类型必须是interface或者ptr,
+
+这样获取其底层的值才有意义：要么返回interface底层的值或者ptr指向的值
+
+其注释如下：
+
+// Elem returns the value that the interface v contains
+// or that the pointer v points to.
+// It panics if v's Kind is not Interface or Ptr.
+// It returns the zero Value if v is nil.
+func (v Value) Elem() Value {
+取地址修改
+那可以访问了，如何修改呢？
+
+利用reflect.value.Set就可以：
+
+上边Elem获取到的反射值是可修改的（assignable）,突破了非导出字段不能从外部修改的限制
+
+var eg testData.Example
+err := SetStructPtrUnExportedStrField(&eg, "a", "test")
+
+func SetStructPtrUnExportedStrField(source interface{}, fieldName string, fieldVal interface{}) (err error) {
+  v := GetStructPtrUnExportedField(source, fieldName)
+  rv := reflect.ValueOf(fieldVal)
+  if v.Kind() != rv.Kind() {
+    return fmt.Errorf("invalid kind: expected kind %v, got kind: %v", v.Kind(), rv.Kind())
+  }
+  // 修改非导出字段值
+  v.Set(rv)
+  return nil
+}
+这里是以反射值来修改非导出字段值，内部类型须一致。修改后内容会直接反应到eg上
+
+类似的还有指定类型的设置方法如SetString,SetBool...
+
+非取地址访问
+当然不取地址也是可以访问非导出字段的。
+
+这里用到的第二个函数是New:
+
+基于指定类型创建一个可以表示该类型的指针
+
+// New returns a Value representing a pointer to a new zero value
+// for the specified type. That is, the returned Value's Type is PtrTo(typ).
+func New(typ Type) Value {
+  if typ == nil {
+    panic("reflect: New(nil)")
+  }
+  t := typ.(*rtype)
+  ptr := unsafe_New(t)
+  fl := flag(Ptr)
+  return Value{t.ptrTo(), ptr, fl}
+}
+具体访问代码如下：
+
+func GetStructUnExportedField(source interface{}, fieldName string) (accessableField, addressableSourceCopy reflect.Value) {
+  v := reflect.ValueOf(source)
+  // since source is not a ptr, get an addressable copy of source to modify it later
+    addressableSourceCopy = reflect.New(v.Type()).Elem()
+    // make a copy of source
+  addressableSourceCopy.Set(v)
+  accessableField = addressableSourceCopy.FieldByName(fieldName)
+  accessableField = reflect.NewAt(accessableField.Type(), unsafe.Pointer(accessableField.UnsafeAddr())).Elem()
+  return
+}
+这样其实是内部构造了一个对该结构其取地址的指针，以满足后续调用Elem时可寻址!
+
+非取地址修改
+非取地址的方式访问没有问题，要还想修改就不会反应到原始结构体上了
+
+毕竟是内部重新拷贝了一个结构体进行的操作。
+
+具体操作类似取地址修改的方式，这里不赘述了。
+
+实际使用中，还是通过NewAt获取可读写的非导出字段更方便一些。
