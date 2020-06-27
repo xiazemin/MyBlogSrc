@@ -1,0 +1,122 @@
+---
+title: PHP7源码之CG EG  SG PG宏
+layout: post
+category: php
+author: 夏泽民
+---
+CG的含义是 compiler_globals。Zend编译器相关的全局变量。
+EG的含义是 executor_globals。Zend执行器相关的全局变量。
+EG和CG有一些数据是共用的。如，function_table (存储方法信息) ， class_table (存储类信息) 。
+
+SG宏主要用于获取SAPI层范围内的全局变量 
+其中PG是一个宏,定义在php_globals.h中：
+
+EX(execute_data/zend_execute_data)
+
+在执行过程中最核心的一个结构，每次函数的调用、include/require、eval等都会生成一个新的结构，它表示当前的作用域、代码的执行位置以及局部变量的分配等等，
+<!-- more -->
+CG和EG两个宏的含义。
+CG
+
+含义
+
+CG的含义是 compiler_globals。Zend编译器相关的全局变量。
+
+作用
+
+大家都知道PHP代码最终是转化为Opcode去执行的。在PHP转换为Opcode过程中需要保存一些信息。这些信息就保存在CG全局变量中。
+
+如果想了解Zend是如何把PHP代码转换为Opcode，使用GC全局变量保存了那些信息，可以查看 Zend/zend_language_scanner.c 文件的 compile_file(zend_file_handle *file_handle, int type)方法
+
+代码
+
+在 Zend/zend_globals_macros.h 文件中有这个宏的相关代码。如下：
+
+/* Compiler */
+
+#ifdef ZTS
+
+<h1>define CG(v) ZEND_TSRMG(compiler_globals_id, zend_compiler_globals *, v)</h1>
+
+#else
+
+<h1>define CG(v) (compiler_globals.v)</h1>
+
+extern ZEND_API struct _zend_compiler_globals compiler_globals;
+
+#endif
+
+EG
+
+含义
+
+EG的含义是 executor_globals。Zend执行器相关的全局变量。
+
+作用
+
+Zend引擎在执行Opcode的时候，需要记录一些执行过程中的状态。如，当前执行的类作用域，当前已经加载了那些文件，等。
+
+代码
+
+在 Zend/zend_globals_macros.h 文件中有这个宏的相关代码。如下：
+
+/* Executor */
+
+#ifdef ZTS
+
+<h1>define EG(v) ZEND_TSRMG(executor_globals_id, zend_executor_globals *, v)</h1>
+
+#else
+
+<h1>define EG(v) (executor_globals.v)</h1>
+
+extern ZEND_API zend_executor_globals executor_globals;
+
+其他
+
+EG和CG有一些数据是共用的。如，function_table (存储方法信息) ， class_table (存储类信息) 。
+
+相关代码在Zend/zend_execute_API.c的init_executor方法中发现如下代码：
+void init_executor(void) /* \{\{\{ */
+
+{
+
+    zend_init_fpu();
+
+    ......
+
+    EG(function_table) = CG(function_table);
+
+    EG(class_table) = CG(class_table);
+
+    ......
+}
+
+Zend/zend_globals_macros.h:
+# define CG(v) TSRMG(compiler_globals_id, zend_compiler_globals *, v)
+
+Zend/zend_globals_macros.h:
+# define EG(v) TSRMG(executor_globals_id, zend_executor_globals *, v)
+
+main/php_globals.h:
+# define PG(v) TSRMG(core_globals_id, php_core_globals *, v)
+
+main/SAPI.h:
+# define SG(v) TSRMG(sapi_globals_id, sapi_globals_struct *, v)
+
+SG宏主要用于获取SAPI层范围内的全局变量 
+
+
+
+其中PG是一个宏,定义在php_globals.h中：
+# define PG(v) TSRMG(core_globals_id, php_core_globals *, v)
+而TSRMG也是一个宏，定义在TSRM.h中:
+#define TSRMG(id, type, element) (((type) (*((void ***) tsrm_ls))[TSRM_UNSHUFFLE_RSRC_ID(id)])->element)
+而TSRM_UNSHUFFLE_RSRC_ID也是一个宏，也定义在TSRM.h中：
+#define TSRM_UNSHUFFLE_RSRC_ID(rsrc_id) ((rsrc_id)-1)
+
+http://www.nowamagic.net/librarys/veda/detail/1390
+ 
+ 这里的拓展分为了两种，通常在php.ini中，通过extension=加载的扩展我们称为PHP扩展，通过zend_extension=加载的扩展我们称为Zend扩展，但从源码的角度来讲，PHP扩展应该称为“模块”（源码中以module命名），而Zend扩展称为“扩展”（源码中以extension命名）。两者最大的区别在于向引擎注册的钩子，向用户层面提供一些C实现的PHP函数，需要用到zend_module_entry（即作为PHP扩展），而需要hook到Zend引擎的话，就得用到zend_extension（即作为Zend扩展）。
+ 
+ https://www.cnblogs.com/jaychan/p/11218047.html

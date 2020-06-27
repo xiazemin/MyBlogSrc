@@ -1,0 +1,137 @@
+---
+title: php 500 错误排查
+layout: post
+category: php
+author: 夏泽民
+---
+php检测php.ini是否配制正确
+运行命令行
+
+ php -d display_startup_errors=1 -d error_reporting=-1 -d display_errors -c "C:\path-to-php\php.ini" -m
+<!-- more -->
+find / -name aaa* 查找缺失的扩展
+
+将错误暴露出来：
+
+使用phpinfo将php.ini的路径找出
+新建一个页面，内容如下：
+
+<?php phpinfo();
+?>
+找到php.ini的位置：
+
+/usr/local/php/etc/php.ini
+编辑php.ini
+查找 display_errors，将配置改为On，即为显示错误。
+
+display_errors = On
+
+
+1）查看nginx的日志
+
+    a) lnmp一键安装包安装的环境， nginx的默认错误日志是 /usr/local/nginx/logs/error.log   这个是 nginx服务器的启动日志， 所以500错误不这这；
+
+    b) access_log日志
+
+        access_log 日志一般配置在 server模块里面， 一个server 可以配置自己的 access_log ， 但是这个access_log 一般只打印 nginx 从 fastcgi 进程收到的日志 和 客户端信息，格式也就是 什么浏览器， 从php-fpm返回的响应是 200 还是 500 或者其他状态码，咦！有500了，但是这里看不到500的详细错误，那就接着往下，找php的错误日志。 下图1 是access_log 打印的日志数据：
+
+
+
+ 
+
+2）php 的错误日志
+
+    php的错误日志包括 php-fpm 的错误0日志 和 php.ini 的错误日志， 这两是不一样的，不要弄混。其中 php-fpm 的日志要优先级高一些，有的会覆盖php.ini 中的配置
+
+    a) php-fpm 的日志配置
+
+        如果是 php-fpm 的默认配置，那么他只会打印 php-fpm 的日志，不打印 php.ini 配置的 error_log 路径(即使配置，也不会打印)， 这是因为 ：
+
+            nginx只对页面的访问做access记录日志。不会有php的error log 信息。nginx把对php的请求发给php-fpm fastcgi进程来处理，默认的php-fpm只会输出php-fpm的错误信息，在php-fpm的errors log里也看不到php的errorlog。原因是php-fpm的配置文件php-fpm.conf中默认是关闭worker进程的错误输出，直接把他们重定向到/dev/null,所以我们在nginx的error log 和php-fpm的errorlog都看不到php的错误日志。
+
+ 
+
+        所以要想输出php的错误日志(看到详细的500错误)，就需要改php-fpm配置(没有就新增)如下：
+
+
+
+    catch_workers_output = yes 
+
+    在php-fpm的错误日志 log/error_log 里面，默认也只会打印 php-fpm的重启信息和错误信息 
+
+ 
+
+    b) 配置php.ini 的错误日志
+
+log_errors = On
+
+error_log = /home/www/php-ini.log    //这里注意权限问题(php用户在linux上一般是www，注意权限和权限组的所属 )，如果没权限写这个日志或者没有配置路径，那么会把详细的500错误内容打印在 php-fpm的错误日志里面
+
+error_reporting = E_ALL & ~E_NOTICE
+
+ 
+
+
+    重启php-fpm：  /etc/init.d/php-fpm  restart      如果配置的错误日志权限没问题，那么就应该在 /home/www/php-ini.log 里面看到详细的500错误信息了，如下：
+
+
+
+ 
+
+ 
+
+ 
+
+到这里，500的详细错误信息就可以看到并针对的去修正了，php 的错误日志配置需要注意几点：
+
+1. php-fpm.conf 中的php_admin_value[error_log] 参数 会覆盖php.ini中的 error_log 参数
+
+所以确保你在phpinfo()中看到的最终error_log文件具有可写权限并且没有设置php_admin_value[error_log] 参数，否则错误日志会输出到php-fpm的错误日志里
+
+ 
+
+2.找不到php.ini位置，使用php的phpinfo()结果查看
+
+ 
+
+3.如何修改PHP错误日志不输出到页面或屏幕上
+
+修改php.ini
+
+display_errors = off //不显示错误信息(不输出到页面或屏幕上)
+
+log_errors = on //记录错误信息(保存到日志文件中)
+
+error_reporting = E_ALL //捕获所有错误信息
+
+error_log = //设置日志文件名
+
+ 
+
+程序中修改以上配置
+
+ini_set("display_errors",0)
+
+ini_set("error_reporting",E_ALL); //这个值好像是个PHP的常量
+
+ini_set("error_log","<日志文件名>")
+
+ini_set("log_errors",1);
+
+ 
+
+4.如何将php的错误日志输出到nginx的错误日志里
+
+在PHP 5.3.8及之前的版本中，通过FastCGI运行的PHP，在用户访问时出现错误，会首先写入到PHP的errorlog中
+
+如果PHP的errorlog无法写入，则会将错误内容返回给FastCGI接口，然后nginx在收到FastCGI的错误返回后记录到了nginx的errorlog中
+
+在PHP 5.3.9及之后的版本中，出现错误后PHP只尝试写入PHP的errorlog中，如果失败则不会再返回到FastCGI了，错误日志会输出到php-fpm的错误日志里。
+
+所以如果想把php错误日志输出到nginx错误日志，需要使用php5.3.8之前的版本，并且配置文件中php的error_log对于php worker进程不可写。
+
+https://www.jb51.net/article/165775.htm
+
+https://blog.csdn.net/wojiuwangla/article/details/84964846
+
+https://github.com/xiazemin/slowLog
