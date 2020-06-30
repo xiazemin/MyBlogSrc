@@ -1,0 +1,306 @@
+---
+title: ipset iptables ipvs
+layout: post
+category: linux
+author: 夏泽民
+---
+iptables -t nat -L --line-numbers
+
+iptables -D INPUT 3: 通过Chain Name(INPUT) 和 line number(3)来删除规则
+
+iptables -t nat -I PREROUTING -m set --match-set myset src -m comment --comment "myset" -j return
+
+
+
+ipset create myset hash:ip
+ipset add myset 192.168.1.1
+
+ipset create myset hash:ip
+ipset add myset 192.168.2.226
+iptables -t nat -I SS_SPEC_WAN_FW -m set --match-set myset src -m comment --comment "myset" -j RETURN
+#在nat表的SS_SPEC_WAN_FW之前加入一个规则:遇到匹配myset的ip的跳过余下规则
+<!-- more -->
+从k8s的1.8版本开始，kube-proxy引入了IPVS模式，IPVS模式与iptables同样基于Netfilter，但是采用的hash表，因此当service数量达到一定规模时，hash查表的速度优势就会显现出来，从而提高service的服务性能。
+
+
+开启内核参数
+cat >> /etc/sysctl.conf << EOF
+net.ipv4.ip_forward = 1
+net.bridge.bridge-nf-call-iptables = 1
+net.bridge.bridge-nf-call-ip6tables = 1
+EOF
+
+sysctl -p
+开启ipvs支持
+yum -y install ipvsadm  ipset
+
+# 临时生效
+modprobe -- ip_vs
+modprobe -- ip_vs_rr
+modprobe -- ip_vs_wrr
+modprobe -- ip_vs_sh
+modprobe -- nf_conntrack_ipv4
+
+# 永久生效
+cat > /etc/sysconfig/modules/ipvs.modules <<EOF
+modprobe -- ip_vs
+modprobe -- ip_vs_rr
+modprobe -- ip_vs_wrr
+modprobe -- ip_vs_sh
+modprobe -- nf_conntrack_ipv4
+EOF
+配置kube-proxy
+# 添加下面两行
+  --proxy-mode=ipvs  \
+  --masquerade-all=true \
+
+# 修改服务文件
+vim /usr/lib/systemd/system/kube-proxy.service
+[Unit]
+Description=Kubernetes Kube-Proxy Server
+Documentation=https://github.com/GoogleCloudPlatform/kubernetes
+After=network.target
+
+[Service]
+WorkingDirectory=/data/k8s/kube-proxy
+ExecStart=/data/k8s/bin/kube-proxy \
+  --bind-address=192.168.1.145 \
+  --hostname-override=192.168.1.145 \
+  --cluster-cidr=10.254.0.0/16 \
+  --kubeconfig=/etc/kubernetes/kube-proxy.kubeconfig \
+  --logtostderr=true \
+  --proxy-mode=ipvs  \
+  --masquerade-all=true \
+  --v=2
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target 
+重启kube-proxy
+systemctl daemon-reload
+systemctl restart kube-proxy
+systemctl status kube-proxy
+测试是否生效
+
+[root@k8sNode01 docker]# ipvsadm -Ln
+IP Virtual Server version 1.2.1 (size=4096)
+Prot LocalAddress:Port Scheduler Flags
+  -> RemoteAddress:Port           Forward Weight ActiveConn InActConn
+TCP  10.254.0.1:443 rr
+  -> 192.168.1.142:6443           Masq    1      0          0         
+  -> 192.168.1.143:6443           Masq    1      1          0         
+  -> 192.168.1.144:6443           Masq    1      1          0         
+TCP  10.254.27.38:80 rr
+  -> 172.30.36.4:9090             Masq    1      0          0         
+TCP  10.254.72.60:80 rr
+  -> 172.30.90.4:8080             Masq    1      0          0         
+TCP  10.254.72.247:80 rr
+  -> 172.30.36.5:3000             Masq    1      0          0         
+TCP  127.0.0.1:27841 rr
+  -> 172.30.36.2:80               Masq    1      0          0         
+  -> 172.30.90.2:80               Masq    1      0          0         
+TCP  127.0.0.1:28453 rr
+  -> 172.30.36.5:3000             Masq    1      0          0         
+TCP  127.0.0.1:36018 rr
+  -> 172.30.36.4:9090             Masq    1      0          0         
+TCP  172.30.90.0:27841 rr
+  -> 172.30.36.2:80               Masq    1      0          0         
+  -> 172.30.90.2:80               Masq    1      0          0   
+
+
+https://www.jianshu.com/p/492bbc74b7ea
+
+k8s中iptables和ipvs区别
+ 发表评论
+A+
+所属分类：DevOps k8s
+从k8s的1.8版本开始，kube-proxy引入了IPVS模式，IPVS模式与iptables同样基于Netfilter，但是ipvs采用的hash表，iptables采用一条条的规则列表。iptables又是为了防火墙设计的，集群数量越多iptables规则就越多，而iptables规则是从上到下匹配，所以效率就越是低下。因此当service数量达到一定规模时，hash查表的速度优势就会显现出来，从而提高service的服务性能
+每个节点的kube-proxy负责监听API server中service和endpoint的变化情况。将变化信息写入本地userspace、iptables、ipvs来实现service负载均衡，使用NAT将vip流量转至endpoint中。由于userspace模式因为可靠性和性能（频繁切换内核/用户空间）早已经淘汰，所有的客户端请求svc，先经过iptables，然后再经过kube-proxy到pod，所以性能很差。
+ipvs和iptables都是基于netfilter的，两者差别如下：
+ipvs 为大型集群提供了更好的可扩展性和性能
+ipvs 支持比 iptables 更复杂的负载均衡算法（最小负载、最少连接、加权等等）
+ipvs 支持服务器健康检查和连接重试等功能
+一、Iptables模式
+在这种模式下，kube-proxy监视API Server中service和endpoint的变化情况。对于每个service，它都生成相应的iptables规则，这些规则捕获到service的clusterIP和port的流量，并将这些流量随机重定向到service后端Pod。对于每个endpoint对象，它生成选择后端Pod的iptables规则。
+如果选择的第一个Pod没有响应，kube-proxy将检测到到第一个Pod的连接失败，并将自动重试另一个后端Pod。
+
+缺点：
+iptables 因为它纯粹是为防火墙而设计的，并且基于内核规则列表，集群数量越多性能越差。
+一个例子是，在5000节点集群中使用 NodePort 服务，如果我们有2000个服务并且每个服务有10个 pod，这将在每个工作节点上至少产生20000个 iptable 记录，这可能使内核非常繁忙。
+二、IPVS模式（NAT模式）
+在这种模式下，kube-proxy监听API Server中service和endpoint的变化情况，调用netlink接口创建相应的ipvs规则，并定期将ipvs规则与Kubernetes服 Services和Endpoints同步。保证IPVS状态。当访问Services时，IPVS将流量定向到后端pod之一。
+IPVS代理模式基于netfilter hook函数，该函数类似于iptables模式，但使用hash表作为底层数据结构，在内核空间中工作。这意味着IPVS模式下的kube-proxy使用更低的重定向流量。其同步规则的效率和网络吞吐量也更高。
+
+pvs依赖iptables进行包过滤、SNAT、masquared(伪装)。 使用 ipset 来存储需要 DROP 或 masquared 的流量的源或目标地址，以确保 iptables 规则的数量是恒定的，这样我们就不需要关心我们有多少服务了
+如果没有加载并启用ipvs模块，则会被降级成iptables模式。
+
+https://www.ayunw.cn/archives/773
+https://www.jianshu.com/p/cb7eaf8f344d
+
+策略路由 iproute2+纯 ip 和 iptables+ipset 有区别？
+
+https://www.v2ex.com/t/161176
+
+Cluster IP
+Kubernetes以Pod作为应用部署的最小单位。kubernetes会根据Pod的声明对其进行调度，包括创建、销毁、迁移、水平伸缩等，因此Pod 的IP地址不是固定的，不方便直接采用Pod IP对服务进行访问。
+
+为解决该问题，Kubernetes提供了Service资源，Service对提供同一个服务的多个Pod进行聚合。一个Service提供一个虚拟的Cluster IP，后端对应一个或者多个提供服务的Pod。在集群中访问该Service时，采用Cluster IP即可，Kube-proxy负责将发送到Cluster IP的请求转发到后端的Pod上。
+
+Kube-proxy是一个运行在每个节点上的go应用程序，支持三种工作模式：
+
+userspace 模式
+该模式下kube-proxy会为每一个Service创建一个监听端口。发向Cluster IP的请求被Iptables规则重定向到Kube-proxy监听的端口上，Kube-proxy根据LB算法选择一个提供服务的Pod并和其建立链接，以将请求转发到Pod上。
+该模式下，Kube-proxy充当了一个四层Load balancer的角色。由于kube-proxy运行在userspace中，在进行转发处理时会增加两次内核和用户空间之间的数据拷贝，效率较另外两种模式低一些；好处是当后端的Pod不可用时，kube-proxy可以重试其他Pod。
+
+
+
+iptables 模式
+为了避免增加内核和用户空间的数据拷贝操作，提高转发效率，Kube-proxy提供了iptables模式。在该模式下，Kube-proxy为service后端的每个Pod创建对应的iptables规则，直接将发向Cluster IP的请求重定向到一个Pod IP。
+该模式下Kube-proxy不承担四层代理的角色，只负责创建iptables规则。该模式的优点是较userspace模式效率更高，但不能提供灵活的LB策略，当后端Pod不可用时也无法进行重试。
+
+
+
+ipvs 模式
+该模式和iptables类似，kube-proxy监控Pod的变化并创建相应的ipvs rules。ipvs也是在kernel模式下通过netfilter实现的，但采用了hash table来存储规则，因此在规则较多的情况下，Ipvs相对iptables转发效率更高。除此以外，ipvs支持更多的LB算法。如果要设置kube-proxy为ipvs模式，必须在操作系统中安装IPVS内核模块。
+
+
+
+什么是IPVS？
+IPVS (IP Virtual Server，IP虚拟服务器)是基于Netfilter的、作为linux内核的一部分实现传输层负载均衡的技术，通常称为第4层LAN交换。
+
+IPVS集成在LVS(Linux Virtual Server)中，它在主机中运行，并在真实服务器集群前充当负载均衡器。IPVS可以将对TCP/UDP服务的请求转发给后端的真实服务器，并使真实服务器的服务在单个IP地址上显示为虚拟服务。因此IPVS天然支持Kubernetes Service。
+
+为什么选择IPVS
+随着kubernetes使用量的增长，其资源的可扩展性变得越来越重要。特别是对于使用kubernetes运行大型工作负载的开发人员或者公司来说，service的可扩展性至关重要。
+
+kube-proxy是为service构建路由规则的模块，之前依赖iptables来实现主要service类型的支持，比如(ClusterIP和NodePort)。但是iptables很难支持上万级的service，因为iptables纯粹是为防火墙而设计的，并且底层数据结构是内核规则的列表。
+
+kubernetes早在1.6版本就已经有能力支持5000多节点，这样基于iptables的kube-proxy就成为集群扩容到5000节点的瓶颈。举例来说，如果在一个5000节点的集群，我们创建2000个service，并且每个service有10个pod，那么我们就会在每个节点上有至少20000条iptables规则，这会导致内核非常繁忙。
+
+基于IPVS的集群内负载均衡就可以完美的解决这个问题。IPVS是专门为负载均衡设计的，并且底层使用哈希表这种非常高效的数据结构，几乎可以允许无限扩容。
+
+IPVS vs. Iptables区别
+IPVS模式在Kubernetes v1.8中引入，并在v1.9中进入了beta。 1.11中实现了GA(General Availability)。IPTABLES模式在v1.1中添加，并成为自v1.2以来的默认操作模式。 IPVS和IPTABLES都基于netfilter。 IPVS模式和IPTABLES模式之间的差异如下：
+
+IPVS为大型集群提供了更好的可扩展性和性能。（规则的存储方式使用的数据结构更高效）
+IPVS支持比iptables更复杂的负载平衡算法（最小负载，最少连接，位置，加权等）。
+IPVS支持服务器健康检查和连接重试等。
+如何以 ipvs 模式 运行kube-proxy
+确保IPVS需要内核模块
+
+ip_vs
+ip_vs_rr
+ip_vs_wrr
+ip_vs_sh
+nf_conntrack_ipv4
+1
+2
+3
+4
+5
+查看是否被加载
+
+$ ls /usr/lib/modules/3.10.0-514.el7.x86_64/kernel/net/netfilter/ipvs/ |grep  -e ip_vs
+ip_vs_dh.ko
+ip_vs_ftp.ko
+ip_vs.ko
+ip_vs_lblc.ko
+ip_vs_lblcr.ko
+ip_vs_lc.ko
+ip_vs_nq.ko
+ip_vs_pe_sip.ko
+ip_vs_rr.ko
+ip_vs_sed.ko
+ip_vs_sh.ko
+ip_vs_wlc.ko
+ip_vs_wrr.ko
+
+$ ls /usr/lib/modules/3.10.0-514.el7.x86_64/kernel/net/ipv4/netfilter/ |grep nf_conntrack_ipv4
+nf_conntrack_ipv4.ko
+
+或
+lsmod | grep -e ip_vs -e nf_conntrack_ipv4
+
+或
+cut -f1 -d " "  /proc/modules | grep -e ip_vs -e nf_conntrack_ipv4
+
+如果没有，使用下面的命令加载
+
+modprobe -- ip_vs
+modprobe -- ip_vs_rr
+modprobe -- ip_vs_wrr
+modprobe -- ip_vs_sh
+modprobe -- nf_conntrack_ipv4
+
+在使用IPVS模式之前，还应在节点上安装ipset等软件包。
+
+默认情况下，Kube-proxy在以kubeadm部署的集群中以iptables模式运行。查看日志如下
+
+[root@master] ~$ kubectl logs kube-proxy-58j2k  -n kube-system
+W0115 11:00:48.003306       1 server_others.go:295] Flag proxy-mode="" unknown, assuming iptables proxy
+I0115 11:00:48.814060       1 server_others.go:148] Using iptables Proxier.
+I0115 11:00:48.831178       1 server_others.go:178] Tearing down inactive rules.
+I0115 11:00:51.566086       1 server.go:464] Version: v1.13.0
+
+
+修改ConfigMap的kube-system/kube-proxy中的config.conf
+
+[root@master] ~$ kubectl edit cm kube-proxy -n kube-system
+configmap/kube-proxy edited
+
+#修改如下
+kind: MasterConfiguration
+apiVersion: kubeadm.k8s.io/v1alpha1
+...
+ipvs:
+      excludeCIDRs: null
+      minSyncPeriod: 0s
+      scheduler: ""
+      syncPeriod: 30s
+    kind: KubeProxyConfiguration
+    metricsBindAddress: 127.0.0.1:10249
+    mode: "ipvs"                  #修改
+
+...
+
+之后重启各个节点上的kube-proxy（删除后会自动重新创建）
+
+[root@master] ~$ kubectl get pod -n kube-system | grep kube-proxy |awk '{system("kubectl delete pod "$1" -n kube-system")}'
+pod "kube-proxy-7dstj" deleted
+pod "kube-proxy-lx887" deleted
+pod "kube-proxy-nfsb9" deleted
+pod "kube-proxy-pkj44" deleted
+
+[root@master] ~$ kubectl get pod -n kube-system | grep kube-proxy 
+kube-proxy-47dh9                           1/1     Running   0          13s
+kube-proxy-64qnx                           1/1     Running   0          17s
+kube-proxy-cbm26                           1/1     Running   0          20s
+kube-proxy-xnpnn                           1/1     Running   0          15s
+
+
+再次查看日志，可以看到ipvs已经启用了
+
+[root@master] ~$ kubectl logs kube-proxy-47dh9  -n kube-system
+I0118 22:12:10.119829       1 server_others.go:189] Using ipvs Proxier.
+W0118 22:12:10.120601       1 proxier.go:381] IPVS scheduler not specified, use rr by default
+I0118 22:12:10.120714       1 server_others.go:216] Tearing down inactive rules.
+I0118 22:12:10.158816       1 server.go:464] Version: v1.13.2
+I0118 22:12:10.163081       1 conntrack.go:52] Setting nf_conntrack_max to 131072
+I0118 22:12:10.172084       1 config.go:202] Starting service config controller
+I0118 22:12:10.172149       1 controller_utils.go:1027] Waiting for caches to sync for service config controller
+I0118 22:12:10.172184       1 config.go:102] Starting endpoints config controller
+I0118 22:12:10.172188       1 controller_utils.go:1027] Waiting for caches to sync for endpoints config controller
+I0118 22:12:10.272577       1 controller_utils.go:1034] Caches are synced for endpoints config controller
+I0118 22:12:10.272629       1 controller_utils.go:1034] Caches are synced for service config controller
+
+https://segmentfault.com/a/1190000016333317
+http://www.10tiao.com/html/606/201807/2664605531/1.html
+
+
+https://blog.csdn.net/fanren224/article/details/86548398
+
+https://blog.csdn.net/qq_36807862/article/details/106068871
+
+https://www.cnblogs.com/si-jie/archive/2020/06/21/13173831.html

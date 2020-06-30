@@ -1,0 +1,177 @@
+---
+title: PHPStorm插件 插件编写
+layout: post
+category: web
+author: 夏泽民
+---
+首先intellij是一个在代码不完整的情况下能拿到一颗不完整的AST的代码分析器，然后因为本身代码解析和编辑器高度耦合，导致代码/AST的同步更新非常低成本。这是大前提。
+https://www.bilibili.com/video/av50066814
+
+作者：药罐子千里冰封
+链接：https://www.zhihu.com/question/320007348/answer/661270180
+来源：知乎
+著作权归作者所有。商业转载请联系作者获得授权，非商业转载请注明出处。
+
+跳转intellij有一个叫做【stub index】的机制。首先intellij可以识别项目结构的——它知道你调用的外部库在哪里，也知道你读哪一班，哦不，也知道怎么parse那些外部库。它会对那些代码进行解析，获取AST，并从AST中萃取出【你可以在你的项目里用到】的部分。比如一个Java的class，它的成员变量和方法（包括private的，因为你在用反射API访问private变量时，传进去的字符串字面量所代表的方法/成员名也是可以跳转到定义的，这时需要用到private的信息）、方法的参数、类名、加瓦多克这些信息就属于【你可以在你的项目里用到】的部分，而每个方法里有哪些语句，就没你什么事儿了。把所有的外部库全部这么扫描一遍，萃取出的【stub index】会被序列化存储起来，这一过程，intellij会显示一个进度条【indexing……】。在这之后intellij就有自信查找你的代码里的外部定义了（项目内部的定义也有一个类似stub index的东西，但是项目内部的不会被序列化，而且stub index和AST是实时互相更新的）。然后，intellij在打开一个编辑器的时候，会扫描文件里所有的【可以引用到一个外部定义】的AST节点，比如变量名。对于每个AST节点（类名叫PsiElement），它有个方法叫getReferences会被调用，如果没有返回null而是返回了一个PsiReference的实例，那么intellij就知道你这个AST节点是可以【引用其他节点的】。对于每个变量名，intellij会调用它的getReferences返回的PsiReference的一个叫resolve的方法。这个方法会返回它所引用的那个AST节点。有了这一套东西，intellij就可以【跳转到定义】了，而且逻辑很简单——当你按下Ctrl、鼠标悬浮在一个【getReferences返回非null的AST节点】上时， 把这个PsiReference的getRange返回的那个范围的代码弄成链接的样子（大部分情况getRange就返回这个AST节点本身所对应的那段代码）。 被点击的时候，就调用它的resolve，并创建一个编辑器，然后在编辑器里打开它resolve返回的AST节点所在的文件，然后移动光标到那个AST节点上。（事实上除了跳转之外的流程都是实现处理好并缓存起来的，这样也可以做find usages和一些奇妙的高亮。我这么说是为了方便读者理解流程）补全补全其实和跳转非常相似，都是在PsiReference里实现的。除了resolve这个查找定义的方法外，还有getVariants这个方法，返回上下文中所有合法的定义（而不是我所引用到的那个唯一的定义）。这个函数会在补全的时候被调用，这些所有合法的定义就会出现在补全列表了。也就是说，当我的代码和光标分别是这样的时候：function dingyi() {}
+let bla = d<guangbiao>aima;上下文中那个合法的定义——dingyi就是getVariants的返回值之一，就会出现在当前光标的补全列表里了（因为光标在daima的第一个字母d后面，正好dingyi也是d开头的）。 那么，这样的代码：a.<guangbiao> 又是咋整的呢？（这里正好回答了 @平平淡淡红美铃 在我的一次未公开技术分享中的疑问。当时我没有想到这么妙的例子，我的语文还有待提高）这个地方，点的右边并没有东西——也就是说并没有AST节点在点的右边，which means 这里没有一个东西来给我调用getReferences。这时候咋办嘞？没办法补全力！咋可能。我们先冷静分析，考虑一个平常一点的情况，a.b。这时候似乎AST应该是这个形状：memberAccess: .
+  + owner: a, 点我跳转到变量 a 的定义处
+  + member: b, 点我跳转到 a 对应的 class 的成员变量 b 的定义处可能，你们以为它的AST的这样设计的：memberAccess: getReferences() = null
+    因为这个点是运算符又不是变量名，你特么难道要我跳转到 javac 里面处理运算符的地方么
+  + owner: a, getReferences().resolve() = [PsiElement(a 的定义处)]
+  + member: b, getReferences().resolve() = [PsiStub(成员变量 b 的定义处)]但实际上它是这么搞的：memberAccess: getReferences().resolve() = [PsiStub(成员变量 b 的定义处)]
+  + owner: a, getReferences().resolve() = [PsiElement(a 的定义处)]
+  + member: b, getReferences() = null这里有一种特殊的PsiReference需要解释，就是memberAccess那个地方的。PsiReference有一个方法叫getRange（前面说过，但是没解释），在普通的AST节点比如a的节点，就返回(0, 变量名.length)；在a.b这种复合节点中，getRange返回最后一段范围。因此，我们在对bla.or<光标>a这个代码进行点击跳转的时候，被拿到的PsiReference的实际上是bla.ora这整个AST的getReferences 的返回值。getRange的返回值确保这里的高亮不会出问题。这个PsiReference的resolve可以 看作是以这样的伪代码实现的：LocalVariableDefinition def = (PsiClass) getFirstChild().getReferences().resolve();
+PsiClass javaClass = def.inferType().getCorrespondingPsiClass();
+PsiMember member = javaClass
+  .getMembers()
+  .stream()
+  .filter(i -> i.getName().equals("ora"))
+  .first()
+  .getOrElse(() -> throw new 你特么写的什么JB代码Exception());这个设计解决了什么问题呢？当我有不完整的AST的时候：memberAccess: .
+  + owner: a
+  + member: null由于之前说过了，intellij能拿到这样的不完整的AST，因此我依然能拿到这个memberAccess的AST。既然有这个AST，我就能实现它的getVariants()
+  https://www.zhihu.com/question/320007348
+<!-- more -->
+Translation　最好用的翻译插件
+.env files support　可以在env函数使用是提示.env文件中所有的key值的自动完成功能
+PHP composer.json support　在做php组件开发时，编辑composer.json文件时有对应的属性和值的自动完成功能
+BashSuporrt　可以书写.sh脚本，且同样可以在书写时有对应的语法提示功能
+Markdown support　在编写.md文件时有预览的功能
+Laravel Plugin　在使用 view route config 函数时，提示对应的所有路径和值的自动完成功能
+.ignore  友好的查看 .ignore 文件
+
+
+https://www.zhihu.com/question/29025752
+
+https://www.cnblogs.com/mclaoliu/archive/2018/05/04/8992522.html
+
+https://github.com/fingerart/ApiDebugger
+
+
+Writing the plugin
+I was really nervous cause I haven't touched java since my school days but I made a decision to just do it.
+Just do it!
+
+Prerequisites
+PHPStorm-包含php-openapi.jar和php.jarIntelliJ IDEA社区版
+Setup
+I've followed a setup written by the people at Jetbrains, Setting-up environment for PhpStorm plugin development. If you are going to follow this setup make sure that when you are configuring the SDK you add php-openapi.jar and php.jar like so 
+don't make the same mistake as me by not seeing the warning to not set those in Libraries.
+
+Debugger setup
+By default InteliJ will setup and run another instance of InteliJ when you click on the debug button. It works really good, but I was developing a plugin for PHPStorm, not for InteliJ. I've searched far and wide for a debugger setup if you are developing a PHPStorm plugin and I couldn't find any. So I had to discover how to do it on my own.
+You can go to the edit debug configurations like so Debug configuration in the JRE field navigate to the path of your PHPStorm and voila, now it works. Easier than I thought it would be.
+
+Coding
+I must say I found it hard to do anything, documentation is pretty scarce and I forgot a lot of java rules and syntax.
+Unfortunately I couldn't find a way to tap in the power of PHPStorm and to ask it; what it knows about a certain variable. The only choice I had left is to use PS一世 and try to figure out where is the declaration of the variable and what type it is. After a few hours of trial and error I have succeeded in that.
+
+https://blog.csdn.net/cunxiedian8614/article/details/105699611
+
+https://github.com/KristijanKanalas/PHPCodeGeneratorPlus
+
+https://confluence.jetbrains.com/display/PhpStorm/Setting-up+environment+for+PhpStorm+plugin+development
+
+https://plugins.jetbrains.com/plugin/12590-php-code-generator-
+
+https://zhuanlan.zhihu.com/p/94108735
+
+idea-composer-plugin, 在 composer.json 文件中，添加代码完成的PhpStorm 插件
+https://www.evget.com/article/2020/4/16/35580.html
+
+http://www.github.com/psliwa/idea-composer-plugin
+https://www.kutu66.com/GitHub/article_118997
+
+https://www.cnblogs.com/eleven24/p/8283221.html
+
+
+https://blog.csdn.net/xfxf996/article/details/105916155
+https://oldbug.net/q/w15a/Can-IntelliJ-IDEA-encapsulate-all-of-the-functionality-of-WebStorm-and-PHPStorm-through-plugins
+
+https://stackoom.com/question/w15a/IntelliJ-IDEA%E6%98%AF%E5%90%A6%E5%8F%AF%E4%BB%A5%E9%80%9A%E8%BF%87%E6%8F%92%E4%BB%B6%E5%B0%81%E8%A3%85WebStorm%E5%92%8CPHPStorm%E7%9A%84%E6%89%80%E6%9C%89%E5%8A%9F%E8%83%BD
+
+给 JetBrains webStorm phpStorm IDEA 开发插件 plugins
+https://www.jetbrains.org/intellij/sdk/docs/basics/getting_started.html
+
+https://blog.csdn.net/weixin_34270865/article/details/94330631
+
+http://www.mamicode.com/info-detail-2156173.html
+https://www.codenong.com/13827214/
+https://github.com/JetBrains?q=php&type=&language=
+
+jetbrains phpstorm插件开发环境搭建
+
+前提条件：
+
+1、下载安装JDK
+
+2、启用 DevKit 插件(默认就是启用的，不用管)
+
+3、安装了 Intellij IDEA、phpstorm
+
+ 
+
+SDK配置：
+
+1、启动 Intellij IDEA
+
+2、配置 插件SDK： 打开 File->Project Structure
+
+技术分享图片
+
+点击 New 按钮，选择 Intellij IDEA 的安装目录
+
+3、配置 php 的 library，要不然找不到 com.jetbrains.php
+
+ File->Project Structure->Libraries，点击 "+" 号选择java，然后选择 phpstorm 安装目录下的 plugins/php/lib，然后点确定。
+
+(如果是 laravel 的插件，还需要添加的 libraries 是 plugins/blade/lib)
+
+4、安装php插件
+
+技术分享图片
+
+技术分享图片
+
+5、重启 IDEA
+
+ 
+
+准备开发：
+
+1、创建一个 Plugin 项目
+
+2、然后就可以进行开发啦
+https://blog.csdn.net/weixin_34270865/article/details/94330631
+
+https://github.com/artspb/phpstorm-library-plugin/blob/master/plugin/library/library.php
+
+https://www.cnblogs.com/xl5230/p/11555076.html
+
+https://plugins.jetbrains.com/plugin/10046-alibaba-java-coding-guidelines
+https://plugins.jetbrains.com/plugin/7973-sonarlint
+https://plugins.jetbrains.com/plugin/9686-pojo-to-json
+https://plugins.jetbrains.com/plugin/7017-plantuml-integration
+https://plugins.jetbrains.com/plugin/10485-kubernetes
+https://plugins.jetbrains.com/plugin/9568-go
+https://plugins.jetbrains.com/plugin/6610-php
+
+PHPStorm离线安装插件
+一 下载插件
+phpstorm插件网址
+
+本次以laravel-plugin为例：laraval-plugin下载地址
+二 找phpstorm安装目录，将下载后安装包拷贝到plugins目录下
+三 进入phpstorm插件安装，并使用离线安装
+找到刚才的目录双击，这时会重新打开phpstorm，然后注意phpstorm重新打开时右下角，然后点击configuration now插件安装成功
+此时你会发现 .idea 目录下会多了一个文件
+https://blog.csdn.net/xys_little/article/details/103643540
+
+https://plugins.jetbrains.com/search?search=composer
+
+https://plugins.jetbrains.com/plugin/7631-php-composer-json-support
+
+$mv composer-json-plugin-proguard.zip /Applications/PhpStorm.app/Contents/plugins/
+
+mv /Applications/composer-json-plugin /Applications/PhpStorm.app/Contents/plugins/
+不兼容
