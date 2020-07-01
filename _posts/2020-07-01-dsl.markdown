@@ -1,0 +1,141 @@
+---
+title: dsl 美团海盗 中间件
+layout: post
+category: web
+author: 夏泽民
+---
+海盗就是一个用来对支持泛化调用（上述所说）的服务进行编排，然后获取预期结果的一个中间件。使用该中间件调用方可以根据场景来对目标服务进行编排，按需调用。
+
+DSL设计
+
+首先重新梳理一下海盗的设计目标：
+
+对既有服务进行编排调用
+
+对获取的数据进行处理
+
+而为了实现服务编排，需要定义一个数据结构来描述服务之间的依赖关系、调用顺序、调用服务的入参和出参等等。之后对获取的结果进行处理，也需要在这个数据结构中具体描述对什么样的数据进行怎么样的处理等等。
+
+所以我们需要定义一套DSL（领域特定语言）来描述整个服务编排的蓝图，其语法如下：
+
+{
+    //定义好需要调用的接口以及接口之间的依赖关系，一个接口调用即为一个task
+    "tasks": [   
+        //第一个task
+        {      
+            "url": "http://helloWorld.test.hello",     //url 为pigeon发布的远程服务地址：
+            "alias": "d1",   //别名，结果取值的时候可以通过别名引用
+            "taskType": "PigeonGeneric",  //task的类别一般可以设置为PigeonGeneric，默认是pigeonAgent方式。
+            "method": "getByDoubleRequest", //要调用的pigeon接口的方法名
+            "timeout": 3000,  //task的超时时间
+            "inputs": {      //入参情况，多个入参通过key:value的结构书写，key的类别通过下面的inputsExtra定义。
+                "helloWorld": {
+                    "name": "csophys",    //可以通过#orderId，从上下文中获取值，可以通过$d1.orderId的形式从其他的task中获取值
+                    "sex": "boy"
+                },
+                "name": "winnie"
+            },
+           "inputsExtra": {     //入参key的类别定义
+                "helloWorld": "com.dianping.csc.pirate.remoting.pigeon.pigeon_generic_demo_service.HelloWorld",
+                "name": "java.lang.String"
+            }          
+        },
+        //另一个task
+        {    
+            "url": "http://helloWorld.test.hello",
+            "alias": "d2",
+            "taskType": "PigeonGeneric",
+            "method": "getByDoubleRequest",
+            "inputsExtra": {
+                "helloWorld": "com.dianping.csc.pirate.remoting.pigeon.pigeon_generic_demo_service.HelloWorld",
+                "name": "java.lang.String"
+            },
+            "timeout": 3000,
+            "inputs": {
+                "helloWorld": {
+                    "name": "csophys",
+                    "sex": "boy"
+                },
+                "name": "winnie"
+            }
+        }
+    ],
+    "name": "pigeonGenericUnitDemo",  //DSL的名称定义，暂时没有特别含义
+    "description": "pigeon泛型调用测试",  //DSL的描述
+    "outputs": {            //定义好最后输出的数据模型
+        "d1name": "$d1.name",
+        "languages": "$d2.languages",
+        "language1": "$d2.languages[0]",
+        "name": "csophys"
+    }
+}
+<!-- more -->
+https://www.cnblogs.com/meituantech/p/9376459.html
+
+其中涉及到几个重点概念：
+
+Facade：对外提供统一接口，供客户端调用。
+
+Parser：对于输入的DSL进行解析，解析成内部流转的数据结构，同时得到所有的task，并且构建task调用逻辑树。
+
+Executor：真实发起调用的模块，目前支持平台内部的Pigeon和MTThrift调用方式，同时对HTTP等其他协议有良好的扩展性。
+
+DataProcessor：数据后处理。这边会把所有接口拿到的数据转换层客服场景这边需要的数据，并且通过设计的一些内部函数，可以支持一些如数据半脱敏等功能。
+
+组件插件化：对日志等功能实现可插拔，调用方可以自定义这些组件，即插即用。
+
+主要Feature
+
+海盗具有如下主要特点：
+
+采用去中心化的设计思路，引擎集成在SDK中。方案通用化，每一个需要业务数据的场景都可以通过海盗直接调用数据提供方。
+
+服务编排支持并行和串行调用，使用方可以根据实际场景自己构造服务调用树。通过DSL的方式把之前硬编码组装的逻辑实现了配置化，然后通过海盗引擎把能并行调用的服务都执行了并行调用，数据使用方不用再自己处理性能优化。
+
+使用JSON DSL 描述整个工作蓝图，简单易学。
+
+支持JSONPath语法对服务返回的结果进行取值。
+
+支持内置函数和自定义指令（语法参考ftl）对取到的元数据进行处理，得到需要的最终结果。
+
+编排服务树可视化。
+
+目前集团内部RPC中间件包括Pigeon、MTThrift，已进行了泛化调用支持，可以通过海盗实现Pigeon服务和MTThrift的服务编排。不需要限制业务团队的服务提供方式，但需要升级中间件版本。这里特别感谢服务治理团队的大力支持。
+
+总结和展望
+
+最后总结一下使用海盗之后的优势：
+
+去中心化的设计，可用性得到保证。
+
+服务复用性高，领域划分更加清晰，让RD专注在自己熟悉的领域，降低研发成本。
+
+因为流程变化后，业务方可以提前验证提供的数据，高质量交付。
+
+客服侧对数据获取进行统一收口，可以对所有调用服务统一监控并对数据统一处理。
+
+展望
+
+海盗的技术规划：
+
+丰富内部函数和运算表达式
+目前海盗提供了一部分简单的内部函数用来对取到的值进行简单处理，同时正在实现支持调用方自定义运算表达式来支持复杂场景的数据处理，这部分需要持续完善。
+
+屏蔽远程调用协议异构性
+目前海盗只支持对美团Pigeon和MTThrift服务进行编排，这里要对协议进行扩展，支持类似HTTP等通用协议，同时支持调用方自定义协议和调用实现。
+
+运营工具完善
+提供一个比较完整的运营工具，调用方可以自行配置DSL并进行校验，然后一键调用查询最终结果。同时调用方可以通过该工具进行日志、报表等相关数据查询。
+
+自动生成单元测试
+能够把经过验证的DSL生成相应的单元测试用例给到数据提供方，持续保障提供的DSL的可用性和正确性。
+
+https://tech.meituan.com/2018/07/26/sep-service-arrange.html
+
+https://my.oschina.net/meituantech/blog/1865467
+
+https://cloud.tencent.com/developer/article/1406149
+
+https://www.jianshu.com/p/cd4e5581bd3d
+
+https://blog.csdn.net/weixin_33897722/article/details/87940474
