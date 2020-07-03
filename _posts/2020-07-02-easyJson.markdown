@@ -1,0 +1,136 @@
+---
+title: easyJson
+layout: post
+category: golang
+author: 夏泽民
+---
+golang easyJson 包的使用
+easyjson 是用来快速进行json序列化与反序列化的工具包，通过给我们要进行序列化的struct生成方法来实现不通过反射进行json序列化，对比golang原有json工具包，性能能够提高3倍以上。
+
+github地址：https://github.com/mailru/easyjson
+
+一 安装：
+
+​ 官网推荐使用：
+
+# install
+go get -u github.com/mailru/easyjson/...
+​ 如果失败，可以将项目克隆到$GOPATH/src/mailru 目录下 并将包名改为easyjson,然后进入easyjson包下的easyjson目录，运行go build 命令，再将生成的二进制文件放到$GOPATH/bin目录下并改名为easyjson
+
+我的go build 文件路径
+
+/home/luslin/go/src/github.com/mailru/easyjson/easyjson
+
+<!-- more -->
+二 生成文件:
+
+项目文件路径：
+
+tests/（在gopath目录下）
+└── src
+    ├── json_test.go
+    └── models
+        ├── models_easyjson.go	（easyjson命令生成的文件)
+        └── models.go	（模型文件）
+
+Easyjson 命令工具使用时models文件需要在gopath路径下，并且要生成json方法的struct上面要加上//easyjson声明，例如：
+
+package models
+
+//easyjson
+type User struct {
+	Name string `json:"name"`
+	Age  int    `json:"age"`
+}
+
+命令行中运行：
+
+easyjson -all models.go
+1
+会看到文件夹下生成 models_easyjson.go 文件，查看内容，会发现文件给User struct 添加了四个方法
+
+// MarshalJSON supports json.Marshaler interface
+func (v User) MarshalJSON() ([]byte, error) {
+	w := jwriter.Writer{}
+	easyjsonD2b7633eEncodeTestsSrcModels(&w, v)
+	return w.Buffer.BuildBytes(), w.Error
+}
+
+// MarshalEasyJSON supports easyjson.Marshaler interface
+func (v User) MarshalEasyJSON(w *jwriter.Writer) {
+	easyjsonD2b7633eEncodeTestsSrcModels(w, v)
+}
+
+// UnmarshalJSON supports json.Unmarshaler interface
+func (v *User) UnmarshalJSON(data []byte) error {
+	r := jlexer.Lexer{Data: data}
+	easyjsonD2b7633eDecodeTestsSrcModels(&r, v)
+	return r.Error()
+}
+
+// UnmarshalEasyJSON supports easyjson.Unmarshaler interface
+func (v *User) UnmarshalEasyJSON(l *jlexer.Lexer) {
+	easyjsonD2b7633eDecodeTestsSrcModels(l, v)
+}
+
+三 方法使用
+
+1 将struct 序列化成json格式
+
+func TestMarshal(t *testing.T)  {
+	u1 := models.User{"teststruct",12}
+	ujs,_ := json.Marshal(u1)
+	fmt.Println(string(ujs),reflect.TypeOf(ujs))
+}
+结果：
+{"name":"teststruct","age":12} []uint8
+
+2 将json序列化成struct
+
+func TestUnmarshal(t *testing.T) {
+	u1 := models.User{"teststruct",12}
+	ujs,_ := json.Marshal(u1)
+	u2 := models.User{}
+	_ = u2.UnmarshalJSON(ujs)
+	fmt.Println(u2,reflect.TypeOf(u2))
+}
+结果：
+{teststruct 12} models.User
+
+四 性能对比
+
+通过Benchmark来对比进行序列化与反序列化时easyjson与原json的性能
+
+func BenchmarkEasyJson(t *testing.B)  {
+	u1 := models.User{"teststruct",12}
+	u2 := models.User{}
+	for i:=0;i<t.N;i++{
+		ujs,_ := u1.MarshalJSON()
+		_ = u2.UnmarshalJSON(ujs)
+	}
+}
+
+
+
+func BenchmarkJson(t *testing.B)  {
+	u1 := models.User{"teststruct",12}
+	u2 := models.User{}
+	for i:=0;i<t.N;i++{
+		ujs,_ := json.Marshal(u1)
+		_ = json.Unmarshal(ujs,u2)
+	}
+}
+运行
+
+go test -bench="."
+1
+结果：
+
+goos: linux
+goarch: amd64
+pkg: tests/src
+BenchmarkEasyJson-4      5000000               366 ns/op
+BenchmarkJson-4          1000000              1146 ns/op
+PASS
+
+性能大约为原json包的三倍左右
