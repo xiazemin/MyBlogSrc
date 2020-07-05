@@ -1,0 +1,86 @@
+---
+title: fastcgi
+layout: post
+category: golang
+author: 夏泽民
+---
+FastCGI协议分为了10种类型，具体定义如下：
+
+typedef enum _fcgi_request_type {
+
+      FCGI_BEGIN_REQUEST  =  1, /* [in] */
+
+      FCGI_ABORT_REQUEST  =  2, /* [in]  (not supported) */
+
+      FCGI_END_REQUEST     =  3, /* [out] */
+
+      FCGI_PARAMS          =  4, /* [in]  environment variables  */
+
+      FCGI_STDIN           =  5, /* [in]  post data   */
+
+      FCGI_STDOUT          =  6, /* [out] response   */
+
+      FCGI_STDERR          =  7, /* [out] errors     */
+
+      FCGI_DATA    =  8, /* [in]  filter data (not supported) */
+
+      FCGI_GET_VALUES      =  9, /* [in]  */
+
+      FCGI_GET_VALUES_RESULT = 10  /* [out] */
+
+} fcgi_request_type;
+
+整个FastCGI是二进制连续传递的，定义了一个统一结构的消息头，用来读取每个消息的消息体，方便消息包的切割。一般情况下，最先发送的是FCGI_BEGIN_REQUEST类型的消息，然后是FCGI_PARAMS和FCGI_STDIN类型的消息，当FastCGI响应处理完后，将发送FCGI_STDOUT和FCGI_STDERR类型的消息，最后以FCGI_END_REQUEST表示请求的结束。FCGI_BEGIN_REQUEST和FCGI_END_REQUEST分别表示请求的开始和结束，与整个协议相关。
+<!-- more -->
+{% raw %}
+FastCGI是对CGI的开放的扩展，它为所有因特网应用提供高性能，且没有Web服务器API的缺点（penalty）。
+
+本规范具有有限的（narrow）目标：从应用的视角规定FastCGI应用和支持FastCGI的Web服务器之间的接口。Web服务器的很多特性涉及FastCGI，举例来说，应用管理设施与应用到Web服务器的接口无关，因此不在这儿描述。
+
+本规范适用于Unix（更确切地说，适用于支持伯克利socket的POSIX系统）。本规范大半是简单的通信协议，与字节序无关，并且将扩展到其他系统。
+
+我们将通过与CGI/1.1的常规Unix实现的比较来介绍FastCGI。FastCGI被设计用来支持常驻（long-lived）应用进程，也就是应用服务器。那是与CGI/1.1的常规Unix实现的主要区别，后者构造应用进程，用它响应一个请求，以及让它退出。
+
+FastCGI进程的初始状态比CGI/1.1进程的初始状态更简洁，因为FastCGI进程开始不会连接任何东西。它没有常规的打开的文件stdin、stdout和stderr，而且它不会通过环境变量接收大量的信息。FastCGI进程的初始状态的关键部分是个正在监听的socket，通过它来接收来自Web服务器的连接。
+
+FastCGI进程在其正在监听的socket上收到一个连接之后，进程执行简单的协议来接收和发送数据。协议服务于两个目的。首先，协议在多个独立的 FastCGI请求间多路复用单个传输线路。这可支持能够利用事件驱动或多线程编程技术处理并发请求的应用。第二，在每个请求内部，协议在每个方向上提供若干独立的数据流。这种方式，例如，stdout和stderr数据通过从应用到Web服务器的单个传输线路传递，而不是像CGI/1.1那样需要独立的管道。
+
+一个FastCGI应用扮演几个明确定义的角色中的一个。最常用的是响应器（Responder）角色，其中应用接收所有与HTTP请求相关的信息，并产生一个HTTP响应；那是CGI/1.1程序扮演的角色。第二个角色是认证器（Authorizer），其中应用接收所有与HTTP请求相关的信息，并产生一个认可/未经认可的判定。第三个角色是过滤器（Filter），其中应用接收所有与HTTP请求相关的信息，以及额外的来自存储在Web服务器上的文件的数据流，并产生"已过滤"版的数据流作为HTTP响应。框架是易扩展的，因而以后可定义更多的FastCGI。
+
+在本规范的其余部分，只要不致引起混淆，术语"FastCGI应用"、"应用进程"或"应用服务器"简写为"应用"。
+
+2. 初始进程状态 2.1 参数表
+
+Web服务器缺省创建一个含有单个元素的参数表，该元素是应用的名字，用作可执行路径名的最后一部分。Web服务器可提供某种方式来指定不同的应用名，或更详细的参数表。
+
+注意，被Web服务器执行的文件可能是解释程序文件（以字符#!开头的文本文件），此情形中的应用参数表的构造在execve man页中描述。
+
+2.2 文件描述符
+
+当应用开始执行时，Web服务器留下一个打开的文件描述符，FCGI_LISTENSOCK_FILENO。该描述符引用Web服务器创建的一个正在监听的socket。
+
+FCGI_LISTENSOCK_FILENO等于STDIN_FILENO。当应用开始执行时，标准的描述符STDOUT_FILENO和STDERR_FILENO被关闭。一个用于应用确定它是用CGI调用的还是用FastCGI调用的可靠方法是调用getpeername(FCGI_LISTENSOCK_FILENO)，对于FastCGI应用，它返回-1，并设置errno为ENOTCONN。
+
+Web服务器对于可靠传输的选择，Unix流式管道（AF_UNIX）或TCP/IP（AF_INET），是内含于FCGI_LISTENSOCK_FILENO socket的内部状态中的。
+
+2.3 环境变量
+
+Web服务器可用环境变量向应用传参数。本规范定义了一个这样的变量，FCGI_WEB_SERVER_ADDRS；我们期望随着规范的发展定义更多。Web服务器可提供某种方式绑定其他环境变量，例如PATH变量。
+
+2.4 其他状态
+
+Web服务器可提供某种方式指定应用的初始进程状态的其他组件，例如进程的优先级、用户ID、组ID、根目录和工作目录。
+
+3. 协议基础 3.1 符号（Notation）
+
+我们用C语言符号来定义协议消息格式。所有的结构元素按照unsigned char类型定义和排列，这样ISO C编译器以明确的方式将它们展开，不带填充。结构中定义的第一字节第一个被传送，第二字节排第二个，依次类推。
+
+我们用两个约定来简化我们的定义。
+
+首先，当两个相邻的结构组件除了后缀“B1”和“B0”之外命名相同时，它表示这两个组件可视为估值为B1<<8 + B0的单个数字。该单个数字的名字是这些组件减去后缀的名字。这个约定归纳了一个由超过两个字节表示的数字的处理方式。
+{% endraw %}
+https://www.cnblogs.com/junhwong/p/3487570.html
+
+https://blog.csdn.net/zhang197093/article/details/78914509
+
+https://blog.csdn.net/fan2012huan/article/details/70183809

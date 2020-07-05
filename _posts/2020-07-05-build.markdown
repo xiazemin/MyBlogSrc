@@ -1,0 +1,176 @@
+---
+title: golang 构建
+layout: post
+category: golang
+author: 夏泽民
+---
+<!-- more -->
+{% raw %}
+VSCode配置任务
+
+配置任务
+具体配置，请查看 https://go.microsoft.com/fwlink/?LinkId=733558
+
+运行任务用 Shift+Command+B, windows使用 Shift+Ctrl+B
+
+
+控制台输出
+配置解释：
+
+    "tasks": [
+        {
+            "label": "任务名称",
+            "type": "shell", //类型 脚本一般用shell
+            "command": "脚本路径", //脚本路径 可以是自己写的脚本，写可以是系统命令 比如：ls, node
+            "args": [], //命令参数 即脚本后带的参数，同时可以使用VSCode自带的参数
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            }
+        }
+    ]
+args: 命令参数 即脚本后带的参数，同时可以使用VSCode自带的参数
+
+VSCode可用如下参数：
+
+${workspaceRoot} VS Code当前打开的文件夹
+${file} 当前打开的文件
+${relativeFile} 相对于workspaceRoot的相对路径
+${fileBasename} 当前打开文件的文件名
+${fileDirname} 所在的文件夹，是绝对路径
+${fileExtname} 当前打开文件的拓展名，如.json
+${cwd} 当前任务运行时的的控制台所在路径
+编写脚本
+首先，在编写脚本前，得了解一些知识
+
+1. 设置临时环境变量
+
+golang构建项目，需要设置GOPATH，其中包含当前项目路径，多个路径用:分隔开来
+
+export GOPATH="<公共库路径>:<当前路径>"
+# echo $GOPATH
+另外还需要如下变量：
+
+export CGO_ENABLED=0 
+export GOOS=<操作系统>
+export GOARCH=amd64 
+这里的GOOS是目标操作系统，即(交叉)编译后的可执行文件需要在什么操作系统上运行，目前支持如下配置：
+
+linux: Linux系统
+darwin：Mac上运行
+windows: windows系统
+GOARCH就是目标操作系统的架构
+
+参考：go如何进行交叉编译 https://www.jianshu.com/p/4b345a9e768e
+
+2. 构建项目
+
+go build src/main.go
+是不是很简单？没错，这样就可以了。
+
+不过。。。
+
+如果有资源文件，需要将资源文件复制到可执行文件的目录下，这时候，程序就需要考虑到资源文件的路径问题了，因为开发环境的资源和最终打包后的资源目录大多情况是不一样的，所以程序需要考虑到
+
+具体做法，可以配置命令参数，也可以通过读取临时环境变量来实现，这个不是本文的重点，就一笔带过
+
+代码模板
+具体的项目，脚本可能不一样，比如最终打包，可以把上传到服务器，然后部署到服务器，一步到位，都写到脚本中。
+
+所以，这里只提供脚本模板，供大家参考：
+
+run.sh
+
+
+#!/bin/bash
+
+######################
+# 以下是配置
+
+#设置并跳转到之前项目根目录
+projectDir=$(cd "$(dirname "$0")/../"; pwd)
+cd $projectDir
+
+#项目配置
+#项目名称
+projectName="example"
+#项目最终目录
+projectDist="./dist/"
+#打包后的压缩包文件存放目录
+projectRelease="./release"
+#服务器项目配置，若不是服务器项目，则无需配置 开发者根据实际情况进行配置
+serverURL="http://127.0.0.1:8080"
+
+#打包配置
+#参数 目标操作系统 第一个参数
+platform=$1 # darwin linux windows
+echo "目标：${platform}"
+
+# 这一步需要根据开发者自己的情况配置，若无全局的库，直接填${projectDir}即可
+echo "-> 设置临时环境变量"
+export GOPATH="${projectDir}/../global:${projectDir}"
+export CGO_ENABLED=0 
+export GOOS=$platform 
+#参数 目标操作系统架构，这里写死，有需求的话，自己可以修改
+export GOARCH="amd64"
+
+######################
+# 以下是打包
+
+echo "-> 开始编译..."
+go build src/main.go
+
+echo "-> 开始打包："
+echo "  打包路径：${projectDist}"
+
+if [ -d "${projectDist}/" ];then
+    rm -r "${projectDist}/"
+fi
+mkdir "${projectDist}/"
+
+# 这里是复制资源路径到dist目录，若没有资源，则无需配置
+# 已conf目录为例
+cp -r "conf/" "${projectDist}/conf/"
+
+# 移动并重命名
+echo "-> 移动到dist目录"
+mv "main" "${projectDist}/$projectName"
+# 授予可执行权限
+chmod 777 "${projectDist}/$projectName"
+
+echo "  打包完成，程序入口：${projectDist}/$projectName"
+
+#压缩备份，方便上传，此步骤不是必须的
+if [ ! -d "${projectRelease}/" ];then
+    mkdir "${projectRelease}/"
+fi
+tar -zcvf "$projectRelease/${projectName}-${platform}.tar.gz" "${projectDist}"
+######################
+# 以下是执行
+
+#杀死已经在运行的进程
+ps -ef|grep "$projectName"|grep -v "grep"|awk '{print $2}'|xargs kill -9 
+
+cd $projectDist
+
+# 后台运行项目 并输出日志
+./$projectName>std.log 2>&1 &
+
+# 若不是服务器项目，则无需执行该步骤
+open $serverURL
+代码浅析
+
+首先是设置变量以及临时环境变量
+然后就是编译
+打包：复制资源目录，可执行文件重命名并授予权限
+压缩文件，有需要的话上传
+最后执行文件并输出日志，记得先kill掉之前的进程
+最后配置task, 记得在args里边加上操作系统的参数，比如: darwin
+也可以直接在控制台运行：
+  ./tools/run.sh darwin
+配置gitignore文件
+如果有使用git的话，记得在gitignore文件加上：
+
+dist/
+release/
+{% endraw %}
