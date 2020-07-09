@@ -1,0 +1,591 @@
+---
+title: govmomi 创建 VMware 虚拟机
+layout: post
+category: golang
+author: 夏泽民
+---
+使用 vsphere-automation-sdk-python 自动创建虚拟机：这是 Python 版的；
+vsphere golang sdk govmomi 使用指南：这是 govmomi 的基础操作，建议你在看本篇文章前先看看。
+
+之所以使用 govmomi 原因有很多，有性能的原因，go 性能强出 Python 太多；有个人的原因，本人比较喜欢 go；当然还有公司的原因，公司的运维平台是 go 写的。
+当然，无论是 govmomi 也好，pyvmomi 也好，还是其他各种 vmomi 也好，都是 VMware 自身 api 的封装，使用起来都是大同小异，适合自己的就是最好的，没必要纠结太多。
+需要说明的是，本文创建虚拟机是将 ovf 模板放入内容库后，通过内容库部署的，而非直接通过模板创建。另外，6.7 的内容库除了支持 ovf 这种模板类型之外，还支持 vm-template，我没有来得及研究
+<!-- more -->
+https://juejin.im/post/5f01c0095188252e8d0dde68
+{% raw %}
+内容库是 VMware 6.0 新增的功能，使用它可以跨 vsphere 共享 iso 文件、虚拟机模板等，当你有多个 vsphere 时，使用起来会很便利。要使用内容库，你首先得创建一个内容库（library），给它一个名称，然后就可以上传文件啊模板啊到这个库中，每个文件或者模板称为一个 item。
+当你在一个 vsphere 中创建内容库后，其他 vsphere 就订阅该内容库了，这样内容库中的文件就会同步到所有订阅它的内容库中，通过这种方式来保证多个 vsphere 内容库中文件的一致性。
+内容库的使用这里就不演示了，网上教程很多，随便就能找到。这里假设你已经有了一个内容库，并且里面已经有了一个 ovf 模板。要想使用内容库，我们就必须先找到这个内容库对象，再通过它来找到其中的 ovf 模板这个对象。
+想必通过之前的文章你已经知道了怎么安装和登录 vsphere 了，那这里就直接登录了：
+const (
+    ip = ""
+    user = ""
+    password = ""
+)
+
+u := &url.URL{
+    Scheme: "https",
+    Host:   ip,
+    Path:   "/sdk",
+}
+
+ctx := context.Background()
+u.User = url.UserPassword(user, password)
+client, err := govmomi.NewClient(ctx, u, true)
+if err != nil {
+    fmt.Fprintf(os.Stderr, "Login to vsphere failed, %v", err)
+    os.Exit(1)
+}
+复制代码本文需要导入的库有这些：
+import (
+	"context"
+	"fmt"
+	"github.com/vmware/govmomi"
+	"github.com/vmware/govmomi/object"
+	"github.com/vmware/govmomi/vapi/library"
+	"github.com/vmware/govmomi/vapi/rest"
+	"github.com/vmware/govmomi/vapi/vcenter"
+	"net/url"
+	"os"
+)
+复制代码后面就不贴出来了，基本 IDE 都会自动补全。
+这里的 client 就可以用来操作整个 vsphere 了，不过通过它无法直接操作内容库，我们必须先要通过它来获得 rest client：
+rc := rest.NewClient(client.Client)
+if err := rc.Login(ctx, url.UserPassword(user, password)); err != nil {
+    fmt.Fprintf(os.Stderr, "rc.Login failed, %v", err)
+    os.Exit(1)
+}
+复制代码这就相当于又重新登录了一次，不知道为什么 VMware 这么设计，直接通过 client 不好么？有了 rc 之后，就可以操作内容库了：
+func getLibraryItem(ctx context.Context, rc *rest.Client) (*library.Item, error) {
+	const (
+		libraryName = ""
+		libraryItemName = ""
+		libraryItemType = "ovf"
+	)
+
+	// 需要通过 rc 来获得 library.Manager 对象
+	m := library.NewManager(rc)
+	// 通过内容库的名称来查找内容库
+	libraries, err := m.FindLibrary(ctx, library.Find{Name: libraryName})
+	if err != nil {
+		fmt.Printf("Find library by name %s failed, %v", libraryName, err)
+		return nil, err
+	}
+
+	// 判断是否找到
+	if len(libraries) == 0 {
+		fmt.Printf("Library %s was not found", libraryName)
+		return nil, fmt.Errorf("library %s was not found", libraryName)
+	}
+
+	if len(libraries) > 1 {
+		fmt.Printf("There are multiple libraries with the name %s", libraryName)
+		return nil, fmt.Errorf("there are multiple libraries with the name %s", libraryName)
+	}
+
+	// 在内容库中通过 ovf 模板的名称来找到 ovf 模板
+	items, err := m.FindLibraryItems(ctx, library.FindItem{Name: libraryItemName,
+		Type: libraryItemType, LibraryID: libraries[0]})
+
+	if err != nil {
+		fmt.Printf("Find library item by name %s failed", libraryItemName)
+		return nil, fmt.Errorf("find library item by name %s failed", libraryItemName)
+	}
+
+	if len(items) == 0 {
+		fmt.Printf("Library item %s was not found", libraryItemName)
+		return nil, fmt.Errorf("library item %s was not found", libraryItemName)
+	}
+
+	if len(items) > 1 {
+		fmt.Printf("There are multiple library items with the name %s", libraryItemName)
+		return nil, fmt.Errorf("there are multiple library items with the name %s", libraryItemName)
+	}
+
+	item, err := m.GetLibraryItem(ctx, items[0])
+	if err != nil {
+		fmt.Printf("Get library item by %s failed, %v", items[0], err)
+		return nil, err
+	}
+
+	return item, nil
+}
+复制代码可以看到，找到 ovf 模板还是挺绕的。如果你确保你的内容库以及里面的 ovf 不会被删除重建的话，你可以首先找到这个 ovf 模板，记下它的 id。等下次要查找的时候，直接调用 m.GetLibraryItem() 就可以了。这样就不用找库，再通过库来找 item 了。
+资源类型
+模板有了，现在要做的就是确定要将虚拟机部署在哪。vsphere 中资源是有层级的，最外层就是数据中心，所有的资源都得属于某个数据中心，而一个 vsphere 中可以存在多个数据中心。
+所以首先你得确认你要将虚拟机部署到哪个数据中心，然后再确定放在哪个集群的哪个资源池、哪个存储、哪个网络、哪个文件夹等，等这些都确定了就可以部署了。
+因此我们首先要通过名称来找到这些资源，从数据中心开始。
+数据中心
+其实创建虚拟机不需要用到数据中心，但是由于其他的资源都在数据中心下面，所以你可以了解了解，当然你不看也没啥影响。
+// 通过这个 finder 你可以列出 VMware 中的所有资源
+finder := find.NewFinder(client.Client)
+dcs, err := finder.DatacenterList(ctx, "*")
+if err != nil {
+    fmt.Fprintf(os.Stderr, "Failed to list data center at vc %s, %v\n", ip, err)
+    os.Exit(1)
+}
+
+for _, dc := range dcs {
+    // 这个唯一名称是 vshpere 中的 id，大概类似于数据库中的自增 id，同一个 vsphere 中唯一，多个 vsphere 不唯一
+    dcUniqName := dc.Reference().Value
+    // 类型就是 DataCenter
+    dcType := dc.Reference().Type
+    // 数据中心的名称
+    dcName := dc.Name()
+    // 数据中心的路径，VMware 中的资源类似于 linux 的文件系统，从根开始，每个资源都有它唯一的路径
+    // 如果你知道一个资源的 path，那么你就可以直接通过这个路径找到这个资源，后续会提到
+    dcPath := dc.InventoryPath
+
+    fmt.Printf("id => %s\nname => %s\npath => %s\ntype => %s\n", dcUniqName, dcName, dcPath, dcType)
+}
+复制代码这就列出了所有的数据中心了。
+集群
+集群中有很多资源，有资源池和 esxi（也就是宿主机，VMware 中称为 HostSystem）。在有 vsan 或者集中存储的环境，你可以将虚拟机直接放在其中的集群资源池上（没有划分资源池也不要紧，集群默认就是一个资源池）；如果没有，那么就只能将虚拟机直接部署到宿主机上了。
+因此你要么将虚拟机放到资源池中，要么放在宿主机上。而这种两种资源都属于集群，因此我们首先获取集群。当然其实你不获取集群也没有关系，可以直接获取资源池或者 host。我这里只是将获取集群的方式列出来，其实所有资源都是这么获取的：
+// 集群的名称为 ClusterComputeResource，不要搞错了
+clusters, err := finder.ClusterComputeResourceList(ctx, "*")
+if err != nil {
+    fmt.Fprintf(os.Stderr, "Failed to list cluster at vc %s, %v", ip, err)
+    os.Exit(1)
+}
+for _, cluster := range clusters {
+    clusterUniqName := cluster.Reference().Value
+    clusterType := cluster.Reference().Type
+    clusterName := cluster.Name()
+    clusterPath := cluster.InventoryPath
+    fmt.Printf("id => %s\nname => %s\npath => %s\ntype => %s\n", clusterUniqName, clusterName, clusterPath, clusterType)
+}
+复制代码这里只是演示如何获取集群，但是创建虚拟机用不到，需要用的是资源池或者宿主机。它们两种的获取方式和集群一样：
+resourcePools, err := finder.ResourcePoolList(ctx, "*")
+hosts, err := finder.HostSystemList(ctx, "*")
+复制代码当然你也可以直接通过集群来获取它自身的资源池：
+clusters[0].ResourcePool(ctx)
+复制代码这种遍历资源的方式其实很 low，这个先不管，先把流程走通再说。
+存储
+储存也属于数据中心，既可以是 vsan，也可以是宿主机。这个是和上面的选择是一一对应的，如果你将虚拟机建在宿主机上，那么存储你就应该选择宿主机。
+datastores, err := finder.DatastoreList(ctx, "*")
+if err != nil {
+    fmt.Fprintf(os.Stderr, "Failed to list datastore at vc %s, %v", ip, err)
+    os.Exit(1)
+}
+for _, datastore := range datastores {
+    datastoreUniqName := datastore.Reference().Value
+    datastoreType := datastore.Reference().Type
+    datastoreName := datastore.Name()
+    datastorePath := datastore.InventoryPath
+    fmt.Printf("id => %s\nname => %s\npath => %s\ntype => %s\n", datastoreUniqName, datastoreName, datastorePath, datastoreType)
+}
+复制代码VMware 中还存在 datastoreCluste 这种资源类型，但是我没有研究。
+网络
+网络属于数据中心，它会复杂一点，因为它有很多种类型：
+
+Network
+OpaqueNetwork
+DistributedVirtualPortgroup
+DistributedVirtualSwitch
+VmwareDistributedVirtualSwitch
+
+具体有啥区别我不是很清楚，大概是如果你使用分布式交换机的话，你只需要选择端口组（DistributedVirtualPortgroup）这种的（交换机就不用选了），否则就选择 Network。
+networks, err := finder.NetworkList(ctx, "*")
+if err != nil {
+    fmt.Fprintf(os.Stderr, "Failed to list network at vc %s, %v", ip, err)
+    os.Exit(1)
+}
+
+for _, network := range networks {
+    networkUniqName := network.Reference().Value
+    // 这就是它的 type，需要注意区分
+    networkType := network.Reference().Type
+    // 没有 name，name 可以通过 path 来获取
+    networkPath := network.GetInventoryPath()
+    fmt.Printf("id => %s\npath => %s\ntype => %s\n", networkUniqName, networkPath, networkType)
+}
+复制代码文件夹
+文件夹属于数据中心，获取起来方式一样：
+folders, err := finder.FolderList(ctx, "*")
+if err != nil {
+    fmt.Fprintf(os.Stderr, "Failed to list folder at vc %s, %v", ip, err)
+    os.Exit(1)
+}
+
+for _, folder := range folders {
+    folderUniqName := folder.Reference().Value
+    folderType := folder.Reference().Type
+    folderName := folder.Name()
+    folderPath := folder.InventoryPath
+    fmt.Printf("id => %s\nname => %s\npath => %s\ntype => %s\n", folderUniqName, folderName, folderPath, folderType)
+}
+复制代码部署虚拟机
+资源都已经具备了，但是在部署之前，我们需要获取 ovf 模板的网络和存储，后面会用到。所以要拿到它们，可能是后面通过它部署虚拟机的时候，要把它们替换掉吧。
+获取的方式很简单：
+rc := rest.NewClient(client.Client)
+if err := rc.Login(ctx, url.UserPassword(user, password)); err != nil {
+    fmt.Fprintf(os.Stderr, "rc.Login failed, %v", err)
+    os.Exit(1)
+}
+
+// 先获取 ovf 模板，这个函数定义在前面
+item, err := getLibraryItem(ctx, rc)
+if err != nil {
+    panic(err)
+}
+
+m := vcenter.NewManager(rc)
+// 这里需要前面获取到的资源池和文件夹，当然宿主机和文件夹也行，就是要将 ResourcePoolID 换成 HostID
+// 至于为什么这么做我也不清楚，只要可以获得我们需要的结果就行
+fr := vcenter.FilterRequest{Target: vcenter.Target{
+    ResourcePoolID: resources[0].Reference().Value,
+    FolderID:       folders[0].Reference().Value,
+},
+}
+r, err := m.FilterLibraryItem(ctx, item.ID, fr)
+if err != nil {
+    fmt.Fprintf(os.Stderr, "FilterLibraryItem error, %v\n", err)
+    os.Exit(1)
+}
+// 模板中的网卡和磁盘可能有多个，我这里当做一个来处理，建议模板中只有一个网卡的磁盘，因为创建虚拟机的时候可以加
+// 这两个 key 后面会用到
+networkKey := r.Networks[0]
+storageKey := r.StorageGroups[0]
+fmt.Println(networkKey, storageKey)
+复制代码接下里就是部署了：
+deploy := vcenter.Deploy{
+    DeploymentSpec: vcenter.DeploymentSpec{
+        // 虚拟机名称
+        Name:               "test",
+        DefaultDatastoreID: datastores[0].Reference().Value,
+        AcceptAllEULA:      true,
+        NetworkMappings: []vcenter.NetworkMapping{{
+            Key:   networkKey,
+            Value: networks[0].Reference().Value,
+        }},
+        StorageMappings: []vcenter.StorageMapping{{
+            Key: storageKey,
+            Value: vcenter.StorageGroupMapping{
+                Type:         "DATASTORE",
+                DatastoreID:  datastores[0].Reference().Value,
+                // 精简置备
+                Provisioning: "thin",
+            },
+        }},
+        // 精简置备
+        StorageProvisioning: "thin",
+    },
+    Target: vcenter.Target{
+        ResourcePoolID: resources[0].Reference().Value,
+        FolderID:       folders[0].Reference().Value,
+    },
+}
+
+ref, err := vcenter.NewManager(rc).DeployLibraryItem(ctx, item.ID, deploy)
+if err != nil {
+    fmt.Printf("Deploy vm from library failed, %v", err)
+    return
+}
+
+f := find.NewFinder(client.Client)
+obj, err := f.ObjectReference(ctx, *ref)
+if err != nil {
+    fmt.Fprintf(os.Stderr, "Find vm failed, %v\n", err)
+    os.Exit(1)
+}
+
+// 这是虚拟机本尊，后面会用到
+vm = obj.(*object.VirtualMachine)
+复制代码这就开始部署了。
+注意我这里所有的资源都是选择的第一个，只是为了演示，你在使用的时候，需要选择正确的才行。当然前面通过遍历的方式获取所有的资源方式显得很 low，而且性能很差。我们的做法是定时去抓取所有 vsphere 的所有资源，将其存到 MySQL 中，包括资源的名称、类型（网络才需要）、路径（这是关键）、资源的 ID（也就是 uniqName）。
+这样在创建虚拟机的时候通过选择这些资源，就可以拿到这些资源的路径，而通过这些路径是可以直接获取资源本身的。这里以存储举例：
+si := object.NewSearchIndex(client.Client)
+inventoryPath, err := si.FindByInventoryPath(ctx, "/beijing/datastore/store1")
+if inventoryPath == nil {
+    fmt.Fprintf(os.Stderr, "Get datastore object failed, %v", err)
+    return
+}
+
+// 如果是其他资源就换成其他资源就行
+ds := object.NewDatastore(client.Client, inventoryPath.Reference())
+复制代码完整代码
+package main
+
+import (
+	"context"
+	"fmt"
+	"github.com/vmware/govmomi"
+	"github.com/vmware/govmomi/find"
+	"github.com/vmware/govmomi/vapi/library"
+	"github.com/vmware/govmomi/vapi/rest"
+	"github.com/vmware/govmomi/vapi/vcenter"
+	"net/url"
+	"os"
+)
+
+func getLibraryItem(ctx context.Context, rc *rest.Client) (*library.Item, error) {
+	const (
+		libraryName     = "Librarysub_from_49.100"
+		libraryItemName = "CentOS 7.5"
+		libraryItemType = "ovf"
+	)
+
+	m := library.NewManager(rc)
+	libraries, err := m.FindLibrary(ctx, library.Find{Name: libraryName})
+	if err != nil {
+		fmt.Printf("Find library by name %s failed, %v", libraryName, err)
+		return nil, err
+	}
+
+	if len(libraries) == 0 {
+		fmt.Printf("Library %s was not found", libraryName)
+		return nil, fmt.Errorf("library %s was not found", libraryName)
+	}
+
+	if len(libraries) > 1 {
+		fmt.Printf("There are multiple libraries with the name %s", libraryName)
+		return nil, fmt.Errorf("there are multiple libraries with the name %s", libraryName)
+	}
+
+	items, err := m.FindLibraryItems(ctx, library.FindItem{Name: libraryItemName,
+		Type: libraryItemType, LibraryID: libraries[0]})
+
+	if err != nil {
+		fmt.Printf("Find library item by name %s failed", libraryItemName)
+		return nil, fmt.Errorf("find library item by name %s failed", libraryItemName)
+	}
+
+	if len(items) == 0 {
+		fmt.Printf("Library item %s was not found", libraryItemName)
+		return nil, fmt.Errorf("library item %s was not found", libraryItemName)
+	}
+
+	if len(items) > 1 {
+		fmt.Printf("There are multiple library items with the name %s", libraryItemName)
+		return nil, fmt.Errorf("there are multiple library items with the name %s", libraryItemName)
+	}
+
+	item, err := m.GetLibraryItem(ctx, items[0])
+	if err != nil {
+		fmt.Printf("Get library item by %s failed, %v", items[0], err)
+		return nil, err
+	}
+	return item, nil
+}
+
+func main() {
+	const (
+		ip       = ""
+		user     = ""
+		password = ""
+	)
+
+	u := &url.URL{
+		Scheme: "https",
+		Host:   ip,
+		Path:   "/sdk",
+	}
+	ctx := context.Background()
+	u.User = url.UserPassword(user, password)
+	client, err := govmomi.NewClient(ctx, u, true)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Login to vsphere failed, %v", err)
+		os.Exit(1)
+	}
+
+	finder := find.NewFinder(client.Client)
+	resourcePools, err := finder.ResourcePoolList(ctx, "*")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to list resource pool at vc %s, %v", ip, err)
+		os.Exit(1)
+	}
+	//hosts, err := finder.HostSystemList(ctx, "*")
+	datastores, err := finder.DatastoreList(ctx, "*")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to list datastore at vc %s, %v", ip, err)
+		os.Exit(1)
+	}
+
+	networks, err := finder.NetworkList(ctx, "*")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to list network at vc %s, %v", ip, err)
+		os.Exit(1)
+	}
+
+	folders, err := finder.FolderList(ctx, "*")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to list folder at vc %s, %v", ip, err)
+		os.Exit(1)
+	}
+
+	rc := rest.NewClient(client.Client)
+	if err := rc.Login(ctx, url.UserPassword(user, password)); err != nil {
+		fmt.Fprintf(os.Stderr, "rc.Login failed, %v", err)
+		os.Exit(1)
+	}
+
+	item, err := getLibraryItem(ctx, rc)
+	if err != nil {
+		return
+	}
+
+	m := vcenter.NewManager(rc)
+	fr := vcenter.FilterRequest{Target: vcenter.Target{
+		ResourcePoolID: resourcePools[0].Reference().Value,
+		FolderID:       folders[0].Reference().Value,
+	},
+	}
+	r, err := m.FilterLibraryItem(ctx, item.ID, fr)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "FilterLibraryItem error, %v\n", err)
+		os.Exit(1)
+	}
+	networkKey := r.Networks[0]
+	storageKey := r.StorageGroups[0]
+
+	deploy := vcenter.Deploy{
+		DeploymentSpec: vcenter.DeploymentSpec{
+			Name:               "test",
+			DefaultDatastoreID: datastores[0].Reference().Value,
+			AcceptAllEULA:      true,
+			NetworkMappings: []vcenter.NetworkMapping{{
+				Key:   networkKey,
+				Value: networks[0].Reference().Value,
+			}},
+			StorageMappings: []vcenter.StorageMapping{{
+				Key: storageKey,
+				Value: vcenter.StorageGroupMapping{
+					Type:        "DATASTORE",
+					DatastoreID: datastores[0].Reference().Value,
+					Provisioning: "thin",
+				},
+			}},
+			StorageProvisioning: "thin",
+		},
+		Target: vcenter.Target{
+			ResourcePoolID: resourcePools[0].Reference().Value,
+			FolderID:       folders[0].Reference().Value,
+		},
+	}
+
+	ref, err := vcenter.NewManager(rc).DeployLibraryItem(ctx, item.ID, deploy)
+	if err != nil {
+		fmt.Printf("Deploy vm from library failed, %v", err)
+		return
+	}
+
+	f := find.NewFinder(client.Client)
+	obj, err := f.ObjectReference(ctx, *ref)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Find vm failed, %v\n", err)
+		os.Exit(1)
+	}
+
+	vm = obj.(*object.VirtualMachine)
+}
+复制代码设置 ip
+部署完成后，我们还需要对虚拟机做一些配置，包括配置 ip、更改 cpu 和内存的配置、增加磁盘等，注意这些操作必须在虚拟机关机的情况下才能进行，而刚部署完的虚拟机处于关机状态，我们正好进行操作。
+需要注意的是，配置 ip 依赖于 vmtools，因此你得先确保你的模板中已经存在 vmtools。CentOS 6 安装 vm_tools 可能有些麻烦，还得挂盘按照官方的要求一步步进行。但是在 CentOS 7 上你只需要安装 open-vm-tools，然后安装 perl 即可。
+type ipAddr struct {
+	ip       string
+	netmask  string
+	gateway  string
+	hostname string
+}
+
+func (p *ipAddr) setIP(ctx context.Context, vm *object.VirtualMachine) error {
+	cam := types.CustomizationAdapterMapping{
+		Adapter: types.CustomizationIPSettings{
+			Ip:         &types.CustomizationFixedIp{IpAddress: p.ip},
+			SubnetMask: p.netmask,
+			Gateway:    []string{p.gateway},
+		},
+	}
+
+	customSpec := types.CustomizationSpec{
+		NicSettingMap: []types.CustomizationAdapterMapping{cam},
+		Identity:      &types.CustomizationLinuxPrep{HostName: &types.CustomizationFixedName{Name: p.hostname}},
+	}
+
+	task, err := vm.Customize(ctx, customSpec)
+	if err != nil {
+		return err
+	}
+
+	return task.Wait(ctx)
+}
+复制代码设置 CPU 和内存
+func setCPUAndMem(ctx context.Context, vm *object.VirtualMachine, cpuNum int32, mem int64) error {
+	spec := types.VirtualMachineConfigSpec{
+		NumCPUs:             cpuNum,
+		NumCoresPerSocket:   cpuNum / 2,
+		MemoryMB:            1024 * mem,
+		CpuHotAddEnabled:    types.NewBool(true),
+		MemoryHotAddEnabled: types.NewBool(true),
+	}
+	task, err := vm.Reconfigure(ctx, spec)
+	if err != nil {
+		return err
+	}
+
+	return task.Wait(ctx)
+}
+复制代码添加磁盘
+你需要给它传递一个数据存储对象：
+func addDisk(ctx context.Context, vm *object.VirtualMachine, diskCapacityKB int64, ds *types.ManagedObjectReference) error {
+	devices, err := vm.Device(ctx)
+	if err != nil {
+		log.Errorf("Failed to get device list for vm %s, %v", vm.Name(), err)
+		return err
+	}
+
+    // 这里要看你的磁盘类型，如果你有 nvme，就选择 nvme；否则就选 scsi。当然还有 ide，但是还有人用么
+	controller, err := devices.FindDiskController("scsi")
+	if err != nil {
+		log.Errorf("Failed to find disk controller by name scsi, %v", err)
+		return err
+	}
+
+	device := types.VirtualDisk{
+		CapacityInKB: diskCapacityKB,
+		VirtualDevice: types.VirtualDevice{
+			Backing: &types.VirtualDiskFlatVer2BackingInfo{
+				DiskMode:        string(types.VirtualDiskModePersistent),
+				ThinProvisioned: types.NewBool(true),
+				VirtualDeviceFileBackingInfo: types.VirtualDeviceFileBackingInfo{
+					Datastore: ds,
+				},
+			},
+		},
+	}
+
+	devices.AssignController(&device, controller)
+	DeviceSpec := &types.VirtualDeviceConfigSpec{
+		Operation:     types.VirtualDeviceConfigSpecOperationAdd,
+		FileOperation: types.VirtualDeviceConfigSpecFileOperationCreate,
+		Device:        &device,
+	}
+
+	spec := types.VirtualMachineConfigSpec{}
+	spec.DeviceChange = append(spec.DeviceChange, DeviceSpec)
+	task, err := vm.Reconfigure(ctx, spec)
+	if err != nil {
+		log.Errorf("Failed to add disk for vm %s, %v", vm.Name(), err)
+		return err
+	}
+
+	if err := task.Wait(ctx); err != nil {
+		log.Errorf("Failed to add disk for vm %s, %v", vm.Name(), err)
+		return err
+	}
+	return nil
+}
+复制代码开机
+在设置了 ip 之后，开机会启动两次，就是第一次启动成功后会重启一次，两次加起来时间还有点长。我也不知道为啥会这样，反正需要等一会儿。
+func powerOn(ctx context.Context, vm *object.VirtualMachine) error {
+	task, err := vm.PowerOn(ctx)
+	if err != nil {
+		log.Errorf("Failed to power on %s", vm.Name())
+		return err
+	}
+
+	return task.Wait(ctx)
+}
+复制代码govmomi 的功能非常多，我这里用到的这是非常少的一部分，如果无法满足你的所有需求，你可能需要看看 govc 源码了
+{% endraw %}

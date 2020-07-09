@@ -1,0 +1,375 @@
+---
+title: golang 规则引擎
+layout: post
+category: golang
+author: 夏泽民
+---
+随着对业务的理解深入和不断的抽象，可以发现很多业务场景的功能都可以抽象成“规则+指标”的模式。
+
+这种模式，可以应用于很多很场景的场景：如风控场景，识别黑产，需要各种规则来进行判别；如流量分发场景，需要基于各种可收集的指标，组成规则，然后进行针对化的内容分发；推荐场景，推荐本身一个基于多指标的典型场景模式（或者说，机器学习就是一个收集数据指标，然后进行学习，进行推广的过程）。
+
+有规则，有指标了，当然还需要一个可以执行规则的引擎。
+
+1. 规则引擎的发展历程
+第一代规则引擎，仅支持逻辑运算符(&&,  ||,  !,  外加括号 )  主要是用来解析逻辑表达式，通过定义特定占位符，来绑定具体的子操作，然后使用子操作的结果来进行逻辑运算，并得到逻辑表达式的最终结果：
+
+如，逻辑表达式: "$1 && $2",  $1 和 $2占位符 接受规定个数的参数，然后分别输出true或false，逻辑表达式再对占位符的结果进行完整的逻辑运算，并得到最终的结果。
+<!-- more -->
+
+{% raw %}
+第一代规则引擎特点：简单；因为简单，所以执行性能相当好；但扩展能力不强，可以满足逻辑判别要求，但无法满足数值判别要求；当添加新的占位符运算时，需要工程重新发版。
+
+第二代规则引擎，基于某些解释型语言的规则引擎，如java支持的javascript的执行引擎，那么规则编写语言就是javascript，规则引擎就是java虚拟机支持的javascript执行引擎本身。
+
+第二代规则引擎特点也很明显，所引入的解释型语言有多强，规则表现能力有多强；无需重新发版；但执行性能略差；还有一个致命的缺陷是，使用者为了配置几个规则，不得不多学习一门语言，加大了规则的配置难度，以致于不便推广；不易测试；
+
+第三代规则引擎，为了延续规则的表现能力，同时为了克服规则的配置难度，为了免于学习一门新语言的代价，第三代规则引擎将实现规则引擎自身的语言作为规则配置语言，借助该语言的自身的发展而发展。同时加入了一些有用的规则属性，如“规则名称”、“规则优先级”、“规则描述”。第三代规则引擎的代表时java实现的drools。
+
+第三代规则引擎的特点是，规则表现力强，可基于用户指定的规则优先级，来先后执行规则，同时简化了一些复杂的不必要的语法。第三代规则引擎适合熟悉规则引擎开发语言自身的开发人员使用，但当推广至其他人员使用时，依旧免不了要让不熟悉此语言的人重新学习一门语言（规则配置复杂度并没有完全消除）；同时，也不能完全满足实时高性能服务场景的需求。
+
+2. 规则的执行模式
+通过对各种业务场景的提炼分析，一个规则引擎至少要满足至少三种执行模式，但实际上，规则执行模式至少有五种，我归纳如下图所示：
+
+
+如上图，顺序模式
+
+规则优先级高的先执行，规则优先级低的后执行。这也是drools支持的模式。此模式的缺点很明显：随着规则链越来越长，执行返回的速度越来越慢。
+
+
+如上图，并发执行模式
+
+多个规则执行时，不考虑规则优先级，规则与规则之间并发执行。规则执行的返回的速度等于所有规则中的执行时间最长的那个规则。性能优异，但无法满足规则优先级
+
+
+如上图，混合执行模式（mix model）
+
+选择规则优先级最高的一个规则最先执行，剩下的规则并发执行。规则执行返回耗时 = 最高优先级的那个规则执行时间 + 并发执行中执行时间最长的那个规则耗时；此模式兼顾优先级和性能，适合于有豁免规则的场景。
+
+
+如上图，逆混合模式
+
+优先级最高的n-1个规则并发执行，执行完毕之后，再执行剩下的一个优先级最低的规则。和混合模式类似，兼顾性能和优先级。
+
+
+如上图，桶模式
+
+名字源于桶排序，规则池基于规则优先级进行分桶，优先级相同的规则置于一个桶中，桶内的规则并发执行，桶间的规则基于规则优先级顺序执行。
+
+3. B站新一代规则引擎的设计与实现
+B站大部分业务线，最开始是使用的是第一代规则引擎。其他使用java的业务线使用的规则引擎是drools。
+
+因为初期业务少且简单，并发量不高，所以选择使用第一代规则引擎或者drools。
+
+但随着业务发展，业务请求并发的显著提升，基于第一代引擎的规则迭代周期长、开发新规则的耗时多。因此有必要开发出一套能满足业务快速迭代、且健壮的规则引擎。
+
+3.1 我们预期的规则引擎的样子
+1.支持规则优先级
+
+2.使用足够简单。这其实对规则与具体的代码的边界划分提出了要求。同时，我们我们的目标不仅是让程序员觉得使用简单，还要让无代码开发经验的产品、运营同学也能够觉得使用简单，让他们几乎不需要学习，便能自主配置规则，以此来完成不同的业务需求。
+
+3.足够的灵活性。支持完整的逻辑运算，支持完整的四则运算，支持if..else选择结构，支持用户自定义API...
+
+4.可选择的规则执行模式。不同的场景需要不同的规则执行模式。
+
+5.高性能。这当然是最重要的，如果不能满足高性能，高并发的需求，最终还是会被扔到历史的垃圾堆中。
+
+6.和golang的无缝对接。B站是以golang为主要开发语言，因此，开发的规则引擎要能和golang无缝对接。
+
+7.其他的小确幸：支持注释...等等
+
+3.2 基于golang与AST(抽象语法树)的规则引擎实现
+第一代规则引擎解析简单的逻辑表达式，有的是基于正则实现，有的是基于简单的AST实现的。如果是简单的逻辑表达式，正则是足够用的。如果仅用AST来解析逻辑表达式，显然又有点大材小用。
+
+为了不让抽象语法树(AST)屈才，也受此启发，我们最终选用了基于AST来方式来解析和执行具体的规则语法。我们实现规则引擎时所用到的具体技术如下：
+
+a.基于Antlr4来自定义规则的语法，最终生成语法树结构
+
+b.基于golang的反射技术来实现对用户自定义API的调用
+
+c.基于golang的并发编程技术实现高性能的规则执行能力
+
+3.2.1 关键核心语法定义
+grammar gengine;
+primary: ruleEntity+;
+ruleEntity:  RULE ruleName ruleDescription? salience? BEGIN ruleContent END;
+ruleName : stringLiteral;
+ruleDescription : stringLiteral;
+salience : SALIENCE integer;
+ruleContent : statements;
+statements: statement+;
+statement : ifStmt | methodCall  | functionCall | assignment;
+expression : mathExpression
+            | expression comparisonOperator expression
+            | expression logicalOperator expression
+            | notOperator ? expressionAtom
+            | notOperator ? '(' expression  ')'
+            ;
+mathExpression : mathExpression  mathMdOperator mathExpression
+               | mathExpression  mathPmOperator mathExpression
+               | expressionAtom
+               | '(' mathExpression ')'
+               ;
+expressionAtom
+    : methodCall
+    | functionCall
+    | constant
+    | mapVar
+    | variable
+    ;
+assignment : (mapVar | variable) (assignOperator | setOperator)  mathExpression;
+ifStmt : 'if' expression '{' statements? '}' elseStmt? ;
+elseStmt : 'else' '{' statements? '}';
+constant
+    : booleanLiteral
+    | integer
+    | realLiteral
+    | stringLiteral
+    | atName
+    ;
+functionArgs
+    : (constant | variable  | functionCall | methodCall | mapVar)  (','(constant | variable | functionCall | methodCall | mapVar))*
+    ;
+integer : '-'? INT;
+realLiteral : MINUS? REAL_LITERAL;
+stringLiteral: DQUOTA_STRING ;
+booleanLiteral : TRUE | FALSE;
+functionCall : SIMPLENAME '(' functionArgs? ')';
+methodCall : DOTTEDNAME '(' functionArgs? ')';
+variable :  SIMPLENAME | DOTTEDNAME ;
+mathPmOperator : PLUS | MINUS ;
+mathMdOperator : MUL | DIV ;
+comparisonOperator : GT | LT | GTE | LTE | EQUALS | NOTEQUALS ;
+logicalOperator : AND | OR ;
+assignOperator: ASSIGN ;
+setOperator: SET;
+notOperator: NOT;
+mapVar: variable LSQARE (integer |stringLiteral | variable ) RSQARE;
+atName : '@name';
+在语法定义好之后，使用idea的antlr4插件，生成遍历语法树的listener和visitor模式的代码。
+
+语法树的可扩展能力决定了规则引擎的可扩展能力，当需要为规则引擎新增功能时，仅需修改语法定义，重新生成代码即可。
+
+3.2.2 定义语法树节点
+具体的代码请查看github:https://github.com/rencalo770/gengine/tree/master/base
+
+
+3.2.3 使用listener模式来遍历语法树
+使用listener遍历模式，将定义的语法树节点对应到具体的节点代码实现上
+
+//此golang文件的更多代码请查看github：
+//https://github.com/rencalo770/gengine/blob/master/iparser/GengineParserListener.go
+import (
+	"gengine/base"
+	"gengine/core/errors"
+	parser "gengine/iantlr/alr"
+	"github.com/antlr/antlr4/runtime/Go/antlr"
+	"github.com/golang-collections/collections/stack"
+	"strconv"
+	"strings"
+)
+func NewGengineParserListener(ctx *base.KnowledgeContext) *GengineParserListener {
+	return &GengineParserListener{
+		Stack:         stack.New(),
+		KnowledgeContext: ctx,
+		ParseErrors:   make([]string, 0),
+	}
+}
+type GengineParserListener struct {
+  //继承antlr生成的基础架构代码
+	parser.BasegengineListener
+	ParseErrors []string
+	KnowledgeContext *base.KnowledgeContext
+	Stack *stack.Stack
+	ruleName      string
+}
+3.2.3 其他核心构件
+RuleBuilder.go 用于从字符串解析出具体的语法树
+
+KnowledgeContext.go 用于存储解析出来的规则
+
+DataContext.go 是用户向规则引擎中添加可用API的接口
+
+Gengine.go 提供各种规则执行模式的接口
+
+3.2.4 规则引擎支持的执行模式
+规则引擎当前支持的执行模式有三种
+
+a.顺序执行模式
+
+b.并发执行模式
+
+c.混合执行模式
+
+3.2.5 规则引擎测试
+一个超级测试：
+
+代码见于: https://github.com/rencalo770/gengine/blob/master/test/Gengine_base_test.go
+
+import (
+	"fmt"
+	"gengine/base"
+	"gengine/builder"
+	"gengine/context"
+	"gengine/engine"
+	"github.com/sirupsen/logrus"
+	"testing"
+	"time"
+)
+type User struct {
+	Name string
+	Age  int64
+	Male bool
+}
+func (u *User)GetNum(i int64) int64 {
+	return i
+}
+func (u *User)Print(s string){
+	fmt.Println(s)
+}
+func (u *User)Say(){
+	fmt.Println("hello world")
+}
+const (
+	base_rule = `
+rule "测试" "测试描述"  salience 0 
+begin
+		// 重命名函数 测试; @name represent the rule name "测试"
+		Sout(@name)
+		// 普通函数 测试
+		Hello()
+		//结构提方法 测试
+		User.Say()
+		// if
+		if !(7 == User.GetNum(7)) || !(7 > 8)  {
+			//自定义变量 和 加法 测试
+			variable = "hello" + (" world" + "zeze")
+			// 加法 与 内建函数 测试 ; @name is just a string  
+			User.Name = "hhh" + strconv.FormatInt(10, 10) + "@name"
+			//结构体属性、方法调用 和 除法 测试
+			User.Age = User.GetNum(8976) / 1000+ 3*(1+1) 
+			//布尔值设置 测试
+			User.Male = false
+			//规则内自定义变量调用 测试
+			User.Print(variable)
+			//float测试	也支持科学计数法		
+			f = 9.56			
+			PrintReal(f)
+			//嵌套if-else测试
+			if false	{
+				Sout("嵌套if测试")
+			}else{
+				Sout("嵌套else测试")
+			}
+		}else{ //else
+			//字符串设置 测试
+			User.Name = "yyyy"
+		}
+		
+		if true {
+			Sout("if true ")
+		}
+		if true{}else{}
+end`)
+func Hello()  {
+	fmt.Println("hello")
+}
+func PrintReal(real float64){
+	fmt.Println(real)
+}
+func exe(user *User){
+	/**
+	 不要注入除函数和结构体指针以外的其他类型(如变量)
+	 */
+	dataContext := context.NewDataContext()
+	//注入结构体指针
+	dataContext.Add("User", user)
+	//重命名函数,并注入
+	dataContext.Add("Sout",fmt.Println)
+	//直接注入函数
+	dataContext.Add("Hello",Hello)
+	dataContext.Add("PrintReal",PrintReal)
+	//初始化规则引擎
+	knowledgeContext := base.NewKnowledgeContext()
+	ruleBuilder := builder.NewRuleBuilder(knowledgeContext, dataContext)
+	//读取规则
+	start1 := time.Now().UnixNano()
+	err := ruleBuilder.BuildRuleFromString(base_rule)
+	end1 := time.Now().UnixNano()
+	logrus.Infof("规则个数:%d, 加载规则耗时:%d ns", len(knowledgeContext.RuleEntities), end1-start1 )
+	if err != nil{
+		logrus.Errorf("err:%s ", err)
+	}else{
+		eng := engine.NewGengine()
+		start := time.Now().UnixNano()
+		// true: means when there are many rules， if one rule execute error，continue to execute rules after the occur error rule
+		err := eng.Execute(ruleBuilder, true)
+		end := time.Now().UnixNano()
+		if err != nil{
+			logrus.Errorf("execute rule error: %v", err)
+		}
+		logrus.Infof("execute rule cost %d ns",end-start)
+		logrus.Infof("user.Age=%d,Name=%s,Male=%t", user.Age, user.Name, user.Male)
+	}
+}
+func Test_Base(t *testing.T){
+	user := &User{
+		Name: "Calo",
+		Age:  0,
+		Male: true,
+	}
+	exe(user)
+}
+尽管测试看起来形式过于复杂，但规则本身只有4种形式：
+
+a.逻辑运算
+
+b.四则运算
+
+c.if...else结构
+
+d.函数API调用
+
+a、b、c三种形式，学过简单数学的都会用，d形式，仅需简单识别即可，为了进一步简化d，可以固定一个函数接口，基于改变指标名称的方法取不同的值。如下
+
+//如果golang支持方法重载，这种用法就美滋滋了：
+//配置规则的人就可以不必关心函数的返回是什么，他只需要知道，传入“指标名” + 参数，就能获得他想要的数据，
+//剩下的一切交给规则引擎来打理
+DataService.GetData("指标名", "参数1"，"参数2"...)
+到这里，任何人，只要学会这4种形式就可以开始配置规则了。
+
+4.gengine规则引擎在B站的使用情况
+B站使用情况：当前已经接入了数个场景，并在逐步扩展至更多的业务场景（因为业务脱敏需要，所以在此详述）。 B站在此规则引擎上构建了规则管理系统，用于在界面上配置规则，并向各个业务场景实时动态下发规则，无需重启服务。为了使规则配置更加简单，我们开发了一套可复用于所有场景的指标管理系统（这个由我的另一个同事研发实现）。
+
+关于性能：真实的线上grpc服务，单场景线上10个规则，10个4核8G的docker容器，压测15分钟，平均2万QPS, 平均响应耗时在2到4ms，也有极个别请求的耗时在700ms左右，但不超过750ms；配合实体机使用效果会更好。
+
+5.gengine规则引擎对机器学习的支持
+如果大家看过周志华的《机器学习》这本书，大家一定知道，“规则学习”（我们配置的规则）也是一种机器学习，“规则学习”也是符合一般机器学习的理论和方法的。如具体场景的“规则学习”针对具体的场景识别或处理，也有准确率、精度、召回等一般机器学习在概念上的对应。规则引擎对于这种“硬”“规则学习”显然是天然支持的。
+
+那么，规则引擎如何支持更一般的机器学习模型调用呢？通常训练出来的模型最终会暴露出对外服务的接口API，这是函数来支持的，也是在3.2.5小节说的形式d（定义函数）来支持。
+
+另外，通常会有很多模型的待识别数据具有很多feature，feature其实就是规则中的指标。因此，基于函数接口取指标完全是OK的。如果从规则外部基于网络连接来取指标，而且是顺序取(规则上不可能支持复杂的并发支持，因为这样会破坏简单性，所以一般也是顺序取)，那么这样带来的结果就是严重拖慢规则执行速度。
+
+基于此考量，在未来不久的时间，我们会在语法树上定义一个简单的语法块，用以支持规则内的并发调用，形式大致如下：
+
+rule "ruleName" "discri" salience 10
+begine
+//用此关键字来调用底层复杂的并发能力
+conc{
+	metric1 = DataService("指标1","参数1","参数2"...)
+  metric2 = DataService("指标2","参数1","参数2"...)
+  //
+  metricn = DataService("指标n","参数1","参数2"...)
+}
+res = MachineService.predict(metric1, metric2, ..., metricn)
+end
+如上，基于语法块 “conc{...}”,就实现了“指标1”到“指标n”的并发取参数，最终n个指标的调用耗时不是累加，而是等于这n个指标调用中的最长耗时的那个指标。
+
+6规则引擎代码实现的github地址
+https://github.com/rencalo770/gengine
+{% endraw %}
+
+https://xie.infoq.cn/article/f0a6ad06b3bfbda60f4330bee
+https://www.bilibili.com/video/BV1AD4y1S79M
+https://medium.com/@ngtzeyang94/go2-sneak-preview-generics-60ee3b4a730
+https://medium.com/@domrevigor/cloud-native-java-vs-golang-2a72c0531b05
+https://github.com/cockroachdb/copyist
