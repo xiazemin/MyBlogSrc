@@ -1,0 +1,325 @@
+---
+title: antlr4go
+layout: post
+category: golang
+author: 夏泽民
+---
+https://github.com/bramp/antlr4-grammars
+https://github.com/bramp/antlr4-grammars/tree/master/xml
+https://github.com/bramp/antlr4-grammars/blob/master/json/json_test.go
+安装
+$curl -O  https://www.antlr.org/download/antlr-4.8-complete.jar
+$java jar  /Users/antlr-4.8-complete.jar
+错误: 找不到或无法加载主类 jar
+注意命令是java -jar
+$java -jar /Users/antlr-4.8-complete.jar
+ANTLR Parser Generator  Version 4.8
+ -o ___              specify output directory where all output is generated
+ -lib ___            specify location of grammars, tokens files
+ -atn                generate rule augmented transition network diagrams
+ -encoding ___       specify grammar file encoding; e.g., euc-jp
+ -message-format ___ specify output style for messages in antlr, gnu, vs2005
+ -long-messages      show exception details when available for errors and warnings
+ -listener           generate parse tree listener (default)
+ -no-listener        don't generate parse tree listener
+ -visitor            generate parse tree visitor
+ -no-visitor         don't generate parse tree visitor (default)
+ -package ___        specify a package/namespace for the generated code
+ -depend             generate file dependencies
+ -D<option>=value    set/override a grammar-level option
+ -Werror             treat warnings as errors
+ -XdbgST             launch StringTemplate visualizer on generated code
+ -XdbgSTWait         wait for STViz to close before continuing
+ -Xforce-atn         use the ATN simulator for all predictions
+ -Xlog               dump lots of logging info to antlr-timestamp.log
+ -Xexact-output-dir  all output goes into -o dir regardless of paths/package
+ https://www.jianshu.com/p/7969d076183f
+ https://www.jianshu.com/p/b4714b98389d
+ https://abcdabcd987.com/notes-on-antlr4/
+<!-- more -->
+https://blog.gopheracademy.com/advent-2017/parsing-with-antlr4-and-go/
+https://github.com/antlr/antlr4/tree/master/runtime/Go/antlr
+
+$java -jar ../calc/antlr-4.8-complete.jar
+ANTLR Parser Generator  Version 4.8
+ -o ___              specify output directory where all output is generated
+ -lib ___            specify location of grammars, tokens files
+ 
+ 注意4.5.1这个包有问题
+$java -jar antlr-4.5.1-complete.jar
+错误: 找不到或无法加载主类 org.antlr.v4.Tool
+$java -jar /Users/didi/PhpstormProjects/c/json-parser/antlr/antlr-4.5.1-complete.jar
+错误: 找不到或无法加载主类 org.antlr.v4.Tool
+```
+// Calc.g4
+grammar Calc;
+
+// Tokens
+MUL: '*';
+DIV: '/';
+ADD: '+';
+SUB: '-';
+NUMBER: [0-9]+;
+WHITESPACE: [ \r\n\t]+ -> skip;
+
+// Rules
+start : expression EOF;
+
+expression
+   : expression op=('*'|'/') expression # MulDiv
+   | expression op=('+'|'-') expression # AddSub
+   | NUMBER                             # Number
+   ;
+```
+生成代码
+$java -jar ../calc/antlr-4.8-complete.jar -Dlanguage=Go -o parser Calc.g4
+
+$tree
+.
+|____Calc.g4
+|____parser
+| |____Calc.interp
+| |____Calc.tokens
+| |____calc_base_listener.go
+| |____calc_lexer.go
+| |____calc_listener.go
+| |____calc_parser.go
+| |____CalcLexer.interp
+| |____CalcLexer.tokens
+
+$go mod init github.com/xiazemin/json-parser/antlr/antlr4go
+go: creating new go.mod: module github.com/xiazemin/json-parser/antlr/antlr4go
+
+https://www.antlr.org/download.html
+$go get github.com/antlr/antlr4/runtime/Go/antlr
+
+
+{% raw %}
+// example1.go
+package main
+
+import (
+"fmt"
+"github.com/antlr/antlr4/runtime/Go/antlr"
+
+"./parser"
+)
+
+func main() {
+	// Setup the input
+	is := antlr.NewInputStream("1 + 2 * 3")
+
+	// Create the Lexer
+	lexer := parser.NewCalcLexer(is)
+
+	// Read all tokens
+	for {
+		t := lexer.NextToken()
+		if t.GetTokenType() == antlr.TokenEOF {
+			break
+		}
+		fmt.Printf("%s (%q)\n",
+			lexer.SymbolicNames[t.GetTokenType()], t.GetText())
+	}
+}
+
+package main
+
+import "github.com/xiazemin/json-parser/antlr/antlr4go/parser"
+
+// example2.go
+package main
+
+import (
+"github.com/xiazemin/json-parser/antlr/antlr4go/parser"
+"github.com/antlr/antlr4/runtime/Go/antlr"
+)
+
+type calcListener struct {
+	*parser.BaseCalcListener
+}
+
+func main() {
+	// Setup the input
+	is := antlr.NewInputStream("1 + 2 * 3")
+
+	// Create the Lexer
+	lexer := parser.NewCalcLexer(is)
+	stream := antlr.NewCommonTokenStream(lexer, antlr.TokenDefaultChannel)
+
+	// Create the Parser
+	p := parser.NewCalcParser(stream)
+
+	// Finally parse the expression
+	antlr.ParseTreeWalkerDefault.Walk(&calcListener{}, p.Start())
+}
+
+package main
+
+import (
+	"fmt"
+	"github.com/antlr/antlr4/runtime/Go/antlr"
+	"github.com/xiazemin/json-parser/antlr/antlr4go/parser"
+	"strconv"
+)
+
+type calcListener struct {
+	*parser.BaseCalcListener
+
+	stack []int
+}
+
+func (l *calcListener) push(i int) {
+	l.stack = append(l.stack, i)
+}
+
+func (l *calcListener) pop() int {
+	if len(l.stack) < 1 {
+		panic("stack is empty unable to pop")
+	}
+
+	// Get the last value from the stack.
+	result := l.stack[len(l.stack)-1]
+
+	// Remove the last element from the stack.
+	l.stack = l.stack[:len(l.stack)-1]
+
+	return result
+}
+
+func (l *calcListener) ExitMulDiv(c *parser.MulDivContext) {
+	right, left := l.pop(), l.pop()
+
+	switch c.GetOp().GetTokenType() {
+	case parser.CalcParserMUL:
+		l.push(left * right)
+	case parser.CalcParserDIV:
+		l.push(left / right)
+	default:
+		panic(fmt.Sprintf("unexpected op: %s", c.GetOp().GetText()))
+	}
+}
+
+func (l *calcListener) ExitAddSub(c *parser.AddSubContext) {
+	right, left := l.pop(), l.pop()
+
+	switch c.GetOp().GetTokenType() {
+	case parser.CalcParserADD:
+		l.push(left + right)
+	case parser.CalcParserSUB:
+		l.push(left - right)
+	default:
+		panic(fmt.Sprintf("unexpected op: %s", c.GetOp().GetText()))
+	}
+}
+
+func (l *calcListener) ExitNumber(c *parser.NumberContext) {
+	i, err := strconv.Atoi(c.GetText())
+	if err != nil {
+		panic(err.Error())
+	}
+
+	l.push(i)
+}
+
+// calc takes a string expression and returns the evaluated result.
+func calc(input string) int {
+	// Setup the input
+	is := antlr.NewInputStream(input)
+
+	// Create the Lexer
+	lexer := parser.NewCalcLexer(is)
+	stream := antlr.NewCommonTokenStream(lexer, antlr.TokenDefaultChannel)
+
+	// Create the Parser
+	p := parser.NewCalcParser(stream)
+
+	// Finally parse the expression (by walking the tree)
+	var listener calcListener
+	antlr.ParseTreeWalkerDefault.Walk(&listener, p.Start())
+
+	return listener.pop()
+}
+
+func main()  {
+   print(calc("1+2*3-4+5"))
+}
+
+package main
+import (
+"bramp.net/antlr4/json" // The parser
+"github.com/antlr/antlr4/runtime/Go/antlr"
+)
+
+type exampleListener struct {
+// https://godoc.org/bramp.net/antlr4/json#BaseJSONListener
+*json.BaseJSONListener
+}
+
+func main() {
+// Setup the input
+is := antlr.NewInputStream(`
+		{
+			"example": "json",
+			"with": ["an", "array"]
+		}`)
+
+
+// Create the JSON Lexer
+lexer := json.NewJSONLexer(is)
+stream := antlr.NewCommonTokenStream(lexer, antlr.TokenDefaultChannel)
+
+// Create the JSON Parser
+p := json.NewJSONParser(stream)
+
+// Finally walk the tree
+antlr.ParseTreeWalkerDefault.Walk(&exampleListener{}, p.Json())
+}
+{% endraw %}
+https://github.com/antlr/antlr4/blob/master/doc/grammars.md
+https://zhuanlan.zhihu.com/p/47179842
+https://github.com/thesues/antlr-calc-golang-example
+
+https://blog.gopheracademy.com/advent-2017/parsing-with-antlr4-and-go/
+https://liangshuang.name/2017/08/20/antlr/
+https://github.com/antlr/antlr4/tree/master/runtime/Go/antlr
+
+$export GOPROXY=https://goproxy.io
+$go  run example1.go
+build command-line-arguments: cannot load github.com/antlr/antlr4/runtime/Go/antlr: module github.com/antlr/antlr4/runtime/Go/antlr: Get https://goproxy.io/github.com/antlr/antlr4/runtime/%21go/antlr/@v/list: x509: certificate has expired or is not yet valid
+
+$ GOPROXY="https://goproxy.cn"
+$cd ../parser/
+$go mod init github.com/xiazemin/json-parser/antlr/antlr4go/parser
+go: creating new go.mod: module github.com/xiazemin/json-parser/antlr/antlr4go/parser
+
+$cd exp1
+replace github.com/xiazemin/json-parser/antlr/antlr4go/parser => ../parser
+
+$go run example1.go
+NUMBER ("1")
+ADD ("+")
+NUMBER ("2")
+MUL ("*")
+NUMBER ("3")
+
+$go mod edit -replace github.com/xiazemin/json-parser/antlr/antlr4go/parser=../parser
+
+$go run example2.go
+go: finding github.com/antlr/antlr4 latest
+# command-line-arguments
+./example2.go:6:1: syntax error: non-declaration statement outside function body
+
+$go mod init github.com/xiazemin/json-parser/antlr/antlr4go
+go: creating new go.mod: module github.com/xiazemin/json-parser/antlr/antlr4go
+$go mod edit -replace github.com/xiazemin/json-parser/antlr/antlr4go/parser=../parser
+$go run example3.go
+go: finding github.com/antlr/antlr4 latest
+8
+
+$go run example4.go
+go: finding github.com/antlr/antlr4 latest
+go: finding bramp.net/antlr4 latest
+go: downloading bramp.net/antlr4 v0.0.0-20190812013724-3751fbacda98
+go: extracting bramp.net/antlr4 v0.0.0-20190812013724-3751fbacda98
+https://blog.gopheracademy.com/advent-2017/parsing-with-antlr4-and-go/
