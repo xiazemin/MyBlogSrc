@@ -1,0 +1,398 @@
+---
+title: zend ZEND_OPCODE_HANDLER_ARGS_PASSTHRU
+layout: post
+category: php
+author: 夏泽民
+---
+https://wiki.php.net/internals/extensions
+opcode 对应函数执行代码
+		if (UNEXPECTED((ret = ((opcode_handler_t)OPLINE->handler)(ZEND_OPCODE_HANDLER_ARGS_PASSTHRU)) != 0)) {
+hook 方法：
+1，用函数简单包裹这一行
+2，在扩展中mdoudule_init 里替换这个函数，做hook或者探针逻辑
+<!-- more -->
+数组的值存储在zvalue_value.ht字段中,ht是一个HashTable的数据
+在Zend/zend_vm_execute.h文件中
+{% raw %}
+static int ZEND_FASTCALL  ZEND_INIT_ARRAY_SPEC_CV_CONST_HANDLER(ZEND_OPCODE_HANDLER_ARGS)
+{
+        zend_op *opline = EX(opline);
+
+
+        array_init(&EX_T(opline->result.u.var).tmp_var); //分配数组内存空间,初始化
+        if (IS_CV == IS_UNUSED) {
+                ZEND_VM_NEXT_OPCODE();
+#if 0 || IS_CV != IS_UNUSED
+        } else {
+                return ZEND_ADD_ARRAY_ELEMENT_SPEC_CV_CONST_HANDLER(ZEND_OPCODE_HANDLER_ARGS_PASSTHRU);
+#endif        }
+}
+初始化数组的函数是 array_init
+
+
+ZEND_API int _array_init(zval *arg, uint size ZEND_FILE_LINE_DC) /* {{{ */
+{
+        ALLOC_HASHTABLE_REL(Z_ARRVAL_P(arg)); //分配内存
+
+
+        _zend_hash_init(Z_ARRVAL_P(arg), size, NULL, ZVAL_PTR_DTOR, 0 ZEND_FILE_LINE_RELAY_CC);
+        Z_TYPE_P(arg) = IS_ARRAY; //类型为数组
+        return SUCCESS;
+}
+看到没有,Hash表初始化函数_zend_hash_init
+
+在PHP扩展中我们可以这么写:
+PHP_FUNCTION(test)
+{
+        zval *value;
+        MAKE_STD_ZVAL(value);
+        array_init(value);
+        ZEND_SET_SYMBOL(EG(active_symbol_table),"star",value);
+添加一个元素的关键代码
+
+add_assoc_long(zval *array, char *key, long n);    添加一个长整型元素。
+
+
+
+
+add_assoc_unset(zval *array, char *key);             添加一个 unset 元素。
+
+
+
+
+add_assoc_bool(zval *array, char *key, int b);       添加一个布尔值。
+
+
+
+
+add_assoc_resource(zval *array, char *key, int r); 添加一个资源。
+
+
+
+
+add_assoc_double(zval *array, char *key, double d); 添加一个浮点值。
+
+
+
+
+add_assoc_string(zval *array, char *key, char *str, int duplicate); 添加一个字符串。duplicate 用于表明这个字符串是否要被复制到 Zend 的内部内存。
+
+
+
+
+add_assoc_stringl(zval *array, char *key, char *str, uint length, int duplicate); 添加一个指定长度的字符串。
+
+
+
+
+add_assoc_zval(zval *array, char *key, zval *value); 添加一个 zval 结构。 
+
+
+
+
+add_index_long(zval *array, uint idx, long n); 添加一个长整型元素。
+
+
+add_index_unset(zval *array, uint idx); 添加一个 unset 元素。
+
+
+
+
+add_index_bool(zval *array, uint idx, int b); 添加一个布尔值。
+
+
+add_index_resource(zval *array, uint idx, int r); 添加一个资源。
+
+
+
+
+add_index_double(zval *array, uint idx, double d); 添加一个浮点值。
+
+
+add_index_string(zval *array, uint idx, char *str, int duplicate); 
+添加一个字符串。duplicate 用于表明这个字符串是否要被复制到 Zend 的内部内存。
+
+
+
+
+add_index_stringl(zval *array, uint idx, char *str, uint length, int duplicate); 添加一个指定长度的字符串。
+
+
+
+
+add_index_zval(zval *array, uint idx, zval *value); 添加一个 zval 结构。 
+
+
+
+
+add_next_index_long(zval *array, long n); 添加一个长整型元素。
+
+
+
+
+add_next_index_unset(zval *array); 添加一个 unset 元素。
+
+
+
+
+add_next_index_bool(zval *array, int b); 添加一个布尔值。
+
+
+
+
+add_next_index_resource(zval *array, int r); 添加一个资源。
+
+
+
+
+add_next_index_double(zval *array, double d); 添加一个浮点值。
+
+add_next_index_string(zval *array, char *str, int duplicate); 添加一个字符串。duplicate 用于表明这个字符串是否要被复制到 Zend 的内部内存。
+
+add_next_index_stringl(zval *array, char *str, uint length, int duplicate); 添加一个指定长度的字符串。
+
+add_next_index_zval(zval *array, zval *value); 添加一个 zval 结构。 添加另外一个数组、对象或流等数据。
+
+https://blog.csdn.net/xinguimeng/article/details/50925028
+
+前言
+本文简要介绍 zend 虚拟机解释执行字节码的基本逻辑以及相关的数据结构，关于 PHP 源代码的下载，编译，调试可以参考之前的系列文章
+
+execute_ex
+我们来看看执行一个简单的脚本 test.php 的调用栈
+
+execute_ex @ zend_vm_execute.h : 411
+zend_execute @ zend_vm_execute.h : 474
+php_execute_script @ zend.c : 1474
+do_cli @ php_cli.c : 993
+main @ php_cli.c : 1381
+由于是执行脚本文件，所以 do_cli 调用了 php_execute_script 函数，最终调用 execute_ex 函数：
+
+ZEND_API void execute_ex(zend_execute_data *ex)
+{
+    DCL_OPLINE
+
+#ifdef ZEND_VM_IP_GLOBAL_REG
+    const zend_op *orig_opline = opline;
+#endif
+#ifdef ZEND_VM_FP_GLOBAL_REG
+    zend_execute_data *orig_execute_data = execute_data;
+    execute_data = ex;
+#else
+    zend_execute_data *execute_data = ex;
+#endif
+
+
+    LOAD_OPLINE();
+    ZEND_VM_LOOP_INTERRUPT_CHECK();
+
+    while (1) {
+#if !defined(ZEND_VM_FP_GLOBAL_REG) || !defined(ZEND_VM_IP_GLOBAL_REG)
+            int ret;
+#endif
+#if defined(ZEND_VM_FP_GLOBAL_REG) && defined(ZEND_VM_IP_GLOBAL_REG)
+        ((opcode_handler_t)OPLINE->handler)(ZEND_OPCODE_HANDLER_ARGS_PASSTHRU);
+        if (UNEXPECTED(!OPLINE)) {
+#else
+        if (UNEXPECTED((ret = ((opcode_handler_t)OPLINE->handler)(ZEND_OPCODE_HANDLER_ARGS_PASSTHRU)) != 0)) {
+#endif
+#ifdef ZEND_VM_FP_GLOBAL_REG
+            execute_data = orig_execute_data;
+# ifdef ZEND_VM_IP_GLOBAL_REG
+            opline = orig_opline;
+# endif
+            return;
+#else
+            if (EXPECTED(ret > 0)) {
+                execute_data = EG(current_execute_data);
+                ZEND_VM_LOOP_INTERRUPT_CHECK();
+            } else {
+# ifdef ZEND_VM_IP_GLOBAL_REG
+                opline = orig_opline;
+# endif
+                return;
+            }
+#endif
+        }
+
+    }
+    zend_error_noreturn(E_CORE_ERROR, "Arrived at end of main loop which shouldn't happen");
+}
+和其它 C 语言编写的系统软件类似，函数中使用了大量的宏定义，通过宏定义的名字还是能大概看出其用途
+
+DCL_OPLINE，变量声明
+
+LOAD_OPLINE()，加载指令字节码
+
+ZEND_VM_LOOP_INTERRUPT_CHECK()，interrupt 检测
+
+while (1) 循环，调用指令的处理函数 OPLINE->handler
+
+op_code_handler
+
+https://blog.csdn.net/vspiders/article/details/106627649
+节讲一下PHP 的hook的两种方式，opcode handler hook和method hook，没有然后。
+
+handler
+PHP提供了内置opcode handler替换函数zend_user_opcode_handlers。
+
+ZEND_API int zend_set_user_opcode_handler(zend_uchar opcode, user_opcode_handler_t handler)
+{
+	if (opcode != ZEND_USER_OPCODE) {
+		if (handler == NULL) {
+			/* restore the original handler */
+			zend_user_opcodes[opcode] = opcode;
+		} else {
+			zend_user_opcodes[opcode] = ZEND_USER_OPCODE;
+		}
+		zend_user_opcode_handlers[opcode] = handler;
+		return SUCCESS;
+	}
+	return FAILURE;
+}
+
+原理很简单，内置维护了一个zend_user_opcode_handlers表，直接替换表中user_opcode_handler_t对象即可。
+
+其实user_opcode_handler_t就是一个函数指针。
+
+typedef int (*user_opcode_handler_t) (zend_execute_data *execute_data);
+1
+替换完函数地址之后，当zend虚拟机执行到改opcode时，会查询该表找到对应的替换之后的handler函数地址并执行。
+
+替换示例：
+
+static int func(zend_execute_data *execute_data){
+	return ZEND_USER_OPCODE_DISPATCH;
+}
+zend_set_user_opcode_handler(ZEND_DO_FCALL,func);
+
+这里的返回值需要说明下：
+
+#define ZEND_USER_OPCODE_CONTINUE   0 /* execute next opcode */
+#define ZEND_USER_OPCODE_RETURN     1 /* exit from executor (return from function) */
+#define ZEND_USER_OPCODE_DISPATCH   2 /* call original opcode handler */
+#define ZEND_USER_OPCODE_ENTER      3 /* enter into new op_array without recursion */
+#define ZEND_USER_OPCODE_LEAVE      4 /* return to calling op_array within the same executor */
+
+#define ZEND_USER_OPCODE_DISPATCH_TO 0x100 /* call original handler of returned opcode */
+
+不同的返回值会走不同的处理逻辑。
+
+因此如果是ZEND_USER_OPCODE_DISPATCH，整个hook的过程可以理解为先执行新的替换之后的handler，之后交给原始handler继续执行。
+
+事实上，经过分析Zend虚拟机执行过程之后，我们知道，其实都是翻译成一个个opcode进行执行，然后寻找这个opcode中的handler执行，再来看一下内置的handler hook函数。
+
+ZEND_API int zend_set_user_opcode_handler(zend_uchar opcode, user_opcode_handler_t handler)
+{
+	if (opcode != ZEND_USER_OPCODE) {
+		if (handler == NULL) {
+			/* restore the original handler */
+			zend_user_opcodes[opcode] = opcode;
+		} else {
+		  // 原始opcode一并替换为ZEND_USER_OPCODE
+			zend_user_opcodes[opcode] = ZEND_USER_OPCODE;
+		}
+		// 替换该opcode对应的handler函数地址。
+		zend_user_opcode_handlers[opcode] = handler;
+		return SUCCESS;
+	}
+	return FAILURE;
+}
+
+因此之后所有替换之后的handler本质上都会走到ZEND_USER_OPCODE这个分支里面，继续追踪下ZEND_USER_OPCODE分支。
+
+static ZEND_OPCODE_HANDLER_RET ZEND_FASTCALL ZEND_USER_OPCODE_SPEC_HANDLER(ZEND_OPCODE_HANDLER_ARGS)
+{
+	USE_OPLINE
+	int ret;
+
+	SAVE_OPLINE();
+	// 获取替换之后的handler返回值
+	ret = zend_user_opcode_handlers[opline->opcode](execute_data);
+	opline = EX(opline);
+
+	// 返回值判断，并继续走相应的流程。
+	switch (ret) {
+		case ZEND_USER_OPCODE_CONTINUE:
+			ZEND_VM_CONTINUE();
+		case ZEND_USER_OPCODE_RETURN:
+			if (UNEXPECTED((EX_CALL_INFO() & ZEND_CALL_GENERATOR) != 0)) {
+				zend_generator *generator = zend_get_running_generator(EXECUTE_DATA_C);
+				zend_generator_close(generator, 1);
+				ZEND_VM_RETURN();
+			} else {
+				ZEND_VM_TAIL_CALL(zend_leave_helper_SPEC(ZEND_OPCODE_HANDLER_ARGS_PASSTHRU));
+			}
+		case ZEND_USER_OPCODE_ENTER:
+			ZEND_VM_ENTER();
+		case ZEND_USER_OPCODE_LEAVE:
+			ZEND_VM_LEAVE();
+		case ZEND_USER_OPCODE_DISPATCH:
+			ZEND_VM_DISPATCH(opline->opcode, opline);
+		default:
+			ZEND_VM_DISPATCH((zend_uchar)(ret & 0xff), opline);
+	}
+}
+
+关注下DISPATCH时的执行流程，
+
+#define ZEND_VM_DISPATCH(opcode, opline) ZEND_VM_TAIL_CALL(((opcode_handler_t)zend_vm_get_opcode_handler_func(opcode, opline))(ZEND_OPCODE_HANDLER_ARGS_PASSTHRU));
+1
+method
+PHP维护了一个全局函数表，其中包含了所有的内置函数，可以通过CG(function_table)的函数获取。因此内置函数hook方法： 在全局函数表中寻找函数zend_function结构体，之后替换handler为自己的即可，taint的实现过程如下：
+
+typedef void (*php_func)(INTERNAL_FUNCTION_PARAMETERS);
+
+static void php_taint_override_func(const char *name, php_func handler, php_func *stash) /* {{{ */ {
+	zend_function *func;
+	if ((func = zend_hash_str_find_ptr(CG(function_table), name, strlen(name))) != NULL) {
+		// 原始函数指针备份
+		if (stash) {
+			*stash = func->internal_function.handler;
+		}
+		// 替换为新的函数
+		func->internal_function.handler = handler;
+	}
+} 
+
+内部函数的基本结构体为：
+
+typedef struct _zend_internal_function {
+	/* Common elements */
+	zend_uchar type;
+	zend_uchar arg_flags[3]; /* bitset of arg_info.pass_by_reference */
+	uint32_t fn_flags;
+	zend_string* function_name;
+	zend_class_entry *scope;
+	zend_function *prototype;
+	uint32_t num_args;
+	uint32_t required_num_args;
+	zend_internal_arg_info *arg_info;
+	/* END of common elements */
+
+	zif_handler handler;
+	struct _zend_module_entry *module;
+	void *reserved[ZEND_MAX_RESERVED_RESOURCES];
+} zend_internal_function;
+
+因此函数hook也是在执行之间进行替换，之后可以先获取备份的原始函数指针，之后指针调用之前的函数。
+
+void (*zif_handler)(INTERNAL_FUNCTION_PARAM_PASSTHRU)
+{% endraw %}
+https://www.cnblogs.com/yjf512/archive/2016/12/01/6120856.html
+
+https://www.cnblogs.com/linuxnotes/archive/2013/12/19/3481401.html
+
+https://www.cnblogs.com/cbryge/p/6078869.html
+
+https://wiki.jikexueyuan.com/project/extending-embedding-php/4.2.html
+
+https://github.com/pangudashu/php7-internal/blob/40645cfe087b373c80738881911ae3b178818f11/7/var.md
+
+https://blog.csdn.net/weixin_33786077/article/details/92200921
+
+https://blog.csdn.net/kill203/article/details/1623075
+
+https://blog.csdn.net/u013756836/article/details/106257863/
+https://www.laruence.com/2009/04/28/719.html
+https://blog.csdn.net/u013756836/article/details/106257863
