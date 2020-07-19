@@ -1,0 +1,92 @@
+---
+title: import
+layout: post
+category: algorithm
+author: golang
+---
+Package 节点表示一组源文件，共同构建 Go 包。
+
+type Package struct {
+        Name    string             // 包名称
+        Scope   *Scope             // 所有文件的包范围
+        Imports map[string]*Object // 包id的地图 - >包对象
+        Files   map[string]*File   // 按文件名转到源文件
+        }
+        
+func NewPackage(fset *token.FileSet, files map[string]*File, importer Importer, universe *Scope) (*Package, error)
+NewPackage 从一组 File 节点创建一个新的 Package 节点。它解决跨文件的未解析标识符，并相应地更新每个文件的未解析列表。如果提供了非零导入器和 Universe 范围，则它们将用于解析未在任何包文件中声明的标识符。任何剩余的未解析标识符都会报告为未声明。如果这些文件属于不同的软件包，则会选择一个软件包名称，并报告具有不同软件包名称的文件，然后将其忽略。结果是包节点和 scanner.ErrorList 是否有错误。
+<!-- more -->
+
+MergeMode 标志控制 MergePackageFiles 的行为。
+
+type MergeMode uint
+const (
+        // 如果设置，则排除重复的函数声明。
+        FilterFuncDuplicates MergeMode = 1 << iota
+        // 如果设置，则与特定的注释无关
+        // AST节点（作为Doc或Comment）被排除在外。
+        FilterUnassociatedComments
+        // 如果设置，则排除重复的导入声明。
+        FilterImportDuplicates
+)
+
+导入程序解析导入路径以打包对象。导入映射记录已导入的包，并按包ID（规范导入路径）进行索引。导入程序必须确定规范导入路径并检查导图，看它是否已经存在于导入导图中。如果是这样，导入器可以返回地图条目。否则，导入程序应将给定路径的包数据加载到新的 *Object(pkg)中，在导入映射中记录 pkg，然后返回 pkg。
+
+type Importer func(imports map[string]*Object, path string) (pkg *Object, err error)
+
+
+ImportSpec 节点表示单个包导入。
+
+type ImportSpec struct {
+        Doc     *CommentGroup // 相关文件; 或者没有
+        Name    *Ident        // 本地包名（包括“.”）; 或者没有
+        Path    *BasicLit     // 导入路径
+        Comment *CommentGroup // 行注释；或者没有
+        EndPos  token.Pos     // 规范结束（如果非零则覆盖Path.Pos）
+}
+func (*ImportSpec) End（显示源代码）
+func (s *ImportSpec) End() token.Pos
+func (*ImportSpec) Pos（显示源代码）
+func (s *ImportSpec) Pos() token.Pos
+
+type File
+一个文件节点代表一个 Go 源文件。
+
+注释列表按照外观顺序包含源文件中的所有注释，包括通过 Doc 和注释字段从其他节点指向的注释。
+
+为了正确打印包含注释的源代码（使用软件包 go/format 和 go/printer），必须特别小心在修改文件语法树时更新注释：对于打印，注释根据其位置散布在令牌之间。如果语法树节点被删除或移动，则其附近的相关注释也必须从 File.Comments 列表中移除或相应移动（通过更新其位置）。一个 CommentMap 可以用来方便这些操作。
+
+注释是否以及如何与节点相关取决于操作程序对语法树的解释：除了与节点直接相关的文档和评论评论之外，其余注释是“自由浮动的（free-floating）”（另见issues ＃18593， ＃20744）。
+
+type File struct {
+        Doc        *CommentGroup   // 相关文件; 或者没有
+        Package    token.Pos       // “package”关键字的位置
+        Name       *Ident          // 包名称
+        Decls      []Decl          // 顶级声明; 或者没有
+        Scope      *Scope          // 包范围（仅限此文件）
+        Imports    []*ImportSpec   // 在此文件中导入
+        Unresolved []*Ident        // 此文件中未解析的标识符
+        Comments   []*CommentGroup // 源文件中所有注释的列表
+}
+
+
+func SortImports（显示源代码）
+func SortImports(fset *token.FileSet, f *File)
+SortImports 对f中的导入块中的连续导入行进行排序。它还可以在不丢失数据的情况下删除重复导入。
+
+https://www.breakyizhan.com/go/35520.html
+
+
+go get github.com/gpmgo/gopm
+
+gopm get -g -v -u golang.org/x/tools/cmd/goimports
+
+
+File -> Settings -> Tools -> File Watchers
+（如果你goland没有 File Watchers ，可以在File -> Settings -> Plugins 中搜索 File Watchers 然后安装使用。）
+
+https://www.jianshu.com/p/020f94f0693e
+
+https://zhuanlan.zhihu.com/p/111719839
+https://www.jianshu.com/p/d11489edd236
+
