@@ -1,0 +1,81 @@
+---
+title: plugin
+layout: post
+category: golang
+author: 夏泽民
+---
+通过在主程序和共享库直接定义一系列的约定或者接口，我们可以通过以下的代码动态加载其他人编译的 Go 语言共享对象，这样做的好处是 — 主程序和共享库的开发者不需要共享代码，只要双方的约定不变，修改共享库后也不再需要重新编译主程序。
+ype Driver interface {
+    Name() string
+}
+
+func main() {
+    p, err := plugin.Open("driver.so")
+    if err != nil {
+	   panic(err)
+    }
+
+    newDriverSymbol, err := p.Lookup("NewDriver")
+    if err != nil {
+        panic(err)
+    }
+
+    newDriverFunc := newDriverSymbol.(func() Driver)
+    newDriver := newDriverFunc()
+    fmt.Println(newDriver.Name())
+}
+
+void *dlopen(const char *filename, int flag);
+char *dlerror(void);
+void *dlsym(void *handle, const char *symbol);
+int dlclose(void *handle);
+
+
+CGO
+在具体分析 plugin 包中几个公有方法之前，我们需要先了解一下包中使用的两个 C 语言函数 pluginOpen 和 pluginLookup；pluginOpen 只是简单包装了一下标准库中的 dlopen 和 dlerror 函数并在加载成功后返回指向动态库的句柄
+这两个函数的实现原理都比较简单，它们的作用也只是简单封装标准库中的 C 语言函数，让它们的函数签名看起来更像是 Go 语言中的函数签名，方便在 Go 语言中调用。
+
+加载过程
+用于加载共享对象的函数 plugin.Open 会接受共享对象文件的路径作为参数并返回 plugin.Plugin 结构体：
+https://draveness.me/golang/docs/part4-advanced/ch08-metaprogramming/golang-plugin/
+<!-- more -->
+https://golang.org/pkg/plugin/
+http://kuanshijiao.com/2018/08/04/goplugin/
+语言本身支持，插件和主程序原生语法交互
+
+进程隔离：无，单进程
+主程序调用插件：一切预协定object（包括function、channel）
+插件感知主程序上下文：主程序预定义类型参数object（包括function、channel）
+stream支持：单向，基于channel
+插件发现：主程序循环扫描插件目录并维护状态；通过第三方文件diff工具维护，例如git
+上线：能
+下线：不能
+更新：不能
+通信：进程内
+序列化：不需要
+性能：高
+Go plugin判断两个插件是否相同是通过比较pluginpath实现的，如果没有指定pluginpath，则由内部的算法生成, 生成的格式为plugin/unnamed-“ + root.Package.Internal.BuildID 。这种情况下，如果两个插件的文件名不同，引用包不同，或者引用的cgo不同，则会生成不同的插件，同时加载不会有问题。但是如果两个插件的文件名相同，相关的引用包也相同，则可能生成相同的插件，即使插件内包含的方法和变量不同，实现也不同。判断插件相同，热加载不会成功，也就意味着老插件不支持覆盖更新。
+
+最好在编译的指定pluginpath，同时方便版本跟踪。目前生产环境建议一些公共库无服务依赖的函数，例如算法库之类的。
+
+go build -ldflags "-pluginpath=plugin/hot-$(date +%s)" -buildmode=plugin -o so/Eng.so eng/greeter.go 
+
+http://kuanshijiao.com/2018/08/04/goplugin/
+https://github.com/natefinch/pie
+https://github.com/hashicorp/go-plugin
+https://github.com/nanomsg/mangos-v1
+https://github.com/mna/agora
+https://github.com/goplus/gop
+
+https://cloud.tencent.com/developer/article/1187560
+https://blog.csdn.net/uisoul/article/details/79793379
+
+https://www.yisu.com/zixun/126862.html
+
+https://tonybai.com/2017/06/27/an-intro-about-go-portability/
+
+https://github.com/dongjun111111/blog/issues/39
+
+https://cloud.tencent.com/developer/article/1187560
+https://github.com/golang/go/issues/20554
+https://github.com/golang/go/issues/20461
