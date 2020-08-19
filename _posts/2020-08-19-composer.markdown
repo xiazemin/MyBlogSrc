@@ -1,0 +1,69 @@
+---
+title: composer svn
+layout: post
+category: php
+author: 夏泽民
+---
+mac上用composer 全局安装工具时报错
+ [Symfony\Component\Process\Exception\RuntimeException]
+  The process has been signaled with signal "5".
+  
+ 方法一：重新安装svn
+
+方法二：https://github.com/composer/composer/commit/432ace33d4216ecb3e3082d53cf06907dc329663
+
+方法三：
+
+Basically what helped me was to add this line:
+
+putenv("DYLD_LIBRARY_PATH=''");
+
+in the top of the Process.php（~/.composer/vendor/symfony/process/Process.php） file of the composer.
+
+原因：
+https://github.com/composer/composer/issues/2146
+
+$brew install svn
+$brew link --overwrite subversion
+
+
+https://github.com/composer/composer/pull/2812
+https://github.com/composer/composer/commit/432ace33d4216ecb3e3082d53cf06907dc329663
+
+问题仍然存在
+<!-- more -->
+最近写了一个命令行脚本，涉及composer安装的几个库，还有自己封装的四五个类。不希望把一堆php脚本拷来拷去，最好能像phpunit那样就直接封装成一个可执行的文件。phpunit的做法是把所有相关文件打包封装到一个phar包里去分发，我也可以这么干。
+
+首先配置php.ini里的phar.readonly=0，默认Php解释器对phar是只读访问的，不能修改phar的内容，以免意外修改整体交付的软件包。修改配置之后才可以用来打包生成phar。改好配置之后，建立程序目录结构如下：
+
+.
+├── bin
+├── generate-phar.php
+└── src
+    └── index.php
+其中src目录里有完整的代码文件，包括composer引入的第三方库。我们用generate-phar.php程序生成phar文件，并把它放到bin目录里去。
+
+<?php
+//在bin目录下创建phar文件
+$phar = new Phar(__DIR__ . DIRECTORY_SEPARATOR . 'bin/mytool.phar');
+
+//从src目录构建phar包
+$phar->buildFromDirectory('src');
+
+//定义默认执行入口为index.php
+$defStub = Phar::createDefaultStub('index.php');
+
+//设置php解释器shell头，让phar可以自己执行
+$phar->setStub("#!/usr/bin/env php\n$defStub");
+
+//用bzip2库压缩phar包里的文件（此步要求PHP安装了zlib和bz2扩展，可以跳过）
+$phar->compressFiles(Phar::BZ2);
+
+//将phar包改名，去掉phar扩展名
+rename('bin/mytool.phar', 'bin/mytool');
+
+//授予phar包可执行权限
+chmod('bin/mytool', 0755);
+现在可以用bin/mytool直接执行包中的程序了，phar会自动使用系统中安装的PHP解释器，如果想在任意目录运行此程序，可以把phar包拷到$PATH路径覆盖的目录中，比如/usr/local/bin
+
+https://xts.so/lang/pack-the-php-project-as-executable-phar.html
