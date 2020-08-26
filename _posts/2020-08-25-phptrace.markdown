@@ -1,0 +1,103 @@
+---
+title: phptrace  Molten
+layout: post
+category: php
+author: 夏泽民
+---
+Molten可以认为是phptrace的的升级版，增加了可视化分布式等等等等的功能吧，主要用了phptrace的信息收集这块。
+
+看下Molten能干啥吧
+
+molten追踪php核心调用库运行时信息并且按照zipkin/optracing格式输出信息。
+可以追踪`curl,pdo,mysqli,redis,mongodb,memcached` 这么多的运行信息。
+灰常牛逼啊，你可以直接看到你耗时比较久的接口的运行信息，调用信息，一眼就能看到哪个地方拖累了你。是不是真的6
+
+接下来安装。直接参考官方的安装，此处略过。
+
+接下来配置，官方说的很清楚了，此处贴上我的配置
+
+[molten]
+extension="/usr/lib/php/extensions/no-debug-non-zts-20131226/molten.so"
+molten.enable="1"
+molten.service_name="local"
+molten.tracing_cli=1
+molten.open_report=1
+molten.sampling_type=2
+molten.sampling_rate=1
+molten.notify_uri="http://127.0.0.1:9411/zipkin/"
+molten.sink_http_uri="http://127.0.0.1:9411/api/v1/spans"
+molten.sink_type=4
+molten.sink_log_path="/project/molten/logs/"
+重新启动fpm后。进入molten的源码目录的example目录。执行sh run.sh前提是装了java环境或者docker环境。打开浏览器http://127.0.0.1:9411/zipkin/就可以看到信息了。
+
+来一段代码
+
+curl_setopt($curl, CURLOPT_URL, 'http://www.baidu.com');
+curl_setopt($curl, CURLOPT_HEADER, 1);
+curl_setopt($curl, CURLOPT_RETURNTRANSFER, 1);
+$data = curl_exec($curl);
+curl_close($curl);
+phpinfo();
+再看zipkin就有了数据，点进去就看到具体的调用信息了。
+Tip：
+好像file_get_contents追踪不到
+由于很多场景都是同一个PHP环境都是运行了很多项目，改php.ini还是有很多不方便。可以在入口文件通过ini_set函数来实现服务的区分。
+<!-- more -->
+https://www.oschina.net/p/molten?hmsr=aladdin1e1
+
+https://research.google/pubs/pub36356/
+
+https://prometheus.io/docs/prometheus/latest/getting_started/
+
+https://github.com/Qihoo360/phptrace
+
+phptrace 是一个低开销的用于跟踪、分析 php 运行情况的工具。
+它可以跟踪 php 在运行时的函数调用、请求信息、执行流程、并且提供有过滤器、统计信息、当前状态等实用功能。
+在任何环境下，它都能很好的定位阻塞的问题以及在高负载下进行 denbug。
+官方源码：https://github.com/Qihoo360/phptrace。
+
+安装#
+pecl 方式安装#
+Copy
+$ pecl install trace
+源码方式安装#
+Copy
+$ wget https://pecl.php.net/get/trace-1.0.0.tgz # 下载源码
+$ tar -xf trace-1.0.0.tgz # 解压文件
+$ cd trace-1.0.0/extension # 进入扩展目录
+源码编译#
+Copy
+$ whereis php-config # 找到 php-config 的路径
+$ phpize
+$ ./configure --with-php-config=/usr/bin/php-config # 这里的 --with-php-config 是上一步找到的路径
+$ make # 编辑
+$ make test # 编译测试
+$ make cli # 命令行工具
+$ make install-all # 安装 php 扩展，命令行工具到 php 目录
+修改 php.ini#
+在 php.ini 配置文件中增加以下配置信息。
+
+Copy
+[phptrace]
+extension=trace.so
+phptrace.enabled=1
+注：修改 php.ini 后，需要手动重启 php-fpm
+
+检查是否生效#
+Copy
+root@639ca1f15214:~# php -m | grep trace
+trace
+实际测试#
+Copy
+root@639ca1f15214:/var/www# php -r 'for ($i = 0; $i < 20; $i++) { sleep(5); }' &
+[1] 361
+root@639ca1f15214:/var/www# phptrace -p $!
+process attached
+[pid   361]    > sleep(5) called at [Command line code:1]
+[pid   361]    < sleep(5) = 0 called at [Command line code:1] ~ 5.001s 5.001s
+
+phptrace 是一个追踪（trace）PHP执行流程的工具，你如果用过strace的话，则可能很容易想到phptrace到底实现了什么样的功能。 其实，phptrace是类strace的一个实现，不同的是，strace用来追踪系统调用，而phptrace用来追踪PHP函数调用。无论是开发测试 还是线上追查问题，代码执行流程往往会提供许多有用的信息，大大提高了开发人员的工作效率；对于系统函数，我们可以用strace 来观察其调用信息，然而PHP却长久以来缺少这么一个行之有效的工具，因此我们开发了phptrace
+
+https://www.cnblogs.com/yulibostu/articles/9788153.html
+
+https://github.com/Qihoo360/phptrace
