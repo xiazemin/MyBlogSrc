@@ -1,0 +1,936 @@
+---
+title: php扩展实现一个class
+layout: post
+category: php
+author: 夏泽民
+---
+$./ext_skel --extname=myClass
+Creating directory myClass
+Creating basic files: config.m4 config.w32 .gitignore myClass.c php_myClass.h CREDITS EXPERIMENTAL tests/001.phpt myClass.php [done].
+
+To use your new extension, you will have to execute the following steps:
+
+1.  $ cd ..
+2.  $ vi ext/myClass/config.m4
+3.  $ ./buildconf
+4.  $ ./configure --[with|enable]-myClass
+5.  $ make
+6.  $ ./sapi/cli/php -f ext/myClass/myClass.php
+7.  $ vi ext/myClass/myClass.c
+8.  $ make
+
+
+两种加载方式 with 和 enable
+enable方式 需要重新编译PHP ,这样是非常浪费时间的,所以我把它编译为so模块..
+所以就用 with啦
+
+ PHP_ARG_WITH(myClass, for myClass support,
+ Make sure that the comment is aligned:
+ [  --with-myClass             Include myClass support])
+ 
+ https://www.cnblogs.com/orlion/p/5466155.html
+ 
+ 
+ 假设我们要用PHP扩展实 现一个类Person，它有一个private的成员变量$_name和两个public的实例方法getName()和setName()，可以用 PHP代码表示如下：
+<?php class Person
+{
+    private $_name;
+    public function getName()
+    {
+        return $this -> _name;
+    } 
+    public function setName($name)
+    {
+        $this -> _name = $name;
+    } 
+} 
+
+1. 声明方法：首先在头文件php_myClass.h里加入方法声明。
+
+PHP_METHOD(Person, __construct);
+PHP_METHOD(Person, __destruct);
+PHP_METHOD(Person, getName);
+PHP_METHOD(Person, setName);
+前面的扩展在声明函数时使用PHP_FUNCTION宏，而在实现类扩展时我们使用PHP_METHOD宏，第一个参数指定类名，第二个参数指定方法名。
+<!-- more -->
+2. 方法实现：在fetion_echo.c文件中实现这几个方法，构造函数和析构函数中只是输出一些文本
+PHP_METHOD(Person, __construct) {
+ php_printf("__construct called.");
+}
+ 
+PHP_METHOD(Person, __destruct) {
+ php_printf("__destruct called.<br/>");
+}
+ 
+PHP_METHOD(Person, getName) {
+ zval *self, *name;
+ self = getThis();
+ name = zend_read_property(Z_OBJCE_P(self), self, ZEND_STRL("_name"), 0 TSRMLS_CC);
+ RETURN_STRING(Z_STRVAL_P(name), 0);
+}
+ 
+PHP_METHOD(Person, setName) {
+ char *arg = NULL;
+ int arg_len;
+ zval *value, *self;
+ if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "s", &arg, &arg_len) == FAILURE) {
+ WRONG_PARAM_COUNT;
+ }
+ self = getThis();
+ MAKE_STD_ZVAL(value);
+ ZVAL_STRINGL(value, arg, arg_len, 0);
+ SEPARATE_ZVAL_TO_MAKE_IS_REF(&value);
+ zend_update_property(Z_OBJCE_P(self), self, ZEND_STRL("_name"), value TSRMLS_CC);
+ RETURN_TRUE;
+}
+对上面的代码做一些解释：
+
+A. 获取方法的参数信息，仍然使用zend_parse_parameters函数，与之前我们介绍过的一样；
+
+B. 获取this指针（相对于PHP代码而言，在PHP扩展中仍然使用zval结构表示）使用getThis()函数；
+
+C. 使用MAKE_STD_ZVAL宏申请并初始化一个zval结构，在PHP扩展中，所有的数据类型其实都是用zval结构来表示的，在本系列文章中我会单独写一篇来介绍zval。
+
+D. 获取属性值使用zend_read_property()函数，使用zend_update_property()函数更新属性值。
+
+3. 初始化类：在扩展初始化函数中，注册并初始化类。
+
+zend_class_entry *person_ce;
+
+PHP_MINIT_FUNCTION(fetion_echo)
+{ 
+    zend_class_entry person; INIT_CLASS_ENTRY(person, "Person", fetion_echo_functions);
+    person_ce = zend_register_internal_class_ex(&person, NULL, NULL TSRMLS_CC);
+
+    zend_declare_property_null(person_ce, ZEND_STRL("_name"), ZEND_ACC_PRIVATE TSRMLS_CC); return SUCCESS;
+}
+使用INIT_CLASS_ENTRY宏初始化类，第二个参数指定类名，第三个参数是函数表。
+
+4. 注册到函数：声明方法的参数，并注册到函数表中。
+
+ZEND_BEGIN_ARG_INFO(arg_person_setname, 0)
+    ZEND_ARG_INFO(0, name)
+ZEND_END_ARG_INFO() const zend_function_entry fetion_echo_functions[] = {
+    PHP_ME(Person, __construct, NULL, ZEND_ACC_PUBLIC|ZEND_ACC_CTOR)
+    PHP_ME(Person, __destruct,  NULL, ZEND_ACC_PUBLIC|ZEND_ACC_DTOR)
+    PHP_ME(Person, getName,     NULL, ZEND_ACC_PUBLIC)
+    PHP_ME(Person, setName,     arg_person_setname, ZEND_ACC_PUBLIC)
+    {NULL, NULL, NULL} /* Must be the last line in fetion_echo_functions[] */ };
+类方法参数的声明与之前我们函数参数声明方式一致，在注册类方法到函数表中时使用PHP_ME宏，而不是之前使用的PHP_FE宏。
+
+ZEND_ACC_PUBLIC：指定方法的访问修饰符
+
+ZEND_ACC_CTOR：指定该方法为构造函数
+
+ZEND_ACC_DTOR：指定该方法为析构函数
+
+5. 运行测试：编译安装扩展后，编写一段简单的测试脚本：
+
+<?php $person = new Person();
+    $person->setName("mickelfeng"); echo $person->getName().'<br/>';
+运行后可以看到如下输出，说明扩展工作正常：
+
+__construct called.
+mickelfeng
+__destruct called.
+
+https://www.cnblogs.com/orlion/p/5459053.html
+
+$phpize
+$./configure
+$make
+myClass.c:87:81: error: too few arguments to function call, expected 6, have 5
+name = zend_read_property(Z_OBJCE_P(self), self, ZEND_STRL("_name"), 0 TSRMLS_CC);
+
+解决办法
+//name = zend_read_property(Z_OBJCE_P(self), self, ZEND_STRL("_name"), 0 TSRMLS_CC);
+zval *length = zend_read_property(Z_OBJCE_P(self), self, ZEND_STRL("_name"), 0 TSRMLS_CC,name);
+
+myClass.c:89:33: error: too many arguments provided to function-like macro invocation
+RETURN_STRING(Z_STRVAL_P(name), 0);
+                                ^
+                                
+//RETURN_STRING(Z_STRVAL_P(name), 0);
+RETURN_STRING(Z_STRVAL_P(name));
+
+myClass.c:102:35: error: too many arguments provided to function-like macro invocation
+ZVAL_STRINGL(value, arg, arg_len, 0);
+
+
+//ZVAL_STRINGL(value, arg, arg_len, 0);
+ZVAL_STRINGL(value, arg, arg_len);
+
+myClass.c:126:62: error: use of undeclared identifier 'fetion_echo_functions'
+        zend_class_entry person; INIT_CLASS_ENTRY(person, "Person", fetion_echo_functions);
+        
+
+改变名字fetion_echo_functions ＝》  myClass_functions
+移动声明到前面
+ZEND_END_ARG_INFO() const zend_function_entry myClass_functions[] = {
+
+/myClass.c:136:61: error: too many arguments to function call, expected 2, have 3
+        person_ce = zend_register_internal_class_ex(&person, NULL, NULL TSRMLS_CC);
+        
+ /myClass.c:193:27: error: redefinition of 'myClass_functions'
+const zend_function_entry myClass_functions[] = {
+
+//const zend_function_entry myClass_functions[] = {
+//	PHP_FE(confirm_myClass_compiled,	NULL)		/* For testing, remove later. */
+//	PHP_FE_END	/* Must be the last line in myClass_functions[] */
+//};
+    
+ $php test.php
+__construct called.dyld: lazy symbol binding failed: Symbol not found: _MAKE_STD_ZVAL
+  Referenced from: /usr/local/lib/php/extensions/no-debug-non-zts-20170718/myClass.so
+  Expected in: flat namespace
+
+dyld: Symbol not found: _MAKE_STD_ZVAL
+  Referenced from: /usr/local/lib/php/extensions/no-debug-non-zts-20170718/myClass.so
+  Expected in: flat namespace
+
+Trace/BPT trap: 5    
+
+php扩展函数返回值MAKE_STD_ZVAL(zv) 宏替换过程如下：
+
+替换之前：
+MAKE_STD_ZVAL(zv);
+---------------------------
+第1次替换：
+ALLOC_ZVAL(zv);
+INIT_PZVAL(zv);
+---------------------------
+第2次替换：
+(zv) = (zval *) emalloc(sizeof(zval));
+(zv)->refcount__gc = 1;
+(zv)->is_ref__gc = 0;;
+
+
+替换完之后，MAKE_STD_ZVAL宏的用途就不言而喻了
+
+
+
+myClass.c:101:1: warning: implicit declaration of function 'MAKE_STD_ZVAL' is invalid
+      in C99 [-Wimplicit-function-declaration]
+MAKE_STD_ZVAL(value);
+^
+/Users/didi/PhpstormProjects/c/php-src/ext/myClass/myClass.c:104:1: warning: implicit declaration of function
+      'SEPARATE_ZVAL_TO_MAKE_IS_REF' is invalid in C99 [-Wimplicit-function-declaration]
+
+
+https://www.laruence.com/2018/04/08/3170.html
+在PHP7开始, 我们移除了MAKE_STD_ZVAL/ALLOC_ZVAL宏, 不再支持存堆内存上申请zval. 函数内部使用的zval要么来自外面输入, 要么使用在栈上分配的临时zval.
+
+
+zval 的创建
+MAKE_STD_ZVAL(pzv). 这个宏将会以一种优化的方式为zval分配空间， 自动的处理超出内存错误，并初始化新zval的refcount和is_ref属性，除此之外，还有宏 ALLOC_INIT_ZVAL(). 这个宏和MAKE_STD_ZVAL唯一的区别是它会将zval *的数据类型初始化为IS_NULL。
+
+MAKE_STD_ZVAL例子（注意：在PHP7下，已经不允许我们在堆上去分配 zval 空间，我们通常的做法是， 定义一个临时变量(栈上)，然后将 p 的指针指向这个临时变量的地址，注意在使用完之后销毁zval，通常，我们可以在.h文件中做一个php5和php7版本的适配， 让你的代码能同时在php5 和 php7 上编译通过）
+
+
+----php7_wrapper.h----
+#if PHP_MAJOR_VERSION < 7 /* PHP Version 5*/
+	#define SW_MAKE_STD_ZVAL(p)               MAKE_STD_ZVAL(p)
+	#define SW_ALLOC_INIT_ZVAL(p)             ALLOC_INIT_ZVAL(p)
+	#define sw_zval_ptr_dtor(p)	          zval_ptr_dtor(*p) //zval销毁
+ 
+#else /* PHP Version 7 */
+        //栈上分配空间
+	#define SW_MAKE_STD_ZVAL(p)             zval _stack_zval_##p; p = &(_stack_zval_##p)
+	#define SW_ALLOC_INIT_ZVAL(p)           do{p = (zval *)emalloc(sizeof(zval)); bzero(p, sizeof(zval));}while(0)
+	#define sw_zval_ptr_dtor(p)	        zval_ptr_dtor(*p) //zval销毁
+ 
+#endif
+
+
+https://blog.csdn.net/caohao0591/article/details/82187030
+
+
+解决办法
+//MAKE_STD_ZVAL(value);
+
+myClass.c:105:1: warning: implicit declaration of function
+      'SEPARATE_ZVAL_TO_MAKE_IS_REF' is invalid in C99 [-Wimplicit-function-declaration]
+SEPARATE_ZVAL_TO_MAKE_IS_REF(&value);
+
+
+// 变量分离，此处重新copy了一份array专门用于key函数
+    SEPARATE_ZVAL_TO_MAKE_IS_REF(varptr_ptr);
+    varptr = *varptr_ptr;
+    Z_ADDREF_P(varptr);
+
+    // 压栈
+    zend_vm_stack_push(varptr TSRMLS_CC);
+    ZEND_VM_NEXT_OPCODE();
+}
+
+上述代码中的SEPARATE_ZVAL_TO_MAKE_IS_REF是一个宏：
+复制代码 代码如下:
+
+#define SEPARATE_ZVAL_TO_MAKE_IS_REF(ppzv)    \
+    if (!PZVAL_IS_REF(*ppzv)) {                \
+        SEPARATE_ZVAL(ppzv);                \
+        Z_SET_ISREF_PP((ppzv));                \
+    }
+
+SEPARATE_ZVAL_TO_MAKE_IS_REF的主要作用为，如果变量不是一个引用，则在内存中copy出一份新的。本例中它将array('a','b','c')复制了一份。因此变量分离之后的内存为：
+注意，变量分离完成之后，CV数组中的指针指向了新copy出来的数据，而通过zend_execute_data->Ts中的指针则依然可以获取旧的数据。
+接下来的循环就不一一赘述了，结合上图来说：
+•foreach结构使用的是下方蓝色的array，会依次遍历a，b，c
+•key、current使用的是上方黄色的array，它的内部指针永远指向b
+至此我们明白了为何key和current一直返回array的第二个元素，由于没有外部代码作用于copy出来的array，它的内部指针便永远不会移动。
+
+https://blog.csdn.net/Inite/article/details/74157330
+
+https://bugs.php.net/bug.php?id=11970
+$php test.php
+__construct called.Segmentation fault: 11
+
+
+https://my.oschina.net/u/4321424/blog/3714297
+php7的文档中有这样的描述：
+Both mistakes might cause memory corruptions and segfaults:
+1)
+char *str;
+long str_len; 
+zend_parse_parameters(ZEND_NUM_ARGS(), "s", &str, &str_len)
+
+2)
+int num; 
+zend_parse_parameters(ZEND_NUM_ARGS(), "l", &num)
+上面的例子应该改成：
+int str_len; ==> size_t str_len;
+
+The following characters also have a meaning in the specifier string:
+| - indicates that the remaining parameters are optional, they
+should be initialized to default values by the extension since they
+will not be touched by the parsing function if they are not
+passed to it.
+/ - use SEPARATE_ZVAL_IF_NOT_REF() on the parameter it follows
+! - the parameter it follows can be of specified type or NULL. If NULL is
+passed and the output for such type is a pointer, then the output
+pointer is set to a native NULL pointer.
+For 'b', 'l' and 'd', an extra argument of type zend_bool* must be
+passed after the corresponding bool*, zend_long* or double* arguments,
+respectively. A non-zero value will be written to the zend_bool if a
+PHP NULL is passed.
+
+
+//int arg_len;
+size_t arg_len;
+
+https://www.cnblogs.com/djhull/p/5359650.html
+
+
+在php_person.h头中加上
+
+extern zend_class_entry *person_ce;PHP_METHOD(person_ce,__construct);PHP_METHOD(person_ce,saying);PHP_METHOD(person_ce,doing);
+在person.c头中加上
+
+/**
+ * 声明构造函数
+ * @param
+ * @return
+ */ZEND_METHOD(person,__construct){
+
+        zval *pThis;
+        pThis = getThis();
+
+
+    zend_printf("construct\n");}/**
+ * 声明析造函数
+ * @param
+ * @return
+ */ZEND_METHOD(person,__destruct){
+
+
+    zend_printf("destruct\n");}ZEND_METHOD(person,doing){
+
+
+    zend_printf("doing\n");}ZEND_METHOD(person,saying){
+
+    zend_printf("saying\n");}//这个函数需要加上声明，去掉了没用的test函数const zend_function_entry person_functions[] = {
+
+
+    ZEND_ME(person, __construct, global_config_arg, ZEND_ACC_PUBLIC|ZEND_ACC_CTOR)
+    ZEND_ME(person,doing,NULL,ZEND_ACC_PUBLIC) ZEND_ME(person,saying,NULL,ZEND_ACC_PUBLIC)
+    ZEND_ME(person,__destruct,NULL,ZEND_ACC_PUBLIC|ZEND_ACC_DTOR)
+
+    PHP_FE_END  /* Must be the last line in person_functions[] */};//将类和方法注册到zendPHP_MINIT_FUNCTION(person){
+       zend_class_entry ce;
+       INIT_CLASS_ENTRY(ce, "person", person_functions);
+       person_ce = zend_register_internal_class(&ce TSRMLS_CC);
+
+       zend_declare_property_null(person_ce,"saying",strlen("saying"),ZEND_ACC_PUBLIC);
+       zend_declare_property_null(person_ce,"doing",strlen("doing"),ZEND_ACC_PUBLIC);
+
+    return SUCCESS;}
+    
+https://blog.csdn.net/weixin_33743880/article/details/91618240
+
+https://blog.csdn.net/caohao0591/article/details/82187030
+
+
+1， zend_class_entry 是php内核中一个类的原型，如果我们想创建一个类，只要将它注册到minit中去即可
+
+2，类都有方法，方法要注册到 zend_function_entry这个结构中去
+
+ZEND_METHOD(myclass, __construct)
+{
+    php_printf("初始化完成");
+}
+ZEND_METHOD(myclass, public_func)
+{
+    php_printf("执行public_func");
+}
+static zend_function_entry walu_functions[] = {
+    ZEND_ME(myclass, __construct, NULL, ZEND_ACC_PUBLIC|ZEND_ACC_CTOR)
+    ZEND_ME(myclass, public_func, NULL, ZEND_ACC_PUBLIC)
+    {NULL,  NULL,   NULL}
+};
+ 
+ 
+ZEND_MINIT_FUNCTION(walu)
+{
+    zend_class_entry ce;
+    INIT_CLASS_ENTRY(ce, "myclass", walu_functions);
+    zend_register_internal_class(&ce TSRMLS_CC);
+    return SUCCESS;
+
+｝
+
+https://blog.csdn.net/qq_32783703/article/details/80641355
+
+https://www.cnblogs.com/yulibostu/articles/8421830.html
+
+1.在php_siren.h里面声明类
+
+1
+2
+3
+4
+PHP_METHOD(Person,__construct);
+PHP_METHOD(Person,__destruct);
+PHP_METHOD(Person,setproperty);
+PHP_METHOD(Person,getproperty);
+PHP_METHOD宏.
+PHP_METHOD 等于ZEND_METHOD
+这个宏接受两个参数,第一个是类名,第二个是类的方法
+
+1
+2
+3
+4
+#define ZEND_METHOD(classname, name)    ZEND_NAMED_FUNCTION(ZEND_MN(classname##_##name))
+#define INTERNAL_FUNCTION_PARAMETERS int ht, zval *return_value, zval **return_value_ptr, zval *this_ptr, int return_v    alue_used TSRMLS_DC
+//最后等于
+void name(int ht, zval *return_value, zval **return_value_ptr, zval *this_ptr, int return_v    alue_used TSRMLS_DC )
+这个宏是用来声明我们的方法…
+2.设置接收的参数
+我们的方法如果需要接受参数.那么就要执行
+
+1
+2
+3
+ZEND_BEGIN_ARG_INFO_EX(arg_person_info,0,0,2) 
+        ZEND_ARG_INFO(0,name)
+ZEND_END_ARG_INFO()
+详细讲这几个宏之前先看看zend_arg_info
+
+typedef struct _zend_arg_info {
+        const char *name; //参数名称
+        zend_uint name_len;//长度
+        const char *class_name;  //所属类名
+        zend_uint class_name_len;  //类名长度
+        zend_bool array_type_hint;
+        zend_bool allow_null; //允许为空
+        zend_bool pass_by_reference;  //引用传值
+        zend_bool return_reference;   //引用返回
+        int required_num_args;   //参数个数
+} zend_arg_info;
+ZEND_BEGIN_ARG_INFO_EX定义在Zend/zend_API.h
+
+1
+2
+3
+#define ZEND_BEGIN_ARG_INFO_EX(name, pass_rest_by_reference, return_reference, required_num_args)       \
+        static const zend_arg_info name[] = {                                                                                                                                           \
+                { NULL, 0, NULL, 0, 0, 0, pass_rest_by_reference, return_reference, required_num_args },
+很明显 声明一个zend_arg_info的数组name,然后初始化结构体的值
+ZEND_ARG_INFO(0,name)的定义如下
+
+1
+#define ZEND_ARG_INFO(pass_by_ref, name)  { #name, sizeof(#name)-1, NULL, 0, 0, 0, pass_by_ref, 0, 0 },
+这三个宏 执行代码 等于
+
+1
+2
+3
+static const zend_arg_info name[] = {                                                                                                                                                    { NULL, 0, NULL, 0, 0, 0, pass_rest_by_reference, return_reference, required_num_args },
+{ #name, sizeof(#name)-1, NULL, 0, 0, 0, pass_by_ref, 0, 0 },
+};
+3.创建zend_function_entry结构数组
+
+const zend_function_entry person_functions[]={
+        PHP_ME(Person,__construct,NULL,ZEND_ACC_PUBLIC|ZEND_ACC_CTOR)
+        PHP_ME(Person,__destruct,NULL,ZEND_ACC_PUBLIC|ZEND_ACC_DTOR)
+        PHP_ME(Person,getproperty,arg_person_info,ZEND_ACC_PUBLIC)
+        PHP_ME(Person,setproperty,arg_person_info,ZEND_ACC_PUBLIC)
+        PHP_FE_END
+};
+zend_function_entry定义如下
+
+typedef struct _zend_function_entry {
+        const char *fname; //函数名称
+        void (*handler)(INTERNAL_FUNCTION_PARAMETERS);
+        const struct _zend_arg_info *arg_info;//参数
+        zend_uint num_args;//参数个数
+        zend_uint flags;//标示PUBLIC ?PRIVATE ?PROTECTED
+} zend_function_entry;
+PHP_ME宏接收四个参数
+1 类名,
+2 方法名,
+3 zend_arg_info 的参数列表,
+
+ZEND_ACC_PUBLIC ZEND_ACC_PRIVATE ZEND_ACC_PROTECTED是我们类里面的三个访问权限
+ZEND_ACC_CTOR标示构造函数
+ZEND_ACC_DTOR标示析构函数
+4.修改PHP_MINIT_FUNCTION
+前面我们说过 PHP_MINIT_FUNCTION是在模块启动的时候执行的函数
+首先创建一个全局指针 zend_class_entry *person_ce;
+在PHP_MINIT_FUNCTION加入如下代码
+zend_class_entry person;
+INIT_CLASS_ENTRY(person,"Person",person_functions);
+person_ce=zend_register_internal_class_ex(&person,NULL,NULL TSRMLS_CC);
+zend_declare_property_null(person_ce,ZEND_STRL("name"),ZEND_ACC_PUBLIC TSRMLS_CC);
+1行创建一个zend_class_entry对象person.
+zend_class_entry这个结构体前面也讲过 PHP内核研究之类的实现
+2行初始化zend_class_entry 它执行了如下代码
+
+{                                                                                                                       \
+        int _len = class_name_len;                                                              \
+        class_container.name = zend_strndup(class_name, _len);  \
+        class_container.name_length = _len;                                             \
+        class_container.builtin_functions = functions;                  \
+        class_container.constructor = NULL;                                             \
+        class_container.destructor = NULL;                                              \
+        class_container.clone = NULL;                                                   \
+        class_container.serialize = NULL;                                               \
+        class_container.unserialize = NULL;                                             \
+        class_container.create_object = NULL;                                   \
+        class_container.interface_gets_implemented = NULL;              \
+        class_container.get_static_method = NULL;                               \
+        class_container.__call = handle_fcall;                                  \
+        class_container.__callstatic = NULL;                                    \
+        class_container.__tostring = NULL;                                              \
+        class_container.__get = handle_propget;                                 \
+        class_container.__set = handle_propset;                                 \
+        class_container.__unset = handle_propunset;                             \
+        class_container.__isset = handle_propisset;                             \
+        class_container.serialize_func = NULL;                                  \
+        class_container.unserialize_func = NULL;                                \
+        class_container.serialize = NULL;                                               \
+        class_container.unserialize = NULL;                                             \
+        class_container.parent = NULL;                                                  \
+        class_container.num_interfaces = 0;                                             \
+        class_container.interfaces = NULL;                                              \
+        class_container.get_iterator = NULL;                                    \
+        class_container.iterator_funcs.funcs = NULL;                    \
+        class_container.module = NULL;                                                  \
+}
+可以对应文章>> PHP内核研究之类的实现来分析
+zend_declare_property_null(person_ce,ZEND_STRL(“name”),ZEND_ACC_PUBLIC TSRMLS_CC);
+创建一个值为NULL的属性
+第一个参数是类名,第二个参数是 属性名称,第三个参数是属性名的长度,因为ZEND_STRL宏定义了长度,所以这里不用再传递长度.
+第四个参数是属性的访问权限.
+还有其他几个函数用来创建不同类型的属性
+
+zend_declare_property_bool
+zend_declare_property_double
+zend_declare_property_ex
+zend_declare_property_long
+zend_declare_property_null
+zend_declare_property_string
+zend_declare_property_stringl
+5.创建 php_siren.h头文件中的方法体
+
+PHP_METHOD(Person,__construct){
+        php_printf("construct is running<br>");
+}
+PHP_METHOD(Person,__destruct){
+        php_printf("destruct is running<br>");
+}
+PHP_METHOD(Person,setproperty){
+ 
+}
+PHP_METHOD(Person,getproperty){
+ 
+}
+6.最后make&& make install
+编译我们的扩展,
+重新启动apache.
+
+https://www.cnblogs.com/yulibostu/articles/8421830.html
+
+https://www.cnblogs.com/orlion/p/5466164.html
+
+https://my.oschina.net/mickelfeng/blog/122519/print
+
+https://www.php.cn/php-weizijiaocheng-254920.html
+
+https://blog.csdn.net/u013474436/article/details/79020159?utm_source=blogxgwz4
+
+类使用 PHP_ME和PHP_METHOD 宏，与方法最大的不同的地方是类需要注册
+
+这里我写了一个 init_class 方法，PHP_MINIT_FUNCTION中调用，主要是需要注册类
+
+$php test.php
+__construct called.PHP Fatal error:  Person::setName() must be derived from ::setName in Unknown on line 0
+
+https://blog.icodef.com/2018/09/25/1508
+
+http://blog.sina.com.cn/s/blog_c039eb5001016mpx.html
+
+而每一个参数的定义可以是下列宏定义中的一个：
+
+ZEND_ARG_INFO	声明普通参数
+ZEND_ARG_OBJ_INFO	声明对象类型的参数
+ZEND_ARG_ARRAY_INFO	声明数组类型的参数
+ZEND_ARG_PASS_INFO(pass_by_ref)	pass_by_ref为1时，强制设置后续的参数为引用类型
+
+https://xueyuanjun.com/post/7239.html
+
+
+ZEND_API void zend_update_property_stringl(zend_class_entry *scope, zval *object, const char *name, size_t name_length, const char *value, size_t value_len) /* {{{ */
+{
+	zval tmp;
+
+	ZVAL_STRINGL(&tmp, value, value_len);
+	Z_SET_REFCOUNT(tmp, 0);
+	zend_update_property(scope, object, name, name_length, &tmp);
+}
+
+
+
+
+
+ZEND_API void zend_update_property_null(zend_class_entry *scope, zval *object, char *name, int name_length TSRMLS_DC);
+ZEND_API void zend_update_property_bool(zend_class_entry *scope, zval *object, char *name, int name_length, long value TSRMLS_DC);
+ZEND_API void zend_update_property_long(zend_class_entry *scope, zval *object, char *name, int name_length, long value TSRMLS_DC);
+ZEND_API void zend_update_property_double(zend_class_entry *scope, zval *object, char *name, int name_length, double value TSRMLS_DC);
+ZEND_API void zend_update_property_string(zend_class_entry *scope, zval *object, char *name, int name_length, const char *value TSRMLS_DC);
+ZEND_API void zend_update_property_stringl(zend_class_entry *scope, zval *object, char *name, int name_length, const char *value, int value_length TSRMLS_DC);
+
+ZEND_API int zend_update_static_property_null(zend_class_entry *scope, char *name, int name_length TSRMLS_DC);
+ZEND_API int zend_update_static_property_bool(zend_class_entry *scope, char *name, int name_length, long value TSRMLS_DC);
+ZEND_API int zend_update_static_property_long(zend_class_entry *scope, char *name, int name_length, long value TSRMLS_DC);
+ZEND_API int zend_update_static_property_double(zend_class_entry *scope, char *name, int name_length, double value TSRMLS_DC);
+ZEND_API int zend_update_static_property_string(zend_class_entry *scope, char *name, int name_length, const char *value TSRMLS_DC);
+ZEND_API int zend_update_static_property_stringl(zend_class_entry *scope, char 
+
+
+
+更新对象的属性：
+
+ZEND_API void zend_update_property(zend_class_entry *scope, zval *object, char *name, int name_length, zval *value TSRMLS_DC);
+ZEND_API int zend_update_static_property(zend_class_entry *scope, char *name, int name_length, zval *value TSRMLS_DC);
+zend_update_property用来更新对象的属性，zend_update_static_property用来更新类的静态属性。如果对象或者类中没有相关的属性，函数将自动的添加上。
+
+读写对象与类属性的实例
+假设我们已经在扩展中定义好下面的类：
+
+class baby
+{
+	public $age;
+	public static $area;
+
+	public function __construct($age, $area)
+	{
+		$this->age = $age;
+		self::$area = $area;
+
+		var_dump($this->age, self::$area);
+	}
+}
+
+ZEND_METHOD(baby, __construct)
+{
+	zval *age, *area;
+	zend_class_entry *ce;
+	ce = Z_OBJCE_P(getThis());
+	if( zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "zz", &age, &area) == FAILURE )
+	{
+		printf("Errorn");
+		RETURN_NULL();
+	}
+	zend_update_property(ce, getThis(), "age", sizeof("age")-1, age TSRMLS_CC);
+	zend_update_static_property(ce, "area", sizeof("area")-1, area TSRMLS_CC);
+
+	age = NULL;
+	area = NULL;
+
+	age = zend_read_property(ce, getThis(), "age", sizeof("age")-1, 0 TSRMLS_DC);
+	php_var_dump(&age, 1 TSRMLS_CC);
+
+	area = zend_read_static_property(ce, "area", sizeof("area")-1, 0 TSRMLS_DC);
+	php_var_dump(&area, 1 TSRMLS_CC);
+
+}
+
+http://www.4u4v.net/the-php-core-exploration-object-properties-literacy.html
+
+
+ 在php扩展程序的开发中，涉及参数接受处理时，第一步便是要对传入参数进行判断，如生成的扩展示例代码：
+if (zend_parse_parameters(ZEND_NUM_ARGS(), "s", &arg, &arg_len) == FAILURE) {
+        return;
+    }如上述示例代码，其判断有
+1：判断是否有入参，如果没有入参就会报缺少参数错误。
+2：判断入参是不是字符串，如果不是字符串就会把参数类型错误。
+    先说一下参数类型吧，上面的例子中只有字符串，没有其它类型。实际PHP扩展程序中的类型不少，有整型，浮点型，还有zval类型。zval是Zend引擎的值容器，无论这个变量是个简单的布尔值，字符串或者其他任何类型值，其信息总是一个完整的zval结构。可以认为是一个简单数据的底层复杂描述的结构。
+    
+    
+    http://www.04007.cn/article/614.html
+    
+    https://xueyuanjun.com/post/7233.html
+    
+ http://www.nowamagic.net/librarys/veda/detail/1467
+ 
+ https://blog.csdn.net/pzqingchong/article/details/70859634?locationNum=2&fps=1
+ 
+ b Boolean
+l Integer 整型
+d Floating point 浮点型
+s String 字符串
+r Resource 资源
+a Array 数组
+o Object instance 对象
+O Object instance of a specified type 特定类型的对象
+z Non-specific zval 任意类型～
+Z zval**类型
+f 表示函数、方法名称，PHP5.3之前没有的
+
+
+b   zend_bool
+l   long
+d   double
+s   char*, int 前者接收指针，后者接收长度
+r   zval*
+a   zval*
+o   zval*
+O   zval*, zend_class_entry*
+z   zval*
+Z   zval**
+
+https://www.cnblogs.com/chenpingzhao/p/4498829.html
+
+
+//if (zend_parse_method_parameters(ZEND_NUM_ARGS(), getThis(), "s",&name, &name_len) == FAILURE) {
+if(zend_parse_method_parameters(ZEND_NUM_ARGS(),getThis(),"s",Z_OBJCE_P(getThis()),person_ce,&name)==FAILURE){
+
+
+
+https://blog.icodef.com/2018/09/25/1508
+
+PHP Warning:  Person::setName() expects exactly 0 parameters, 1 given in /Users/didi/PhpstormProjects/c/php-src/ext/myClass/test.php on line 4
+https://www.cnblogs.com/chenpingzhao/p/4498829.html
+
+https://www.cnblogs.com/djhull/p/5359650.html
+
+https://www.cnblogs.com/yhl664123701/p/5311387.html
+
+https://segmentfault.com/a/1190000007575322
+
+zend_parse_method_parameters 和 zend_parse_parameters 区别
+
+
+
+zend_parse_method_parameters 必须第一个格式字符串是 O
+
+this_ptr作为返回值 返回（赋值给obj_ptr) 且必须是 mchessian_service_ce_ptr类型实例 
+
+if (FAILURE == zend_parse_method_parameters(ZEND_NUM_ARGS() TSRMLS_CC, p_this, "O|o", &obj_ptr, mcphessian_service_ce_ptr, &obj2_ptr)) {
+zend_error(E_WARNING, "parse parameters error.");
+//return;
+}
+
+ ZEND_API int zend_parse_method_parameters(int num_args TSRMLS_DC, zval *this_ptr, const char *type_spec, ...) /* {{{ */
+{
+va_list va;
+int retval;
+const char *p = type_spec;
+zval **object;
+zend_class_entry *ce;
+
+
+if (!this_ptr) {
+RETURN_IF_ZERO_ARGS(num_args, p, 0);
+
+
+va_start(va, type_spec);
+retval = zend_parse_va_args(num_args, type_spec, &va, 0 TSRMLS_CC);
+va_end(va);
+} else {
+p++;
+RETURN_IF_ZERO_ARGS(num_args, p, 0);
+
+
+va_start(va, type_spec);
+
+
+object = va_arg(va, zval **);
+ce = va_arg(va, zend_class_entry *);
+*object = this_ptr;
+
+
+if (ce && !instanceof_function(Z_OBJCE_P(this_ptr), ce TSRMLS_CC)) {
+zend_error(E_CORE_ERROR, "%s::%s() must be derived from %s::%s",
+ce->name, get_active_function_name(TSRMLS_C), Z_OBJCE_P(this_ptr)->name, get_active_function_name(TSRMLS_C));
+}
+
+
+retval = zend_parse_va_args(num_args, p, &va, 0 TSRMLS_CC);
+va_end(va);
+}
+return retval;
+
+https://www.laruence.com/2009/04/28/719.html
+
+https://www.laruence.com/2008/04/16/19.html
+https://www.laruence.com/2011/09/13/2139.html
+
+
+https://blog.icodef.com/2018/09/25/1508
+
+类参数
+其实和函数的参数一样，还有一个类似的zend_parse_method_parameters我用的时候总是错误，还没明白这个函数是干什么的，而且找不到说明的资料=_=，后面附上两个源码的区别再看看
+
+PHP_METHOD(study_ext_class,sum)
+{
+    zend_long parma_num=0;
+    zval* this=getThis();
+    zval* static_num=zend_read_static_property(Z_OBJCE_P(this),"num",sizeof("num")-1,0);
+    if(zend_parse_parameters(ZEND_NUM_ARGS(),"l",&parma_num)==FAILURE){
+        RETURN_LONG(-1)
+    }
+    if(Z_TYPE_P(static_num)==IS_LONG){
+        RETURN_LONG(static_num->value.lval+parma_num)
+    }
+    RETURN_LONG(-1)
+}
+ZEND_BEGIN_ARG_INFO(sum_arg,0)
+ZEND_ARG_INFO(0,num)
+ZEND_END_ARG_INFO()
+C
+探究
+如果我们的第二个参数this_ptr为NULL或者不是OBJECT类型的话，那么效果和zend_parse_parameters一样，我之前填的是this指针，所以跳到了else分支
+
+else分之第一句就是p++;表示字符串往后面移动一位，我填的参数是是一个单独的 l 然后一移动....没啦，后面还有两个va_arg
+
+通过后面这两个得知，我们的两个参数，一个是 zval 的，一个是 zend_class_entry* 我们传入的 this_ptr 参数会赋值给 object 也就是我们后面的第四个参数，第五个是我们类的指针
+
+object = va_arg(va, zval **);
+ce = va_arg(va, zend_class_entry *);
+*object = this_ptr;
+C
+看后面这一段，好像是校验类的，所以我觉得这个zend_parse_method_parameters和zend_parse_parameters的区别就在这里，method能够对类进行校验
+
+        if (ce && !instanceof_function(Z_OBJCE_P(this_ptr), ce)) {
+            zend_error_noreturn(E_CORE_ERROR, "%s::%s() must be derived from %s::%s",
+                ZSTR_VAL(Z_OBJCE_P(this_ptr)->name), get_active_function_name(), ZSTR_VAL(ce->name), get_active_function_name());
+        }
+
+ZEND_API zend_bool ZEND_FASTCALL instanceof_function(const zend_class_entry *instance_ce, const zend_class_entry *ce) /* {{{ */
+{
+    if (ce->ce_flags & ZEND_ACC_INTERFACE) {
+        return instanceof_interface(instance_ce, ce);
+    } else {
+        return instanceof_class(instance_ce, ce);
+    }
+}
+
+static zend_always_inline zend_bool instanceof_class(const zend_class_entry *instance_ce, const zend_class_entry *ce) /* {{{ */
+{
+    while (instance_ce) {
+        if (instance_ce == ce) {//会循环校验父类是否相等
+            return 1;
+        }
+        instance_ce = instance_ce->parent;
+    }
+    return 0;
+}
+C
+ZEND_API int zend_parse_parameters(int num_args, const char *type_spec, ...) /* {{{ */
+{
+    va_list va;
+    int retval;
+    int flags = 0;
+
+    va_start(va, type_spec);
+    retval = zend_parse_va_args(num_args, type_spec, &va, flags);
+    va_end(va);
+
+    return retval;
+}
+/* }}} */
+
+ZEND_API int zend_parse_method_parameters(int num_args, zval *this_ptr, const char *type_spec, ...) /* {{{ */
+{
+    va_list va;
+    int retval;
+    int flags = 0;
+    const char *p = type_spec;
+    zval **object;
+    zend_class_entry *ce;
+
+    /* Just checking this_ptr is not enough, because fcall_common_helper does not set
+     * Z_OBJ(EG(This)) to NULL when calling an internal function with common.scope == NULL.
+     * In that case EG(This) would still be the $this from the calling code and we'd take the
+     * wrong branch here. */
+    zend_bool is_method = EG(current_execute_data)->func->common.scope != NULL;
+
+    if (!is_method || !this_ptr || Z_TYPE_P(this_ptr) != IS_OBJECT) {
+        va_start(va, type_spec);
+        retval = zend_parse_va_args(num_args, type_spec, &va, flags);
+        va_end(va);
+    } else {
+        p++;
+
+        va_start(va, type_spec);
+
+        object = va_arg(va, zval **);
+        ce = va_arg(va, zend_class_entry *);
+        *object = this_ptr;
+
+        if (ce && !instanceof_function(Z_OBJCE_P(this_ptr), ce)) {
+            zend_error_noreturn(E_CORE_ERROR, "%s::%s() must be derived from %s::%s",
+                ZSTR_VAL(Z_OBJCE_P(this_ptr)->name), get_active_function_name(), ZSTR_VAL(ce->name), get_active_function_name());
+        }
+
+        retval = zend_parse_va_args(num_args, p, &va, flags);
+        va_end(va);
+    }
+    return retval;
+}
+/* }}} */
+C
+使用
+这里的type_spec我还加了一个O，因为在源码中，p++;这里跳过了一个字符，那么我们后面retval = zend_parse_va_args(num_args, p, &va, flags);的时候传入的就是 l 了， O 这里应该是可以乱填一个字符的
+
+&this 又传回来了- -
+
+PHP_METHOD(study_ext_class,sum)
+{
+    zend_long parma_num=0;
+    zval* this=getThis();
+    zval* static_num=zend_read_static_property(Z_OBJCE_P(this),"num",sizeof("num")-1,0);
+    // zval
+    if(zend_parse_method_parameters(ZEND_NUM_ARGS(),this,"Ol",&this,study_ce,&parma_num)==FAILURE){
+        RETURN_LONG(-1)
+    }
+    if(Z_TYPE_P(static_num)==IS_LONG){
+        RETURN_LONG(static_num->value.lval+parma_num)
+    }
+    RETURN_LONG(-1)
+    
+    
+https://github.com/php/php-src/commit/8664ff7ae174c610769c36a712eeea80cc3ad933
+
