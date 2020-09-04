@@ -1,0 +1,216 @@
+---
+title: 特殊字符的string怎么转byte
+layout: post
+category: golang
+author: 夏泽民
+---
+https://www.jianshu.com/p/34e6790a6503
+
+<!-- more -->
+特殊字符的string怎么转byte？
+
+新世界杂货铺关注
+0.0932020.08.31 09:34:12字数 2,141阅读 210
+前言
+前段时间发表了Go中的HTTP请求之——HTTP1.1请求流程分析，所以这两天本来打算研究HTTP2.0的请求源码，结果发现太复杂就跑去逛知乎了，然后就发现了一个非常有意思的提问“golang 特殊字符的string怎么转成[]byte?”。为了转换一下心情， 便有了此篇文章。
+
+问题
+原问题我就不码字了，直接上图：
+
+看到问题，我的第一反应是ASCII码值范围应该是0~127呀，怎么会超过127呢？直到实际运行的时候才发现上图的特殊字符是‘�’（如果无法展示，记住该特殊字符的unicode是\u0081），并不是英文中的句号。
+
+unicode和utf-8的恩怨纠葛
+百度百科已经把unicode和utf-8介绍的很详细了，所以这里就不做过多的阐述，仅摘抄部分和本文相关的定义：
+
+Unicode为每个字符设定了统一并且唯一的二进制编码，通常用两个字节表示一个字符。
+UTF-8是针对Unicode的一种可变长度字符编码。它可以用来表示Unicode标准中的任何字符。UTF-8的特点是对不同范围的字符使用不同长度的编码。对于0x00-0x7F之间的字符，UTF-8编码与ASCII编码完全相同。
+go中的字符
+众所周知，go中能表示字符的有两种类型，分别是byte和rune，byte和rune的定义分别是：type byte = uint8和type rune = int32。
+
+uint8范围是0-255，只能够表示有限个unicode字符，超过255的范围就会编译报错。根据上述关于unicode的定义，4字节的rune完全兼容两字节的unicode。
+
+我们用下面的代码来验证：
+
+
+var (
+        c1 byte = 'a'
+        c2 byte = '新'
+        c3 rune = '新'
+    )
+    fmt.Println(c1, c2, c3)
+上述的程序根本无法运行，因为第二行编译会报错，vscode给到了十分详细的提示：'新' (untyped rune constant 26032) overflows byte。
+
+接下来，我们通过下面的代码来验证字符和unicode和整型的等价关系：
+
+
+    fmt.Printf("0x%x, %d\n", '�', '�') //输出：0x81, 129
+    fmt.Println(0x81 == '�', '\u0081' == '�', 129 == '�') // 输出：true true true
+    //\u0081输出到屏幕上后不展示， 所以换了大写字母A来输出
+    fmt.Printf("%c\n", 65) // 输出：A
+根据上面的代码输出的3个true可以知道，字符和unicode和整形是等价，并且整型也能转回字符的表现形式。
+
+go中的字符串是utf8编码的
+根据golang官方博客https://blog.golang.org/strings的原文：
+
+
+
+Go source code is always UTF-8.
+A string holds arbitrary bytes.
+A string literal, absent byte-level escapes, always holds valid UTF-8 sequences.
+
+翻译整理过来其实也就是两点：
+
+go中的代码总是用utf8编码，并且字符串能够存储任何字节。
+没有经过字节级别的转义，那么字符串是一个标准的utf8序列。
+有了前面的基础知识和字符串是一个标准的utf8序列这一结论后我们接下来对字符串“�”（如果无法展示，记住该特殊字符的unicode是\u0081）手动编码。
+
+Unicode到UTF-8的编码方对照表：
+
+Unicode编码(十六进制)	UTF-8 字节流(二进制)
+000000-00007F	0xxxxxxx
+000080-0007FF	110xxxxx 10xxxxxx
+000800-00FFFF	1110xxxx 10xxxxxx 10xxxxxx
+010000-10FFFF	11110xxx 10xxxxxx 10xxxxxx 10xxxxxx
+字符‘�’（如果无法展示，记住该特殊字符的unicode是\u0081）的二进制表示为10000001，16进制表示为0x81。
+
+根据unicode转utf8的对照表，0x7f < 0x81 < 0x7ff，所以此特殊字符需占两个字节，并且要套用的utf8模版是110xxxxx 10xxxxxx。
+
+我们按照下面的步骤对10000001转为utf8的二进制序列：
+
+第一步：根据x数量对特殊字符的高位补0。x的数量是11，所以需要对特殊字符的高位补3个0，此时特殊字符的二进制表示为：00010000001。
+
+第二步：x有两个部分，且长度分别是5和6，所以对00010000001由底位向高位分别截取6位和5位，得到000001和00010。
+
+第三步：将000001和00010由低位向高位填充至模版110xxxxx 10xxxxxx，可得到utf8的二进制序列为：11000010 10000001。
+
+我们通过go对二进制转为整型：
+
+
+fmt.Printf("%d, %d\n", 0b11000010, 0b10000001)
+// 输出：194, 129
+综上：当用字符转字节时输出的是字符本身的整型值，当用字符串转字节切片时，实际上是输出的是utf8的字节切片序列(go中的字符串存储的就是utf8字节切片)。此时，我们回顾一下最开始的问题，就会发现输出是完全符合预期的。
+
+go中的rune
+笔者在这里猜测提问者期望的结果是“字符串转字节切片和字符转字节的结果保持一致”，这时rune就派上用场了，我们看看使用rune的效果：
+
+
+fmt.Println([]rune("�"))
+// 输出：[129]
+由上可知用rune切片去转字符串时，它是直接将每个字符转为对应的unicode。
+
+我们通过下面的代码模拟字符串转为[]rune切片和[]rune切片转为字符串的过程：
+
+字符串转为rune切片:
+
+
+    // 字符串直接转为[]rune切片
+    for _, v := range []rune("新世界杂货铺") {
+        fmt.Printf("%x ", v)
+    }
+    fmt.Println()
+    bs := []byte("新世界杂货铺")
+    for len(bs) > 0 {
+        r, w := utf8.DecodeRune(bs)
+        fmt.Printf("%x ", r)
+        bs = bs[w:]
+    }
+    fmt.Println()
+    // 输出:
+    // 65b0 4e16 754c 6742 8d27 94fa
+    // 65b0 4e16 754c 6742 8d27 94fa
+上述代码中utf8.DecodeRune的作用是通过传入的utf8字节序列转为一个rune即unicode。
+
+rune切片转为字符串:
+
+
+    // rune切片转为字符串
+    rs := []rune{0x65b0, 0x4e16, 0x754c, 0x6742, 0x8d27, 0x94fa}
+    fmt.Println(string(rs))
+    utf8bs := make([]byte, 0)
+    for _, r := range rs {
+        bs := make([]byte, 4)
+        w := utf8.EncodeRune(bs, r)
+        utf8bs = append(utf8bs, bs[:w]...)
+    }
+    fmt.Println(string(utf8bs))
+    // 输出:
+    // 新世界杂货铺
+    // 新世界杂货铺
+上述代码中utf8.EncodeRune的作用是将一个rune转为utf8字节序列。
+
+综上：对于无法确定字符串中仅有单字节的字符的情况， 请使用rune，每一个rune类型代表一个unicode字符，并且它可以和字符串做无缝切换。
+
+理解go中的字符串其实是字节切片
+前面已经提到了字符串能够存储任意字节数据，而且是一个标准的utf8格式的字节切片。那么本节将会通过代码来加深印象。
+
+
+    fmt.Println([]byte("新世界杂货铺"))
+    s := "新世界杂货铺"
+    for i := 0; i < len(s); i++ {
+        fmt.Print(s[i], " ")
+    }
+    fmt.Println()
+    // 输出：
+    // [230 150 176 228 184 150 231 149 140 230 157 130 232 180 167 233 147 186]
+    // 230 150 176 228 184 150 231 149 140 230 157 130 232 180 167 233 147 186
+由上述的代码可知，我们通过游标按字节访问字符串得到的结果和字符串转为字节切片是一样的，因此可以再次确认字符串和字节切片是等价的。
+
+通常情况下我们的字符串都是标准utf8格式的字节切片，但这并不是说明字符串只能存储utf8格式的字节切片，go中的字符串可以存储任意的字节数据。
+
+
+
+    bs := []byte{65, 73, 230, 150, 176, 255}
+    fmt.Println(string(bs))         // 将随机的字节切片转为字符串
+    fmt.Println([]byte(string(bs))) // 将字符串再次转回字节切片
+
+    rs := []rune(string(bs)) // 将字符串转为字节rune切片
+    fmt.Println(rs)          // 输出rune切片
+    fmt.Println(string(rs))  // 将rune切片转为字符串
+
+    for len(bs) > 0 {
+        r, w := utf8.DecodeRune(bs)
+        fmt.Printf("%d: 0x%x ", r, r) // 输出rune的值和其对应的16进制
+        bs = bs[w:]
+    }
+    fmt.Println()
+    fmt.Println([]byte(string(rs))) // 将rune切片转为字符串后再次转为字节切片
+    // 输出：
+    // AI新�
+    // [65 73 230 150 176 255]
+    // [65 73 26032 65533]
+    // AI新�
+    // 65: 0x41 73: 0x49 26032: 0x65b0 65533: 0xfffd 
+    // [65 73 230 150 176 239 191 189]
+
+仔细阅读上面的代码和输出，前5行的输出应该是没有疑问的。但是第6行输出却和预期有出入。
+
+前面提到了字符串可以存储任意的字节数据，那如果存储的字节数据不是标准的utf8字节切片就会出现上面的问题。
+
+我们已经知道通过utf8.DecodeRune可以将字节切片转为rune。那如果碰到不符合utf8编码规范的字节切片时，utf8.DecodeRune会返回一个容错的unicode\uFFFD，这个unicode对应上面输出的16进制0xfffd。
+
+问题也就出现在这个容错的unicode\uFFFD上，因为字节切片不符合utf8编码规范无法得到正确的unicode，既\uFFFD占据了本应该是正确的unicode所在的位置。这个时候再将已经含有容错字符的rune切片转为字符串时，字符串存储的就是合法的utf8字节切片了，因此第六行输出的是含有\uFFFD的合法utf8字节切片，也就产生了和最初始的字节切片不一致的情况了。
+
+⚠️：在平时的开发中要注意rune切片和byte切片的相互转换一定要基于没有乱码的字符串(内部是符合utf8编码规则的字节切片)，否则容易出现上述类似的错误。
+
+字符串的多种表示方式
+本节算是扩展了，在开发中还是尽量别用这种特殊的表示方式，虽然看起来很高级但是可读性太差。
+
+下面直接看代码：
+
+
+    bs := []byte([]byte("新"))
+    for i := 0; i < len(bs); i++ {
+        fmt.Printf("0x%x ", bs[i])
+    }
+    fmt.Println()
+    fmt.Println("\xe6\x96\xb0")
+    fmt.Println("\xe6\x96\xb0世界杂货铺" == "新世界杂货铺")
+    fmt.Println('\u65b0' == '新')
+    fmt.Println("\u65b0世界杂货铺" == "新世界杂货铺")
+    // 输出:
+    // 0xe6 0x96 0xb0 
+    // 新
+    // true
+    // true
+    // true
+目前笔者仅发现unicode和单字节的16进制可以直接用在字符串中
