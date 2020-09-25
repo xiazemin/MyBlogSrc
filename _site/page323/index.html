@@ -147,21 +147,100 @@
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/golang/2019/03/17/escape.html">escape 逃逸分析</a>
+						<a class="post-link" href="/MyBlog/storage/2019/03/23/codis.html">Codis Twemproxy redis集群</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/golang/2019/03/17/escape.html"> 夏泽民</a>
+						<a href="/MyBlog/storage/2019/03/23/codis.html"> 夏泽民</a>
+						<span class="post-meta"><i class="fa fa-calendar"></i> 
+							Mar 23, 2019
+						</span>
+					</div>
+					<div class="excerpt"><p>Redis本身仅支持单实例，内存一般最多10~20GB。这无法支撑大型线上业务系统的需求。而且也造成资源的利用率过低——毕竟现在服务器内存动辄100~200GB。
+1.1 客户端分片
+这种方案将分片工作放在业务程序端，程序代码根据预先设置的路由规则，直接对多个Redis实例进行分布式访问。这样的好处是，不依赖于第三方分布式中间件，实现方法和代码都自己掌控，可随时调整，不用担心踩到坑。
+这实际上是一种静态分片技术。Redis实例的增减，都得手工调整分片程序。基于此分片机制的开源产品，现在仍不多见。
+这种分片机制的性能比代理式更好（少了一个中间分发环节）。但缺点是升级麻烦，对研发人员的个人依赖性强——需要有较强的程序开发能力做后盾。如果主力程序员离职，可能新的负责人，会选择重写一遍。
+所以，这种方式下，可运维性较差。出现故障，定位和解决都得研发和运维配合着解决，故障时间变长。
+这种方案，难以进行标准化运维，不太适合中小公司（除非有足够的DevOPS）。
+1.2 代理分片
+这种方案，将分片工作交给专门的代理程序来做。代理程序接收到来自业务程序的数据请求，根据路由规则，将这些请求分发给正确的Redis实例并返回给业务程序。
+这种机制下，一般会选用第三方代理程序（而不是自己研发），因为后端有多个Redis实例，所以这类程序又称为分布式中间件。
+这样的好处是，业务程序不用关心后端Redis实例，运维起来也方便。虽然会因此带来些性能损耗，但对于Redis这种内存读写型应用，相对而言是能容忍的。
+这是我们推荐的集群实现方案。像基于该机制的开源产品Twemproxy，便是其中代表之一，应用非常广泛。
+1.3 Redis Cluster
+在这种机制下，没有中心节点（和代理模式的重要不同之处）。所以，一切开心和不开心的事情，都将基于此而展开。
+Redis Cluster将所有Key映射到16384个Slot中，集群中每个Redis实例负责一部分，业务程序通过集成的Redis Cluster客户端进行操作。客户端可以向任一实例发出请求，如果所需数据不在该实例中，则该实例引导客户端自动去对应实例读写数据。
+Redis Cluster的成员管理（节点名称、IP、端口、状态、角色）等，都通过节点之间两两通讯，定期交换并更新。
+由此可见，这是一种非常“重”的方案。已经不是Redis单实例的“简单、可依赖”了。可能这也是延期多年之后，才近期发布的原因之一。
+这令人想起一段历史。因为Memcache不支持持久化，所以有人写了一个Membase，后来改名叫Couchbase，说是支持Auto Rebalance，好几年了，至今都没多少家公司在使用。
+这是个令人忧心忡忡的方案。为解决仲裁等集群管理的问题，Oracle RAC还会使用存储设备的一块空间。而Redis Cluster，是一种完全的去中心化……
+本方案目前不推荐使用，从了解的情况来看，线上业务的实际应用也并不多见。</p>
+<ol>
+  <li>Twemproxy及不足之处
+Twemproxy是一种代理分片机制，由Twitter开源。Twemproxy作为代理，可接受来自多个程序的访问，按照路由规则，转发给后台的各个Redis服务器，再原路返回。
+这个方案顺理成章地解决了单个Redis实例承载能力的问题。当然，Twemproxy本身也是单点，需要用Keepalived做高可用方案。
+我想很多人都应该感谢Twemproxy，这么些年来，应用范围最广、稳定性最高、最久经考验的分布式中间件，应该就是它了。只是，他还有诸多不方便之处。
+Twemproxy最大的痛点在于，无法平滑地扩容/缩容。
+这样导致运维同学非常痛苦：业务量突增，需增加Redis服务器；业务量萎缩，需要减少Redis服务器。但对Twemproxy而言，基本上都很难操作（那是一种锥心的、纠结的痛……）。
+或者说，Twemproxy更加像服务器端静态sharding。有时为了规避业务量突增导致的扩容需求，甚至被迫新开一个基于Twemproxy的Redis集群。
+Twemproxy另一个痛点是，运维不友好，甚至没有控制面板。
+Codis刚好击中Twemproxy的这两大痛点，并且提供诸多其他令人激赏的特性。</li>
+</ol>
+
+</div>
+					<div class="readmore" style="float: right;">
+						
+							<a href="/MyBlog/storage/2019/03/23/codis.html" style="color:green">阅读全文</a>
+						
+					</div>								
+			</div>
+			<br/>
+			<hr/>
+			<div class="post-list" style="list-style-type: none;">			
+				 	
+					<h2>
+						<img class="title-image" src="/MyBlog/img/dna.png"/>
+						<a class="post-link" href="/MyBlog/storage/2019/03/19/gapLock.html">gap Lock 间隙锁</a>
+					</h2>
+					<div class="author" style="margin-top: -10px;">Posted by
+						<i class="fa fa-user"></i>
+						<a href="/MyBlog/storage/2019/03/19/gapLock.html"> 夏泽民</a>
+						<span class="post-meta"><i class="fa fa-calendar"></i> 
+							Mar 19, 2019
+						</span>
+					</div>
+					<div class="excerpt"><p>InnoDB有三种行锁的算法：</p>
+
+</div>
+					<div class="readmore" style="float: right;">
+						
+							<a href="/MyBlog/storage/2019/03/19/gapLock.html" style="color:green">阅读全文</a>
+						
+					</div>								
+			</div>
+			<br/>
+			<hr/>
+			<div class="post-list" style="list-style-type: none;">			
+				 	
+					<h2>
+						<img class="title-image" src="/MyBlog/img/dna.png"/>
+						<a class="post-link" href="/MyBlog/linux/2019/03/17/strace.html">strace</a>
+					</h2>
+					<div class="author" style="margin-top: -10px;">Posted by
+						<i class="fa fa-user"></i>
+						<a href="/MyBlog/linux/2019/03/17/strace.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
 							Mar 17, 2019
 						</span>
 					</div>
-					<div class="excerpt"><p>在编译程序优化理论中，逃逸分析是一种确定指针动态范围的方法，可以分析在程序的哪些地方可以访问到指针。它涉及到指针分析和形状分析。 当一个变量(或对象)在子程序中被分配时，一个指向变量的指针可能逃逸到其它执行线程中，或者去调用子程序。如果使用尾递归优化（通常在函数编程语言中是需要的），对象也可能逃逸到被调用的子程序中。 如果一个子程序分配一个对象并返回一个该对象的指针，该对象可能在程序中的任何一个地方被访问到——这样指针就成功“逃逸”了。如果指针存储在全局变量或者其它数据结构中，它们也可能发生逃逸，这种情况是当前程序中的指针逃逸。 逃逸分析需要确定指针所有可以存储的地方，保证指针的生命周期只在当前进程或线程中。</p>
+					<div class="excerpt"><p>strace是用来跟踪用户空间进程的系统调用和信号的
+系统调用提供用户程序与操作系统之间的接口。操作系统的进程空间分为用户空间和内核空间：</p>
 
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/golang/2019/03/17/escape.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/linux/2019/03/17/strace.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -171,21 +250,29 @@
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/linux/2019/03/17/core.html">core dump</a>
+						<a class="post-link" href="/MyBlog/linux/2019/03/17/pstack.html">pstack 原理</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/linux/2019/03/17/core.html"> 夏泽民</a>
+						<a href="/MyBlog/linux/2019/03/17/pstack.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
 							Mar 17, 2019
 						</span>
 					</div>
-					<div class="excerpt"><p>有的程序可以通过编译, 但在运行时会出现Segment fault(段错误). 这通常都是指针错误引起的. 但这不像编译错误一样会提示到文件某一行, 而是没有任何信息, 使得我们的调试变得困难起来.</p>
+					<div class="excerpt"><p>注意和ptrace（ptrace()系统调用提供了一个方法，该方法使一个程序（追踪者）可以观察和控制另外一个程序（被追踪者）的执行，并检查和改变被追踪者的内存及寄存器。它主要用于实现断点调试和追踪系统调用。GDB的工作机制）区分</p>
+
+<p>和jstack一样, pstack亦能展现进程的线程堆栈快照, 非常方便验证和性能评估.
+ pstack的作用, 大致可以归纳如下:
+　　1). 查看线程数(比pstree, 包含了详细的堆栈信息)
+　　2). 能简单验证是否按照预定的调用顺序/调用栈执行
+　　3). 采用高频率多次采样使用时, 能发现程序当前的阻塞在哪里, 以及性能消耗点在哪里?
+　　4). 能反映出疑似的死锁现象(多个线程同时在wait lock, 具体需要进一步验证)
+　　当然还能举例更多的作用, 相信使用过jstack的coder, 必然深以为然.</p>
 
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/linux/2019/03/17/core.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/linux/2019/03/17/pstack.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -195,87 +282,22 @@
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/linux/2019/03/17/bt.html">thread apply all bt</a>
+						<a class="post-link" href="/MyBlog/linux/2019/03/17/mqueue.html">Linux进程间通信-消息队列（mqueue）</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/linux/2019/03/17/bt.html"> 夏泽民</a>
+						<a href="/MyBlog/linux/2019/03/17/mqueue.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
 							Mar 17, 2019
 						</span>
 					</div>
-					<div class="excerpt"><p>Core Dump又叫核心转储, 当程序没有core文件生成怎么办呢?</p>
+					<div class="excerpt"><p>消息队列的实现分为两种，一种为System V的消息队列，一种是Posix消息队列；
+消息队列可以认为是一个消息链表，某个进程往一个消息队列中写入消息之前，不需要另外某个进程在该队列上等待消息的达到，这一点与管道和FIFO相反。Posix消息队列与System V消息队列的区别如下：</p>
 
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/linux/2019/03/17/bt.html" style="color:green">阅读全文</a>
-						
-					</div>								
-			</div>
-			<br/>
-			<hr/>
-			<div class="post-list" style="list-style-type: none;">			
-				 	
-					<h2>
-						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/lang/2019/03/10/tail.html">尾递归、尾调用</a>
-					</h2>
-					<div class="author" style="margin-top: -10px;">Posted by
-						<i class="fa fa-user"></i>
-						<a href="/MyBlog/lang/2019/03/10/tail.html"> 夏泽民</a>
-						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Mar 10, 2019
-						</span>
-					</div>
-					<div class="excerpt"><p>尾调用的概念非常简单，一句话就能说清楚，就是指某个函数的最后一步是调用另一个函数。
-function f(x){
-  return g(x);
-}
-尾调用不一定出现在函数尾部，只要是最后一步操作即可。
-function f(x) {
-  if (x &gt; 0) {
-    return m(x)
-  }
-  return n(x);
-}
-以下两种情况，都不属于尾调用。
-// 情况一
-function f(x){
-  let y = g(x);
-  return y;
-}</p>
-
-</div>
-					<div class="readmore" style="float: right;">
-						
-							<a href="/MyBlog/lang/2019/03/10/tail.html" style="color:green">阅读全文</a>
-						
-					</div>								
-			</div>
-			<br/>
-			<hr/>
-			<div class="post-list" style="list-style-type: none;">			
-				 	
-					<h2>
-						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/golang/2019/03/10/slice.html">golang slice append 陷阱</a>
-					</h2>
-					<div class="author" style="margin-top: -10px;">Posted by
-						<i class="fa fa-user"></i>
-						<a href="/MyBlog/golang/2019/03/10/slice.html"> 夏泽民</a>
-						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Mar 10, 2019
-						</span>
-					</div>
-					<div class="excerpt"><p>func main() {
-    a := make([]int, 2, 2)
-    a[0], a[1] = 1, 2</p>
-
-</div>
-					<div class="readmore" style="float: right;">
-						
-							<a href="/MyBlog/golang/2019/03/10/slice.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/linux/2019/03/17/mqueue.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -2035,6 +2057,14 @@ function f(x){
 			  
 			    
 			      <a href="/MyBlog/page436/">436</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page437/">437</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page438/">438</a>
 			    
 			  
 
@@ -4246,6 +4276,16 @@ function f(x){
 						  
 						
 
+						  
+							<li><a href="/MyBlog/page437">437</a></li>
+						  
+						
+
+						  
+							<li><a href="/MyBlog/page438">438</a></li>
+						  
+						
+
 						
 						  <li><a href="/MyBlog/page324">Next</a></li>
 						
@@ -4277,6 +4317,78 @@ function f(x){
 							var searchIndex={
 							"code" : 0 ,
 							"data" : [
+							
+							{
+							"title" : "goreman 进程管理工具 - ",
+							"url" : "/MyBlog/golang/2020/09/25/goreman.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "raft - ",
+							"url" : "/MyBlog/algorithm/2020/09/23/raft.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "optional parameter in function - ",
+							"url" : "/MyBlog/golang/2020/09/23/optional.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "解决 ln -s 软链接产生的Too many levels of symbolic links错误 - ",
+							"url" : "/MyBlog/linux/2020/09/23/ln.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "array_merge - ",
+							"url" : "/MyBlog/php/2020/09/23/array_merge.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "libfaketime - ",
+							"url" : "/MyBlog/linux/2020/09/22/libfaketime.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "php 500 - ",
+							"url" : "/MyBlog/php/2020/09/22/500.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "slice - ",
+							"url" : "/MyBlog/golang/2020/09/21/slice.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "索引失效的情况 - ",
+							"url" : "/MyBlog/storage/2020/09/21/index.html"
+							}
+							
+							,
+							
 							
 							{
 							"title" : "Debugging Go in prod using eBPF - ",
@@ -21860,7 +21972,7 @@ function f(x){
 								
 								
 									<a class="bold" href="/MyBlog/category/linux">
-										linux (378)
+										linux (380)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -21887,7 +21999,7 @@ function f(x){
 								
 								
 									<a class="bold" href="/MyBlog/category/golang">
-										golang (804)
+										golang (807)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -21923,7 +22035,7 @@ function f(x){
 								
 								
 									<a class="bold" href="/MyBlog/category/storage">
-										storage (152)
+										storage (153)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -21941,7 +22053,7 @@ function f(x){
 								
 								
 									<a class="bold" href="/MyBlog/category/algorithm">
-										algorithm (102)
+										algorithm (103)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -21959,7 +22071,7 @@ function f(x){
 								
 								
 									<a class="bold" href="/MyBlog/category/php">
-										php (114)
+										php (116)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -22037,6 +22149,42 @@ function f(x){
 							<div id="tags">
 								<ul style="display:none;width:250px;height:250px;">
 								     
+								   <li>
+										<a href="/MyBlog/golang/2020/09/25/goreman.html" style="font-size:40px;"> goreman 进程管理工具</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/algorithm/2020/09/23/raft.html" style="font-size:40px;"> raft</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/golang/2020/09/23/optional.html" style="font-size:40px;"> optional parameter in function</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/linux/2020/09/23/ln.html" style="font-size:40px;"> 解决 ln -s 软链接产生的Too many levels of symbolic links错误</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/php/2020/09/23/array_merge.html" style="font-size:40px;"> array_merge</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/linux/2020/09/22/libfaketime.html" style="font-size:40px;"> libfaketime</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/php/2020/09/22/500.html" style="font-size:40px;"> php 500</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/golang/2020/09/21/slice.html" style="font-size:40px;"> slice</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/storage/2020/09/21/index.html" style="font-size:40px;"> 索引失效的情况</a>
+									</li>
+									  
 								   <li>
 										<a href="/MyBlog/golang/2020/09/21/eBPF.html" style="font-size:40px;"> Debugging Go in prod using eBPF</a>
 									</li>
@@ -22160,42 +22308,6 @@ function f(x){
 								   <li>
 										<a href="/MyBlog/linux/2020/08/27/ld_preload.html" style="font-size:40px;"> ld_preload</a>
 									</li>
-									  
-								   <li>
-										<a href="/MyBlog/php/2020/08/27/file_get_contents.html" style="font-size:40px;"> file_get_contents</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/php/2020/08/27/auto_prepend_file.html" style="font-size:40px;"> auto_prepend_file与auto_append_file使用方法</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/php/2020/08/26/passthru.html" style="font-size:40px;"> php执行shell命令，system、exec、passthru</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/linux/2020/08/26/grep.html" style="font-size:40px;"> grep 正则表达式</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/php/2020/08/25/symfony.html" style="font-size:40px;"> symfony/console composer</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/php/2020/08/25/phptrace.html" style="font-size:40px;"> phptrace  Molten</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/php/2020/08/25/object.html" style="font-size:40px;"> object 传引用</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/php/2020/08/25/dumpautoload.html" style="font-size:40px;"> composer dump-autoload</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/php/2020/08/24/composer.html" style="font-size:40px;"> composer 的自动加载原理</a>
-									</li>
 									
 								</ul>
 							</div>
@@ -22210,33 +22322,33 @@ function f(x){
                 		<ul class="posts" span="recent">  
 							  
 							   <li>  
-								   <span>21 Sep 2020</span>
-								   <a href="/MyBlog/golang/2020/09/21/eBPF.html">  
-								   Debugging Go in prod using eBPF</a>  
+								   <span>25 Sep 2020</span>
+								   <a href="/MyBlog/golang/2020/09/25/goreman.html">  
+								   goreman 进程管理工具</a>  
 							   </li>  
 							  
 							   <li>  
-								   <span>21 Sep 2020</span>
-								   <a href="/MyBlog/golang/2020/09/21/Pebble.html">  
-								   Pebble</a>  
+								   <span>23 Sep 2020</span>
+								   <a href="/MyBlog/algorithm/2020/09/23/raft.html">  
+								   raft</a>  
 							   </li>  
 							  
 							   <li>  
-								   <span>18 Sep 2020</span>
-								   <a href="/MyBlog/golang/2020/09/18/rt0_go.html">  
-								   rt0_go</a>  
+								   <span>23 Sep 2020</span>
+								   <a href="/MyBlog/golang/2020/09/23/optional.html">  
+								   optional parameter in function</a>  
 							   </li>  
 							  
 							   <li>  
-								   <span>18 Sep 2020</span>
-								   <a href="/MyBlog/golang/2020/09/18/garbage.html">  
-								   garbage</a>  
+								   <span>23 Sep 2020</span>
+								   <a href="/MyBlog/linux/2020/09/23/ln.html">  
+								   解决 ln -s 软链接产生的Too many levels of symbolic links错误</a>  
 							   </li>  
 							  
 							   <li>  
-								   <span>18 Sep 2020</span>
-								   <a href="/MyBlog/golang/2020/09/18/dubbogo.html">  
-								   dubbogo</a>  
+								   <span>23 Sep 2020</span>
+								   <a href="/MyBlog/php/2020/09/23/array_merge.html">  
+								   array_merge</a>  
 							   </li>  
 							  
 						</ul>
