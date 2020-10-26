@@ -1,7 +1,7 @@
 ---
 title: nginx php-fpm unix-socket
 layout: post
-category: web
+category: php
 author: 夏泽民
 ---
 tcpdump 无法抓unix socket

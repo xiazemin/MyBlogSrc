@@ -1,7 +1,7 @@
 ---
 title: cachetool 非php环境操作apcu
 layout: post
-category: web
+category: php
 author: 夏泽民
 ---
 https://packagist.org/packages/gordalina/cachetool

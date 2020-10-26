@@ -1,7 +1,7 @@
 ---
 title: max_execution_time fpm
 layout: post
-category: web
+category: php
 author: 夏泽民
 ---
 一个线上服务nginx请求日志里突然出现大量499、500、502的错误，于此同时发现php-fpm的worker进程不断的退出，新启动的worker几乎过几十秒就死掉了，在php-fpm.log里发现如下错误：

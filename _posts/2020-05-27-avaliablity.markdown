@@ -1,7 +1,7 @@
 ---
 title: 如何保证系统高可用总结
 layout: post
-category: web
+category: architect
 author: 夏泽民
 ---
 高可用性指的是系统如何保证比较高的服务可用率，在出现故障时如何应对，包括及时发现、故障转移、尽快从故障中恢复等等

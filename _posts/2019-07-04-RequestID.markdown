@@ -1,7 +1,7 @@
 ---
 title: RequestID fastcgi
 layout: post
-category: web
+category: php
 author: 夏泽民
 ---
 为什么需要在消息头发送 RequestID 这个标识？

@@ -1,7 +1,7 @@
 ---
 title: redis协议
 layout: post
-category: web
+category: storage
 author: 夏泽民
 ---
 <!-- more -->

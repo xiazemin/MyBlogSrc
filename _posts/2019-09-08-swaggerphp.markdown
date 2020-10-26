@@ -1,7 +1,7 @@
 ---
 title: swagger php
 layout: post
-category: web
+category: php
 author: 夏泽民
 ---
 在php文件中写 swagger 格式的 /* 注释 /

@@ -1,7 +1,7 @@
 ---
 title: antlr graphviz
 layout: post
-category: linux
+category: lang
 author: 夏泽民
 ---
 https://www.jianshu.com/p/37573261d3cf

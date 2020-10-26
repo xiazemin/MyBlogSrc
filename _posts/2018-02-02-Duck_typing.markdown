@@ -1,7 +1,7 @@
 ---
 title: Duck typing
 layout: post
-category: web
+category: golang
 author: 夏泽民
 ---
 <!-- more -->

@@ -1,7 +1,7 @@
 ---
 title: composer-source
 layout: post
-category: jekyll
+category: php
 author: 夏泽民
 ---
 <!-- more -->

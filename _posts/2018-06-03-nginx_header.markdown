@@ -1,7 +1,7 @@
 ---
 title: nginx_header
 layout: post
-category: web
+category: php 
 author: 夏泽民
 ---
 <!-- more -->

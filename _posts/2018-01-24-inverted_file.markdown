@@ -1,7 +1,7 @@
 ---
 title: 倒排索引
 layout: post
-category: web
+category: storage
 author: 夏泽民
 ---
 倒排索引源于实际应用中需要根据属性的值来查找记录。这种索引表中的每一项都包括一个属性值和具有该属性值的各记录的地址。由于不是由记录来确定属性值，而是由属性值来确定记录的位置，因而称为倒排索引(inverted index)。带有倒排索引的文件我们称为倒排索引文件，简称倒排文件(inverted file)。

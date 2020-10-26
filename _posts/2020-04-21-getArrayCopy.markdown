@@ -1,7 +1,7 @@
 ---
 title: PHP SPL（PHP 标准库）
 layout: post
-category: web
+category: php
 author: 夏泽民
 ---
 一、什么是spl库？

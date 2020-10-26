@@ -1,7 +1,7 @@
 ---
 title: rapidjson
 layout: post
-category: linux
+category: lang
 author: 夏泽民
 ---
 https://github.com/Tencent/rapidjson

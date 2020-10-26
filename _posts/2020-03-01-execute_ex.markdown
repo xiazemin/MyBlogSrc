@@ -1,7 +1,7 @@
 ---
 title: php execute_ex
 layout: post
-category: web
+category: php
 author: 夏泽民
 ---
 php扩展实践zend_execute_ex层获取实参

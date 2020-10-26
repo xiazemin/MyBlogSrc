@@ -1,7 +1,7 @@
 ---
 title: netfliter
 layout: post
-category: jekyll
+category: linux
 author: 夏泽民
 ---
 <!-- more -->
