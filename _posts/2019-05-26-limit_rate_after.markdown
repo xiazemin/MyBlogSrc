@@ -1,7 +1,7 @@
 ---
 title: limit_rate_after nginx限速配置
 layout: post
-category: web
+category: php
 author: 夏泽民
 ---
 Nginx的http核心模块ngx_http_core_module中提供limit_rate这个指令可以用于控制速度，limit_rate_after用于设置http请求传输多少字节后开始限速。

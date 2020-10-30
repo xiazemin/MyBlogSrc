@@ -1,7 +1,7 @@
 ---
 title: thrift_golang
 layout: post
-category: web
+category: golang
 author: 夏泽民
 ---
 Thrift RPC 框架指南

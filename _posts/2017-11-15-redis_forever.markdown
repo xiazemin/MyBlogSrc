@@ -1,7 +1,7 @@
 ---
 title: redis 持久化
 layout: post
-category: web
+category: storage
 author: 夏泽民
 ---
 edis是一个支持持久化的内存数据库，也就是说redis需要经常将内存中的数据同步到磁盘来保证持久化。redis支持四种持久化方式，一是 Snapshotting（快照）也是默认方式；二是Append-only file（缩写aof）的方式；三是虚拟内存方式；四是diskstore方式。

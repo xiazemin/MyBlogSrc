@@ -1,7 +1,7 @@
 ---
 title: mysql_index
 layout: post
-category: web
+category: storage
 author: 夏泽民
 ---
 MySQL官方对索引的定义为：索引（Index）是帮助MySQL高效获取数据的数据结构。提取句子主干，就可以得到索引的本质：索引是数据结构。

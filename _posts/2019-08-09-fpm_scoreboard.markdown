@@ -1,7 +1,7 @@
 ---
 title: fpm_scoreboard
 layout: post
-category: web
+category: php
 author: 夏泽民
 ---
 fpm_scoreboard(以下简称scoreboard模块)是PHP-FPM核心功能之一，源码位于sapi/fpm/fpm_scoreboard.c。从字面意思理解是一个”记分器”，实际上，是FPM内置的一个worker进程统计功能模块。

@@ -1,7 +1,7 @@
 ---
 title: php流Streams、包装器wrapper 
 layout: post
-category: web
+category: php
 author: 夏泽民
 ---
 流Streams这个概念是在php4.3引进的，是对流式数据的抽象，用于统一数据操作，比如文件数据、网络数据、压缩数据等，以使可以共享同一套函数，

@@ -1,7 +1,7 @@
 ---
 title: php json_encode 的坑
 layout: post
-category: web
+category: php
 author: 夏泽民
 ---
 成功则返回 JSON 编码的 string 或者在失败时返回 FALSE 。

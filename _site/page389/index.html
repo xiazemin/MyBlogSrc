@@ -56,13 +56,13 @@
     <link rel="stylesheet" href="/MyBlog/katex/katex.css">
 
     <!--轮播图片-->
-    <!--script type="text/javascript" src="https://xiazemin.github.io/MyBlog/js/jquery.js"></script>
-    <script type="text/javascript" src="https://xiazemin.github.io/MyBlog/js/jquery.stripesrotator.js"></script>
+    <!--script type="text/javascript" src="http://localhost:4000/MyBlog/js/jquery.js"></script>
+    <script type="text/javascript" src="http://localhost:4000/MyBlog/js/jquery.stripesrotator.js"></script>
     <script type="text/javascript">
                     $(document).ready(function() {
                     alert($('#rotator_xzm'));
                      alert($('#rotator_xzm').fn);
-                    $('#rotator_xzm').stripesRotator({ images: [ "https://xiazemin.github.io/MyBlog/img/BPlusTree.png", "https://xiazemin.github.io/MyBlog/img/linuxMMap.jpeg"] });
+                    $('#rotator_xzm').stripesRotator({ images: [ "http://localhost:4000/MyBlog/img/BPlusTree.png", "http://localhost:4000/MyBlog/img/linuxMMap.jpeg"] });
                     });
     </script-->
 
@@ -121,7 +121,7 @@
             <div class="row">
                 <div class="col-lg-12">
                     <div class="heading text-center">
-                        <a href="https://xiazemin.github.io/MyBlog/" style="color: #fff; font-size: 4em; font-family: 'Schoolbell', cursive;">泽民博客</a>
+                        <a href="http://localhost:4000/MyBlog/" style="color: #fff; font-size: 4em; font-family: 'Schoolbell', cursive;">泽民博客</a>
                         <a href="#menu-toggle" class="btn btn-default sciblog" id="menu-toggle" style="font-weight: bold;">&#9776; Menu</a>
                     </div>
                 </div>
@@ -147,22 +147,50 @@
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/golang/2018/05/18/PostForm.html">PostForm</a>
+						<a class="post-link" href="/MyBlog/zookeeper/2018/06/10/raft.html">Paxos、Raft、Zab和VR</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/golang/2018/05/18/PostForm.html"> 夏泽民</a>
+						<a href="/MyBlog/zookeeper/2018/06/10/raft.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							May 18, 2018
+							Jun 10, 2018
 						</span>
 					</div>
 					<div class="excerpt"><!-- more -->
-<p>golang http.request的三个属性Form、PostForm、MultipartForm</p>
+<p>Raft
+Paxos偏向于理论、对如何应用到工程实践提及较少。理解的难度加上现实的骨感，在生产环境中基于Paxos实现一个正确的分布式系统非常难[1]：
+There are significant gaps between the description of the Paxos algorithm and the needs of a real-world system. In order to build a real-world system, an expert needs to use numerous ideas scattered in the literature and make several relatively small protocol extensions. The cumulative effort will be substantial and the final system will be based on an unproven protocol.
+Raft[2][3]在2013年提出，提出的时间虽然不长，但已经有很多系统基于Raft实现。相比Paxos，Raft的买点就是更利于理解、更易于实行。
+为达到更容易理解和实行的目的，Raft将问题分解和具体化：Leader统一处理变更操作请求，一致性协议的作用具化为保证节点间操作日志副本(log replication)一致，以term作为逻辑时钟(logical clock)保证时序，节点运行相同状态机(state machine)[4]得到一致结果。Raft协议具体过程如下：
+Client发起请求，每一条请求包含操作指令
+请求交由Leader处理，Leader将操作指令(entry)追加(append)至操作日志，紧接着对Follower发起AppendEntries请求、尝试让操作日志副本在Follower落地
+如果Follower多数派(quorum)同意AppendEntries请求，Leader进行commit操作、把指令交由状态机处理
+状态机处理完成后将结果返回给Client
+指令通过log index(指令id)和term number保证时序，正常情况下Leader、Follower状态机按相同顺序执行指令，得出相同结果、状态一致。
+宕机、网络分化等情况可引起Leader重新选举(每次选举产生新Leader的同时，产生新的term)、Leader/Follower间状态不一致。Raft中Leader为自己和所有Follower各维护一个nextIndex值，其表示Leader紧接下来要处理的指令id以及将要发给Follower的指令id，LnextIndex不等于FnextIndex时代表Leader操作日志和Follower操作日志存在不一致，这时将从Follower操作日志中最初不一致的地方开始，由Leader操作日志覆盖Follower，直到LnextIndex、FnextIndex相等。
+Paxos中Leader的存在是为了提升决议效率，Leader的有无和数目并不影响决议一致性，Raft要求具备唯一Leader，并把一致性问题具体化为保持日志副本的一致性，以此实现相较Paxos而言更容易理解、更容易实现的目标。
+Zab
+Zab[5][6]的全称是Zookeeper atomic broadcast protocol，是Zookeeper内部用到的一致性协议。相比Paxos，Zab最大的特点是保证强一致性(strong consistency，或叫线性一致性linearizable consistency)。
+和Raft一样，Zab要求唯一Leader参与决议，Zab可以分解成discovery、sync、broadcast三个阶段：
+discovery: 选举产生PL(prospective leader)，PL收集Follower epoch(cepoch)，根据Follower的反馈PL产生newepoch(每次选举产生新Leader的同时产生新epoch，类似Raft的term)
+sync: PL补齐相比Follower多数派缺失的状态、之后各Follower再补齐相比PL缺失的状态，PL和Follower完成状态同步后PL变为正式Leader(established leader)
+broadcast: Leader处理Client的写操作，并将状态变更广播至Follower，Follower多数派通过之后Leader发起将状态变更落地(deliver/commit)
+Leader和Follower之间通过心跳判别健康状态，正常情况下Zab处在broadcast阶段，出现Leader宕机、网络隔离等异常情况时Zab重新回到discovery阶段。
+了解完Zab的基本原理，我们再来看Zab怎样保证强一致性，Zab通过约束事务先后顺序达到强一致性，先广播的事务先commit、FIFO，Zab称之为primary order(以下简称PO)。实现PO的核心是zxid。
+Zab中每个事务对应一个zxid，它由两部分组成：&lt;e, c&gt;，e即Leader选举时生成的epoch，c表示当次epoch内事务的编号、依次递增。假设有两个事务的zxid分别是z、z’，当满足 z.e &lt; z’.e 或者 z.e = z’.e &amp;&amp; z.c &lt; z’.c 时，定义z先于z’发生(z &lt; z’)。
+为实现PO，Zab对Follower、Leader有以下约束：
+有事务z和z’，如果Leader先广播z，则Follower需保证先commit z对应的事务
+有事务z和z’，z由Leader p广播，z’由Leader q广播，Leader p先于Leader q，则Follower需保证先commit z对应的事务
+有事务z和z’，z由Leader p广播，z’由Leader q广播，Leader p先于Leader q，如果Follower已经commit z，则q需保证已commit z才能广播z’
+第1、2点保证事务FIFO，第3点保证Leader上具备所有已commit的事务。
+相比Paxos，Zab约束了事务顺序、适用于有强一致性需求的场景。
+Paxos、Raft、Zab再比较
+除Paxos、Raft和Zab外，Viewstamped Replication(简称VR)[7][8]也是讨论比较多的一致性协议。这些协议包含很多共同的内容(Leader、quorum、state machine等)，因而我们不禁要问：Paxos、Raft、Zab和VR等分布式一致性协议区别到底在哪，还是根本就是一回事？[9]</p>
 
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/golang/2018/05/18/PostForm.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/zookeeper/2018/06/10/raft.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -172,171 +200,22 @@
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/golang/2018/05/17/template.html">template</a>
+						<a class="post-link" href="/MyBlog/zookeeper/2018/06/10/quorum.html">quorum</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/golang/2018/05/17/template.html"> 夏泽民</a>
+						<a href="/MyBlog/zookeeper/2018/06/10/quorum.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							May 17, 2018
+							Jun 10, 2018
 						</span>
 					</div>
 					<div class="excerpt"><!-- more -->
-<p>1， 前端部分：
-【模板标签】
-模板标签用”qqqq”和”qqqq”括起来
-【注释】
-qqqq/* a comment <em>/qqqq
-使用“qqqq/</em>”和“*/qqqq”来包含注释内容
-【变量】
-qqqq.qqqq
-此标签输出当前对象的值
-qqqq.Admpubqqqq
-表示输出Struct对象中字段或方法名称为“Admpub”的值。
-当“Admpub”是匿名字段时，可以访问其内部字段或方法,比如“Com”：qqqq.Admpub.Comqqqq ，
-如果“Com”是一个方法并返回一个Struct对象，同样也可以访问其字段或方法：qqqq.Admpub.Com.Field1qqqq
-qqqq.Method1 “参数值1” “参数值2”qqqq
-调用方法“Method1”，将后面的参数值依次传递给此方法，并输出其返回值。
-qqqq$admpubqqqq
-此标签用于输出在模板中定义的名称为“admpub”的变量。当$admpub本身是一个Struct对象时，可访问其字段：qqqq$admpub.Field1qqqq
-在模板中定义变量：变量名称用字母和数字组成，并带上“$”前缀，采用符号“:=”进行赋值。
-比如：qqqq$x := “OK”qqqq 或 qqqq$x := pipelineqqqq
-【管道函数】
-用法1：
-qqqqFuncName1qqqq
-此标签将调用名称为“FuncName1”的模板函数（等同于执行“FuncName1()”，不传递任何参数）并输出其返回值。
-用法2：
-qqqqFuncName1 “参数值1” “参数值2”qqqq
-此标签将调用“FuncName1(“参数值1”, “参数值2”)”，并输出其返回值
-用法3：
-qqqq.Admpub|FuncName1qqqq
-此标签将调用名称为“FuncName1”的模板函数（等同于执行“FuncName1(this.Admpub)”，将竖线“|”左边的“.Admpub”变量值作为函数参数传送）并输出其返回值。
-【条件判断】
-用法1：
-qqqqif pipelineqqqq T1 qqqqendqqqq
-标签结构：qqqqif …qqqq … qqqqendqqqq
-用法2：
-qqqqif pipelineqqqq T1 qqqqelseqqqq T0 qqqqendqqqq
-标签结构：qqqqif …qqqq … qqqqelseqqqq … qqqqendqqqq
-用法3：
-qqqqif pipelineqqqq T1 qqqqelse if pipelineqqqq T0 qqqqendqqqq
-标签结构：qqqqif …qqqq … qqqqelse if …qqqq … qqqqendqqqq
-其中if后面可以是一个条件表达式（包括管道函数表达式。pipeline即管道），也可以是一个字符窜变量或布尔值变量。当为字符窜变量时，如为空字符串则判断为false，否则判断为true。
-【遍历】
-用法1：
-qqqqrange $k, $v := .Varqqqq qqqq$kqqqq =&gt; qqqq$vqqqq qqqqend}}
-range…end结构内部如要使用外部的变量，比如.Var2，需要这样写：$.Var2
-（即：在外部变量名称前加符号“$”即可，单独的“$”意义等同于global）
-用法2：
-qqqqrange .Varqqqq qqqq.qqqq qqqqendqqqq
-用法3：
-qqqqrange pipelineqqqq T1 qqqqelseqqqq T0 qqqqendqqqq
-当没有可遍历的值时，将执行else部分。
-【嵌入子模板】
-用法1：
-qqqqtemplate “name”qqqq
-嵌入名称为“name”的子模板。使用前，请确保已经用“qqqqdefine “name”qqqq子模板内容qqqqendqqqq”定义好了子模板内容。
-用法2：
-qqqqtemplate “name” pipelineqqqq
-将管道的值赋给子模板中的“.”（即“qqqq.qqqq”）
-【子模板嵌套】
-qqqqdefine “T1”qqqqONEqqqqendqqqq
-qqqqdefine “T2”qqqqTWOqqqqendqqqq
-qqqqdefine “T3”qqqqqqqqtemplate “T1”qqqq qqqqtemplate “T2”qqqqqqqqend}}
-qqqqtemplate “T3”qqqq
-输出：
-ONE TWO
-【定义局部变量】
-用法1：
-qqqqwith pipelineqqqq T1 qqqqendqqqq
-管道的值将赋给该标签内部的“.”。（注：这里的“内部”一词是指被qqqqwith pipelineqqqq…qqqqendqqqq包围起来的部分，即T1所在位置）
-用法2：
-qqqqwith pipelineqqqq T1 qqqqelseqqqq T0 qqqqendqqqq
-如果管道的值为空，“.”不受影响并且执行T0，否则，将管道的值赋给“.”并且执行T1。
-说明：qqqqendqqqq标签是if、with、range的结束标签。
-【例子：输出字符窜】
-qqqq”"output"“qqqq
-输出一个字符窜常量。
-qqqq<code class="highlighter-rouge">"output"</code>qqqq
-输出一个原始字符串常量
-qqqqprintf “%q” “output”qqqq
-函数调用.（等同于：printf(“%q”, “output”)。）
-qqqq”output” | printf “%q”qqqq
-竖线“|”左边的结果作为函数最后一个参数。（等同于：printf(“%q”, “output”)。）
-qqqqprintf “%q” (print “out” “put”)qqqq
-圆括号中表达式的整体结果作为printf函数的参数。（等同于：printf(“%q”, print(“out”, “put”))。）
-qqqq”put” | printf “%s%s” “out” | printf “%q”qqqq
-一个更复杂的调用。（等同于：printf(“%q”, printf(“%s%s”, “out”, “put”))。）
-qqqq”output” | printf “%s” | printf “%q”qqqq
-等同于：printf(“%q”, printf(“%s”, “output”))。
-qqqqwith “output”qqqqqqqqprintf “%q” .qqqqqqqqendqqqq
-一个使用点号“.”的with操作。（等同于：printf(“%q”, “output”)。）
-qqqqwith $x := “output” | printf “%q”qqqqqqqq$xqqqqqqqqendqqqq
-with结构，定义变量，值为执行管道函数之后的结果（等同于：$x := printf(“%q”, “output”)。）
-qqqqwith $x := “output”qqqqqqqqprintf “%q” $xqqqqqqqqendqqqq
-with结构中，在其它动作中使用定义的变量
-qqqqwith $x := “output”qqqqqqqq$x | printf “%q”qqqqqqqqendqqqq
-同上，但使用了管道。（等同于：printf(“%q”, “output”)。）
-===============【预定义的模板全局函数】================
-【and】
-qqqqand x yqqqq
-表示：if x then y else x
-如果x为真，返回y，否则返回x。等同于Golang中的：x &amp;&amp; y
-【call】
-qqqqcall .X.Y 1 2qqqq
-表示：dot.X.Y(1, 2)
-call后面的第一个参数的结果必须是一个函数（即这是一个函数类型的值），其余参数作为该函数的参数。
-该函数必须返回一个或两个结果值，其中第二个结果值是error类型。
-如果传递的参数与函数定义的不匹配或返回的error值不为nil，则停止执行。
-【html】
-转义文本中的html标签，如将“&lt;”转义为“&lt;”，“&gt;”转义为“&gt;”等
-【index】
-qqqqindex x 1 2 3qqqq
-返回index后面的第一个参数的某个索引对应的元素值，其余的参数为索引值
-表示：x[1][2][3]
-x必须是一个map、slice或数组
-【js】
-返回用JavaScript的escape处理后的文本
-【len】
-返回参数的长度值（int类型）
-【not】
-返回单一参数的布尔否定值。
-【or】
-qqqqor x yqqqq
-表示：if x then x else y。等同于Golang中的：x || y
-如果x为真返回x，否则返回y。
-【print】
-fmt.Sprint的别名
-【printf】
-fmt.Sprintf的别名
-【println】
-fmt.Sprintln的别名
-【urlquery】
-返回适合在URL查询中嵌入到形参中的文本转义值。（类似于PHP的urlencode）
-=================【布尔函数】===============
-布尔函数对于任何零值返回false，非零值返回true。
-这里定义了一组二进制比较操作符函数：
-【eq】
-返回表达式“arg1 == arg2”的布尔值
-【ne】
-返回表达式“arg1 != arg2”的布尔值
-【lt】
-返回表达式“arg1 &lt; arg2”的布尔值
-【le】
-返回表达式“arg1 &lt;= arg2”的布尔值
-【gt】
-返回表达式“arg1 &gt; arg2”的布尔值
-【ge】
-返回表达式“arg1 &gt;= arg2”的布尔值
-对于简单的多路相等测试，eq只接受两个参数进行比较，后面其它的参数将分别依次与第一个参数进行比较，
-qqqqeq arg1 arg2 arg3 arg4qqqq
-即只能作如下比较：
-arg1==arg2 || arg1==arg3 || arg1==arg4 …</p>
+<p>在分布式系统中有个CAP理论，对于P（分区容忍性）而言，是实际存在 从而无法避免的。因为，分布系统中的处理不是在本机，而是网络中的许多机器相互通信，故网络分区、网络通信故障问题无法避免。因此，只能尽量地在C 和 A 之间寻求平衡。对于数据存储而言，为了提高可用性（Availability），采用了副本备份，比如对于HDFS，默认每块数据存三份。某数据块所在的机器宕机了，就去该数据块副本所在的机器上读取（从这可以看出，数据分布方式是按“数据块”为单位分布的）</p>
 
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/golang/2018/05/17/template.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/zookeeper/2018/06/10/quorum.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -346,24 +225,21 @@ arg1==arg2 || arg1==arg3 || arg1==arg4 …</p>
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/web/2018/05/12/mergeLy.html">mergely_CodeMirror_DiffMatchPatch前端文本diff</a>
+						<a class="post-link" href="/MyBlog/zookeeper/2018/06/10/paxos_quorum.html">Paxos和Quorum</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/web/2018/05/12/mergeLy.html"> 夏泽民</a>
+						<a href="/MyBlog/zookeeper/2018/06/10/paxos_quorum.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							May 12, 2018
+							Jun 10, 2018
 						</span>
 					</div>
-					<div class="excerpt"><!-- more -->
-<p>CodeMirror
-CodeMirror Github: https://github.com/codemirror/CodeMirror 
-CodeMirror Demo: http://codemirror.net/demo/merge.html</p>
+					<div class="excerpt"><p>为什么需要Paxos或Quorum算法？分布式系统实现数据存储，是通过多份数据副本来保证可靠，假设部分节点访问数据失败，还有其他节点提供一致的数据返回给用户。对数据存储而言，怎样保证副本数据的一致性当属分布式存储最重要的问题。 一致性是分布式理论中的根本性问题，近半个世纪以来，科学家们围绕着一致性问题提出了很多理论模型，依据这些理论模型，业界也出现了很多工程实践投影。何为一致性问题？简而言之，一致性问题就是相互独立的节点之间，在可控的时间范围内如何达成一项决议的问题。</p>
 
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/web/2018/05/12/mergeLy.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/zookeeper/2018/06/10/paxos_quorum.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -373,42 +249,28 @@ CodeMirror Demo: http://codemirror.net/demo/merge.html</p>
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/docker/2018/05/09/pipework.html">pipework  为docker容器配置独立IP</a>
+						<a class="post-link" href="/MyBlog/elasticsearch/2018/06/10/lucence.html">lucence  elasticsearch</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/docker/2018/05/09/pipework.html"> 夏泽民</a>
+						<a href="/MyBlog/elasticsearch/2018/06/10/lucence.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							May 9, 2018
+							Jun 10, 2018
 						</span>
 					</div>
-					<div class="excerpt"><!-- more -->
-<p>环境:安装docker        关闭selinux     开启路由转发（net.ipv4.ip_forward =  1）
-一、将 Docker 容器配置到本地网络环境中
-为了使本地网络中的机器和 Docker 容器更方便的通信，我们经常会有将 Docker 容器配置到和主机同一网段的需求。这个需求其实很容易实现，我们只要将 Docker 容器和主机的网卡桥接起来，再给 Docker 容器配上 IP 就可以了。
-下面我们来操作一下，我主机 A 地址为 192.168.157.128/24,网关为 192.168.157.2,需要给 Docker容器的地址配置为 192.168.157.150/24。在主机 A 上做如下操作：
-安装 pipework
-下载地址：wget https://github.com/jpetazzo/pipework.git
-unzippipework-master.zip
-cp -p /root/pipework-master/pipework/usr/local/bin/
-启动 Docker 容器。
-docker run -itd–name test1 镜像 /bin/bash
-配置容器网络，并连到网桥 br0 上。网关在 IP 地址后面加@指定。
-pipework br0 test1192.168.157.150/24@192.168.157.2
-将主机 eno16777736 桥接到 br0 上，并把 eno16777736 的 IP 配置在 br0 上。
-p addradd 192.168.157.128/24 dev br0
-ip addrdel 192.168. 157.128/24 dev eno16777736
-brctladdif br0 eno16777736
-ip routedel default
-ip routeadd default via 192.168.157.2 dev br0
-注：如果是远程操作，中间网络会断掉，所以放在一条命令中执行。
-ip addradd 192.168.157.128/24 dev br0；ip addr del 192.168. 157.128/24 deveno16777736；brctl addif br0 eno16777736；ip route del default；ip route add default via 192.168.157.2dev br0
-完成上述步骤后，我们发现 Docker 容器已经可以使用新的 IP 和主机网络里的机器相互通信了</p>
+					<div class="excerpt"><p>lucene，最先进、功能最强大的搜索库，直接基于lucene开发，非常复杂，api复杂（实现一些简单的功能，写大量的java代码），需要深入理解原理（各种索引结构）
+elasticsearch，基于lucene，隐藏复杂性，提供简单易用的restful api接口、java api接口（还有其他语言的api接口）
+（1）分布式的文档存储引擎
+（2）分布式的搜索引擎和分析引擎
+（3）分布式，支持PB级数据
+开箱即用，优秀的默认参数，不需要任何额外设置，完全开源
+<!-- more -->
+Lucene概述</p>
 
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/docker/2018/05/09/pipework.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/elasticsearch/2018/06/10/lucence.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -418,45 +280,22 @@ ip addradd 192.168.157.128/24 dev br0；ip addr del 192.168. 157.128/24 deveno16
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/docker/2018/05/09/namespace.html">调用namespace的API</a>
+						<a class="post-link" href="/MyBlog/zookeeper/2018/06/10/jndi.html">jndi</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/docker/2018/05/09/namespace.html"> 夏泽民</a>
+						<a href="/MyBlog/zookeeper/2018/06/10/jndi.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							May 9, 2018
+							Jun 10, 2018
 						</span>
 					</div>
 					<div class="excerpt"><!-- more -->
-<p>Linux内核中就提供了这六种namespace隔离的系统调用，如下表所示。
-Namespace
-系统调用参数
-隔离内容
-UTS
-CLONE_NEWUTS
-主机名与域名
-IPC
-CLONE_NEWIPC
-信号量、消息队列和共享内存
-PID
-CLONE_NEWPID
-进程编号
-Network
-CLONE_NEWNET
-网络设备、网络栈、端口等等
-Mount
-CLONE_NEWNS
-挂载点（文件系统）
-User
-CLONE_NEWUSER
-用户和用户组
-表 namespace六项隔离
-实际上，Linux内核实现namespace的主要目的就是为了实现轻量级虚拟化（容器）服务。在同一个namespace下的进程可以感知彼此的变化，而对外界的进程一无所知。这样就可以让容器中的进程产生错觉，仿佛自己置身于一个独立的系统环境中，以此达到独立和隔离的目的。</p>
+<p>JNDI是 Java 命名与目录接口（Java Naming and Directory Interface），在J2EE规范中是重要的规范之一，不少专家认为，没有透彻理解JNDI的意义和作用，就没有真正掌握J2EE特别是EJB的知识。</p>
 
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/docker/2018/05/09/namespace.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/zookeeper/2018/06/10/jndi.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -2240,6 +2079,26 @@ CLONE_NEWUSER
 			  
 			    
 			      <a href="/MyBlog/page442/">442</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page443/">443</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page444/">444</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page445/">445</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page446/">446</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page447/">447</a>
 			    
 			  
 
@@ -4481,6 +4340,31 @@ CLONE_NEWUSER
 						  
 						
 
+						  
+							<li><a href="/MyBlog/page443">443</a></li>
+						  
+						
+
+						  
+							<li><a href="/MyBlog/page444">444</a></li>
+						  
+						
+
+						  
+							<li><a href="/MyBlog/page445">445</a></li>
+						  
+						
+
+						  
+							<li><a href="/MyBlog/page446">446</a></li>
+						  
+						
+
+						  
+							<li><a href="/MyBlog/page447">447</a></li>
+						  
+						
+
 						
 						  <li><a href="/MyBlog/page390">Next</a></li>
 						
@@ -4512,6 +4396,206 @@ CLONE_NEWUSER
 							var searchIndex={
 							"code" : 0 ,
 							"data" : [
+							
+							{
+							"title" : "phpstorm - ",
+							"url" : "/MyBlog/php/2020/10/28/phpstorm.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "php静态分析 - ",
+							"url" : "/MyBlog/php/2020/10/28/phpscan.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "php-code-coverage - ",
+							"url" : "/MyBlog/php/2020/10/28/coverage.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "SetMaxThreads - ",
+							"url" : "/MyBlog/golang/2020/10/28/SetMaxThreads.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "phpgc - ",
+							"url" : "/MyBlog/php/2020/10/26/phpgc.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "mapReduce - ",
+							"url" : "/MyBlog/php/2020/10/26/mapReduce.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "bundle - ",
+							"url" : "/MyBlog/jekyll/2020/10/26/bundle.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "Plugin - ",
+							"url" : "/MyBlog/golang/2020/10/25/Plugin.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "JsonSerializable - ",
+							"url" : "/MyBlog/php/2020/10/24/JsonSerializable.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "HBase的存储格式 - ",
+							"url" : "/MyBlog/storage/2020/10/22/hbase.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "getParams yaf - ",
+							"url" : "/MyBlog/php/2020/10/21/getParams.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "xdebug_debug_zval - ",
+							"url" : "/MyBlog/php/2020/10/20/xdebug_debug_zval.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "scoreboard - ",
+							"url" : "/MyBlog/php/2020/10/20/scoreboard.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "axure 产品画图工具 - ",
+							"url" : "/MyBlog/web/2020/10/20/axure.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "udp 超出长度丢弃问题 - ",
+							"url" : "/MyBlog/web/2020/10/18/udp.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "通过ip获取用户地理信息原理 - ",
+							"url" : "/MyBlog/web/2020/10/18/ip.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "如何快速定位 Redis 热 key - ",
+							"url" : "/MyBlog/storage/2020/10/18/hotkeys.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "mysql ha - ",
+							"url" : "/MyBlog/storage/2020/10/18/ha.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "symfony console VarDumper - ",
+							"url" : "/MyBlog/php/2020/10/16/symfony.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "slice 内存泄露 - ",
+							"url" : "/MyBlog/golang/2020/10/16/slice.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "phan - ",
+							"url" : "/MyBlog/php/2020/10/16/phan.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "php parser - ",
+							"url" : "/MyBlog/php/2020/10/16/parser.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "box - ",
+							"url" : "/MyBlog/php/2020/10/16/box.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "chaos 混沌工程 - ",
+							"url" : "/MyBlog/algorithm/2020/10/15/chaos.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "稳定性 - ",
+							"url" : "/MyBlog/web/2020/10/15/avaliable.html"
+							}
+							
+							,
+							
 							
 							{
 							"title" : "fastest template - ",
@@ -5931,7 +6015,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "graphql - ",
-							"url" : "/MyBlog/linux/2020/07/14/graphql.html"
+							"url" : "/MyBlog/web/2020/07/14/graphql.html"
 							}
 							
 							,
@@ -6003,7 +6087,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "graphviz - ",
-							"url" : "/MyBlog/php/2020/07/12/graphviz.html"
+							"url" : "/MyBlog/lang/2020/07/12/graphviz.html"
 							}
 							
 							,
@@ -6019,7 +6103,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "antlr graphviz - ",
-							"url" : "/MyBlog/linux/2020/07/12/antlr_graphviz.html"
+							"url" : "/MyBlog/lang/2020/07/12/antlr_graphviz.html"
 							}
 							
 							,
@@ -6067,7 +6151,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "antlr hive - ",
-							"url" : "/MyBlog/linux/2020/07/10/antlr_hive.html"
+							"url" : "/MyBlog/lang/2020/07/10/antlr_hive.html"
 							}
 							
 							,
@@ -6115,7 +6199,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "antlr idea - ",
-							"url" : "/MyBlog/linux/2020/07/09/antlridea.html"
+							"url" : "/MyBlog/lang/2020/07/09/antlridea.html"
 							}
 							
 							,
@@ -6123,7 +6207,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "antlr - ",
-							"url" : "/MyBlog/linux/2020/07/09/antlr.html"
+							"url" : "/MyBlog/lang/2020/07/09/antlr.html"
 							}
 							
 							,
@@ -6371,7 +6455,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "dot 语言 graphviz - ",
-							"url" : "/MyBlog/linux/2020/07/05/dot.html"
+							"url" : "/MyBlog/lang/2020/07/05/dot.html"
 							}
 							
 							,
@@ -6395,7 +6479,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "rapidjson - ",
-							"url" : "/MyBlog/linux/2020/07/04/rapidjson.html"
+							"url" : "/MyBlog/lang/2020/07/04/rapidjson.html"
 							}
 							
 							,
@@ -6411,7 +6495,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "lex yacc解析 json - ",
-							"url" : "/MyBlog/linux/2020/07/04/json.html"
+							"url" : "/MyBlog/lang/2020/07/04/json.html"
 							}
 							
 							,
@@ -6451,7 +6535,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "JSON解析学习 - ",
-							"url" : "/MyBlog/linux/2020/07/04/JSON_zhihu.html"
+							"url" : "/MyBlog/lang/2020/07/04/JSON_zhihu.html"
 							}
 							
 							,
@@ -6595,7 +6679,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "Time Structured Merge Tree - ",
-							"url" : "/MyBlog/linux/2020/06/30/tsm.html"
+							"url" : "/MyBlog/storage/2020/06/30/tsm.html"
 							}
 							
 							,
@@ -6619,7 +6703,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "ipset iptables ipvs - ",
-							"url" : "/MyBlog/linux/2020/06/30/ipset.html"
+							"url" : "/MyBlog/k8s/2020/06/30/ipset.html"
 							}
 							
 							,
@@ -6643,7 +6727,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "dhcp - ",
-							"url" : "/MyBlog/linux/2020/06/30/dhcp.html"
+							"url" : "/MyBlog/web/2020/06/30/dhcp.html"
 							}
 							
 							,
@@ -6771,7 +6855,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "time structure merge tree InfluxDB OpenTSDB - ",
-							"url" : "/MyBlog/linux/2020/06/28/tsm.html"
+							"url" : "/MyBlog/storage/2020/06/28/tsm.html"
 							}
 							
 							,
@@ -6779,7 +6863,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "rrdtool Round Robin Database Tool - ",
-							"url" : "/MyBlog/linux/2020/06/28/rrdtool.html"
+							"url" : "/MyBlog/storage/2020/06/28/rrdtool.html"
 							}
 							
 							,
@@ -6899,7 +6983,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "一次http请求，谁会先断开TCP连接？什么情况下客户端先断，什么情况下服务端先断？ - ",
-							"url" : "/MyBlog/linux/2020/06/26/fin.html"
+							"url" : "/MyBlog/web/2020/06/26/fin.html"
 							}
 							
 							,
@@ -6907,7 +6991,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "cgi - ",
-							"url" : "/MyBlog/linux/2020/06/26/cgi.html"
+							"url" : "/MyBlog/php/2020/06/26/cgi.html"
 							}
 							
 							,
@@ -7322,6 +7406,14 @@ CLONE_NEWUSER
 							
 							
 							{
+							"title" : "gc 垃圾回收 - ",
+							"url" : "/MyBlog/golang/2020/06/09/gc.html"
+							}
+							
+							,
+							
+							
+							{
 							"title" : "Errors with stack trace - ",
 							"url" : "/MyBlog/golang/2020/06/09/error.html"
 							}
@@ -7347,7 +7439,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "ddd - ",
-							"url" : "/MyBlog/golang/2020/06/09/ddd.html"
+							"url" : "/MyBlog/architect/2020/06/09/ddd.html"
 							}
 							
 							,
@@ -7372,14 +7464,6 @@ CLONE_NEWUSER
 							{
 							"title" : "不要轻易使用 Alpine 镜像来构建 Docker 镜像 - ",
 							"url" : "/MyBlog/golang/2020/06/09/Alpine.html"
-							}
-							
-							,
-							
-							
-							{
-							"title" : "gc 垃圾回收 - ",
-							"url" : "/MyBlog/golang/2020/06/09/.html"
 							}
 							
 							,
@@ -7475,7 +7559,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "usr2 - ",
-							"url" : "/MyBlog/linux/2020/06/03/usr2.html"
+							"url" : "/MyBlog/php/2020/06/03/usr2.html"
 							}
 							
 							,
@@ -7947,7 +8031,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "php 扩展编写ext - ",
-							"url" : "/MyBlog/web/2020/05/27/ext.html"
+							"url" : "/MyBlog/php/2020/05/27/ext.html"
 							}
 							
 							,
@@ -7963,7 +8047,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "如何保证系统高可用总结 - ",
-							"url" : "/MyBlog/web/2020/05/27/avaliablity.html"
+							"url" : "/MyBlog/architect/2020/05/27/avaliablity.html"
 							}
 							
 							,
@@ -8251,7 +8335,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "xdebug 配置教程 - ",
-							"url" : "/MyBlog/web/2020/05/20/cdebug.html"
+							"url" : "/MyBlog/php/2020/05/20/cdebug.html"
 							}
 							
 							,
@@ -8427,7 +8511,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "apcu - ",
-							"url" : "/MyBlog/web/2020/05/16/apcu.html"
+							"url" : "/MyBlog/php/2020/05/16/apcu.html"
 							}
 							
 							,
@@ -8891,7 +8975,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "PHP SPL（PHP 标准库） - ",
-							"url" : "/MyBlog/web/2020/04/21/getArrayCopy.html"
+							"url" : "/MyBlog/php/2020/04/21/getArrayCopy.html"
 							}
 							
 							,
@@ -9379,7 +9463,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "composer - ",
-							"url" : "/MyBlog/web/2020/04/08/composer.html"
+							"url" : "/MyBlog/php/2020/04/08/composer.html"
 							}
 							
 							,
@@ -9723,7 +9807,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "分布式从 ACID、CAP、BASE 的理论推进 - ",
-							"url" : "/MyBlog/linux/2020/03/30/base.html"
+							"url" : "/MyBlog/storage/2020/03/30/base.html"
 							}
 							
 							,
@@ -9851,7 +9935,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "微服务设计模式 - ",
-							"url" : "/MyBlog/web/2020/03/26/micro.html"
+							"url" : "/MyBlog/architect/2020/03/26/micro.html"
 							}
 							
 							,
@@ -9955,7 +10039,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "composer source 和 dist。 - ",
-							"url" : "/MyBlog/web/2020/03/24/source.html"
+							"url" : "/MyBlog/php/2020/03/24/source.html"
 							}
 							
 							,
@@ -9987,7 +10071,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "composer - ",
-							"url" : "/MyBlog/web/2020/03/24/composer.html"
+							"url" : "/MyBlog/php/2020/03/24/composer.html"
 							}
 							
 							,
@@ -10027,7 +10111,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "prestissimo Composer 加速 - ",
-							"url" : "/MyBlog/web/2020/03/23/prestissimo.html"
+							"url" : "/MyBlog/php/2020/03/23/prestissimo.html"
 							}
 							
 							,
@@ -10043,7 +10127,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "packagist composer - ",
-							"url" : "/MyBlog/web/2020/03/23/packagist.html"
+							"url" : "/MyBlog/php/2020/03/23/packagist.html"
 							}
 							
 							,
@@ -10179,7 +10263,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "怎么面对“写业务代码”这件事 - ",
-							"url" : "/MyBlog/web/2020/03/17/code.html"
+							"url" : "/MyBlog/architect/2020/03/17/code.html"
 							}
 							
 							,
@@ -10451,7 +10535,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "fpm slowlog - ",
-							"url" : "/MyBlog/web/2020/03/05/slowlog.html"
+							"url" : "/MyBlog/php/2020/03/05/slowlog.html"
 							}
 							
 							,
@@ -10571,7 +10655,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "gts - ",
-							"url" : "/MyBlog/web/2020/03/02/gts.html"
+							"url" : "/MyBlog/architect/2020/03/02/gts.html"
 							}
 							
 							,
@@ -10603,7 +10687,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "php execute_ex - ",
-							"url" : "/MyBlog/web/2020/03/01/execute_ex.html"
+							"url" : "/MyBlog/php/2020/03/01/execute_ex.html"
 							}
 							
 							,
@@ -10619,7 +10703,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "micro - ",
-							"url" : "/MyBlog/web/2020/02/29/micro.html"
+							"url" : "/MyBlog/architect/2020/02/29/micro.html"
 							}
 							
 							,
@@ -10795,7 +10879,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "dci 四色模型结合 - ",
-							"url" : "/MyBlog/web/2020/02/26/dci.html"
+							"url" : "/MyBlog/architect/2020/02/26/dci.html"
 							}
 							
 							,
@@ -10851,7 +10935,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "resolver - ",
-							"url" : "/MyBlog/web/2020/02/25/resolver.html"
+							"url" : "/MyBlog/architect/2020/02/25/resolver.html"
 							}
 							
 							,
@@ -10859,7 +10943,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "插件化 - ",
-							"url" : "/MyBlog/web/2020/02/25/plugin.html"
+							"url" : "/MyBlog/architect/2020/02/25/plugin.html"
 							}
 							
 							,
@@ -10867,7 +10951,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "业务配置化 - ",
-							"url" : "/MyBlog/web/2020/02/25/config.html"
+							"url" : "/MyBlog/architect/2020/02/25/config.html"
 							}
 							
 							,
@@ -10875,7 +10959,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "组件化 组件化业务模型（CBM） - ",
-							"url" : "/MyBlog/web/2020/02/25/component.html"
+							"url" : "/MyBlog/architect/2020/02/25/component.html"
 							}
 							
 							,
@@ -10883,7 +10967,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "四色原型总结 - ",
-							"url" : "/MyBlog/web/2020/02/25/color.html"
+							"url" : "/MyBlog/architect/2020/02/25/color.html"
 							}
 							
 							,
@@ -10915,7 +10999,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "从领域、对象、角色、职责、对象交互、场景等方面去分析和设计领域模型 - ",
-							"url" : "/MyBlog/web/2020/02/25/DCI.html"
+							"url" : "/MyBlog/architect/2020/02/25/DCI.html"
 							}
 							
 							,
@@ -10979,7 +11063,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "php Traits - ",
-							"url" : "/MyBlog/web/2020/02/24/Traits.html"
+							"url" : "/MyBlog/php/2020/02/24/Traits.html"
 							}
 							
 							,
@@ -11275,7 +11359,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "php-Parser - ",
-							"url" : "/MyBlog/web/2020/02/15/Parser.html"
+							"url" : "/MyBlog/php/2020/02/15/Parser.html"
 							}
 							
 							,
@@ -11291,7 +11375,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "PhpStorm Xdebug远程调试环境搭建原理分析 - ",
-							"url" : "/MyBlog/web/2020/02/14/Xdebug.html"
+							"url" : "/MyBlog/php/2020/02/14/Xdebug.html"
 							}
 							
 							,
@@ -11611,7 +11695,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "ddd - ",
-							"url" : "/MyBlog/web/2020/02/03/ddd.html"
+							"url" : "/MyBlog/architect/2020/02/03/ddd.html"
 							}
 							
 							,
@@ -11763,7 +11847,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "服务自动发现 - ",
-							"url" : "/MyBlog/web/2020/01/09/discovery.html"
+							"url" : "/MyBlog/k8s/2020/01/09/discovery.html"
 							}
 							
 							,
@@ -11875,7 +11959,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "多线程安全无锁日志系统 - ",
-							"url" : "/MyBlog/linux/2020/01/08/log4cpp.html"
+							"url" : "/MyBlog/golang/2020/01/08/log4cpp.html"
 							}
 							
 							,
@@ -12611,7 +12695,15 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "Uber 设计 - ",
-							"url" : "/MyBlog/web/2019/12/18/Uber.html"
+							"url" : "/MyBlog/architect/2019/12/18/Uber.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "Uber Project Lead揭秘 在科技巨头如何从0到1，主导项目 - ",
+							"url" : "/MyBlog/architect/2019/12/17/uber.html"
 							}
 							
 							,
@@ -12619,7 +12711,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "Facebook面试真题：如何设计Payment System - ",
-							"url" : "/MyBlog/web/2019/12/17/Payment.html"
+							"url" : "/MyBlog/architect/2019/12/17/Payment.html"
 							}
 							
 							,
@@ -12627,15 +12719,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "设计Netflix - ",
-							"url" : "/MyBlog/web/2019/12/17/Netflix.html"
-							}
-							
-							,
-							
-							
-							{
-							"title" : "Uber Project Lead揭秘：在科技巨头如何从0到1，主导项目 - ",
-							"url" : "/MyBlog/web/2019/12/17/.html"
+							"url" : "/MyBlog/architect/2019/12/17/Netflix.html"
 							}
 							
 							,
@@ -12651,7 +12735,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "feed 流 - ",
-							"url" : "/MyBlog/web/2019/12/16/feed.html"
+							"url" : "/MyBlog/architect/2019/12/16/feed.html"
 							}
 							
 							,
@@ -12659,7 +12743,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "如何设计Twitter - ",
-							"url" : "/MyBlog/web/2019/12/16/Twitter.html"
+							"url" : "/MyBlog/architect/2019/12/16/Twitter.html"
 							}
 							
 							,
@@ -12819,7 +12903,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "12306 抢票，极限并发带来的思考 - ",
-							"url" : "/MyBlog/web/2019/12/10/12306.html"
+							"url" : "/MyBlog/architect/2019/12/10/12306.html"
 							}
 							
 							,
@@ -13435,7 +13519,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "tcc - ",
-							"url" : "/MyBlog/web/2019/11/14/tcc.html"
+							"url" : "/MyBlog/architect/2019/11/14/tcc.html"
 							}
 							
 							,
@@ -13451,7 +13535,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "GTS - ",
-							"url" : "/MyBlog/web/2019/11/14/GTS.html"
+							"url" : "/MyBlog/architect/2019/11/14/GTS.html"
 							}
 							
 							,
@@ -14563,7 +14647,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "php heredoc - ",
-							"url" : "/MyBlog/web/2019/10/11/heredoc.html"
+							"url" : "/MyBlog/php/2019/10/11/heredoc.html"
 							}
 							
 							,
@@ -14819,7 +14903,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "xdebug - ",
-							"url" : "/MyBlog/web/2019/09/26/xdebug.html"
+							"url" : "/MyBlog/php/2019/09/26/xdebug.html"
 							}
 							
 							,
@@ -15011,7 +15095,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "php7 - ",
-							"url" : "/MyBlog/web/2019/09/21/php.html"
+							"url" : "/MyBlog/php/2019/09/21/php.html"
 							}
 							
 							,
@@ -15267,7 +15351,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "max_execution_time fpm - ",
-							"url" : "/MyBlog/web/2019/09/14/max_execution_time.html"
+							"url" : "/MyBlog/php/2019/09/14/max_execution_time.html"
 							}
 							
 							,
@@ -15387,7 +15471,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "tcpproxy - ",
-							"url" : "/MyBlog/web/2019/09/08/tcpproxy.html"
+							"url" : "/MyBlog/golang/2019/09/08/tcpproxy.html"
 							}
 							
 							,
@@ -15395,7 +15479,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "swagger php - ",
-							"url" : "/MyBlog/web/2019/09/08/swaggerphp.html"
+							"url" : "/MyBlog/php/2019/09/08/swaggerphp.html"
 							}
 							
 							,
@@ -15611,7 +15695,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "http状态码413 - ",
-							"url" : "/MyBlog/web/2019/08/15/413.html"
+							"url" : "/MyBlog/php/2019/08/15/413.html"
 							}
 							
 							,
@@ -15627,7 +15711,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "phpgc - ",
-							"url" : "/MyBlog/web/2019/08/09/phpgc.html"
+							"url" : "/MyBlog/php/2019/08/09/phpgc.html"
 							}
 							
 							,
@@ -15643,7 +15727,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "fpm_scoreboard - ",
-							"url" : "/MyBlog/web/2019/08/09/fpm_scoreboard.html"
+							"url" : "/MyBlog/php/2019/08/09/fpm_scoreboard.html"
 							}
 							
 							,
@@ -16027,7 +16111,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "php - ",
-							"url" : "/MyBlog/web/2019/07/11/php.html"
+							"url" : "/MyBlog/php/2019/07/11/php.html"
 							}
 							
 							,
@@ -16203,7 +16287,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "fastcgi_client - ",
-							"url" : "/MyBlog/web/2019/07/04/fastcgi_client.html"
+							"url" : "/MyBlog/php/2019/07/04/fastcgi_client.html"
 							}
 							
 							,
@@ -16211,7 +16295,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "RequestID fastcgi - ",
-							"url" : "/MyBlog/web/2019/07/04/RequestID.html"
+							"url" : "/MyBlog/php/2019/07/04/RequestID.html"
 							}
 							
 							,
@@ -16275,7 +16359,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "shutdown 源码分析 - ",
-							"url" : "/MyBlog/golang/2019/06/29/graceful.html"
+							"url" : "/MyBlog/php/2019/06/29/graceful.html"
 							}
 							
 							,
@@ -16459,7 +16543,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "phpcs phpcbf PHP_CodeSniffer - ",
-							"url" : "/MyBlog/web/2019/06/17/phpcs.html"
+							"url" : "/MyBlog/php/2019/06/17/phpcs.html"
 							}
 							
 							,
@@ -16707,7 +16791,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "socketpair nginx 通信机制 - ",
-							"url" : "/MyBlog/web/2019/06/06/socketpair.html"
+							"url" : "/MyBlog/php/2019/06/06/socketpair.html"
 							}
 							
 							,
@@ -16779,7 +16863,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "yaf - ",
-							"url" : "/MyBlog/web/2019/06/01/yaf.html"
+							"url" : "/MyBlog/php/2019/06/01/yaf.html"
 							}
 							
 							,
@@ -16803,7 +16887,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "ngx_cycle_s - ",
-							"url" : "/MyBlog/web/2019/05/31/ngx_cycle_s.html"
+							"url" : "/MyBlog/php/2019/05/31/ngx_cycle_s.html"
 							}
 							
 							,
@@ -16819,7 +16903,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "fpm worker 进程的生命周期 - ",
-							"url" : "/MyBlog/web/2019/05/31/fpm.html"
+							"url" : "/MyBlog/php/2019/05/31/fpm.html"
 							}
 							
 							,
@@ -16827,7 +16911,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "ext_skel php-x php扩展开发工具 - ",
-							"url" : "/MyBlog/web/2019/05/31/ext_skel.html"
+							"url" : "/MyBlog/php/2019/05/31/ext_skel.html"
 							}
 							
 							,
@@ -16891,7 +16975,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "php-fpm - ",
-							"url" : "/MyBlog/web/2019/05/28/fpm.html"
+							"url" : "/MyBlog/php/2019/05/28/fpm.html"
 							}
 							
 							,
@@ -16971,7 +17055,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "limit_rate_after nginx限速配置 - ",
-							"url" : "/MyBlog/web/2019/05/26/limit_rate_after.html"
+							"url" : "/MyBlog/php/2019/05/26/limit_rate_after.html"
 							}
 							
 							,
@@ -17051,7 +17135,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "nginx request_time - ",
-							"url" : "/MyBlog/web/2019/05/21/request_time.html"
+							"url" : "/MyBlog/php/2019/05/21/request_time.html"
 							}
 							
 							,
@@ -17131,7 +17215,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "tideways + xhgui（+toolkit） php 性能分析 - ",
-							"url" : "/MyBlog/web/2019/04/24/tideways.html"
+							"url" : "/MyBlog/php/2019/04/24/tideways.html"
 							}
 							
 							,
@@ -17195,7 +17279,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "SESSION 保存在服务器的哪里 - ",
-							"url" : "/MyBlog/web/2019/04/21/SESSION.html"
+							"url" : "/MyBlog/php/2019/04/21/SESSION.html"
 							}
 							
 							,
@@ -17731,7 +17815,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "分布式事务 xa/tcc - ",
-							"url" : "/MyBlog/web/2019/02/26/xa.html"
+							"url" : "/MyBlog/storage/2019/02/26/xa.html"
 							}
 							
 							,
@@ -17835,7 +17919,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "php json_encode 的坑 - ",
-							"url" : "/MyBlog/web/2019/01/28/json_encode.html"
+							"url" : "/MyBlog/php/2019/01/28/json_encode.html"
 							}
 							
 							,
@@ -17923,7 +18007,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "ddd - ",
-							"url" : "/MyBlog/web/2019/01/13/ddd.html"
+							"url" : "/MyBlog/architect/2019/01/13/ddd.html"
 							}
 							
 							,
@@ -17931,7 +18015,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "4色图 - ",
-							"url" : "/MyBlog/web/2019/01/13/4color.html"
+							"url" : "/MyBlog/architect/2019/01/13/4color.html"
 							}
 							
 							,
@@ -18139,7 +18223,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "Shell 脚本中调用另一个 Shell 脚本 - ",
-							"url" : "/MyBlog/web/2018/11/28/shell.html"
+							"url" : "/MyBlog/linux/2018/11/28/shell.html"
 							}
 							
 							,
@@ -18611,7 +18695,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "nginx php-fpm unix-socket - ",
-							"url" : "/MyBlog/web/2018/09/20/php-fpm-unix-socket.html"
+							"url" : "/MyBlog/php/2018/09/20/php-fpm-unix-socket.html"
 							}
 							
 							,
@@ -18619,7 +18703,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "cachetool 非php环境操作apcu - ",
-							"url" : "/MyBlog/web/2018/09/20/cachetool.html"
+							"url" : "/MyBlog/php/2018/09/20/cachetool.html"
 							}
 							
 							,
@@ -18707,7 +18791,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "php 内置的 web 服务器 - ",
-							"url" : "/MyBlog/web/2018/09/11/oho.html"
+							"url" : "/MyBlog/php/2018/09/11/oho.html"
 							}
 							
 							,
@@ -18715,7 +18799,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "php 的定界符 <<<eof - ",
-							"url" : "/MyBlog/web/2018/09/10/php.html"
+							"url" : "/MyBlog/php/2018/09/10/php.html"
 							}
 							
 							,
@@ -18731,7 +18815,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "thrift_golang - ",
-							"url" : "/MyBlog/web/2018/09/09/thrift_golang.html"
+							"url" : "/MyBlog/golang/2018/09/09/thrift_golang.html"
 							}
 							
 							,
@@ -18875,7 +18959,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "php流Streams、包装器wrapper - ",
-							"url" : "/MyBlog/web/2018/08/30/phpwrapper.html"
+							"url" : "/MyBlog/php/2018/08/30/phpwrapper.html"
 							}
 							
 							,
@@ -18883,7 +18967,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "phar - ",
-							"url" : "/MyBlog/web/2018/08/30/phar.html"
+							"url" : "/MyBlog/php/2018/08/30/phar.html"
 							}
 							
 							,
@@ -18931,7 +19015,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "Php-fpm运行原理 - ",
-							"url" : "/MyBlog/web/2018/08/27/fpm.html"
+							"url" : "/MyBlog/php/2018/08/27/fpm.html"
 							}
 							
 							,
@@ -18963,7 +19047,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "PHP的Realpath Cache - ",
-							"url" : "/MyBlog/web/2018/08/22/realpath.html"
+							"url" : "/MyBlog/php/2018/08/22/realpath.html"
 							}
 							
 							,
@@ -19235,7 +19319,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "php_kafka - ",
-							"url" : "/MyBlog/web/2018/07/11/php_kafka.html"
+							"url" : "/MyBlog/php/2018/07/11/php_kafka.html"
 							}
 							
 							,
@@ -19323,7 +19407,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "composer dump-atoload namespace dir - ",
-							"url" : "/MyBlog/web/2018/07/06/composer.html"
+							"url" : "/MyBlog/php/2018/07/06/composer.html"
 							}
 							
 							,
@@ -19747,7 +19831,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "lsm - ",
-							"url" : "/MyBlog/web/2018/06/16/lsm.html"
+							"url" : "/MyBlog/storage/2018/06/16/lsm.html"
 							}
 							
 							,
@@ -19907,7 +19991,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "nginx_header - ",
-							"url" : "/MyBlog/web/2018/06/03/nginx_header.html"
+							"url" : "/MyBlog/php/2018/06/03/nginx_header.html"
 							}
 							
 							,
@@ -20739,7 +20823,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "type_hinting - ",
-							"url" : "/MyBlog/web/2018/02/26/type_hinting.html"
+							"url" : "/MyBlog/php/2018/02/26/type_hinting.html"
 							}
 							
 							,
@@ -20747,7 +20831,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "tsrm - ",
-							"url" : "/MyBlog/web/2018/02/26/tsrm.html"
+							"url" : "/MyBlog/php/2018/02/26/tsrm.html"
 							}
 							
 							,
@@ -20755,7 +20839,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "create_function - ",
-							"url" : "/MyBlog/web/2018/02/26/create_function.html"
+							"url" : "/MyBlog/php/2018/02/26/create_function.html"
 							}
 							
 							,
@@ -20763,7 +20847,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "Xdebug - ",
-							"url" : "/MyBlog/web/2018/02/26/Xdebug.html"
+							"url" : "/MyBlog/php/2018/02/26/Xdebug.html"
 							}
 							
 							,
@@ -20787,7 +20871,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "vld_dot_graphviz - ",
-							"url" : "/MyBlog/web/2018/02/12/vld_dot_graphviz.html"
+							"url" : "/MyBlog/php/2018/02/12/vld_dot_graphviz.html"
 							}
 							
 							,
@@ -20795,7 +20879,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "phpvld - ",
-							"url" : "/MyBlog/jekyll/2018/02/12/phpvld.html"
+							"url" : "/MyBlog/php/2018/02/12/phpvld.html"
 							}
 							
 							,
@@ -20803,7 +20887,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "phpize - ",
-							"url" : "/MyBlog/web/2018/02/12/phpize.html"
+							"url" : "/MyBlog/php/2018/02/12/phpize.html"
 							}
 							
 							,
@@ -20811,7 +20895,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "PHP 调试利器之 PHPDBG - ",
-							"url" : "/MyBlog/web/2018/02/12/phpdbg.html"
+							"url" : "/MyBlog/php/2018/02/12/phpdbg.html"
 							}
 							
 							,
@@ -20891,7 +20975,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "Duck typing - ",
-							"url" : "/MyBlog/web/2018/02/02/Duck_typing.html"
+							"url" : "/MyBlog/golang/2018/02/02/Duck_typing.html"
 							}
 							
 							,
@@ -20923,7 +21007,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "mongodb - ",
-							"url" : "/MyBlog/web/2018/01/24/mongodb.html"
+							"url" : "/MyBlog/storage/2018/01/24/mongodb.html"
 							}
 							
 							,
@@ -20931,7 +21015,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "倒排索引 - ",
-							"url" : "/MyBlog/web/2018/01/24/inverted_file.html"
+							"url" : "/MyBlog/storage/2018/01/24/inverted_file.html"
 							}
 							
 							,
@@ -21059,7 +21143,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "raft - ",
-							"url" : "/MyBlog/jekyll/2018/01/04/raft.html"
+							"url" : "/MyBlog/storage/2018/01/04/raft.html"
 							}
 							
 							,
@@ -21211,7 +21295,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "goroutine - ",
-							"url" : "/MyBlog/linux/2017/12/24/goroutine.html"
+							"url" : "/MyBlog/golang/2017/12/24/goroutine.html"
 							}
 							
 							,
@@ -21275,7 +21359,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "各种树的应用场景 - ",
-							"url" : "/MyBlog/web/2017/12/13/tree.html"
+							"url" : "/MyBlog/storage/2017/12/13/tree.html"
 							}
 							
 							,
@@ -21355,7 +21439,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "netfliter - ",
-							"url" : "/MyBlog/jekyll/2017/12/09/netfliter.html"
+							"url" : "/MyBlog/linux/2017/12/09/netfliter.html"
 							}
 							
 							,
@@ -21379,7 +21463,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "mysql_index - ",
-							"url" : "/MyBlog/web/2017/12/07/mysql_index.html"
+							"url" : "/MyBlog/storage/2017/12/07/mysql_index.html"
 							}
 							
 							,
@@ -21467,7 +21551,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "go_pprof - ",
-							"url" : "/MyBlog/web/2017/11/29/go_pprof.html"
+							"url" : "/MyBlog/golang/2017/11/29/go_pprof.html"
 							}
 							
 							,
@@ -21491,7 +21575,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "redis协议 - ",
-							"url" : "/MyBlog/web/2017/11/18/redis_protocal.html"
+							"url" : "/MyBlog/storage/2017/11/18/redis_protocal.html"
 							}
 							
 							,
@@ -21539,7 +21623,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "mysql 的排序 - ",
-							"url" : "/MyBlog/web/2017/11/16/mysql_sort.html"
+							"url" : "/MyBlog/storage/2017/11/16/mysql_sort.html"
 							}
 							
 							,
@@ -21547,7 +21631,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "mysql_maneager - ",
-							"url" : "/MyBlog/web/2017/11/16/mysql_maneager.html"
+							"url" : "/MyBlog/storage/2017/11/16/mysql_maneager.html"
 							}
 							
 							,
@@ -21555,7 +21639,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "mysql_index - ",
-							"url" : "/MyBlog/web/2017/11/16/mysql_index.html"
+							"url" : "/MyBlog/storage/2017/11/16/mysql_index.html"
 							}
 							
 							,
@@ -21563,7 +21647,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "MySQL的表类型的（存储引擎） - ",
-							"url" : "/MyBlog/web/2017/11/16/mysql_engine.html"
+							"url" : "/MyBlog/storage/2017/11/16/mysql_engine.html"
 							}
 							
 							,
@@ -21571,7 +21655,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "mysql 原理 - ",
-							"url" : "/MyBlog/web/2017/11/16/mysql.html"
+							"url" : "/MyBlog/storage/2017/11/16/mysql.html"
 							}
 							
 							,
@@ -21587,7 +21671,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "redis 持久化 - ",
-							"url" : "/MyBlog/web/2017/11/15/redis_forever.html"
+							"url" : "/MyBlog/storage/2017/11/15/redis_forever.html"
 							}
 							
 							,
@@ -21643,7 +21727,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "php_session - ",
-							"url" : "/MyBlog/web/2017/11/09/php_session.html"
+							"url" : "/MyBlog/php/2017/11/09/php_session.html"
 							}
 							
 							,
@@ -21667,7 +21751,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "composer - ",
-							"url" : "/MyBlog/web/2017/11/03/composer.html"
+							"url" : "/MyBlog/php/2017/11/03/composer.html"
 							}
 							
 							,
@@ -21827,7 +21911,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "mysqldump - ",
-							"url" : "/MyBlog/web/2017/09/20/mysqldump.html"
+							"url" : "/MyBlog/storage/2017/09/20/mysqldump.html"
 							}
 							
 							,
@@ -21835,7 +21919,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "mysql-time - ",
-							"url" : "/MyBlog/jekyll/2017/09/20/mysql-time.html"
+							"url" : "/MyBlog/storage/2017/09/20/mysql-time.html"
 							}
 							
 							,
@@ -21875,7 +21959,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "netcat - ",
-							"url" : "/MyBlog/jekyll/2017/09/15/netcat.html"
+							"url" : "/MyBlog/web/2017/09/15/netcat.html"
 							}
 							
 							,
@@ -21899,7 +21983,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "脚本输出带颜色文字 - ",
-							"url" : "/MyBlog/jekyll/2017/09/14/%E8%84%9A%E6%9C%AC%E8%BE%93%E5%87%BA%E5%B8%A6%E9%A2%9C%E8%89%B2%E6%96%87%E5%AD%97.html"
+							"url" : "/MyBlog/linux/2017/09/14/%E8%84%9A%E6%9C%AC%E8%BE%93%E5%87%BA%E5%B8%A6%E9%A2%9C%E8%89%B2%E6%96%87%E5%AD%97.html"
 							}
 							
 							,
@@ -21915,7 +21999,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "php-curl-ext - ",
-							"url" : "/MyBlog/jekyll/2017/09/13/php-curl-ext.html"
+							"url" : "/MyBlog/php/2017/09/13/php-curl-ext.html"
 							}
 							
 							,
@@ -21923,7 +22007,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "curl-https-php - ",
-							"url" : "/MyBlog/jekyll/2017/09/13/curl-https-php.html"
+							"url" : "/MyBlog/php/2017/09/13/curl-https-php.html"
 							}
 							
 							,
@@ -21931,7 +22015,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "php-spider - ",
-							"url" : "/MyBlog/jekyll/2017/09/12/php-spider.html"
+							"url" : "/MyBlog/php/2017/09/12/php-spider.html"
 							}
 							
 							,
@@ -21939,7 +22023,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "php怎么判断函数，类，类方法是不是存在 - ",
-							"url" : "/MyBlog/jekyll/2017/09/12/php-function.html"
+							"url" : "/MyBlog/php/2017/09/12/php-function.html"
 							}
 							
 							,
@@ -21947,7 +22031,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "composer-source - ",
-							"url" : "/MyBlog/jekyll/2017/09/12/composer-source.html"
+							"url" : "/MyBlog/php/2017/09/12/composer-source.html"
 							}
 							
 							,
@@ -21955,7 +22039,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "php-doc - ",
-							"url" : "/MyBlog/jekyll/2017/09/11/php-doc.html"
+							"url" : "/MyBlog/php/2017/09/11/php-doc.html"
 							}
 							
 							,
@@ -21971,7 +22055,7 @@ CLONE_NEWUSER
 							
 							{
 							"title" : "http-head 四种常见的 POST 提交数据方式 - ",
-							"url" : "/MyBlog/jekyll/2017/09/10/http-head.html"
+							"url" : "/MyBlog/web/2017/09/10/http-head.html"
 							}
 							
 							,
@@ -22231,7 +22315,7 @@ CLONE_NEWUSER
                 <div id="container" class="well">
                 	  <div class="row">
                         <div class="col-lg-6">
-                            <img src="https://xiazemin.github.io/MyBlog/img/webwxgetmsgimg.jpeg"  height="300" width="auto" />
+                            <img src="http://localhost:4000/MyBlog/img/webwxgetmsgimg.jpeg"  height="300" width="auto" />
                         </div>
                       </div>
                 </div>
@@ -22246,7 +22330,7 @@ CLONE_NEWUSER
 								
 								
 									<a class="bold" href="/MyBlog/category/jekyll">
-										jekyll (42)
+										jekyll (30)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -22282,7 +22366,7 @@ CLONE_NEWUSER
 								
 								
 									<a class="bold" href="/MyBlog/category/web">
-										web (315)
+										web (223)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -22308,6 +22392,24 @@ CLONE_NEWUSER
 								
 								
 								
+									<a class="bold" href="/MyBlog/category/php">
+										php (196)
+									</a>
+                        </div>
+                        <div class="col-lg-6">
+                        	
+								
+								
+								
+									<a class="bold" href="/MyBlog/category/linux">
+										linux (366)
+									</a>
+                        </div>
+                        <div class="col-lg-6">
+                        	
+								
+								
+								
 									<a class="bold" href="/MyBlog/category/spark">
 										spark (51)
 									</a>
@@ -22326,8 +22428,17 @@ CLONE_NEWUSER
 								
 								
 								
-									<a class="bold" href="/MyBlog/category/linux">
-										linux (383)
+									<a class="bold" href="/MyBlog/category/storage">
+										storage (176)
+									</a>
+                        </div>
+                        <div class="col-lg-6">
+                        	
+								
+								
+								
+									<a class="bold" href="/MyBlog/category/golang">
+										golang (826)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -22345,16 +22456,7 @@ CLONE_NEWUSER
 								
 								
 									<a class="bold" href="/MyBlog/category/lang">
-										lang (65)
-									</a>
-                        </div>
-                        <div class="col-lg-6">
-                        	
-								
-								
-								
-									<a class="bold" href="/MyBlog/category/golang">
-										golang (819)
+										lang (74)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -22389,15 +22491,6 @@ CLONE_NEWUSER
 								
 								
 								
-									<a class="bold" href="/MyBlog/category/storage">
-										storage (153)
-									</a>
-                        </div>
-                        <div class="col-lg-6">
-                        	
-								
-								
-								
 									<a class="bold" href="/MyBlog/category/java">
 										java (4)
 									</a>
@@ -22408,7 +22501,7 @@ CLONE_NEWUSER
 								
 								
 									<a class="bold" href="/MyBlog/category/algorithm">
-										algorithm (106)
+										algorithm (107)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -22425,8 +22518,8 @@ CLONE_NEWUSER
 								
 								
 								
-									<a class="bold" href="/MyBlog/category/php">
-										php (117)
+									<a class="bold" href="/MyBlog/category/architect">
+										architect (34)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -22435,16 +22528,7 @@ CLONE_NEWUSER
 								
 								
 									<a class="bold" href="/MyBlog/category/k8s">
-										k8s (12)
-									</a>
-                        </div>
-                        <div class="col-lg-6">
-                        	
-								
-								
-								
-									<a class="bold" href="/MyBlog/category/architect">
-										architect (9)
+										k8s (14)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -22505,6 +22589,106 @@ CLONE_NEWUSER
 								<ul style="display:none;width:250px;height:250px;">
 								     
 								   <li>
+										<a href="/MyBlog/php/2020/10/28/phpstorm.html" style="font-size:40px;"> phpstorm</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/php/2020/10/28/phpscan.html" style="font-size:40px;"> php静态分析</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/php/2020/10/28/coverage.html" style="font-size:40px;"> php-code-coverage</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/golang/2020/10/28/SetMaxThreads.html" style="font-size:40px;"> SetMaxThreads</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/php/2020/10/26/phpgc.html" style="font-size:40px;"> phpgc</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/php/2020/10/26/mapReduce.html" style="font-size:40px;"> mapReduce</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/jekyll/2020/10/26/bundle.html" style="font-size:40px;"> bundle</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/golang/2020/10/25/Plugin.html" style="font-size:40px;"> Plugin</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/php/2020/10/24/JsonSerializable.html" style="font-size:40px;"> JsonSerializable</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/storage/2020/10/22/hbase.html" style="font-size:40px;"> HBase的存储格式</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/php/2020/10/21/getParams.html" style="font-size:40px;"> getParams yaf</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/php/2020/10/20/xdebug_debug_zval.html" style="font-size:40px;"> xdebug_debug_zval</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/php/2020/10/20/scoreboard.html" style="font-size:40px;"> scoreboard</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/web/2020/10/20/axure.html" style="font-size:40px;"> axure 产品画图工具</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/web/2020/10/18/udp.html" style="font-size:40px;"> udp 超出长度丢弃问题</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/web/2020/10/18/ip.html" style="font-size:40px;"> 通过ip获取用户地理信息原理</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/storage/2020/10/18/hotkeys.html" style="font-size:40px;"> 如何快速定位 Redis 热 key</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/storage/2020/10/18/ha.html" style="font-size:40px;"> mysql ha</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/php/2020/10/16/symfony.html" style="font-size:40px;"> symfony console VarDumper</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/golang/2020/10/16/slice.html" style="font-size:40px;"> slice 内存泄露</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/php/2020/10/16/phan.html" style="font-size:40px;"> phan</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/php/2020/10/16/parser.html" style="font-size:40px;"> php parser</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/php/2020/10/16/box.html" style="font-size:40px;"> box</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/algorithm/2020/10/15/chaos.html" style="font-size:40px;"> chaos 混沌工程</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/web/2020/10/15/avaliable.html" style="font-size:40px;"> 稳定性</a>
+									</li>
+									  
+								   <li>
 										<a href="/MyBlog/golang/2020/10/10/template.html" style="font-size:40px;"> fastest template</a>
 									</li>
 									  
@@ -22563,106 +22747,6 @@ CLONE_NEWUSER
 								   <li>
 										<a href="/MyBlog/php/2020/09/29/cow.html" style="font-size:40px;"> cow</a>
 									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2020/09/29/compare.html" style="font-size:40px;"> compare</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/linux/2020/09/29/chisel.html" style="font-size:40px;"> chisel  lldb</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2020/09/29/byte.html" style="font-size:40px;"> byte</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/algorithm/2020/09/26/SourceGraph.html" style="font-size:40px;"> SourceGraph</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/linux/2020/09/25/set.html" style="font-size:40px;"> set</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2020/09/25/goreman.html" style="font-size:40px;"> goreman 进程管理工具</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/algorithm/2020/09/23/raft.html" style="font-size:40px;"> raft</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2020/09/23/optional.html" style="font-size:40px;"> optional parameter in function</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/linux/2020/09/23/ln.html" style="font-size:40px;"> 解决 ln -s 软链接产生的Too many levels of symbolic links错误</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/php/2020/09/23/array_merge.html" style="font-size:40px;"> array_merge</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/linux/2020/09/22/libfaketime.html" style="font-size:40px;"> libfaketime</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/php/2020/09/22/500.html" style="font-size:40px;"> php 500</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2020/09/21/slice.html" style="font-size:40px;"> slice</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/storage/2020/09/21/index.html" style="font-size:40px;"> 索引失效的情况</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2020/09/21/eBPF.html" style="font-size:40px;"> Debugging Go in prod using eBPF</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2020/09/21/Pebble.html" style="font-size:40px;"> Pebble</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2020/09/18/rt0_go.html" style="font-size:40px;"> rt0_go</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2020/09/18/garbage.html" style="font-size:40px;"> garbage</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2020/09/18/dubbogo.html" style="font-size:40px;"> dubbogo</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/k8s/2020/09/18/Declarative.html" style="font-size:40px;"> Declarative</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2020/09/10/godefs.html" style="font-size:40px;"> godefs</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/php/2020/09/10/get_called_class.html" style="font-size:40px;"> get_called_class</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2020/09/10/dapr.html" style="font-size:40px;"> dapr sidecar</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/docker/2020/09/09/privileged.html" style="font-size:40px;"> privileged 在docker内部运行docker</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/docker/2020/09/09/container.html" style="font-size:40px;"> make container</a>
-									</li>
 									
 								</ul>
 							</div>
@@ -22677,33 +22761,33 @@ CLONE_NEWUSER
                 		<ul class="posts" span="recent">  
 							  
 							   <li>  
-								   <span>10 Oct 2020</span>
-								   <a href="/MyBlog/golang/2020/10/10/template.html">  
-								   fastest template</a>  
+								   <span>28 Oct 2020</span>
+								   <a href="/MyBlog/php/2020/10/28/phpstorm.html">  
+								   phpstorm</a>  
 							   </li>  
 							  
 							   <li>  
-								   <span>10 Oct 2020</span>
-								   <a href="/MyBlog/k8s/2020/10/10/probe.html">  
-								   容器健康检查</a>  
+								   <span>28 Oct 2020</span>
+								   <a href="/MyBlog/php/2020/10/28/phpscan.html">  
+								   php静态分析</a>  
 							   </li>  
 							  
 							   <li>  
-								   <span>10 Oct 2020</span>
-								   <a href="/MyBlog/golang/2020/10/10/plugin.html">  
-								   plugin</a>  
+								   <span>28 Oct 2020</span>
+								   <a href="/MyBlog/php/2020/10/28/coverage.html">  
+								   php-code-coverage</a>  
 							   </li>  
 							  
 							   <li>  
-								   <span>10 Oct 2020</span>
-								   <a href="/MyBlog/linux/2020/10/10/iptables.html">  
-								   iptables 限制连接数</a>  
+								   <span>28 Oct 2020</span>
+								   <a href="/MyBlog/golang/2020/10/28/SetMaxThreads.html">  
+								   SetMaxThreads</a>  
 							   </li>  
 							  
 							   <li>  
-								   <span>10 Oct 2020</span>
-								   <a href="/MyBlog/golang/2020/10/10/goyacc.html">  
-								   goyacc</a>  
+								   <span>26 Oct 2020</span>
+								   <a href="/MyBlog/php/2020/10/26/phpgc.html">  
+								   phpgc</a>  
 							   </li>  
 							  
 						</ul>
@@ -22781,50 +22865,50 @@ CLONE_NEWUSER
 
                <!-- 轮播图片 -->
                 <!--div class="well">
-					<div id="rotator_xzm" style="height:auto;width: 100%; overflow: hidden; padding: 0; background-image: url('https://xiazemin.github.io/MyBlog/img/Tachyon2.jpg');"></div>
+					<div id="rotator_xzm" style="height:auto;width: 100%; overflow: hidden; padding: 0; background-image: url('http://localhost:4000/MyBlog/img/Tachyon2.jpg');"></div>
                 </div-->
                 <!--div class="well">
-                <script src='https://xiazemin.github.io/MyBlog/slicebox/js/jquery.js'></script>
-				<script src='https://xiazemin.github.io/MyBlog/slicebox/js/jquery.slicebox.js'></script>
+                <script src='http://localhost:4000/MyBlog/slicebox/js/jquery.js'></script>
+				<script src='http://localhost:4000/MyBlog/slicebox/js/jquery.slicebox.js'></script>
                         <ul id="sb-slider" class="sb-slider">
 						      <li>
-						        <a href="#" ><img src="https://xiazemin.github.io/MyBlog/img/Tachyon2.jpg" alt="image1"/></a>
+						        <a href="#" ><img src="http://localhost:4000/MyBlog/img/Tachyon2.jpg" alt="image1"/></a>
 						        <div class="sb-description">
 						          <h3>Creative Lifesaver</h3>
 						        </div>
 						      </li>
 						      <li>
-						        <a href="#" ><img src="https://xiazemin.github.io/MyBlog/img/Tachyon2.jpg" alt="image2"/></a>
+						        <a href="#" ><img src="http://localhost:4000/MyBlog/img/Tachyon2.jpg" alt="image2"/></a>
 						        <div class="sb-description">
 						          <h3>Honest Entertainer</h3>
 						        </div>
 						      </li>
 						      <li>
-						        <a href="#" ><img src="https://xiazemin.github.io/MyBlog/img/Tachyon2.jpg" alt="image1"/></a>
+						        <a href="#" ><img src="http://localhost:4000/MyBlog/img/Tachyon2.jpg" alt="image1"/></a>
 						        <div class="sb-description">
 						          <h3>Brave Astronaut</h3>
 						        </div>
 						      </li>
 						      <li>
-						        <a href="#" ><img src="https://xiazemin.github.io/MyBlog/img/Tachyon2.jpg" alt="image1"/></a>
+						        <a href="#" ><img src="http://localhost:4000/MyBlog/img/Tachyon2.jpg" alt="image1"/></a>
 						        <div class="sb-description">
 						          <h3>Affectionate Decision Maker</h3>
 						        </div>
 						      </li>
 						      <li>
-						        <a href="#" ><img src="https://xiazemin.github.io/MyBlog/img/Tachyon2.jpg" alt="image1"/></a>
+						        <a href="#" ><img src="http://localhost:4000/MyBlog/img/Tachyon2.jpg" alt="image1"/></a>
 						        <div class="sb-description">
 						          <h3>Faithful Investor</h3>
 						        </div>
 						      </li>
 						      <li>
-						        <a href="#" ><img src="https://xiazemin.github.io/MyBlog/img/Tachyon2.jpg" alt="image1"/></a>
+						        <a href="#" ><img src="http://localhost:4000/MyBlog/img/Tachyon2.jpg" alt="image1"/></a>
 						        <div class="sb-description">
 						          <h3>Groundbreaking Artist</h3>
 						        </div>
 						      </li>
 						      <li>
-						        <a href="#" ><img src="https://xiazemin.github.io/MyBlog/img/Tachyon2.jpg" alt="image1"/></a>
+						        <a href="#" ><img src="http://localhost:4000/MyBlog/img/Tachyon2.jpg" alt="image1"/></a>
 						        <div class="sb-description">
 						          <h3>Selfless Philantropist</h3>
 						        </div>
@@ -22837,10 +22921,10 @@ CLONE_NEWUSER
 						      <a href="#">Next</a>
 						      <a href="#">Previous</a>
 						    </div>
-					<script src="https://xiazemin.github.io/MyBlog/slicebox/js/index.js"></script>
-					<link rel='stylesheet prefetch' href='https://xiazemin.github.io/MyBlog/slicebox/css/demo.css'>
-					<link rel="stylesheet" href="https://xiazemin.github.io/MyBlog/slicebox/css/style.css" media="screen" type="text/css" />
-					<script src="https://xiazemin.github.io/MyBlog/slicebox/js/modernizr.js"></script>
+					<script src="http://localhost:4000/MyBlog/slicebox/js/index.js"></script>
+					<link rel='stylesheet prefetch' href='http://localhost:4000/MyBlog/slicebox/css/demo.css'>
+					<link rel="stylesheet" href="http://localhost:4000/MyBlog/slicebox/css/style.css" media="screen" type="text/css" />
+					<script src="http://localhost:4000/MyBlog/slicebox/js/modernizr.js"></script>
                 </div-->	
 
                 <!-- author widget -->

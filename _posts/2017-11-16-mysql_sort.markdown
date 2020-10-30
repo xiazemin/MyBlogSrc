@@ -1,7 +1,7 @@
 ---
 title: mysql 的排序
 layout: post
-category: web
+category: storage
 author: 夏泽民
 ---
 <div class="container">

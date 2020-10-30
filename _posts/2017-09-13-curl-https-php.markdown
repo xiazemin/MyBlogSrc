@@ -1,7 +1,7 @@
 ---
 title: curl-https-php
 layout: post
-category: jekyll
+category: php
 author: 夏泽民
 ---
 php使用curl访问https返回无结果的问题

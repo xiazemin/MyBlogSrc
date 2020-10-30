@@ -1,7 +1,7 @@
 ---
 title: antlr idea
 layout: post
-category: linux
+category: lang
 author: 夏泽民
 ---
 https://www.cntofu.com/book/115/line-between-lexer-and-parser.md

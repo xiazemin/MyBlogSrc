@@ -1,7 +1,7 @@
 ---
 title: packagist composer 
 layout: post
-category: web
+category: php
 author: 夏泽民
 ---
 composer是现代PHP的基石

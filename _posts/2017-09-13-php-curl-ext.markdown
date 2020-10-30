@@ -1,7 +1,7 @@
 ---
 title: php-curl-ext
 layout: post
-category: jekyll
+category: php
 author: 夏泽民
 ---
 php curl  扩展安装

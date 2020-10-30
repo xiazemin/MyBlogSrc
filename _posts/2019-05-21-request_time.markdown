@@ -1,7 +1,7 @@
 ---
 title: nginx request_time
 layout: post
-category: web
+category: php
 author: 夏泽民
 ---
 1、request_time

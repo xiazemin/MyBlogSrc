@@ -1,7 +1,7 @@
 ---
 title: ngx_cycle_s
 layout: post
-category: web
+category: php
 author: 夏泽民
 ---
 https://www.kancloud.cn/digest/understandingnginx/202596

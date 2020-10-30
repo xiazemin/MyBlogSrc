@@ -1,7 +1,7 @@
 ---
 title: 服务自动发现
 layout: post
-category: web
+category: k8s
 author: 夏泽民
 ---
 先看下consumer端发起调用时的链路流程：

@@ -1,7 +1,7 @@
 ---
 title: JSON解析学习
 layout: post
-category: linux
+category: lang
 author: 夏泽民
 ---
 https://zhuanlan.zhihu.com/p/22457315

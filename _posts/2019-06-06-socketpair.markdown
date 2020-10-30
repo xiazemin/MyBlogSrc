@@ -1,7 +1,7 @@
 ---
 title: socketpair nginx 通信机制
 layout: post
-category: web
+category: php
 author: 夏泽民
 ---
 由于nginx使用的是多进程的模型，因此，进程间的通信或者同步很重要，为什么要进行进程同步呢？我们知道，nginx有master和worker进程。不过，在创建worker进程的时候，是需要对进程同步的。举个具体的例子，我们假设服务器共有4个worker进程，我们知道nginx有一个全局变量，是ngx_processes数组，他存储着所有进程的信息，在worker1创建的时候，worker2，worker3，worker4进程是没有创建的，因此，这个时候就牵扯到同步，最合理的方式是，在master创建一个进程的时候，就应该通知所有子进程有新的进程被fork了，以及这个进程的基本信息。

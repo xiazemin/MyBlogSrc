@@ -1,7 +1,7 @@
 ---
 title: php怎么判断函数，类，类方法是不是存在
 layout: post
-category: jekyll
+category: php
 author: 夏泽民
 ---
 <!-- more -->

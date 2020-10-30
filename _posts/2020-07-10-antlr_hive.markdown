@@ -1,7 +1,7 @@
 ---
 title: antlr hive
 layout: post
-category: linux
+category: lang
 author: 夏泽民
 ---
 hive是使用antlr来解析的

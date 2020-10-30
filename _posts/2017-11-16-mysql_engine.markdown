@@ -1,7 +1,7 @@
 ---
 title: MySQL的表类型的（存储引擎）
 layout: post
-category: web
+category: storage
 author: 夏泽民
 ---
 查看数据库支持的存储引擎： \G或者分号表示命令结束

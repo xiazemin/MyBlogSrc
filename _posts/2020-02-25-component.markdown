@@ -1,7 +1,7 @@
 ---
 title: 组件化 组件化业务模型（CBM）
 layout: post
-category: web
+category: architect
 author: 夏泽民
 ---
 1.1 什么是组件化?
