@@ -1,0 +1,297 @@
+---
+title: Docker基础镜像的制作
+layout: post
+category: docker
+author: 夏泽民
+---
+大部分的文章讨论的都是怎么从docker hub或者openvz上下载基础镜像，然后添加自己的功能制作镜像，包括涵盖了大部分docker内容的。但是如果实在找不到想要的基础镜像，比如我想制作Fedora Core 2的基础镜像，可是找了好久都没有找到，就需要自己从头制作基础镜像。
+
+制作需要在linux下，我的操作系统是centos6.5。
+
+1.    安装febootstrap
+
+Febootstrap在EPEL库里，所以首先要把EPEL库增加到yum源里。
+
+在/etc/yum.repo.d/下新建epel.repo,内容如下
+
+[epel]
+
+name=fedora-epel
+
+baseurl=http://mirrors.aliyun.com/epel/6/i/i386/
+
+enabled=1
+
+gpgcheck=0
+
+然后#yum install febootstrap
+
+2.    系统版本的选择
+
+目前实际机器上用的系统是Fedora Core release3（Heidelberg）Kernel 2.6.9-34.EL on i586,编译用的机器系统是Red Hat AS4 U3, gcc版本gcc version 3.4.520051201 (Red Hat 3.4.5-2)
+
+现在我从网上找到了fedora core 3，但是发现内核版本是kernel2.6.9-1.667 gcc 版本是gcc version3.4.2 20041017 (Red Hat 3.4.2-6.fc3)，而Red Hat AS4 U3没有找到更新源。这就陷入了困境，如果采用fc3，与之前的编译环境不符，可是又找不到Red Hat AS4 U3的源，最后找到了一篇文章（参考https://wenku.baidu.com/view/a97f9bb2fd0a79563c1e72c0.html）知道了CentOS4.3等同于RedHat AS4 U3，既然这样就直接用centos4.3来制作编译环境吧。
+
+附上找了好久找到的更新源
+
+Centos4.3 http://vault.centos.org/4.3/os/i386/
+
+Centos6.5 http://vault.centos.org/6.5/os/i386/
+
+Fedora core3 http://archives.fedoraproject.org/pub/archive/fedora/linux/core/3/i386/os/
+<!-- more -->
+{% raw %}
+.    制作镜像文件
+
+利用febootstrap制作镜像文件，首先要找到更新源的地址。找了好久终于找到
+
+制作命令
+
+$febootstrap -i bash -i gcc-c++ -i openssh -i yum -i make centos4.3 centos4.3 http://vault.centos.org/4.3/os/i386/
+
+其中-i后是要安装的程序，centos4.3是镜像标签，后一个centos4.3是生成的目录，后面是源地址。
+
+执行完毕后会在当前目录下生成centos4.3目录
+
+中间碰到错误UnicodeDecodeError: 'ascii' codeccan't decode byte 0xe8 in position
+
+是yumrepo.py中报出的。
+
+只要修改这个文件，在import后增加
+
+Import sys
+
+  reload(sys)
+    sys.setdefaultencoding('utf-8')
+
+生成完centos4.3目录后用
+
+$cd centos4.3
+
+$tar -czvf centos4.3.tar.gz *
+
+（注意，一定要进入centos4.3目录后用这个命令，不要把centos目录也压进压缩包了。否则运行容器的时候会出现used "exec:\"bash\": executable file not found in $PATH": unknown.的错误。）
+
+（由于我的操作系统是centos6.5，而docker是在window上安装的dockertoolbox17，后来导入文件的时候出现了错误，发现是tar版本的问题，于是在centos6.5上只用tar -cvf打包，然后在docker虚拟机上压缩。）
+
+ 生成镜像的压缩文件。
+
+ 
+
+4.    在docker中导入
+
+$docker imager import centos4.3.tar.gz centos:4.3
+
+可以将镜像导入
+{% endraw %}
+
+在 Dockerfile 中， 每一条指令都会创建一个镜像层，继而会增加整体镜像的大小。
+举例来说：
+
+FROM busybox
+
+RUN mkdir /tmp/foo
+
+RUN dd if=/dev/zero of=/tmp/foo/bar bs=1048576 count=100
+
+RUN rm /tmp/foo/bar
+以上 Dockerfile 干了这几件事：
+
+基于一个官方的基础镜像 busybox(只有1M多)
+创建一个文件夹(/tmp/foo)和一个文件(bar)
+为该文件分配了100M大小
+再把这个大文件删除
+事实上，它最终什么也没做，我们把它构建成镜像看看（构建可以参考一期）：
+
+docker build -t busybox:test .
+再让我们来对比下原生的 busybox 镜像大小和我们生成的镜像大小：
+
+$ docker images | grep
+
+busyboxbusybox    test     896c63dbdb96    2 seconds ago    106 MB
+
+busybox    latest   2b8fd9751c4c    9 weeks ago      1.093 MB
+出乎意料的是，却生成了 106 MB 的镜像。
+
+多出了 100 M，这是为何？这点和 git 类似（都用到了Copy-On-Write技术），我用 git 做了如下两次提交（添加了又删除），请问 A_VERY_LARGE_FILE 还在 git 仓库中吗？
+
+$ git add  A_VERY_LARGE_FILE
+
+$ git commit
+
+$ git rm  A_VERY_LARGE_FILE
+
+$ git commit
+答案是： 在的 ，并且会占用仓库的大小。Git 会保存每一次提交的文件版本，而 Dockerfile 中每一条指令都可能增加整体镜像的大小，即使它最终什么事情都没做。
+
+方法： 串联你的 Dockerfile 指令（一般是 RUN 指令）。
+
+Dockerfile 中的 RUN 指令通过 && 和 / 支持将命令串联在一起，有时能达到意想不到的精简效果。
+
+步骤 4：压缩你的镜像
+
+方法：试着用命令或工具压缩你的镜像。
+
+docker 自带的一些命令还能协助压缩镜像，比如 export 和 import
+
+https://blog.csdn.net/a1010256340/article/details/80092038
+
+https://www.jianshu.com/p/e8979e00bf0b
+
+https://blog.csdn.net/liumiaocn/article/details/100922774?utm_medium=distribute.pc_aggpage_search_result.none-task-blog-2~all~first_rank_v2~rank_v28-1-100922774.nonecase&utm_term=docker%20%E6%9C%80%E5%A4%A7%E5%B1%82%E6%95%B0&spm=1000.2123.3001.4430
+http://www.cocoachina.com/articles/75641
+
+通过 docker history 查看到层的信息，但是除了最顶一层，其余的 ID 均为<missing>。
+
+所以看到资料说通过 tag 可以进行层的回滚，但是这里没有 ID 可用也就似乎无法使用 tag 命令了。
+
+按照我的理解，docker 的镜像应该是层的叠加而成的，那么进行回滚时理论上也应该可以逐层回滚吧？
+在 build 的主机上有 cache，可以用 tag。
+pull 下来 /save 然后 load 都不能‘层回滚’的，因为 build 的操作跟上下文环境有关，不像 git。
+https://github.com/moby/moby/issues/20131
+https://github.com/moby/moby/issues/20316
+
+docker支持多种graphDriver，包括vfs、devicemapper、overlay、overlay2、aufs等等，其中最常用的就是aufs了，但随着linux内核3.18把overlay纳入其中，overlay的地位变得更重目前docker默认的存储类型就是overlay2，docker版本是1.8，如下
+
+image.png
+
+docker默认的存储目录是/var/lib/docker，下面我们简单打印一下这个目录：
+
+
+[root@docker2 ~]# ll /var/lib/docker
+总用量 24
+drwx------.   2 root root    24 5月  15 2019 builder
+drwx------.   4 root root    92 5月  15 2019 buildkit
+drwx------.   3 root root    78 3月   8 11:14 containers
+drwx------.   3 root root    22 5月  15 2019 image
+drwxr-x---.   3 root root    19 5月  15 2019 network
+drwx------. 165 root root 16384 3月   8 11:14 overlay2
+drwx------.   4 root root    32 5月  15 2019 plugins
+drwx------    2 root root     6 3月   8 11:10 runtimes
+drwx------.   4 root root    83 3月   8 11:10 swarm
+drwx------    2 root root     6 3月   8 11:10 tmp
+drwx------.   2 root root     6 5月  15 2019 trust
+drwx------.  21 root root  4096 8月  11 2019 volumes
+只关心image和overlay2，image:主要存放镜像中layer层的元数据和overlay2:各层的具体信息。
+做这个实验之前，我们应该先启动一个容器，在这里使用nginx作为实验:
+
+
+[root@docker2 ~]# docker ps 
+CONTAINER ID        IMAGE               COMMAND                  CREATED             STATUS              PORTS                NAMES
+88984d1d86a9        nginx               "nginx -g 'daemon of…"   45 hours ago        Up 5 hours          0.0.0.0:80->80/tcp   nginx              "nginx -g 'daemon of…"   4 seconds ago       Up 3 seconds        80/tcp              practical_vaughan
+可以看到新启动的nginx容器的id是88984d1d86a9，我们继续往下看。
+
+上面说了，我们只需要关心/var/lib/docker/image和/var/lib/docker/overlay2，可以先到/var/lib/docker/image打印一下：
+
+
+[root@docker2 ~]# cd /var/lib/docker/image/
+[root@docker2 image]# ll
+总用量 0
+drwx------. 5 root root 81 3月   6 19:29 overlay2
+我们只能看到overlay2这个目录，docker会在/var/lib/docker/image目录下给使用的存储驱动创建一个目录，如这里的overlay2。
+接下来，使用tree命令浏览一下这个目录：
+
+
+[root@docker2 image]# tree -L 2 overlay2/
+overlay2/
+├── distribution      
+│   ├── diffid-by-digest
+│   └── v2metadata-by-diffid
+├── 
+│   ├── content
+│   └── metadata
+├── 
+│   ├── mounts
+│   ├── sha256
+│   └── tmp
+└── repositories.json
+
+
+这里的关键地方是imagedb和layerdb目录，看这个目录名字，很明显就是专门用来存储元数据的地方，那为什么区分image和layer呢？因为在docker中，image是由多个layer组合而成的，换句话就是layer是一个共享的层，可能有多个image会指向某个layer。
+那如何才能确认image包含了哪些layer呢？答案就在imagedb这个目录中去找。比如上面启动的nginx容器，我们可以先找到这个容器对应的镜像：
+
+
+[root@docker2 image]# docker images nginx
+REPOSITORY          TAG                 IMAGE ID            CREATED             SIZE
+nginx               latest              6678c7c2e56c        3 days ago          127MB
+nginx               1.13.7-alpine       22f5726c6dc0        2 years ago         15.5MB
+可以看到，imageID是6678c7c2e56c，再次记住这个id，我们打印/var/lib/docker/image/overlay2/imagedb/content/sha256这个目录：
+
+
+[root@docker2 sha256]# ll  |grep 6678c7c2e56c
+-rw-------  1 root root  6666 3月   6 19:29 6678c7c2e56c970388f8d5a398aa30f2ab60e85f20165e101053c3d3a11e6663
+第一行的6678c7c2e56c970388f8d5a398aa30f2ab60e85f20165e101053c3d3a11e6663正是记录我们nginx镜像元数据的文件，接下来cat一下这个文件，得到一个长长的json：
+
+
+[root@docker2 sha256]# cat 6678c7c2e56c970388f8d5a398aa30f2ab60e85f20165e101053c3d3a11e6663  |python  -mjson.tool
+。。。。。。
+    "rootfs": {
+        "diff_ids": [
+            "sha256:f2cb0ecef392f2a630fa1205b874ab2e2aedf96de04d0b8838e4e728e28142da",
+            "sha256:71f2244bc14dacf7f73128b4b89b1318f41a9421dffc008c2ba91bb6dc2716f1",
+            "sha256:55a77731ed2630d9c092258490b03be3491d5f245fe13a1c6cb4e21babfb15b7"
+        ],
+        "type": "layers"
+由于篇幅原因，我只展示最关键的一部分，也就是rootfs。可以看到rootfs的diff_ids是一个包含了3个元素的数组，其实这3个元素正是组成nginx镜像的3个layerID，从上往下看，就是底层到顶层，也就是说f2cb0ecef392f2a630fa1205b874ab2e2aedf96de04d0b8838e4e728e28142da是image的最底层。既然得到了组成这个image的所有layerID，那么我们就可以带着这些layerID去寻找对应的layer了。
+接下来，我们返回到上一层的layerdb中，先打印一下这个目录：
+
+
+[root@docker2 layerdb]# ll
+总用量 20
+drwxr-xr-x.   3 root root    78 3月   8 11:14 mounts
+drwxr-xr-x. 162 root root 16384 3月   6 19:29 sha256
+drwxr-xr-x.   2 root root     6 3月   6 19:29 tmp
+在这里我们只管mounts和sha256两个目录，再打印一下sha256目录:
+
+
+[root@docker2 layerdb]# ll sha256/ |grep f2cb0ecef392f2a630fa1205b874ab2e2aedf96de04d0b8838e4e728e28142da
+drwx------  2 root root 71 3月   6 19:27 f2cb0ecef392f2a630fa1205b874ab2e2aedf96de04d0b8838e4e728e28142da
+在这里，我们仅仅发现f2cb0ecef392f2a630fa1205b874ab2e2aedf96de04d0b8838e4e728e28142da这个最底层的layer，那么剩余两个layer为什么会没有呢？那是因为docker使用了chainID的方式去保存这些layer，简单来说就是chainID=sha256sum(H(chainID) diffid)，也就是f2cb0ecef392f2a630fa1205b874ab2e2aedf96de04d0b8838e4e728e28142da..的上一层的sha256 id是：
+
+
+[root@docker2 sha256]#  echo -n "sha256:f2cb0ecef392f2a630fa1205b874ab2e2aedf96de04d0b8838e4e728e28142da sha256:71f2244bc14dacf7f73128b4b89b1318f41a9421dffc008c2ba91bb6dc2716f1" |sha256sum -
+1541955a517830d061b79f2b52b1aed297d81c009ce7766a15527979b6e719c4  -
+这个时候，你能看到f2cb0ecef392f2a630fa1205b874ab2e2aedf96de04d0b8838e4e728e28142da这个layer层的目录了吧？依次类推，我们就能找出所有的layerID的组合。
+但是上面我们也说了，/var/lib/docker/image/overlay2/layerdb存的只是元数据，那么真实的rootfs到底存在哪里呢？其中cache-id就是我们关键所在了。我们打印一下/var/lib/docker/image/overlay2/layerdb/sha256/f2cb0ecef392f2a630fa1205b874ab2e2aedf96de04d0b8838e4e728e28142da/cache-id:
+
+
+[root@docker2 layerdb]# cat sha256/1541955a517830d061b79f2b52b1aed297d81c009ce7766a15527979b6e719c4/cache-id 
+f77d281af55651a70e5fc8f31de840d5b5461f36d930545db39f01bc839e4097
+没错，这个id就是对应/var/lib/docker/overlay2/f77d281af55651a70e5fc8f31de840d5b5461f36d930545db39f01bc839e4097。因此，以此类推，更高一层的layer对应的cache-id也能找到对应的rootfs，当这些rootfs的diff目录通过联合挂载的方式挂载到某个目录，就能完整整个容器需要的rootfs了。
+
+https://blog.51cto.com/12182612/2476386?source=dra
+
+如果其中的 Liberty Image 发生变化的时候，例如需要升级 Liberty 版本的时候，只需要重新更新该节点和该节点之后的其他 Image 节点，而不会影响到 Liberty Image 节点的兄弟节点或者父亲节点以及由这些节点衍生出来的其他的 Docker Image。当更新 App Image 的时候，由于其均来自同样的父亲节点 Liberty Image。 所以每次更新的时候只会做 EAR 包的增量更新。
+
+https://www.ibm.com/developerworks/cn/devops/1601_kongyi_devopsdockerimages/index.html
+
+https://www.cnblogs.com/autopenguin/p/7390239.html
+https://www.cnblogs.com/sparkdev/p/9092082.html
+https://imagelayers.io/?images=qqeqwe:latest,ert:latest,2345:latest
+
+docker-compose.yml定义中的服务的image参数具有双重含义,具体取决于构建参数的存在.
+>如果没有构建节,则只需拉动并运行图像.
+>如果您有一个构建节,那么image将是您构建的名称
+图像被标记为,并运行.
+
+http://www.cocoachina.com/articles/75641
+https://blog.csdn.net/z136370204/article/details/108831582
+
+使用多阶段构建
+对于多阶段构建，可以在 Dockerfile 中使用多个 FROM 语句。每个 FROM 指令都可以使用不同的基镜像，并且它们都开始了构建的新阶段。您可以选择性地将工件从一个阶段复制到另一个阶段，舍弃在最终镜像中您不想要的所有内容。为了说明这是如何工作的，让我们使用多阶段构建调整前一节中的 Dockerfile。
+
+Dockerfile：
+
+FROM golang:1.7.3
+WORKDIR /go/src/github.com/alexellis/href-counter/
+RUN go get -d -v golang.org/x/net/html  
+COPY app.go .
+RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o app .
+
+FROM alpine:latest  
+RUN apk --no-cache add ca-certificates
+WORKDIR /root/
+COPY --from=0 /go/src/github.com/alexellis/href-counter/app .
+CMD ["./app"] 
+
+https://www.cnblogs.com/ittranslator/p/13235891.html
