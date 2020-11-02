@@ -1,6 +1,6 @@
 #!/bin/bash
 jekyll clean
-jekyll build --trace
+bundle exec jekyll build --trace
 #git add *
 ls |xargs git add -f
 t=`date`
