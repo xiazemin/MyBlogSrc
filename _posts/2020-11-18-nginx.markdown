@@ -1,0 +1,207 @@
+---
+title: nginx的11个阶段
+layout: post
+category: php
+author: 夏泽民
+---
+https://iziyang.github.io/2020/04/12/5-nginx/
+
+postread 阶段，是 11 个阶段的第 1 个阶段，这个阶段刚刚获取到了请求的头部，还没有进行任何处理，我们可以拿到一些原始的信息。例如，拿到用户的真实 IP 地址
+
+X-Forwardex-For 是用来传递 IP 的，这个头部会把经过的节点 IP 都记录下来
+X-Real-IP：可以记录用户真实的 IP 地址，只能有一个
+
+binary_remote_addr、remote_addr 这样的变量，其值就是真实的 IP，这样做连接限制也就是 limit_conn 模块才有意义，这也说明了，limit_conn 模块只能在 preaccess 阶段，而不能在 postread 阶段生效。
+
+
+
+首先 rewrite 阶段分为两个，一个是 server_rewrite 阶段，一个是 rewrite
+
+server_rewrite
+find_config
+rewrite
+
+在 rewrite 模块中，有一个 return 指令，遇到该指令就不会再向下执行，直接返回响应。
+
+rewrite 指令
+rewrite 指令用于修改用户传入 Nginx 的 URL。来看下 rewrite 的指令规则：
+Syntax: rewrite regex replacement [flag];
+Default: —
+Context: server, location, if
+
+当 replacement 以 http:// 或者 https:// 或者 $schema 开头，则直接返回 302 重定向
+
+rewrite 行为记录日志
+主要是一个指令 rewrite_log：
+
+if 指令
+if 指令也是在 rewrite 阶段生效的，它的语法如下所示：
+
+Syntax: if (condition) { ... }
+Default: —
+Context: server, location
+
+匹配规则
+location 的匹配规则是仅匹配 URI，忽略参数，有下面三种大的情况：
+
+前缀字符串
+常规匹配
+=：精确匹配
+^~：匹配上后则不再进行正则表达式匹配
+正则表达式
+~：大小写敏感的正则匹配
+~*：大小写不敏感
+用户内部跳转的命名 location
+@
+
+postrewrite
+<!-- more -->
+preaccess 阶段。我们经常会遇到一个问题，就是如何限制每个客户端的并发连接数？如何限制访问频率？这些就是在 preaccess 阶段处理完成的，顾名思义，preaccess 就是在连接之前。
+
+limit_conn 模块
+这里面涉及到的模块是 ngx_http_limit_conn_module，它的基本特性如下：
+
+生效阶段：NGX_HTTP_PREACCESS_PHASE 阶段
+模块：http_limit_conn_module
+默认编译进 Nginx，通过 --without-http_limit_conn_module 禁用
+
+定义共享内存（包括大小），以及 key 关键字
+Syntax: limit_conn_zone key zone=name:size;
+Default: —
+Context: http
+
+限制并发连接数
+Syntax: limit_conn zone number;
+Default: —
+Context: http, server, location
+限制发生时的日志级别
+Syntax: limit_conn_log_level info | notice | warn | error;
+Default: limit_conn_log_level error; 
+Context: http, server, location
+限制发生时向客户端返回的错误码
+Syntax: limit_conn_status code;
+Default: limit_conn_status 503; 
+Context: http, server, location
+
+limit_req 模块
+在本节开头我们就提出了两个问题：
+
+如何限制每个客户端的并发连接数？
+
+如何限制访问频率？
+
+第一个问题限制并发连接数的问题已经解决了，下面来看第二个问题。
+
+这里面生效的模块是 ngx_http_limit_req_module，它的基本特性如下：
+
+生效阶段：NGX_HTTP_PREACCESS_PHASE 阶段
+模块：http_limit_req_module
+默认编译进 Nginx，通过 --without-http_limit_req_module 禁用
+生效算法：leaky bucket 算法
+生效范围
+全部 worker 进程（基于共享内存）
+进入 preaccess 阶段前不生效
+leaky bucket 算法
+leaky bucket 叫漏桶算法，其他用来限制请求速率的还有令牌环算法等，这里面不展开讲。
+
+漏桶算法的原理是，先定义一个桶的大小，所有进入桶内的请求都会以恒定的速率被处理，如果请求太多超出了桶的容量，那么就会立刻返回错误。
+
+定义共享内存（包括大小），以及 key 关键字和限制速率
+Syntax: limit_req_zone key zone=name:size rate=rate ;
+Default: —
+Context: http
+rate 单位为 r/s 或者 r/m（每分钟或者每秒处理多少个请求）
+
+限制并发连接数
+Syntax: limit_req zone=name [burst=number] [nodelay];
+Default: —
+Context: http, server, location
+
+limit_req 与 limit_conn 配置同时生效时，哪个优先级高？
+limit_req 在 limit_conn 处理之前，因此是 limit_req 会生效
+nodelay 添加与否，有什么不同？
+不添加 nodelay，请求会等待，直到能够处理请求；添加 nodelay，在不超出 burst 的限制的情况下会立刻处理并返回，超出限制则会返回 503。
+
+access 模块
+这里面涉及到的模块是 ngx_http_access_module，它的基本特性如下：
+
+生效阶段：NGX_HTTP_ACCESS_PHASE 阶段
+模块：http_access_module
+默认编译进 Nginx，通过 --without-http_access_module 禁用
+生效范围
+进入 access 阶段前不生效
+
+access 模块提供了两条指令 allow 和 deny
+
+auth_basic 模块
+auth_basic 模块是用作用户认证的，当开启了这个模块之后，我们通过浏览器访问网站时，就会返回一个 401 Unauthorized，当然这个 401 用户不会看见，浏览器会弹出一个对话框要求输入用户名和密码。这个模块使用的是 RFC2617 中的定义。
+
+satisfy 指令有两个值一个是 all，一个是 any，这个模块对 acces 阶段的三个模块都生效：
+
+access 模块
+auth_basic 模块
+auth_request 模块
+其他模块
+如果 satisfy 指令的值是 all 的话，就表示必须所有 access 阶段的模块都要执行，都通过了才会放行；值是 any 的话，表示有任意一个模块得到执行即可。
+
+precontent 阶段，这个阶段只有 try_files 这一个指令。
+try_files 模块
+指令语法
+Syntax: try_files file ... uri;
+        try_files file ... =code;
+Default: —
+Context: server, location
+模块：ngx_http_try_files_module 模块
+依次试图访问多个 URL 对应的文件（由 root 或者 alias 指令指定），当文件存在时，直接返回文件内容，如果所有文件都不存在，则按照最后一个 URL 结果或者 code 返回
+
+mirror 模块
+mirror 模块可以实时拷贝流量，这对于需要同时访问多个环境的请求是非常有用的。
+
+指令语法
+模块：ngx_http_mirror_module 模块，默认编译进 Nginx
+通过 –without-http_mirror_module 移除模块
+功能：处理请求时，生成子请求访问其他服务，对子请求的返回值不做处理
+
+ content 阶段的 static 模块，虽然这是位于 content 阶段的最后一个处理模块
+ 
+  root 和 alias 这两个指令，这两个指令都是用来映射文件路径的。
+  功能：将 URL 映射为文件路径，以返回静态文件内容
+差别：root 会将完整 URL 映射进文件路径中，alias 只会将 location 后的 URL 映射到文件路径
+
+# 该指令决定重定向时的域名，可以决定返回哪个域名
+Syntax: server_name_in_redirect on | off;
+Default: server_name_in_redirect off; 
+Context: http, server, location
+# 该指令决定重定向时的端口
+Syntax: port_in_redirect on | off;
+Default: port_in_redirect on; 
+Context: http, server, location
+# 该指令决定是否填域名，默认是打开的，也就是返回绝对路径
+Syntax: absolute_redirect on | off;
+Default: absolute_redirect on; 
+Context: http, server, location
+
+index 模块
+模块：ngx_http_index_module
+
+功能：指定 / 结尾的目录访问时，返回 index 文件内容
+
+模块：ngx_http_autoindex_module，默认编译进 Nginx，使用 --without-http_autoindex_module 取消
+
+concat模块
+下面介绍一个可以提升小文件性能的模块，这个模块是由阿里巴巴开发的，在淘宝网中有广泛应用。
+
+模块：ngx_http_concat_module
+
+模块开发者：Tengine(https://github.com/alibaba/nginx-http-concat) –add-module=../nginx-http-concat/
+
+功能：合并多个小文件请求，可以明显提升 HTTP 请求的性能
+
+og 阶段
+下面终于来到了 11 个阶段的最后一个阶段，记录请求访问日志的 log 模块。
+
+功能：将 HTTP 请求相关信息记录到日志
+模块：ngx_http_log_module，无法禁用
+
+  
+ 
