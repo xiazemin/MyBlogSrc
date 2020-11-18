@@ -139,243 +139,91 @@
         <div class="box">
                 <div class="col-lg-12">
                     <div class="intro-text text-center">
-					<h1 class="post-title" itemprop="name headline">shutdown 源码分析</h1>
-					<p class="post-meta"> <span itemprop="author" itemscope itemtype="http://schema.org/Person"><span itemprop="name">by 夏泽民</span></span> <time datetime="2019-06-29T00:00:00+08:00" itemprop="datePublished"><i class="fa fa-calendar"></i> Jun 29, 2019</time></p>
+					<h1 class="post-title" itemprop="name headline">proxy_pass</h1>
+					<p class="post-meta"> <span itemprop="author" itemscope itemtype="http://schema.org/Person"><span itemprop="name">by 夏泽民</span></span> <time datetime="2020-11-15T00:00:00+08:00" itemprop="datePublished"><i class="fa fa-calendar"></i> Nov 15, 2020</time></p>
 					</div>
-					 <p>我们知道在go 1.8.x后，golang在http里加入了shutdown方法，用来控制优雅退出。什么是优雅退出？ 简单说就是不处理新请求，但是会处理正在进行的请求，把旧请求都处理完，也就是都response之后，那么就退出。</p><br />
+					 <p>FastCGI 是一个协议，它是应用程序和 WEB 服务器连接的桥梁。Nginx 并不能直接与 PHP-FPM 通信，而是将请求通过 FastCGI 交给 PHP-FPM 处理。</p><br />
 <br />
-<p>社区里不少http graceful动态重启，平滑重启的库，大多是基于http.shutdown做的。平滑启动的原理很简单，fork子进程，继承listen fd, 老进程优雅退出<br />
+<p>location ~.php$ {<br />
+fastcgi_pass 127.0.0.1:9000;<br />
+}</p><br />
+<br />
+<p>Nginx 反向代理最重要的指令是 proxy_pass<br />
+location ^~/seckill_query/{<br />
+proxy_pass http://ris.filemail.gdrive:8090/;<br />
+}</p><br />
+<br />
+<p>Nginx 负载均衡</p><br />
+<br />
+<p>介绍一下 upstream 模块：</p><br />
+<br />
+<p>负载均衡模块用于从”upstream”指令定义的后端主机列表中选取一台主机。nginx先使用负载均衡模块找到一台主机，再使用upstream模块实现与这台主机的交互。<br />
+upstream php-upstream {<br />
+ip_hash;<br />
+server 192.168.0.1;<br />
+server 192.168.0.2;<br />
+}</p><br />
+<br />
+<p>建立upstream<br />
+这个是fastcgi的例子，如果是http的则把端口改下就可以了</p><br />
+<br />
+<p>upstream fastcgi_backend {<br />
+    server 127.0.0.1:9000;<br />
+    keepalive 60;<br />
+}<br />
 <!-- more --><br />
-http shutdown 源码分析</p><br />
+http://nginx.org/en/docs/http/ngx_http_proxy_module.html#proxy_pass<br />
+http://nginx.org/en/docs/http/ngx_http_fastcgi_module.html#fastcgi_pass</p><br />
 <br />
-<p>先来看下http shutdown的主方法实现逻辑。用atomic来做退出标记的状态，然后关闭各种的资源，然后一直阻塞的等待无空闲连接，每500ms轮询一次。</p><br />
+<p>cgi-fcgi命令实现了 fastcgi 客户端协议，可以直接访问php-fpm实现HTTP请求。<br />
+https://github.com/FastCGI-Archives</p><br />
 <br />
-<p>// xiaorui.cc</p><br />
+<p>https://fastcgi-archives.github.io/</p><br />
 <br />
-<p>var shutdownPollInterval = 500 * time.Millisecond</p><br />
+<p>php代码</p><br />
 <br />
-<p>func (srv *Server) Shutdown(ctx context.Context) error {<br />
-    // 标记退出的状态<br />
-    atomic.StoreInt32(&amp;srv.inShutdown, 1)<br />
-    srv.mu.Lock()<br />
-    // 关闭listen fd，新连接无法建立。<br />
-    lnerr := srv.closeListenersLocked()</p><br />
+<p>&lt;?php<br />
+print_r($_GET);<br />
+命令</p><br />
 <br />
-<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code>// 把server.go的done chan给close掉，通知等待的worekr退出<br />
-srv.closeDoneChanLocked()<br />
+<p>env USER=dev FCGI_ROLE=RESPONDER SCRIPT_FILENAME=/path/php/test/get.php QUERY_STRING=”arg1=1” REQUEST_METHOD=GET SCRIPT_NAME=/get.php REQUEST_URI=/get.php DOCUMENT_URI=/get.php DOCUMENT_ROOT=/path/php/test SERVER_PROTOCOL=HTTP/1.1 GATEWAY_INTERFACE=CGI/1.1 SERVER_SOFTWARE=nginx/1.8.1 REMOTE_ADDR=127.0.0.1 REMOTE_PORT=50815 SERVER_ADDR=127.0.0.1 SERVER_PORT=80 SERVER_NAME=localhost REDIRECT_STATUS=200 HTTP_HOST=localhost HTTP_CONNECTION=keep-alive HTTP_CACHE_CONTROL=max-age=0 PHP_SELF=/index.php REQUEST_TIME_FLOAT=1499780545.7094 REQUEST_TIME=1499780545 cgi-fcgi -bind -connect 127.0.0.1:9000</p><br />
 <br />
-// 执行回调方法，我们可以注册shutdown的回调方法<br />
-for _, f := range srv.onShutdown {<br />
-    go f()<br />
-}<br />
+<p>输出</p><br />
 <br />
-// 每500ms来检查下，是否没有空闲的连接了，或者监听上游传递的ctx上下文。<br />
-ticker := time.NewTicker(shutdownPollInterval)<br />
-defer ticker.Stop()<br />
-for {<br />
-    if srv.closeIdleConns() {<br />
-        return lnerr<br />
-    }<br />
-    select {<br />
-    case &lt;-ctx.Done():<br />
-        return ctx.Err()<br />
-    case &lt;-ticker.C:<br />
-    }<br />
-} } …<br />
-</code></pre></div></div><br />
+<p>X-Powered-By: PHP/5.6.30<br />
+Content-type: text/html; charset=UTF-8</p><br />
 <br />
-<p>是否没有空闲的连接<br />
-func (s *Server) closeIdleConns() bool {<br />
-	s.mu.Lock()<br />
-	defer s.mu.Unlock()<br />
-	quiescent := true<br />
-	for c := range s.activeConn {<br />
-		st, unixSec := c.getState()<br />
-		if st == StateNew &amp;&amp; unixSec &lt; time.Now().Unix()-5 {<br />
-			st = StateIdle<br />
-		}<br />
-		if st != StateIdle || unixSec == 0 {<br />
-			quiescent = false<br />
-			continue<br />
-		}<br />
-		c.rwc.Close()<br />
-		delete(s.activeConn, c)<br />
-	}<br />
-	return quiescent<br />
-}<br />
-关闭server.doneChan和监听的文件描述符</p><br />
+<p>Array<br />
+(<br />
+    [arg1] =&gt; 1<br />
+)<br />
+命令分为两部分，第一部分设置环境变量，也就是env命令，cgi-fcgi后面才是连接php-fpm的参数</p><br />
 <br />
-<p>// xiaorui.cc</p><br />
+<p>关于环境变量的配置<br />
+env命令设置的环境变量对应的php $_SERVER中的值，如果搞不清楚这里的环境变量怎么设置，可以将普通HTTP请求产生的$_SERVER变量，然后稍微修改使用，或者参考nginx fastcgi_params配置文件。</p><br />
 <br />
-<p>// 关闭doen chan<br />
-func (s *Server) closeDoneChanLocked() {<br />
-    ch := s.getDoneChanLocked()<br />
-    select {<br />
-    case &lt;-ch:<br />
-        // Already closed. Don’t close again.<br />
-    default:<br />
-        // Safe to close here. We’re the only closer, guarded<br />
-        // by s.mu.<br />
-        close(ch)<br />
-    }<br />
-}</p><br />
+<p>实现蛋疼的POST的请求<br />
+实现POST请求，我查遍了cgi-fcgi的文档、google、stackoverflow等都没有现成的实现方法，最后我根据fcgi的c/c++的实现，还有文档中post数据来源于stdin的描述，搞清楚了怎么用cgi-fcgi实现post请求</p><br />
 <br />
-<p>// 关闭监听的fd<br />
-func (s <em>Server) closeListenersLocked() error {<br />
-    var err error<br />
-    for ln := range s.listeners {<br />
-        if cerr := (</em>ln).Close(); cerr != nil &amp;&amp; err == nil {<br />
-            err = cerr<br />
-        }<br />
-        delete(s.listeners, ln)<br />
-    }<br />
-    return err<br />
-}</p><br />
+<p>php代码</p><br />
 <br />
-<p>// 关闭连接<br />
-func (c *conn) Close() error {<br />
-    if !c.ok() {<br />
-        return syscall.EINVAL<br />
-    }<br />
-    err := c.fd.Close()<br />
-    if err != nil {<br />
-        err = &amp;OpError{Op: “close”, Net: c.fd.net, Source: c.fd.laddr, Addr: c.fd.raddr, Err: err}<br />
-    }<br />
-    return err<br />
-}<br />
-这么一系列的操作后，server.go的serv主监听方法也就退出了。</p><br />
+<p>&lt;php?<br />
+print_r($_POST);<br />
+命令</p><br />
 <br />
-<p>// xiaorui.cc <br />
-func (srv *Server) Serve(l net.Listener) error {<br />
-    …<br />
-    for {<br />
-        rw, e := l.Accept()<br />
-        if e != nil {<br />
-            select {<br />
-             // 退出<br />
-            case &lt;-srv.getDoneChan():<br />
-                return ErrServerClosed<br />
-            default:<br />
-            }<br />
-            …<br />
-            return e<br />
-        }<br />
-        tempDelay = 0<br />
-        c := srv.newConn(rw)<br />
-        c.setState(c.rwc, StateNew) // before Serve can return<br />
-        go c.serve(ctx)<br />
-    }<br />
-}</p><br />
+<p>env USER=dev FCGI_ROLE=RESPONDER SCRIPT_FILENAME=/path/php/test/post.php QUERY_STRING=”” REQUEST_METHOD=POST CONTENT_TYPE=”application/x-www-form-urlencoded” CONTENT_LENGTH=5 SCRIPT_NAME=/post.php REQUEST_URI=/post.php DOCUMENT_URI=/post.php DOCUMENT_ROOT=/path/php/test SERVER_PROTOCOL=HTTP/1.1 GATEWAY_INTERFACE=CGI/1.1 SERVER_SOFTWARE=nginx/1.8.1 REMOTE_ADDR=127.0.0.1 REMOTE_PORT=50815 SERVER_ADDR=127.0.0.1 SERVER_PORT=80 SERVER_NAME=localhost REDIRECT_STATUS=200 HTTP_HOST=localhost HTTP_CONNECTION=keep-alive HTTP_CACHE_CONTROL=max-age=0 PHP_SELF=/post.php REQUEST_TIME_FLOAT=1456138229.7094 REQUEST_TIME=1456138229 cgi-fcgi -bind -connect 127.0.0.1:9000 «&lt; “arg=1”<br />
+输出</p><br />
 <br />
-<p>// xiaorui.cc<br />
-那么如何保证用户在请求完成后，再关闭连接的？</p><br />
+<p>X-Powered-By: PHP/5.6.30<br />
+Content-type: text/html; charset=UTF-8</p><br />
 <br />
-<p>// xiaorui.cc</p><br />
+<p>Array<br />
+(<br />
+    [arg] =&gt; 1<br />
+)<br />
+post请求要注意CONTENT_LENGTH环境变量要和post的数据长度保持一致。</p><br />
 <br />
-<p>func (s *Server) doKeepAlives() bool {<br />
-	return atomic.LoadInt32(&amp;s.disableKeepAlives) == 0 &amp;&amp; !s.shuttingDown()<br />
-}</p><br />
-<br />
-<p>// Serve a new connection.<br />
-func (c *conn) serve(ctx context.Context) {<br />
-	defer func() {<br />
-                … xiaorui.cc …<br />
-		if !c.hijacked() {<br />
-                        // 关闭连接，并且标记退出<br />
-			c.close()<br />
-			c.setState(c.rwc, StateClosed)<br />
-		}<br />
-	}()<br />
-        …<br />
-	ctx, cancelCtx := context.WithCancel(ctx)<br />
-	c.cancelCtx = cancelCtx<br />
-	defer cancelCtx()</p><br />
-<br />
-<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code>c.r = &amp;connReader{conn: c}<br />
-c.bufr = newBufioReader(c.r)<br />
-c.bufw = newBufioWriterSize(checkConnErrorWriter{c}, 4&lt;&lt;10)<br />
-<br />
-for {<br />
-            // 接收请求<br />
-	w, err := c.readRequest(ctx)<br />
-	if c.r.remain != c.server.initialReadLimitSize() {<br />
-		c.setState(c.rwc, StateActive)<br />
-	}<br />
-            ...<br />
-            ...<br />
-            // 匹配路由及回调处理方法<br />
-	serverHandler{c.server}.ServeHTTP(w, w.req)<br />
-	w.cancelCtx()<br />
-	if c.hijacked() {<br />
-		return<br />
-	}<br />
-            ...<br />
-            // 判断是否在shutdown mode, 选择退出<br />
-	if !w.conn.server.doKeepAlives() {<br />
-		return<br />
-	}<br />
-}<br />
-... 使用实例 package main<br />
-</code></pre></div></div><br />
-<br />
-<p>import (<br />
-    “context”<br />
-    “fmt”<br />
-    “net/http”<br />
-    “os”<br />
-    “os/signal”<br />
-    “sync”<br />
-    “syscall”<br />
-    “time”<br />
-)</p><br />
-<br />
-<p>const addr = “:9527”</p><br />
-<br />
-<p>func main() {<br />
-    http.HandleFunc(“/”, func(w http.ResponseWriter, r <em>http.Request) {<br />
-        fmt.Fprint(w, “just another http server…”)<br />
-    })<br />
-    //使用默认路由创建 http server<br />
-    srv := http.Server{<br />
-        Addr:    addr,<br />
-        Handler: http.DefaultServeMux,<br />
-    }<br />
-    //使用WaitGroup同步Goroutine<br />
-    var wg sync.WaitGroup<br />
-    exit := make(chan os.Signal)<br />
-    //监听 Ctrl+C 信号<br />
-    signal.Notify(exit, syscall.SIGINT, syscall.SIGTERM)<br />
-    go func() {<br />
-        &lt;-exit<br />
-        wg.Add(1)<br />
-        //使用context控制srv.Shutdown的超时时间<br />
-        ctx, cancel := context.WithTimeout(context.Background(), 15</em>time.Second)<br />
-        defer cancel()<br />
-        err := srv.Shutdown(ctx)<br />
-        if err != nil {<br />
-            fmt.Println(err)<br />
-        }<br />
-        wg.Done()<br />
-    }()</p><br />
-<br />
-<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code>fmt.Println("listening at " + addr)<br />
-err := srv.ListenAndServe()<br />
-<br />
-fmt.Println("waiting for the remaining connections to finish...")<br />
-wg.Wait()<br />
-if err != nil &amp;&amp; err != http.ErrServerClosed {<br />
-    panic(err)<br />
-}<br />
-fmt.Println("gracefully shutdown the http server...") }<br />
-</code></pre></div></div><br />
-<br />
-<p>两种普遍的方法。这些方法可以被如下概括:</p><br />
-<br />
-<p>你可以在套接字上设置 SO_REUSEPORT ，从而让多个进程能够被绑定到同一个端口上。利用这个方法，你会有多个接受队列向多个进程提供数据。<br />
-复制套接字，并把它以文件的形式传送给一个子进程，然后在新的进程中重新创建这个套接字。使用这种方法，你将有一个接受队列向多个进程提供数据。]<br />
-在我们初期的讨论中，我们了解到几个关于 SO_REUSEPORT 的问题。我们的一个工程师之前使用这个方法，并且注意到由于其多个接受队列，有时候会丢弃挂起的 TCP 连接。除此之外，当我们进行这些讨论的时候，Go 并没有很好地支持在一个 net.Listener 上设置 SO_REUSEPORT。然而，在过去的几天中，在这个问题上有了进展，看起来像 Go 不久就会支持设置套接字属性。</p><br />
-<br />
-<p>第二种方法也很吸引人，因为它的简单性以及大多数开发人员熟悉的传统Unix 的 fork/exec 产生模型，即将所有打开文件传递给子进程的约定。需要注意的一点，os/exec 包实际上不赞同这种用法。主要是出于安全上的考量，它只传递 stdin , stdout 和 stderr 给子进程。然而， os 包确实提供较低级的原语，可用于将文件传递给子程序，这就是我们想做的。</p><br />
+<p>这样就可以访问任意php服务器了，可以向它们提交配置文件到local cache、刷新部分php文件的opcache等特殊操作了，当然它的玩法还不仅限于此。</p><br />
 <br />
 
 					 <span class='st_sharethis_large' displayText='ShareThis'></span>
