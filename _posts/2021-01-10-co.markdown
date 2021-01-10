@@ -1,0 +1,231 @@
+---
+title: tj/co 函数生成器
+layout: post
+category: node
+author: 夏泽民
+---
+https://github.com/tj/co
+JS函数生成器，function* () {}
+
+#1，暂停、继续
+function* fn() {
+    console.log(1);
+    //暂停！
+    yield;
+    //调用next方法继续执行
+    console.log(2);
+}
+var iter = fn();
+iter.next(); //1
+iter.next(); //2
+   
+1、函数生成器特点是函数名前面有一个‘*’
+2、通过调用函数生成一个控制器
+3、调用next()方法开始执行函数
+4、遇到yield函数将暂停
+5、再次调用next()继续执行函数
+
+#2，消息传递
+　　除了暂停和继续执行外，生成器同时支持传值。
+    function* fn() {
+        var a = yield 'hello';
+        yield;
+        console.log(a);
+    }
+var iter = fn();
+var res = iter.next();
+console.log(res.value); //hello
+iter.next(2);
+iter.next(); //2
+可以看到，yield后面有一个字符串，在第一次调用next时，暂停在这里且返回给了iter.next()。
+
+　　而暂停的地方是一个赋值语句，需要一个变量给a，于是next()方法中传了一个参数2替换了yield，最后打印a得到了2。
+　　
+#3，异步应用 　　
+　　通过yield来实现异步控制流程：
+    function fn(a, b) {
+        //假设这是一个ajax请求
+        ajax('url' + a + b, function(data) {
+            //数据请求到会执行it.next
+            it.next(data);
+        });
+    }
+    //这里是函数生成器
+    function* g() {
+        //当异步操作完毕yield会得到值
+        //这里会自动继续执行
+        var text = yield fn(a, b);
+        console.log(text);
+    }
+    var it = g();
+    it.next();
+   
+  确实很巧妙，通过回调函数来继续执行函数生成器，然后得到数据。
+
+　　然而，直接在回调里拿数据不行么。书上讲，这样异步操作符合大脑思考模式，函数的执行看起来‘同步’了。
+<!-- more -->
+yield+promise
+
+promise对异步的实现： 
+function request(url) {
+        return new Promise(function(resolve, reject) {
+            //ajax异步请求完成会调用resolve决议
+            ajax(url, resolve);
+        });
+    }
+    request('url').then(function(res) {
+        console.log(res);
+    })
+
+流程大概是调用函数传入url，由于会立即决议，触发ajax请求函数。异步请求完调用调用回调函数，也就是resolve，然后根据返回的resolve调用then方法获取数据。
+
+现在将yield与promise综合在一起：
+ function foo(x) {
+        return request('url' + x);
+    }
+    //等待promise决议值返回
+    function* fn() {
+        var text = yield foo(1);
+    }
+    var it = fn();
+    //返回一个promise
+    var p = it.next().value;
+    //对promise处理
+    p.then(function(text) {
+        //这里继续执行生成器
+        it.next(text);
+    })
+    
+    https://www.cnblogs.com/yuzhengbo/p/6807914.html
+    
+    https://developer.mozilla.org/zh-tw/docs/web/javascript/reference/statements/function*
+    
+    
+    co 函数库是著名程序员 TJ Holowaychuk 于2013年6月发布的一个小工具，用于 Generator 函数的自动执行。
+    fs.readfile("a.txt","utf-8",function(err,result){
+     if(result)
+     {
+          fs.readfile("b.txt","utf-8",function(err,result){
+               if(result){
+                   fs.readfile("c.txt","utf-8",function(err,result){
+                       //......
+                   });
+               }
+          });
+     }
+     if(err){
+
+     }
+ })
+ 
+  解释:基于事件驱动的特性，回调函数对于前端开发来说非常常见，但是在服务端开发过程中，存在数据依赖的情况，比如上面代码的情况，c=>b=>a(实际上有可能有更多依赖，这个例子只是为了说明callback-hell),代码嵌套层数过多对于后期维护来说非常头疼  
+  
+  为了解决这个问题，人们想到了很多办法，再此列举几个比较常见的，async.waterfall()、promise,generator
+
+async:
+
+优点：解决了回调嵌套的问题以及简单的流程控制
+缺点：依然不是同步的思维
+
+promise:
+优点：解决了回调嵌套的问题
+缺点：但是没有解决流程控制问题(promise状态一旦reject或者resolve就不可以再次变化)，也不是同步的思维
+
+generator:
+优点：解决了流程控制问题
+缺点：单独使用效果不佳
+
+co简介：co整合了promise与generator,使代码书写起来非常友好
+
+二、为什么用co?
+先看一个实例
+
+co实例：
+
+co(function *(){
+  // yield any promise
+  var result = yield toPromise(fs.readFile)("a.txt",'utf-8');
+  if(result)
+  {
+     var result2=yield toPromise(fs.readFile)("b.txt",'utf-8')
+     if(result2)
+     {
+         var result3=yield toPromise(fs.readFile)("b.txt",'utf-8')
+     }
+  }
+}).catch(onerror);
+function onerror(err) {
+  console.error(err.stack);
+}
+跟用java或者php书写方式基本没有什么不同了，但是代码却是异步执行的哦。所以很多人都说用了co就再也不想回去了
+
+
+三、 co 函数库的原理
+function co(gen) {
+  var ctx = this;
+  var args = slice.call(arguments, 1)
+
+  // we wrap everything in a promise to avoid promise chaining,
+  // which leads to memory leak errors.
+  // see https://github.com/tj/co/issues/180
+  return new Promise(function(resolve, reject) {
+    if (typeof gen === 'function') gen = gen.apply(ctx, args);
+    if (!gen || typeof gen.next !== 'function') return resolve(gen);
+
+    onFulfilled();
+
+    /**
+     * @param {Mixed} res
+     * @return {Promise}
+     * @api private
+     */
+
+    function onFulfilled(res) {
+      var ret;
+      try {
+        ret = gen.next(res);
+      } catch (e) {
+        return reject(e);
+      }
+      next(ret);
+    }
+
+    /**
+     * @param {Error} err
+     * @return {Promise}
+     * @api private
+     */
+
+    function onRejected(err) {
+      var ret;
+      try {
+        ret = gen.throw(err);
+      } catch (e) {
+        return reject(e);
+      }
+      next(ret);
+    }
+
+    /**
+     * Get the next value in the generator,
+     * return a promise.
+     *
+     * @param {Object} ret
+     * @return {Promise}
+     * @api private
+     */
+
+    function next(ret) {
+      if (ret.done) return resolve(ret.value);
+      var value = toPromise.call(ctx, ret.value);
+      if (value && isPromise(value)) return value.then(onFulfilled, onRejected);
+      return onRejected(new TypeError('You may only yield a function, promise, generator, array, or object, '
+        + 'but the following object was passed: "' + String(ret.value) + '"'));
+    }
+  });
+}
+co的原理非常简单，在对generator比较熟悉的情况下，利用递归的方法完成一步步调用。
+
+value.then(onFulfilled, onRejected)，自动注册promise的resolve,reject方法，在状态发生改变成为resolve时自动调用onFulfilled,执行下一个yield(当然还有返回上一次的处理结果),reject时自动调用onRejected，抛出错误。
+
+https://zhuanlan.zhihu.com/p/24831979
