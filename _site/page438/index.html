@@ -147,6 +147,73 @@
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
+						<a class="post-link" href="/MyBlog/linux/2017/12/22/exec.html">Linux进程控制——exec函数族</a>
+					</h2>
+					<div class="author" style="margin-top: -10px;">Posted by
+						<i class="fa fa-user"></i>
+						<a href="/MyBlog/linux/2017/12/22/exec.html"> 夏泽民</a>
+						<span class="post-meta"><i class="fa fa-calendar"></i> 
+							Dec 22, 2017
+						</span>
+					</div>
+					<div class="excerpt"><p>在Linux中，并不存在exec()函数，exec指的是一组函数，一共有6个，分别是：
+ #include <unistd.h>
+extern char **environ;
+int execl(const char *path, const char *arg, ...);
+int execlp(const char *file, const char *arg, ...);
+int execle(const char *path, const char *arg, ..., char * const envp[]);
+int execv(const char *path, char *const argv[]);
+int execvp(const char *file, char *const argv[]);
+int execve(const char *path, char *const argv[], char *const envp[]);
+其中只有execve是真正意义上的系统调用，其它都是在此基础上经过包装的库函数。
+exec函数族的作用是根据指定的文件名找到可执行文件，并用它来取代调用进程的内容，换句话说，就是在调用进程内部执行一个可执行文件。这里的可执行文件既可以是二进制文件，也可以是任何Linux下可执行的脚本文件。
+函数名与参数的关系：
+细看一下，这6个函数都是以exec开头（表示属于exec函数组），前3个函数接着字母l的，后3个接着字母v的，我的理解是l表示list（列举参数），v表示vector（参数向量表）
+。它们的区别在于，execv开头的函数是以"char *argv[]"(vector)形式传递命令行参数，而execl开头的函数采用了罗列(list)的方式，把参数一个一个列出来，然后以一个NULL表示结束。这里的NULL的作用和argv数组里的NULL作用是一样的。
+字母p是指在环境变量PATH的目录里去查找要执行的可执行文件。2个以p结尾的函数execlp和execvp，看起来，和execl与execv的差别很小，事实也如此，它们的区别从第一个参数名可以看出：除 execlp和execvp之外的4个函数都要求，它们的第1个参数path必须是一个完整的路径，如"/bin/ls"；而execlp和execvp 的第1个参数file可以仅仅只是一个文件名，如"ls"，这两个函数可以自动到环境变量PATH指定的目录里去查找。
+字母e是指给可执行文件指定环境变量。在全部6个函数中，只有execle和execve使用了char *envp[]传递环境变量，其它的4个函数都没有这个参数，这并不意味着它们不传递环境变量，这4个函数将把默认的环境变量不做任何修改地传给被执行的应用程序。而execle和execve用指定的环境变量去替代默认的那些。
+返回值
+与一般情况不同，exec函数族的函数执行成功后不会返回，因为调用进程的实体，包括代码段，数据段和堆栈等都已经被新的内容取代，只有进程ID等一些表面上的信息仍保持原样。调用失败时，会设置errno并返回-1，然后从原程序的调用点接着往下执行。
+与其他系统调用比起来，exec很容易失败，被执行文件的位置，权限等很多因素都能导致调用失败。因此，使用exec函数族时，一定要加错误判断语句。最常见的错误：
+找不到文件或路径，此时errno被设置为ENOENT；
+数组argv和envp忘记用NULL结束，此时errno被设置为EFAULT；
+没有对要执行文件的运行权限，此时errno被设置为EACCES。
+2、应用
+如果一个进程想执行另一个程序，它就可以fork或vfork出一个新进程，然后调用任何一个exec函数。
+为此，Linux还专门对fork作了优化：通常fork会将调用进程的所有内容原封不动的拷贝到新产生的子进程中去，这些拷贝的动作很消耗时 间，而如果fork完之后我们马上就调用exec，那这些辛辛苦苦拷贝来的东西就会被立刻抹掉，这看起来非常不划算，于是人们设计了一种"写时复制（copy-on-write）" 技术，使得fork结束后并不立刻复制父进程的内容到子进程，而是到了真正使用时才复制，这样如果下一条语句是exec，它就不会作无用功了。其实"写时 复制"还是有复制，进程的mm结构、页表都还是被复制了（"写时复制"也必须由这些信息来支撑。否则内核捕捉到CPU访存异常，怎么区分 这是“写时复制”引起的，还是真正的越权访问呢？）。
+而vfork就把事情做绝了，所有有关于内存的东西都不复制了，父子进程的内存是完全共享的。 但是这样一来又有问题了，虽然用户程序可以设计很多方法来避免父子进程间的访存冲突。但是关键的一点，父子进程共用着栈，这可不由用户程序控制的。一个进 程进行了关于函数调用或返回的操作，则另一个进程的调用栈 （实际上就是同一个栈）也被影响了。这样的程序没法运行下去。所以，vfork有个限制，子进程生成后，父进程在vfork中被内核挂起，直到子进程有了 自己的内存空间（exec**）或退出(_exit)。并且， 在此之前，子进程不能从调用vfork的函数中返回（同时，不能修改栈上变量、不能继续调用除_exit或exec系列之外的函数，否则父进程的数据可能 被改写）。
+尽管限制很多，vfork后马上exec效率会比fork高不少。
+<!-- more -->
+fork函数是用于创建一个子进程，该子进程几乎是父进程的副本，而有时我们希望子进程去执行另外的程序，exec函数族就提供了一个在进程中启动另一个程序执行的方法。它可以根据指定的文件名或目录名找到可执行文件，并用它来取代原调用进程的数据段、代码段和堆栈段，在执行完之后，原调用进程的内容除了进程号外，其他全部被新程序的内容替换了。另外，这里的可执行文件既可以是二进制文件，也可以是Linux下任何可执行脚本文件。
+（2）在Linux中使用exec函数族主要有以下两种情况
+a. 当进程认为自己不能再为系统和用户做出任何贡献时，就可以调用任何exec 函数族让自己重生。
+b. 如果一个进程想执行另一个程序，那么它就可以调用fork函数新建一个进程，然后调用任何一个exec函数使子进程重生。
+（3）exec函数族语法
+实际上，在Linux中并没有exec函数，而是有6个以exec开头的函数族，下表列举了exec函数族的6个成员函数的语法。
+所需头文件： #include <unistd.h>
+函数说明： 执行文件
+函数原型：
+[plain] view plain copy
+int execl(const char *path, const char *arg, ...)  
+int execv(const char *path, char *const argv[])  
+int execle(const char *path, const char *arg, ..., char *const envp[])  
+int execve(const char *path, char *const argv[], char *const envp[])  
+int execlp(const char *file, const char *arg, ...)  
+int execvp(const char *file, char *const argv[])</unistd.h></unistd.h></p>
+
+</div>
+					<div class="readmore" style="float: right;">
+						
+							<a href="/MyBlog/linux/2017/12/22/exec.html" style="color:green">阅读全文</a>
+						
+					</div>								
+			</div>
+			<br/>
+			<hr/>
+			<div class="post-list" style="list-style-type: none;">			
+				 	
+					<h2>
+						<img class="title-image" src="/MyBlog/img/dna.png"/>
 						<a class="post-link" href="/MyBlog/storage/2017/12/13/tree.html">各种树的应用场景</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
@@ -287,50 +354,6 @@ name «= (name, organization, version) { (n, o, v) =&gt; “project “ + n + �
 					<div class="readmore" style="float: right;">
 						
 							<a href="/MyBlog/spark/2017/12/13/maven.html" style="color:green">阅读全文</a>
-						
-					</div>								
-			</div>
-			<br/>
-			<hr/>
-			<div class="post-list" style="list-style-type: none;">			
-				 	
-					<h2>
-						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/spark/2017/12/13/figaro.html">figaro mac 安装</a>
-					</h2>
-					<div class="author" style="margin-top: -10px;">Posted by
-						<i class="fa fa-user"></i>
-						<a href="/MyBlog/spark/2017/12/13/figaro.html"> 夏泽民</a>
-						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Dec 13, 2017
-						</span>
-					</div>
-					<div class="excerpt"><p>$brew install sbt
- $which sbt
-/usr/local/bin/sbt
-$ git clone https://github.com/xiazemin/figaro.git
-$sbt package
-[warn] No sbt.version set in project/build.properties, base directory: /Users/didi/figaro/figaro
-[info] Set current project to figaro (in build file:/Users/didi/figaro/figaro/)
-[info] Updating {file:/Users/didi/figaro/figaro/}figaro…
-[info] Done updating.
-[info] Packaging /Users/didi/figaro/figaro/target/scala-2.12/figaro_2.12-0.1-SNAPSHOT.jar …
-[info] Done packaging.
-[success] Total time: 3 s, completed 2017-12-13 13:13:19
-操作后会得到一个jar文件
-target/scala-2.12/figaro_2.12-0.1-SNAPSHOT.jar
-建立一个scala工程将生成的jar包引入
-问题：
-包无法引入
-参考：
-https://www.cra.com/work/case-studies/figaro
-下载编译包
-安装到：/Applications/figaro-5.0.0.0-2.11
-项目中引入包即可</p>
-</div>
-					<div class="readmore" style="float: right;">
-						
-							<a href="/MyBlog/spark/2017/12/13/figaro.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -4648,6 +4671,14 @@ https://www.cra.com/work/case-studies/figaro
 							{
 							"title" : "express - ",
 							"url" : "/MyBlog/node/2021/01/10/express.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "vscode 调试 node.js - ",
+							"url" : "/MyBlog/node/2021/01/10/debug.html"
 							}
 							
 							,
@@ -23218,7 +23249,7 @@ https://www.cra.com/work/case-studies/figaro
 								
 								
 									<a class="bold" href="/MyBlog/category/node">
-										node (14)
+										node (15)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -23319,6 +23350,10 @@ https://www.cra.com/work/case-studies/figaro
 									  
 								   <li>
 										<a href="/MyBlog/node/2021/01/10/express.html" style="font-size:40px;"> express</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/node/2021/01/10/debug.html" style="font-size:40px;"> vscode 调试 node.js</a>
 									</li>
 									  
 								   <li>
@@ -23423,10 +23458,6 @@ https://www.cra.com/work/case-studies/figaro
 									  
 								   <li>
 										<a href="/MyBlog/web/2020/11/24/protobuf.html" style="font-size:40px;"> protobuf 为什么那么快</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/php/2020/11/24/nginx.html" style="font-size:40px;"> nginx反向代理实现服务器瞬间故障转移</a>
 									</li>
 									
 								</ul>
