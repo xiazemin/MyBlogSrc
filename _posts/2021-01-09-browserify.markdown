@@ -1,7 +1,7 @@
 ---
 title: browserify
 layout: post
-category: web
+category: node
 author: 夏泽民
 ---
 http://browserify.org/#install
