@@ -1,0 +1,52 @@
+---
+title: http proxy charles 抓包
+layout: post
+category: golang
+author: 夏泽民
+---
+如何用charles 抓我们自己go代码的请求包？
+我们可以用charles 抓手机上的包，因为手机安装证书，且制定了代理地址为charles 的代理地址。我们可以用charles抓浏览器包，因为我们配置了浏览器的hhtp，https 代理。
+
+我们手写的http客户端怎么抓包呢，这就需要httpproxy，go里面实现如下
+
+import (
+	"net/http"
+	u "net/url"
+)
+ 
+// http GET 代理
+func HttpGetFromProxy(url,proxyURL string) (*http.Response,error) {
+	req,_ := http.NewRequest("GET",url,nil)
+	proxy,err := u.Parse("http://127.0.0.1:8888")//charles 代理端口
+	if err != nil {
+		return nil,err
+	}
+	client := &http.Client{
+		Transport: &http.Transport{
+			Proxy : http.ProxyURL(proxy),},}
+	return client.Do(req)
+}
+<!-- more -->
+反向代理如何实现呢
+go语言自带包ReverseProxy 实现了proxy的功能。
+
+但我希望proxy进程能够在代理的同时，完整的把请求和请求体记录在日志里。
+
+仅使用ReverseProxy 包的话，uri记录没问题，但body只能被读取一次，proxy将body记录在日志，那么backend就没办法再读body了。
+
+因此需要proxy进程读过一次body之后，把数据重新写回去，留给backend读取。
+
+func (h *handle) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+        backend, err := url.Parse("http://" + h.backendHost)
+        if err != nil {
+                return
+        }
+        body, err := ioutil.ReadAll(r.Body)
+        defer r.Body.Close()
+        if err != nil {
+                log.Println(err.Error())
+                return
+        }
+        r.Body = ioutil.NopCloser(bytes.NewBuffer(body))
+        proxy := httputil.NewSingleHostReverseProxy(backend)
+}
