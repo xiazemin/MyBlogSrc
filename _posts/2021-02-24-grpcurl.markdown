@@ -1,0 +1,104 @@
+---
+title: grpcurl
+layout: post
+category: golang
+author: 夏泽民
+---
+grpcurl是一个命令行工具，使用它可以在命令行中访问gRPC服务，就像使用curl访问http服务一样。
+
+准备: 在gRPC服务中注册reflection服务
+gRPC服务是使用Protobuf(PB)协议的，而PB提供了在运行时获取Proto定义信息的反射功能。grpc-go中的"google.golang.org/grpc/reflection"包就对这个反射功能提供了支持。
+
+server := grpc.NewServer()
+	// 注册grpcurl所需的reflection服务
+	reflection.Register(server)
+	// 注册业务服务
+	proto.RegisterGreeterServer(server, &greeter{})
+<!-- more -->
+1,grpcurl 127.0.0.1:57904 list
+Failed to dial target host "127.0.0.1:57904": tls: first record does not look like a TLS handshake
+原因grpc默认是https
+
+2，grpcurl -plaintext 127.0.0.1:57904 list
+grpc.health.v1.Health
+grpc.reflection.v1alpha.ServerReflection
+xxx.svc.xx.XXService
+
+加-plaintext 走http 解决
+
+3，grpcurl -plaintext 127.0.0.1:57904 list xxx.svc.xx.XXService
+xxx.svc.xx.XXService.xxMethod
+xxx.svc.xx.XXService.yyMethod
+前提是服务端起了reflection 
+
+4,grpcurl -plaintext 127.0.0.1:57904 xxx.svc.xx.XXService/yyMethod
+ERROR:
+  Code: InvalidArgument
+  Message: xxx
+缺少参数
+
+5，grpcurl -plaintext 127.0.0.1:57904 describe xxx.svc.xx.XXService
+e xxx.svc.xx.XXService is a service:
+service XXService {
+  rpc yyMethod ( .google.protobuf.Empty ) returns ( .google.protobuf.Empty );
+  
+6，grpcurl -plaintext 127.0.0.1:57904 describe xxx.svc.xx.XXService.yyMethod
+
+xxx.svc.xx.XXService.yyMethod is a method:
+rpc yyMethod ( .xxx.svc.xx.XXService.yyMethodRequest ) returns ( .xxx.svc.xx.XXService.yyMethodResponse );
+
+7.grpcurl -plaintext 127.0.0.1:57904 describe .xxx.svc.xx.yyMethodRequest
+
+.xxx.svc.xx.yyMethodRequest is a message:
+message yyMethodRequest {
+  string xxx = 1;
+  int64 yyy = 2;
+  }
+  
+8.grpcurl -plaintext 127.0.0.1:57904  -d '{"xxx":"12133","yyy":0}' xxx.svc.xx.XXService/yyMethod
+Too many arguments.
+
+原因：请求参数位置不对
+
+9，grpcurl -plaintext -d '{"xxx":"12133","yyy":0}' 127.0.0.1:57904  xxx.svc.xx.XXService/yyMethod
+
+ERROR:
+  Code: PermissionDenied
+原因 缺少meta参数（header）
+
+10.grpcurl -plaintext -d '{"xxx":"12133","yyy":0}' -H '"Xx":1234' 127.0.0.1:57904 xxx.svc.xx.XXService/yyMethod
+
+Error invoking method "xxx.svc.xx.XXService/yyMethod": rpc error: code = Internal desc = failed to query for service descriptor "xxx.svc.xx.XXService/yyMethod": stream terminated by RST_STREAM with error code: PROTOCOL_ERROR
+
+原因：没有指定proto 文件
+
+11.grpcurl -plaintext -d  '{"xxx":"12133","yyy":0}' -H '"Xx":1234' -proto "~/go/protos/xxx.proto" 127.0.0.1:57904 xxx.svc.xx.XXService/yyMethod
+
+Failed to process proto source files.: could not parse given files: %!v(PANIC=Error method: runtime error: invalid memory address or nil pointer dereference)
+
+原因：没有指定依赖文件的目录
+
+12. grpcurl -plaintext -d '{"xxx":"12133","yyy":0}' -H '"Xx":1234' -import-path "/go/protos/" -proto "/go/protos/xxx.proto" 127.0.0.1:57904 xxx.svc.xx.XXService/yyMethod
+ERROR:
+  Code: Internal
+  Message: stream terminated by RST_STREAM with error code: PROTOCOL_ERROR
+
+原因：header 错误，原因header 里多了“
+
+13. grpcurl -plaintext -emit-defaults 127.0.0.1:57904 xxx.svc.xx.XXService/yyMethod
+ERROR:
+  Code: InvalidArgument
+  Message: xxx or yyy is required
+
+14.grpcurl -plaintext -d '{"xxx":"12133","yyy":0}' -H 'Xx:1234' -import-path "/go/protos/" -proto "/go/protos/xxx.proto" 127.0.0.1:57904 xxx.svc.xx.XXService/yyMethod
+问题解决
+
+参考：
+https://blog.csdn.net/weixin_30878501/article/details/94952412
+https://www.cnblogs.com/highend/p/grpc_call_protocol_error.html
+https://github.com/fullstorydev/grpcurl
+https://about.sourcegraph.com/go/gophercon-2018-grpc-reflection-and-grpcurl/
+https://github.com/fullstorydev/grpcurl/blob/master/README.md
+https://blog.frognew.com/2020/04/grpcurl.html
+
+https://github.com/xiazemin/lean_record/blob/main/grpcurl
