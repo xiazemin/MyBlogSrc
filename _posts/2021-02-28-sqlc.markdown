@@ -1,0 +1,87 @@
+---
+title: sqlc支持mysql in 语法 
+layout: post
+category: golang
+author: 夏泽民
+---
+sqlc可以根据我们编写的 SQL 语句生成类型安全的、地道的 Go 接口代码，我们要做的只是调用这些方法。但是sqlc 不支持in 语法，写代码比较痛苦，所以对sqlc进行了修改，添加了in语法支持的功能。
+
+
+
+项目地址：
+
+源码：https://github.com/xiazemin/sqlc
+
+ 实例：https://github.com/xiazemin/sqlc_study
+<!-- more -->
+安装
+
+go get -u github.com/xiazemin/sqlc
+
+
+使用
+
+https://github.com/kyleconroy/sqlc 的sql 是没法解析in操作的
+
+
+
+本文实现的sqlc 支持复杂的in 操作比如
+
+-- name: GetOneAuthor :one
+SELECT * FROM authors where  id in (?)  and bio=? and  name in (?)  limit 1;
+
+
+生成的相关代码如下
+
+
+const getOneAuthor = `-- name: GetOneAuthor :one
+SELECT id, name, bio FROM authors where  id in (?)  and bio=? and  name in (?)  limit 1
+`
+
+type GetOneAuthorParams struct {
+  ID []int32
+
+  Bio sql.NullString
+
+  Name []string
+}
+
+func stringSlice2interface(l []string) []interface{} {
+  v := make([]interface{}, len(l))
+  for i, val := range l {
+    v[i] = val
+
+  }
+  return v
+}
+
+func (q *Queries) GetOneAuthor(ctx context.Context, arg GetOneAuthorParams) (Author, error) {
+
+  getOneAuthor := getOneAuthor
+
+  {
+    param := "?"
+    for i := 0; i < len(arg.ID)-1; i++ {
+      param += ",?"
+    }
+    getOneAuthor = replaceNth(getOneAuthor, "(?)", "("+param+")", 1)
+  }
+
+  {
+    param := "?"
+    for i := 0; i < len(arg.Name)-1; i++ {
+      param += ",?"
+    }
+    getOneAuthor = replaceNth(getOneAuthor, "(?)", "("+param+")", 1)
+  }
+
+  row := q.db.QueryRowContext(ctx, getOneAuthor, append(append(int32Slice2interface(arg.ID), arg.Bio), stringSlice2interface(arg.Name)...)...)
+  var i Author
+  err := row.Scan(&i.ID, &i.Name, &i.Bio)
+  return i, err
+}
+完全兼容以前的sqlc，一键生成支持in 语法的代码，不用手动维护
+
+
+
+注意，对于子查询暂时不支持
