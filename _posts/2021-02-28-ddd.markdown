@@ -1,0 +1,81 @@
+---
+title: ddd
+layout: post
+category: architect
+author: 夏泽民
+---
+项目的目录结构
+分为 application，domain，facade，infrastructure 四个部分
+
+application 对应了 DDD 中的「应用层」，同时也对应了 Clean Architecture 中的 Application Business Rule。从项目中的实践而言，它作为「粗粒度」业务的入口，也有人喜欢称之为一个 Use Case。在这一层中不应该包含复杂的业务规则，而是对下层的 domain (领域层)进行协调，对业务逻辑进行编排。需要注意的是这一层只应该依赖于下层的 domain 层与 infrastructure 层。
+
+application 内部是怎么划分的:
+ dto service util
+ 
+ dto 目录存放了的是 application 对上层暴露服务所接受的参数类型，也就是大家熟悉的 Data Transfer Object。service 目录则是之前提到的「粗粒度」的服务接口，这些服务需要做的就是按照业务逻辑将 dto 对象转化为 domain 层的领域对象，并调用相关领域对象的方法完成业务逻辑。如果需要还会调用 infrastructure 的服务。再次强调，这部分的服务不应该涉及到复杂，核心的业务逻辑。
+ 
+ domain 是 DDD 的核心层
+ domain 之下的是名为 bc1 的目录，这里指代项目中某个业务的 Bounded Context(限界上下文)
+ exception 目录中定义了领域层相关的异常，即一般称之为的 BusinessException，代表违反某些业务逻辑的异常，例如账户余额不足等。model 目录中定了领域对象，一般建议使用「充血模型」进行建模。repository 中定义了领域对象对应的「仓库」
+ service 则是定义了「领域服务」对象，如果认为 model 定义了业务模型，是名词，那么领域服务就是动词。
+ 
+ 
+ 在一个完整的领域模型中，我们往往需要划分多个不同的 Bounded Context，但是不同的 BC 之间应该怎么交互呢？Eric Evans 的书中提供了集中不同的解决方案，例如自定义 DSL，防腐层等。而在我们具体的项目中，我们更倾向于使用基于「领域事件」的交互方式，这样不仅不会破坏各个 BC 间的封装，也移除了各自间的耦合。producer 中是事件的发送方，handler 是具体处理事件的对象。
+<!-- more -->
+facade 是整个系统对外暴露服务的部分
+
+即 RESTful 风格的 API 与 Web Service，对应的实现分别在 rest 与 ws 目录下。facade 层的工作是基于协议对客户端提供的数据进行校验，然后将数据转化为 application 层所需的 dto 对象，并调用 application 提供的服务。facade 中不应该有任何的业务规则与逻辑，只是完成数据对象的转换。
+
+Infrastructure Layer
+infrastructure 层主要负责提供底层的纯技术服务，
+
+繁琐的数据对象转换
+从系统的分层架构来看，一共有三种类型的数据对象，分别为 DTO，Domain，PO(Persistence Object)。在实现一个业务功能时往往发生多次数据对象的转换，且大部分时间都是 getter 与 setter 的操作，非常的冗繁。
+
+为了解决这个问题我们引入了 Model Mapper 作为对象映射框架，省去了一些多余的代码。但是依然存在着另一个问题。考虑到 DDD 中的另一个概念: Aggregate(聚合)，当从 PO 转换为 Domain 时，需要以 eager 模式从存储中加载所有的数据，相对而言丧失了延迟加载的优化特性。
+
+模糊的 Module 与 Bounded Context
+在 DDD 理论中 Module 与 Bounded Context 是不同的东西，在上述的分层架构中，领域层有着明确的 BC 划分，但是在其他层却没有这些。最直接的现象就是随着系统功能的逐渐增加，业务规则日益复杂，application 目录下 dto，service 下的类会越来越多，由于缺乏进一层的抽象，导致后续的开发人员很难理解。
+
+领域事件引入的事务问题
+在引入领域事件之后，一部分的业务流程变为了异步调用，因此事务边界的管理变得更为复杂，在某些情况下无法达到事务一致性的要求。这无疑增加了开发者的心智负担，也提升了不少测试的难度。在这种情况需要进一步加深对业务的理解，尽量将事务特性从业务规则中移除或是绕开。
+
+架构复杂性的提升
+架构复杂性的提升带来的是开发人员学习的成本提升，在实践中，我们发现很多时候开发人员的代码中引入了错误的依赖关系，例如 domain 的方法签名中有来自于 dto 的对象，或是 facade 中引入了 domain 的领域对象。对于这种问题比较好的解决方案是加强 code review，加强开发人员对分层思想的理解，以及引入 Unit test your Java architecture - ArchUnit 这样的框架，在 CI 时对代码的依赖关系进行静态检查。
+
+https://segmentfault.com/a/1190000021737741
+
+https://www.infoq.cn/article/s_lfulu6zqodd030rbh9
+https://www.infoq.cn/article/7QgXyp4Jh3-5Pk6LydWw
+
+https://www.coder.work/article/719267
+https://tkstorm.com/posts-list/software-engineering/cloud-native/ddd-layer/
+
+https://www.cnblogs.com/hafiz/p/9388334.html
+https://blog.csdn.net/k6T9Q8XKs6iIkZPPIFq/article/details/78909897
+https://www.cnblogs.com/netfocus/archive/2011/10/10/2204949.html
+https://blog.csdn.net/bluishglc/article/details/6681253
+
+http://www.7xue.top/?p=4591
+
+https://www.jianshu.com/p/a775836c7e25
+https://my.oschina.net/luanwu/blog/4308928
+https://blog.csdn.net/m0_47404181/article/details/111023054
+
+https://juejin.cn/post/6844904063801409550
+
+三层架构：
+
+表现层（Presentation）
+业务逻辑层（Business）
+持久层（Persistence）
+四层架构：
+
+表现层（Presentation）
+应用（逻辑）层（Application）
+领域层（Domain）
+基础设施层（Infrastructure）
+在四层架构中的基础设施层要比三层架构中的持久层的功能多一些。
+
+
+https://zhuanlan.zhihu.com/p/315675171
