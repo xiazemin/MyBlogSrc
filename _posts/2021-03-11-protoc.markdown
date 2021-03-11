@@ -1,0 +1,113 @@
+---
+title: protobuf 自定义选项生成自定义代码
+layout: post
+category: golang
+author: 夏泽民
+---
+protobuf 自定义选项可以用在 proto 文件全局域、消息、字段、服务、方法等等上面
+
+并能通过官方提供的 API ： proto.GetExtension 来获取这些选项；
+
+也可以自己写 protoc go 插件时，根据选项值不同，自动生成不同的代码；
+
+ rpc Hello(Request) returns (mypack.NoReply) { option (mypack.Broadcast) = true; }
+ 
+ option (mypack.Broadcast) = true; 就是一个自定义选项
+
+自定义 proto go 插件，可以根据这些自定义选项，生成一些自定义代码
+
+syntax = "proto3";
+使用 proto3 语法。也可以使用 proto2 看自己喜好
+package mypack;
+包名
+必须要有
+option go_package = "github.com/fananchong/test_protobuf_options;mypack";
+其他 proto 文件根据这个定义 import 这个 proto
+必须要有
+import "protoc-gen-go/descriptor/descriptor.proto";
+导入 proto 元数据定义
+全路径为 github.com/golang/protobuf/protoc-gen-go/descriptor/descriptor.proto
+项目名 github.com/golang/protobuf 部分需要省略
+必须要有
+import 第3方开源库的 proto ，都遵循这个规则
+extend google.protobuf.MethodOptions { bool Broadcast = 50000; }
+自定义 method 选项： Broadcast
+核心语句，本 proto 为的就是定义这个
+必须要有
+message NoReply {}
+非必须，定义一个消息，其他 proto 可以拿去用
+
+protoc -I. -I%DEP% --go_out=. broadcast.proto
+生成 broadcast.pb.go
+
+基于 proto_gen_go 自定义插件，根据选项来生成自定义代码
+
+https://blog.csdn.net/u013272009/article/details/100097318
+<!-- more -->
+
+protoc-gen-go 介绍与源代码分析
+https://blog.csdn.net/u013272009/article/details/100018002
+
+
+https://izualzhy.cn/protobuf-custom-options
+
+http://arganzheng.life/make-good-use-of-protobuf-custom-options.html
+https://blog.csdn.net/mh942408056/article/details/107019863
+
+https://www.jianshu.com/p/6f24de5f0f93
+
+
+https://chai2010.gitbooks.io/advanced-go-programming-book/content/ch4-rpc/ch4-02-pb-intro.html
+Protobuf的protoc编译器是通过插件机制实现对不同语言的支持。比如protoc命令出现--xxx_out格式的参数，那么protoc将首先查询是否有内置的xxx插件，如果没有内置的xxx插件那么将继续查询当前系统中是否存在protoc-gen-xxx命名的可执行程序，最终通过查询到的插件生成代码。对于Go语言的protoc-gen-go插件来说，里面又实现了一层静态插件系统。比如protoc-gen-go内置了一个gRPC插件，用户可以通过--go_out=plugins=grpc参数来生成gRPC相关代码，否则只会针对message生成相关代码。
+
+https://nullget.sourceforge.io/?q=node/861
+protobuf拓展
+我们需要指定哪些message需要生成c struct，哪些不需要，因此我们可以定义message的拓展。 新建一个文件，假设叫做 pod_options.proto
+
+import "google/protobuf/descriptor.proto";
+extend google.protobuf.MessageOptions
+{
+    // 1: need to generate pod data code
+    // 2: need to generate pod data code without constructor
+    optional int32 gen_pod = 30000;
+}
+接下来，可以定义我们自己的test.proto了。
+
+import "pod_options.proto";
+message NeedPod
+{
+    // 设置了1，需要生成 c struct
+    option (gen_pod) = 1;
+    optional uint32 id = 1;
+}
+message DontNeedPod
+{
+    optional uint32 id = 1;
+}
+解析proto文件
+有了拓展字段，接下来怎么获取呢，难道要修改protoc的源码，输出需要的c struct么？ 其实，并不需要修改源码，起码有几种方法可以达到目的。
+
+使用Importer
+仔细阅读protoc源码，有一个 google::protobuf::compiler::Importer 类
+
+早期的protobuf版本就是用这个类来产生FileDescriptor，而有了FileDescriptor，就有了整个proto文件的所有信息。Importer的用法可以参照早期版本的protoc源码，或者在单元测试用例中也仍然有用到Importer
+
+使用py2文件
+还有一种方法可以以曲线救国的方式来实现我们的目的。我们知道protoc可以支持产出不同语言的目标文件，而针对python的目标文件就是py2.py文件，查看 py2 文件，可以看到，里面已经包含了FileDescriptor类了，因此，只要用python写一个脚本加载这个py2文件，就可以获得一个FileDescriptor类
+
+https://zhuanlan.zhihu.com/p/75362138
+
+https://github.com/snow1313113/pod_plugin
+
+https://cloud.tencent.com/developer/article/1623690
+
+https://colobu.com/2020/05/10/generate-rpcx-code-from-protobuf-files/
+
+https://cloud.tencent.com/developer/article/1623690
+
+https://github.com/rpcxio/protoc-gen-rpcx
+
+https://tunsuy.github.io/2017/02/20/%E4%B8%BAProtobuf%E7%BC%96%E8%AF%91%E5%99%A8protoc%E7%BC%96%E5%86%99%E6%8F%92%E4%BB%B6/
+
+
+
