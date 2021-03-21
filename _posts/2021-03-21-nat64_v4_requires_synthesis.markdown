@@ -59,10 +59,25 @@ vi ~/Library/Group\ Containers/group.com.docker/settings.json
   "showKubernetesSystemContainers": false,
   "kubernetesInitialInstallPerformed": false,
   
-  
+
+清理干净所有镜像
   
 Docker 3.2.2版本
 
 修改k8s-for-docker-desktop
 的images.properties
 v1.19.3 为v1.19.7
+
+sh load_images.sh
+
+重启docker
+
+ % docker images |grep desktop
+docker/desktop-kubernetes                                        kubernetes-v1.19.7-cni-v0.8.5-critools-v1.17.0-debian   93b3398dbfde   6 weeks ago     285MB
+docker/desktop-storage-provisioner                               v1.1                                                    e704287ce753   12 months ago   41.8MB
+docker/desktop-vpnkit-controller                                 v1.0                                                    79da37e5a3aa   12 months ago   36.6MB
+
+看到上面三个就成功了
+
+
+
