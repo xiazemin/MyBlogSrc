@@ -1,0 +1,71 @@
+---
+title: echo 解析客户端IP的坑clientIp
+layout: post
+category: golang
+author: 夏泽民
+---
+某些场景我们需要获取客户端的ip，比如埋点、反作弊、审计等等
+```
+ip := net.ParseIP(ctx.ClientIP())
+ip = ip.To4()
+ipInt32 := binary.BigEndian.Uint32(ip)
+```
+上面这段代码乍看没有问题，但是实际应用中可能panic
+<!-- more -->
+我们来看下echo中相关函数的实现
+```
+func (c *Context) ClientIP() string {
+	if c.engine.ForwardedByClientIP {
+		clientIP := c.requestHeader("X-Forwarded-For")
+		clientIP = strings.TrimSpace(strings.Split(clientIP, ",")[0])
+		if clientIP == "" {
+			clientIP = strings.TrimSpace(c.requestHeader("X-Real-Ip"))
+		}
+		if clientIP != "" {
+			return clientIP
+		}
+	}
+```
+这里直接通过逗号分隔X-Forwarded-For，取第一个字符串，众所周知X-Forwarded-For是可以篡改的，如果用户不遵守代理协议，把第一个ip地址写成非法的ip地址，比如一个字符串，那么这个函数返回的就是一个字符串
+
+接下来我们看看解析ip的函数
+```
+// ParseIP parses s as an IP address, returning the result.
+// The string s can be in IPv4 dotted decimal ("192.0.2.1"), IPv6
+// ("2001:db8::68"), or IPv4-mapped IPv6 ("::ffff:192.0.2.1") form.
+// If s is not a valid textual representation of an IP address,
+// ParseIP returns nil.
+func ParseIP(s string) IP {
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '.':
+			return parseIPv4(s)
+		case ':':
+			return parseIPv6(s)
+		}
+	}
+	return nil
+}
+```
+我们可以看到对于不合法的ip地址，返回的直接是个nil
+```
+// To4 converts the IPv4 address ip to a 4-byte representation.
+// If ip is not an IPv4 address, To4 returns nil.
+func (ip IP) To4() IP {
+	if len(ip) == IPv4len {
+		return ip
+	}
+	if len(ip) == IPv6len &&
+		isZeros(ip[0:10]) &&
+		ip[10] == 0xff &&
+		ip[11] == 0xff {
+		return ip[12:16]
+	}
+	return nil
+}
+```
+转换函数也一样，如果不是合法的ipv4 或者ipv6地址，那么返回的仍然是个nil
+
+如何修复呢
+1，代码加nil判断
+2，接入成对X-Forwarded-For  清洗

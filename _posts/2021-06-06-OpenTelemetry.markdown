@@ -1,0 +1,32 @@
+---
+title: OpenTelemetry
+layout: post
+category: algorithm
+author: 夏泽民
+---
+什么是OpenTelemetry？
+OpenTelemetry合并了OpenTracing和OpenCensus项目，提供了一组API和库来标准化遥测数据的采集和传输。OpenTelemetry提供了一个安全，厂商中立的工具，这样就可以按照需要将数据发往不同的后端。
+
+OpenTelemetry项目由如下组件构成：
+
+推动在所有项目中使用一致的规范
+基于规范的，包含接口和实现的APIs
+不同语言的SDK(APIs的实现)，如 Java, Python, Go, Erlang等
+Exporters：可以将数据发往一个选择的后端
+Collectors：厂商中立的实现，用于处理和导出遥测数据
+术语
+如果刚接触Opentelemetry，那么需要了解如下术语：
+
+Traces：记录经过分布式系统的请求活动，一个trace是spans的有向无环图
+
+Spans：一个trace中表示一个命名的，基于时间的操作。Spans嵌套形成trace树。每个trace包含一个根span，描述了端到端的延迟，其子操作也可能拥有一个或多个子spans。
+
+Metrics：在运行时捕获的关于服务的原始度量数据。Opentelemetry定义的metric instruments(指标工具)如下。Observer支持通过异步API来采集数据，每个采集间隔采集一个数据。
+
+Context：一个span包含一个span context，它是一个全局唯一的标识，表示每个span所属的唯一的请求，以及跨服务边界转移trace信息所需的数据。OpenTelemetry 也支持correlation context，它可以包含用户定义的属性。correlation context不是必要的，组件可以选择不携带和存储该信息。
+
+Context propagation：表示在不同的服务之间传递上下文信息，通常通过HTTP首部。 Context propagation是Opentelemetry系统的关键功能之一。除了tracing之外，还有一些有趣的用法，如，执行A/B测试。OpenTelemetry支持通过多个协议的Context propagation来避免可能发生的问题，但需要注意的是，在自己的应用中最好使用单一的方法。
+<!-- more -->
+https://www.cnblogs.com/charlieroro/p/13862471.html
+
+https://github.com/open-telemetry/opentelemetry-go

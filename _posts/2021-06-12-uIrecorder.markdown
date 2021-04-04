@@ -1,0 +1,228 @@
+---
+title: uIrecorder
+layout: post
+category: web
+author: 夏泽民
+---
+UIRecorder 是一端录制，多端使用的便捷 UI 自动化测试工具
+https://uirecorder.com/
+Support all user operation: key event, mouse event, alert, file upload, drag, svg, shadow dom
+Support mobile native APP(Android, iOS) recorde, powered by macaca: https://macacajs.com/
+No interference when recording: the same as self test
+Record test file saved in local
+Support kinds of expect: val,text,displayed,enabled,selected,attr,css,url,title,cookie,localStorage,sessionStorage
+Support image diff
+Support powerful var string
+Support common test case: one case call another
+Support parallel test
+Support i18n: en, zh-cn, zh-tw
+Support screenshots after each step
+Support HTML report & JUnit report
+Support multi systems: Windows, Mac, Linux
+Test file base on NodeJs: jWebDriver
+
+https://alibaba.github.io/uirecorder/build/#/artist/uirecorder/hbqzpl
+<!-- more -->
+UIRecorder 是一款 UI录制 和 回归测试 工具，用于录制浏览器页面 UI 的操作。通过 UIRecorder 的录制功能，可以在自测的同时，完成测试过程的录制，生成 JavaScript 测试脚本代码。回归测试过程中，可以利用生成的 JavaScript 测试脚本代码，使用 Mocha 对自测过程进行回放，以达到零成本做自动化回归测试的目的。
+
+https://mochajs.org/
+
+// version 3.x
+cnpm install uirecorder mocha macaca-reporter -g
+
+deprecate mocha@5.2.0 › mkdirp@0.5.1 Legacy versions of mkdirp are no longer supported. Please update to mkdirp 1.x. (Note that the API surface has changed to use Promises in 1.x.)
+deprecate remap-istanbul@0.11.1 › istanbul@0.4.5 This module is no longer maintained, try this instead:
+  npm i nyc
+  
+cnpm i nyc -g
+https://github.com/mochajs/mocha/issues/4217
+npm update mkdirp -g
+cnpm install  mocha -g
+npm install uirecorder mocha macaca-reporter -g
+
+cnpm list uirecorder -g
+cnpm list mocha -g
+cnpm list macaca-reporter -g          // 3.x 版本报告器
+
+录制脚本
+1，初始化工程
+mkdir uirecorder_test
+cd uirecorder_test
+uirecorder init
+// 默认设置的话，一路回车就可以
+Start install project dependencies...
+-----
+selenium-standalone installation finished
+-----
+
+uirecorder start
+录制浏览器会自动打开，注意本地 hosts 配置 127.0.0.1 localhost。进入页面输入 url 则可以开始录制。默认会打开同步校验浏览器，该浏览器的作用是在录制的同时做回归测试校验，如果提示执行失败，则说明回归测试过程很大几率也会执行失败，需要对录制过程进行优化（比如借助工具栏辅助功能）
+录制完毕，点击左下方工具栏“结束录制”按钮，结束录制并保存测试用例脚本
+
+已有测试用例继续录制，运行以下命令，待页面加载执行完毕，可继续录制：
+
+uirecorder sample/test.spec.js  // 对应文件名 
+
+回归测试
+// 进入工程目录
+cd ~/Documents/uirecorder_test
+// 启动 webdriver 服务
+npm run server
+
+Error: Missing /Users/xiazemin/uirecorder_test/node_modules/_selenium-standalone@6.23.0@selenium-standalone/.selenium/chromedriver/latest-x64-chromedriver
+    at /Users/xiazemin/uirecorder_test/node_modules/_selenium-standalone@6.23.0@selenium-standalone/lib/check-paths-existence.js:16:29
+    at suppressedCallback (node:fs:236:5)
+    at FSReqCallback.oncomplete (node:fs:180:23)
+npm ERR! code 1
+npm ERR! path /Users/xiazemin/uirecorder_test
+npm ERR! command failed
+npm ERR! command sh -c selenium-standalone start
+
+npm install selenium-standalone@latest -g 
+https://www.cnblogs.com/duxuebing/p/7469511.html
+selenium-standalone install 
+-----
+selenium-standalone installation finished
+-----
+https://github.com/vvo/selenium-standalone
+https://stackoverflow.com/questions/33240483/specify-chromedriver-path-to-selenium-standalone
+https://github.com/vvo/selenium-standalone/issues/177
+https://github.com/vvo/selenium-standalone/blob/master/README.md#selenium-standalone---
+
+ cp  /usr/local/lib/node_modules/selenium-standalone/.selenium/chromedriver/latest-x64-chromedriver  node_modules/selenium-standalone/.selenium/chromedriver/
+  chmod 777  node_modules/selenium-standalone/.selenium/chromedriver/latest-x64-chromedriver
+  
+ https://github.com/vvo/selenium-standalone/issues/438
+ 
+Error: Missing /usr/local/lib/node_modules/selenium-standalone/.selenium/geckodriver/latest-x64-geckodriver
+
+https://www.kenst.com/2016/12/installing-marionette-firefoxdriver-on-mac-osx/
+https://github.com/mozilla/geckodriver/releases
+
+npm install geckodriver -g
+cnpm install geckodriver -g
+
+https://stackoverflow.com/questions/54508934/how-to-get-my-selenium-standalone-to-start-selenium-standalone-start
+
+https://github.com/mozilla/geckodriver/releases
+
+Due to the requirement from Apple that all programs must be
+notarized, geckodriver will not work on Catalina if you manually
+download it through another notarized program, such as Firefox.
+
+https://github.com/mozilla/geckodriver/releases/download/v0.29.1/geckodriver-v0.29.1-macos.tar.gz
+
+https://github.com/vvo/selenium-standalone/issues/433
+修改配置文件，不安装Firefox
+
+selenium-standalone install --singleDriverInstall=chrome
+https://www.gitmemory.com/issue/vvo/selenium-standalone/433/543548287
+
+https://webdriver.io/docs/selenium-standalone-service/
+
+No Java runtime present, requesting install.
+/usr/local/lib/node_modules/selenium-standalone/bin/selenium-standalone:25
+        throw err;
+
+https://en.softonic.com/download/java-jre/mac/post-download
+
+https://webdriver.io/docs/selenium-standalone-service/
+
+运行测试用例
+可以通过正则匹配的方式指定运行的测试脚本，如运行文件名称为 xx.spec.js 的测试脚本可通过以下命令：
+Mac/Linux: source run.sh sample/xx.spec.js
+
+% source run.sh test1.js
+(node:62009) Warning: Accessing non-existent property 'VERSION' of module exports inside circular dependency
+  test1 : chrome
+    1) "before all" hook
+Error: EEXIST: file already exists, mkdir '/Users/xiazemin/uirecorder_test/reports/screenshots/.'
+
+
+
+打开当前目录 ./reports/index.html 文件查看格式化报告
+https://www.jianshu.com/p/2ce56e41288e
+https://www.cnblogs.com/vae860514/p/8459523.html
+
+https://blog.csdn.net/yue530tomtom/article/details/81188382
+
+https://www.jianshu.com/p/611c588d67b8
+
+https://blog.csdn.net/ajdeng/article/details/54946675
+https://www.cnblogs.com/igubai/p/7593285.html
+https://my.oschina.net/anxiaole/blog/1923326
+https://github.com/alibaba/uirecorder/blob/master/doc/zh-cn/pc-advanced.md
+
+https://www.npmjs.com/package/uirecorder
+
+https://github.com/mochajs/mocha/issues/4217
+
+
+https://www.oracle.com/java/technologies/javase-jdk16-downloads.html
+
+ 
+ selenium-standalone install --config=config.json
+ selenium-standalone start --config=config.json
+
+  cat config.json
+{
+    "webdriver": {
+        "host": "127.0.0.1",
+        "port": "4444",
+        "chromeOptions": {
+            "w3c": false
+        },
+        "browsers": "chrome"
+    },
+    "vars": {},
+    "reporter": {
+        "distDir": ""
+    },
+    "screenshots": {
+        "captureAll": true
+    },
+    "recorder": {
+        "pathAttrs": "data-id,data-name,type,data-type,role,data-role,data-value",
+        "attrValueBlack": "",
+        "classValueBlack": "",
+        "hideBeforeExpect": ""
+    }
+}
+
+
+14:22:11.393 INFO [SeleniumServer.boot] - Selenium Server is up and running on port 4444
+Selenium started
+
+
+
+
+https://chromedriver.storage.googleapis.com/91.0.4472.101/chromedriver_mac64_m1.zip https://chromedriver.chromium.org/downloads https://chromedriver.storage.googleapis.com/index.html?path=91.0.4472.101/ https://www.jianshu.com/p/2ce56e41288e
+
+cp ~/Downloads/chromedriver /usr/local/lib/node_modules/selenium-standalone/.selenium/chromedriver/latest-x64-chromedriver cp ~/Downloads/chromedriver /Users/xiazemin/test/uirecorder_test/node_modules/_selenium-standalone@6.23.0@selenium-standalone/.selenium/chromiumedgedriver/latest-x64-msedgedriver cp ~/Downloads/chromedriver /Users/xiazemin/test/uirecorder_test/node_modules/_selenium-standalone@6.23.0@selenium-standalone/.selenium/chromedriver/latest-x64-chromedriver
+
+Error: the string "Timed out waiting for driver server to start.\nBuild info: version: '3.141.59', revision: 'e82be7d358', time: '2018-11-14T08:25:53'\nSystem info: host: 'xiazemindeMacBook-Pro.local', ip: 'fe80:0:0:0:1050:b67f:fe83:5064%en0', os.name: 'Mac OS X', os.arch: 'x86_64', os.version: '10.16', java.version: '1.8.0_271'\nDriver info: driver.version: unknown" was thrown, throw an Error :)
+
+https://stackoverflow.com/questions/66642697/selenium-in-chrome-browser-shows-exception-in-thread-main-org-openqa-selenium
+
+https://sites.google.com/a/chromium.org/chromedriver/
+
+版本版本号要对应
+
+https://github.com/alibaba/uirecorder/issues/380
+
+https://www.yuque.com/artist/uirecorder/uozk2g
+
+npm run singletest (sample/test.spec.js
+
+https://www.yuque.com/artist/f2etest/webdriver-cloud-usage https://github.com/alibaba/f2etest
+
+https://github.com/alibaba/f2etest
+
+https://github.com/alibaba/uirecorder/issues/154
+
+https://github.com/alibaba/uirecorder/issues/154
+
+
+
+
+
