@@ -25,4 +25,6 @@ https://stackoverflow.com/questions/68779331/use-token-to-push-some-codes-to-git
 
 
 
+https://github.blog/changelog/2021-08-12-git-password-authentication-is-shutting-down/
 
+https://djc8.cn/archives/github-started-from-august-13-2021-and-does-not-accept-the-user-password-for-git-operation-verification.html
