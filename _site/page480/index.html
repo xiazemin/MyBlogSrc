@@ -147,6 +147,127 @@
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
+						<a class="post-link" href="/MyBlog/linux/2018/04/29/veth.html">veth</a>
+					</h2>
+					<div class="author" style="margin-top: -10px;">Posted by
+						<i class="fa fa-user"></i>
+						<a href="/MyBlog/linux/2018/04/29/veth.html"> 夏泽民</a>
+						<span class="post-meta"><i class="fa fa-calendar"></i> 
+							Apr 29, 2018
+						</span>
+					</div>
+					<div class="excerpt"><p>Linux container 中用到一个叫做veth的东西，这是一种新的设备，专门为 container 所建。veth 从名字上来看是 Virtual ETHernet 的缩写，它的作用很简单，就是要把从一个 network namespace 发出的数据包转发到另一个 namespace。veth 设备是成对的，一个是 container 之中，另一个在 container 之外，即在真实机器上能看到的。 
+  VETH设备总是成对出现，送到一端请求发送的数据总是从另一端以请求接受的形式出现。创建并配置正确后，向其一端输入数据，VETH会改变数据的方向并将其送入内核网络子系统，完成数据的注入，而在另一端则能读到此数据。（Namespace，其中往veth设备上任意一端上RX到的数据，都会在另一端上以TX的方式发送出去）veth工作在L2数据链路层，veth-pair设备在转发数据包过程中并不串改数据包内容。 
+<!-- more -->
+  显然，仅有veth-pair设备，容器是无法访问网络的。因为容器发出的数据包，实质上直接进入了veth1设备的协议栈里。如果容器需要访问网络，需要使用bridge等技术，将veth1接收到的数据包通过某种方式转发出去 
+创建veth的命令如下：
+ip link add name veth0 type veth0 peer name veth1
+veth设备特点
+veth和其它的网络设备都一样，一端连接的是内核协议栈
+veth设备是成对出现的，另一端两个设备彼此相连
+一个设备收到协议栈的数据发送请求后，会将数据发送到另一个设备上去
+常用命令
+创建network namespace
+ # ip netns add sunldnamespace01
+ # ip netns list
+sunldnamespace01
+创建veth
+ # ip link add sunldveth01 type veth peer name sunldveth02
+ # ip link list
+显示信息如下：
+1: lo: &lt;LOOPBACK,UP,LOWER_UP&gt; mtu 65536 qdisc noqueue state UNKNOWN mode DEFAULT group default 
+    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
+2: eth0: &lt;BROADCAST,MULTICAST,UP,LOWER_UP&gt; mtu 1500 qdisc pfifo_fast state UP mode DEFAULT group default qlen 1000
+    link/ether 00:0c:29:2d:d4:23 brd ff:ff:ff:ff:ff:ff
+20: sunldveth02: &lt;BROADCAST,MULTICAST&gt; mtu 1500 qdisc noop state DOWN mode DEFAULT group default qlen 1000
+    link/ether c6:bb:c0:d0:54:71 brd ff:ff:ff:ff:ff:ff
+21: sunldveth01: &lt;BROADCAST,MULTICAST&gt; mtu 1500 qdisc noop state DOWN mode DEFAULT group default qlen 1000
+    link/ether da:a1:36:d1:3b:36 brd ff:ff:ff:ff:ff:ff
+添加网卡到namespace
+ # ip link set sunldveth01 netns sunldnamespace01
+查看当前namespace中的veth，只有sunldveth02
+ # ip link list
+显示信息如下
+1: lo: &lt;LOOPBACK,UP,LOWER_UP&gt; mtu 65536 qdisc noqueue state UNKNOWN mode DEFAULT group default 
+    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
+2: eth0: &lt;BROADCAST,MULTICAST,UP,LOWER_UP&gt; mtu 1500 qdisc pfifo_fast state UP mode DEFAULT group default qlen 1000
+    link/ether 00:0c:29:2d:d4:23 brd ff:ff:ff:ff:ff:ff
+3: virbr0: &lt;NO-CARRIER,BROADCAST,MULTICAST,UP&gt; mtu 1500 qdisc noqueue state DOWN mode DEFAULT group default 
+    link/ether ba:d9:d4:48:55:65 brd ff:ff:ff:ff:ff:ff
+20: sunldveth02: &lt;BROADCAST,MULTICAST&gt; mtu 1500 qdisc noop state DOWN mode DEFAULT group default qlen 1000
+    link/ether c6:bb:c0:d0:54:71 brd ff:ff:ff:ff:ff:ff
+通过命令查看sunldnamespace01中的veth
+ # ip netns exec sunldnamespace01 ip link list
+显示信息如下
+1: lo: <LOOPBACK> mtu 65536 qdisc noop state DOWN mode DEFAULT group default 
+    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
+21: sunldveth01: &lt;BROADCAST,MULTICAST&gt; mtu 1500 qdisc noop state DOWN mode DEFAULT group default qlen 1000
+    link/ether da:a1:36:d1:3b:36 brd ff:ff:ff:ff:ff:ff
+配置network namespace的网口
+ # ip netns exec sunldnamespace01 ifconfig sunldveth01 100.2.96.2/16 up
+ # ip netns exec sunldnamespace01 ip addr list
+显示信息如下
+1: lo: <LOOPBACK> mtu 65536 qdisc noop state DOWN group default 
+    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
+21: sunldveth01: &lt;NO-CARRIER,BROADCAST,MULTICAST,UP&gt; mtu 1500 qdisc pfifo_fast state DOWN group default qlen 1000
+    link/ether da:a1:36:d1:3b:36 brd ff:ff:ff:ff:ff:ff
+    inet 100.2.96.2/16 brd 100.2.255.255 scope global sunldveth01
+       valid_lft forever preferred_lft forever
+开启空间脚本
+ #可以使用这条命令开启一个 ns0 的 shell 
+ip netns exec ns0 sh
+network namespace
+创建network namespace
+ # ip netns add blue
+ # ip netns list
+blue
+添加网口到namespace
+先创建veth
+ # ip link add veth0 type veth peer name veth1
+在当前namespace可以看到veth0和veth1
+ # ip link list
+1: lo: &lt;LOOPBACK,UP,LOWER_UP&gt; mtu 65536 qdisc noqueue state UNKNOWN
+    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
+2: eth0: &lt;BROADCAST,MULTICAST,UP,LOWER_UP&gt; mtu 1500 qdisc pfifo_fast state UP qlen 1000
+    link/ether 00:0c:29:b2:cf:72 brd ff:ff:ff:ff:ff:ff
+3: veth1: &lt;BROADCAST,MULTICAST&gt; mtu 1500 qdisc noop state DOWN qlen 1000
+    link/ether ae:0d:00:e1:11:38 brd ff:ff:ff:ff:ff:ff
+4: veth0: &lt;BROADCAST,MULTICAST&gt; mtu 1500 qdisc noop state DOWN qlen 1000
+    link/ether 42:e7:50:d4:bb:c5 brd ff:ff:ff:ff:ff:ff
+将veth1加到namespace “blue”
+ # ip link set veth1 netns blue
+此时，当前namepapce只能看到veth0。
+通过如下命令可以查看blue namespace的网口
+ # ip netns exec blue ip link list
+配置network namespace的网口
+通过ip netns exec可以配置namespace的网口
+ # ip netns exec blue ifconfig veth1 172.17.42.2/16 up
+network namespace的网口与物理网卡的通信通过bridge来实现。
+ # add the namespaces
+ip netns add ns1
+ip netns add ns2
+ # create the veth pair
+ip link add tap1 type veth peer name tap2
+ # move the interfaces to the namespaces
+ip link set tap1 netns ns1
+ip link set tap2 netns ns2
+ # bring up the links
+ip netns exec ns1 ip link set dev tap1 up
+ip netns exec ns2 ip link set dev tap2 up</LOOPBACK></LOOPBACK></p>
+
+</div>
+					<div class="readmore" style="float: right;">
+						
+							<a href="/MyBlog/linux/2018/04/29/veth.html" style="color:green">阅读全文</a>
+						
+					</div>								
+			</div>
+			<br/>
+			<hr/>
+			<div class="post-list" style="list-style-type: none;">			
+				 	
+					<h2>
+						<img class="title-image" src="/MyBlog/img/dna.png"/>
 						<a class="post-link" href="/MyBlog/linux/2018/04/29/namespace.html">linux namespace</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
@@ -585,30 +706,6 @@ brw-rw—- 1 root disk 8, 0 Jul 25 22:46 /dev/sda
 					<div class="readmore" style="float: right;">
 						
 							<a href="/MyBlog/linux/2018/04/29/cgroup.html" style="color:green">阅读全文</a>
-						
-					</div>								
-			</div>
-			<br/>
-			<hr/>
-			<div class="post-list" style="list-style-type: none;">			
-				 	
-					<h2>
-						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/linux/2018/04/29/bridge.html">bridge</a>
-					</h2>
-					<div class="author" style="margin-top: -10px;">Posted by
-						<i class="fa fa-user"></i>
-						<a href="/MyBlog/linux/2018/04/29/bridge.html"> 夏泽民</a>
-						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Apr 29, 2018
-						</span>
-					</div>
-					<div class="excerpt"><p>网桥设备作为一个虚拟设备，用于连接多个端口，可以构建一个局域网。与之相似的是vlan设备，在linux中，vlan设备是为了处理802.1q的添加和去除TAG的问题，这和传统交换机中vlan的功能—划分局域网，不太一样，在这里仅仅是处理了消息头，只是实现了隔离功能，并未实现交换功能，如果需要vlan内的数据转发，可以把vlan子接口挂接在网桥设备下。</p>
-
-</div>
-					<div class="readmore" style="float: right;">
-						
-							<a href="/MyBlog/linux/2018/04/29/bridge.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -2736,6 +2833,10 @@ brw-rw—- 1 root disk 8, 0 Jul 25 22:46 /dev/sda
 			  
 			    
 			      <a href="/MyBlog/page528/">528</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page529/">529</a>
 			    
 			  
 
@@ -5407,6 +5508,11 @@ brw-rw—- 1 root disk 8, 0 Jul 25 22:46 /dev/sda
 						  
 						
 
+						  
+							<li><a href="/MyBlog/page529">529</a></li>
+						  
+						
+
 						
 						  <li><a href="/MyBlog/page481">Next</a></li>
 						
@@ -5610,6 +5716,14 @@ brw-rw—- 1 root disk 8, 0 Jul 25 22:46 /dev/sda
 							{
 							"title" : "gscan - ",
 							"url" : "/MyBlog/algorithm/2021/08/15/gscan.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "groupcache 源码分析 - ",
+							"url" : "/MyBlog/golang/2021/08/15/groupcache.html"
 							}
 							
 							,
@@ -26736,7 +26850,7 @@ brw-rw—- 1 root disk 8, 0 Jul 25 22:46 /dev/sda
 								
 								
 									<a class="bold" href="/MyBlog/category/golang">
-										golang (966)
+										golang (967)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -27020,6 +27134,10 @@ brw-rw—- 1 root disk 8, 0 Jul 25 22:46 /dev/sda
 									</li>
 									  
 								   <li>
+										<a href="/MyBlog/golang/2021/08/15/groupcache.html" style="font-size:40px;"> groupcache 源码分析</a>
+									</li>
+									  
+								   <li>
 										<a href="/MyBlog/golang/2021/08/15/gorse.html" style="font-size:40px;"> gorse</a>
 									</li>
 									  
@@ -27085,10 +27203,6 @@ brw-rw—- 1 root disk 8, 0 Jul 25 22:46 /dev/sda
 									  
 								   <li>
 										<a href="/MyBlog/golang/2021/08/15/assembly.html" style="font-size:40px;"> plan 9 汇编</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/architect/2021/08/15/Repository.html" style="font-size:40px;"> DDD Repository模式</a>
 									</li>
 									
 								</ul>
