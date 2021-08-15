@@ -147,24 +147,26 @@
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/golang/2017/12/24/goroutine.html">goroutine</a>
+						<a class="post-link" href="/MyBlog/spark/2018/01/04/Paxos.html">Paxos</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/golang/2017/12/24/goroutine.html"> 夏泽民</a>
+						<a href="/MyBlog/spark/2018/01/04/Paxos.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Dec 24, 2017
+							Jan 4, 2018
 						</span>
 					</div>
-					<div class="excerpt"><p>Go runtime的调度器：在了解Go的运行时的scheduler之前，需要先了解为什么需要它，因为我们可能会想，OS内核不是已经有一个线程scheduler了嘛？熟悉POSIX API的人都知道，POSIX的方案在很大程度上是对Unix process进场模型的一个逻辑描述和扩展，两者有很多相似的地方。 Thread有自己的信号掩码，CPU affinity等。但是很多特征对于Go程序来说都是累赘。 尤其是context上下文切换的耗时。另一个原因是Go的垃圾回收需要所有的goroutine停止，使得内存在一个一致的状态。垃圾回收的时间点是不确定的，如果依靠OS自身的scheduler来调度，那么会有大量的线程需要停止工作。 单独的开发一个GO得调度器，可以是其知道在什么时候内存状态是一致的，也就是说，当开始垃圾回收时，运行时只需要为当时正在CPU核上运行的那个线程等待即可，而不是等待所有的线程。用户空间线程和内核空间线程之间的映射关系有：N:1,1:1和M:NN:1是说，多个（N）用户线程始终在一个内核线程上跑，context上下文切换确实很快，但是无法真正的利用多核。1：1是说，一个用户线程就只在一个内核线程上跑，这时可以利用多核，但是上下文switch很慢。M:N是说， 多个goroutine在多个内核线程上跑，这个看似可以集齐上面两者的优势，但是无疑增加了调度的难度。
-Go的调度器内部有三个重要的结构：M，P，G
-M:代表真正的内核OS线程，和POSIX里的thread差不多，真正干活的人G:代表一个goroutine，它有自己的栈，instruction pointer和其他信息（正在等待的channel等等），用于调度。P:代表调度的上下文，可以把它看做一个局部的调度器，使go代码在一个线程上跑，它是实现从N:1到N:M映射的关键。
-有2个物理线程M，每一个M都拥有一个context（P），每一个也都有一个正在运行的goroutine。P的数量可以通过GOMAXPROCS()来设置，它其实也就代表了真正的并发度，即有多少个goroutine可以同时运行。图中灰色的那些goroutine并没有运行，而是出于ready的就绪态，正在等待被调度。P维护着这个队列（称之为runqueue），Go语言里，启动一个goroutine很容易：go function 就行，所以每有一个go语句被执行，runqueue队列就在其末尾加入一个goroutine，在下一个调度点，就从runqueue中取出（如何决定取哪个goroutine？）一个goroutine执行。为何要维护多个上下文P？因为当一个OS线程被阻塞时，P可以转而投奔另一个OS线程！图中看到，当一个OS线程M0陷入阻塞时，P转而在OS线程M1上运行。调度器保证有足够的线程来运行所以的context P。</p>
+					<div class="excerpt"><p>使用Basic-Paxos协议的日志同步与恢复
+ 在保证数据安全的基础上，保持服务的持续可用，是核心业务对底层数据存储系统的基本要求。业界常见MySQL/Oracle的1主N备的方案面临的问题是“最大可用（Maximum Availability）”和“最大保护（Maximum Protection）”模式间的艰难抉择，其中“最大可用”模式，表示主机尽力将数据同步到备机之后才返回成功，如果备机宕机或网络中断那么主机则单独提供服务，这意味着主备都宕机情况下可能的数据丢失；“最大保护”模式，表示主机一定要将数据同步到备机后才能返回成功，则意味着在任意备机宕机或网络中断情况下主机不得不停服务等待备机或网络恢复。可见传统主备方式下，如果要求数据不丢，那么基本放弃了服务的持续可用能力。
+基于Paxos协议的数据同步与传统主备方式最大的区别在与Paxos只需任意超过半数的副本在线且相互通信正常，就可以保证服务的持续可用，且数据不丢失。本文不再分析Paxos协议本身（参考原始论文，以及这篇比较通俗的分析http://mp.weixin.qq.com/s?__biz=MjM5MDg2NjIyMA==&amp;mid=203607654&amp;idx=1&amp;sn=bfe71374fbca7ec5adf31bd3500ab95a&amp;key=8ea74966bf01cfb6684dc066454e04bb5194d780db67f87b55480b52800238c2dfae323218ee8645f0c094e607ea7e6f&amp;ascene=1&amp;uin=MjA1MDk3Njk1&amp;devicetype=webwx&amp;version=70000001&amp;pass_ticket=2ivcW%2FcENyzkz%2FGjIaPDdMzzf%2Bberd36%2FR3FYecikmo%3D ），而是基于Paxos协议，讨论一种在多副本上持久化数据的高可用方案。需要注意的是，本方案不考虑运行性能，只是为了帮助说清协议的工程实现。
+我们将数据持久化的需求抽象为：在N个server的机群上，持久化数据库或者文件系统的操作日志，并且为每条日志分配连续递增的logID，我们允许多个客户端并发的向机群内的任意机器发送日志同步请求。对于高可用的需求为：在N个server中只要有超过半数的server（majority）正常服务，并且相互通信正常，那么这个机器就可以持续的提供日志持久化和查询服务。
+将每条日志的持久化流程都看作一个“Paxos Instance”，不同的logID代表不同的Paxos Instance形成的“决议（decision）”。即每一个logID标识着一轮完整paxos协议流程的执行，最后形成decision。机群内的每个server同时作为paxos的acceptor和proposer。
+获取LogID</p>
 
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/golang/2017/12/24/goroutine.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/spark/2018/01/04/Paxos.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -174,106 +176,95 @@ M:代表真正的内核OS线程，和POSIX里的thread差不多，真正干活�
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/web/2017/12/24/goclipse.html">goclipse eclipse go 开发环境搭建＋跳转支持</a>
+						<a class="post-link" href="/MyBlog/cryptology/2018/01/03/rsa.html">rsa 非对称加密原理</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/web/2017/12/24/goclipse.html"> 夏泽民</a>
+						<a href="/MyBlog/cryptology/2018/01/03/rsa.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Dec 24, 2017
+							Jan 3, 2018
+						</span>
+					</div>
+					<div class="excerpt"><p>一、一点历史</p>
+
+</div>
+					<div class="readmore" style="float: right;">
+						
+							<a href="/MyBlog/cryptology/2018/01/03/rsa.html" style="color:green">阅读全文</a>
+						
+					</div>								
+			</div>
+			<br/>
+			<hr/>
+			<div class="post-list" style="list-style-type: none;">			
+				 	
+					<h2>
+						<img class="title-image" src="/MyBlog/img/dna.png"/>
+						<a class="post-link" href="/MyBlog/cryptology/2018/01/03/merkle_tree.html">Merkle Patricia Tree</a>
+					</h2>
+					<div class="author" style="margin-top: -10px;">Posted by
+						<i class="fa fa-user"></i>
+						<a href="/MyBlog/cryptology/2018/01/03/merkle_tree.html"> 夏泽民</a>
+						<span class="post-meta"><i class="fa fa-calendar"></i> 
+							Jan 3, 2018
+						</span>
+					</div>
+					<div class="excerpt"><p>　Merkle Patricia Tree(简称MPT树，实际上是一种trie前缀树)是以太坊中的一种加密认证的数据结构，可以用来存储所有的(key，value)对。以太坊区块的头部包括一个区块头，一个交易的列表和一个uncle区块的列表。在区块头部包括了交易的hash树根，用来校验交易的列表。在p2p网络上传输的交易是一个简单的列表，它们被组装成一个叫做trie树的特殊数据结构，来计算根hash。值得注意的是，除了校验区块外，这个数据结构并不是必须的，一旦区块被验证正确，那么它在技术上是可以忽略的。但是，这意味着交易列表在本地以trie树的形式存储，发送给客户端的时候序列化成列表。客户端接收到交易列表后重新构建交易列表trie树来验证根hash。RLP(Recursive length prefix encoding,递归长度前缀编码)，用来对trie树种所有的条目进行编码(参考：http://www.cnblogs.com/fengzhiwu/p/5565559.html)。</p>
+
+</div>
+					<div class="readmore" style="float: right;">
+						
+							<a href="/MyBlog/cryptology/2018/01/03/merkle_tree.html" style="color:green">阅读全文</a>
+						
+					</div>								
+			</div>
+			<br/>
+			<hr/>
+			<div class="post-list" style="list-style-type: none;">			
+				 	
+					<h2>
+						<img class="title-image" src="/MyBlog/img/dna.png"/>
+						<a class="post-link" href="/MyBlog/cryptology/2018/01/03/ecc.html">ecc 椭圆曲线加密</a>
+					</h2>
+					<div class="author" style="margin-top: -10px;">Posted by
+						<i class="fa fa-user"></i>
+						<a href="/MyBlog/cryptology/2018/01/03/ecc.html"> 夏泽民</a>
+						<span class="post-meta"><i class="fa fa-calendar"></i> 
+							Jan 3, 2018
+						</span>
+					</div>
+					<div class="excerpt"><p>比特币使用椭圆曲线算法生成公钥和私钥，选择的是secp256k1曲线。与RSA（Ron Rivest，Adi Shamir，Len Adleman三位天才的名字）一样，ECC（Elliptic Curves Cryptography，椭圆曲线加密）也属于公开密钥算法。</p>
+
+</div>
+					<div class="readmore" style="float: right;">
+						
+							<a href="/MyBlog/cryptology/2018/01/03/ecc.html" style="color:green">阅读全文</a>
+						
+					</div>								
+			</div>
+			<br/>
+			<hr/>
+			<div class="post-list" style="list-style-type: none;">			
+				 	
+					<h2>
+						<img class="title-image" src="/MyBlog/img/dna.png"/>
+						<a class="post-link" href="/MyBlog/linux/2017/12/30/broad_cast.html">单播、多播和广播</a>
+					</h2>
+					<div class="author" style="margin-top: -10px;">Posted by
+						<i class="fa fa-user"></i>
+						<a href="/MyBlog/linux/2017/12/30/broad_cast.html"> 夏泽民</a>
+						<span class="post-meta"><i class="fa fa-calendar"></i> 
+							Dec 30, 2017
 						</span>
 					</div>
 					<div class="excerpt"><!-- more -->
-<p>Eclipse Mars (4.5)  下载地址：https://www.eclipse.org/mars/
-golang 1.6.0rc2 下载地址：http://www.golangtc.com/download
-goclipse 0.14.1 下载地址: https://github.com/GoClipse/goclipse
-eclipse在线安装地址：http://goclipse.github.io/releases/
-eclipse+goclipse安装后不能联想和跳转问题解决
-Window-&gt;Preferences-&gt;Go
-指定$GOPATH 和$GOROOT
-<img src="https://xiazemin.github.io/MyBlog/img/goclipse.png" /></p>
+<p>　　单播在网络中得到了广泛的应用，网络上绝大部分的数据都是以单播的形式传输的，只是一般网络用户不知道而已。例如，你在收发电子邮件、浏览网页时，必须与邮件服务器、Web服务器建立连接，此时使用的就是单播数据传输方式。但是通常使用“点对点通信”（Point to Point）代替“单播”，因为“单播”一般与“多播”和“广播”相对应使用
+　　　“多播”也可以称为“组播”，在网络技术的应用并不是很多，网上视频会议、网上视频点播特别适合采用多播方式。因为如果采用单播方式，逐个节点传输，有多少个目标节点，就会有多少次传送过程，这种方式显然效率极低，是不可取的；如果采用不区分目标、全部发送的广播方式，虽然一次可以传送完数据，但是显然达不到区分特定数据接收对象的目的。采用多播方式，既可以实现一次传送所有目标节点的数据，也可以达到只对特定对象传送数据的目的。</p>
 
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/web/2017/12/24/goclipse.html" style="color:green">阅读全文</a>
-						
-					</div>								
-			</div>
-			<br/>
-			<hr/>
-			<div class="post-list" style="list-style-type: none;">			
-				 	
-					<h2>
-						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/web/2017/12/22/tcp_flag.html">tcp_flag</a>
-					</h2>
-					<div class="author" style="margin-top: -10px;">Posted by
-						<i class="fa fa-user"></i>
-						<a href="/MyBlog/web/2017/12/22/tcp_flag.html"> 夏泽民</a>
-						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Dec 22, 2017
-						</span>
-					</div>
-					<div class="excerpt"><!-- more -->
-<p>在TCP层，有个FLAGS字段，这个字段有以下几个标识：SYN, FIN, ACK, PSH, RST, URG.</p>
-
-</div>
-					<div class="readmore" style="float: right;">
-						
-							<a href="/MyBlog/web/2017/12/22/tcp_flag.html" style="color:green">阅读全文</a>
-						
-					</div>								
-			</div>
-			<br/>
-			<hr/>
-			<div class="post-list" style="list-style-type: none;">			
-				 	
-					<h2>
-						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/web/2017/12/22/short_url.html">url短链</a>
-					</h2>
-					<div class="author" style="margin-top: -10px;">Posted by
-						<i class="fa fa-user"></i>
-						<a href="/MyBlog/web/2017/12/22/short_url.html"> 夏泽民</a>
-						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Dec 22, 2017
-						</span>
-					</div>
-					<div class="excerpt"><p>什么是短链接 🔗
-就是把普通网址，转换成比较短的网址。比如：http://t.cn/RlB2PdD 这种，在微博这些限制字数的应用里。好处不言而喻。短、字符少、美观、便于发布、传播。</p>
-
-</div>
-					<div class="readmore" style="float: right;">
-						
-							<a href="/MyBlog/web/2017/12/22/short_url.html" style="color:green">阅读全文</a>
-						
-					</div>								
-			</div>
-			<br/>
-			<hr/>
-			<div class="post-list" style="list-style-type: none;">			
-				 	
-					<h2>
-						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/linux/2017/12/22/pid_0_1.html">ID为0和ID为1的进程</a>
-					</h2>
-					<div class="author" style="margin-top: -10px;">Posted by
-						<i class="fa fa-user"></i>
-						<a href="/MyBlog/linux/2017/12/22/pid_0_1.html"> 夏泽民</a>
-						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Dec 22, 2017
-						</span>
-					</div>
-					<div class="excerpt"><!-- more -->
-<p>ID为0的进程通常是调度进程，常常被称为交换进程（swapper）。该进程是内核的一部分，它并不执行任何磁盘上的程序，因此也被称为系统进程。
-ID为1的进程，通常是init进程，在自举过程结束时由内核调用。该进程的程序文件，在UNIX早起版本中是/etc/init，在较新的版本中是/sbin/init。该进程负责在自举内核后启动一个UNIX系统。init通常读与系统有关的初始化文件（/etc/rc*文件或/etc/inittab文件，以及/etc/init.d中的文件），并将系统引导到一个状态。init 进程绝不会终止，它是一个普通的用户进程（与交换进程不同，它不是内核的系统进程）但是它以超级用户特权运行。 ——摘自APUE
-父进程ID为0的进程通常是内核进程，它们作为系统自举过程的一部分而启动，但init进程是个例外，它的父进程是0，但是它是用户进程。</p>
-
-</div>
-					<div class="readmore" style="float: right;">
-						
-							<a href="/MyBlog/linux/2017/12/22/pid_0_1.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/linux/2017/12/30/broad_cast.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -2393,6 +2384,14 @@ ID为1的进程，通常是init进程，在自举过程结束时由内核调用�
 			  
 			    
 			      <a href="/MyBlog/page526/">526</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page527/">527</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page528/">528</a>
 			    
 			  
 
@@ -5054,6 +5053,16 @@ ID为1的进程，通常是init进程，在自举过程结束时由内核调用�
 						  
 						
 
+						  
+							<li><a href="/MyBlog/page527">527</a></li>
+						  
+						
+
+						  
+							<li><a href="/MyBlog/page528">528</a></li>
+						  
+						
+
 						
 						  <li><a href="/MyBlog/page503">Next</a></li>
 						
@@ -5103,6 +5112,14 @@ ID为1的进程，通常是init进程，在自举过程结束时由内核调用�
 							
 							
 							{
+							"title" : "gdb tui - ",
+							"url" : "/MyBlog/golang/2021/08/15/tui.html"
+							}
+							
+							,
+							
+							
+							{
 							"title" : "opentracing - ",
 							"url" : "/MyBlog/golang/2021/08/15/trace.html"
 							}
@@ -5119,6 +5136,22 @@ ID为1的进程，通常是init进程，在自举过程结束时由内核调用�
 							
 							
 							{
+							"title" : "sync.pool - ",
+							"url" : "/MyBlog/golang/2021/08/15/sync.pool.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "singleflight - ",
+							"url" : "/MyBlog/golang/2021/08/15/singleflight.html"
+							}
+							
+							,
+							
+							
+							{
 							"title" : "上下文切换的开销在哪里 - ",
 							"url" : "/MyBlog/golang/2021/08/15/shed.html"
 							}
@@ -5127,8 +5160,24 @@ ID为1的进程，通常是init进程，在自举过程结束时由内核调用�
 							
 							
 							{
+							"title" : "restfull - ",
+							"url" : "/MyBlog/golang/2021/08/15/restfull.html"
+							}
+							
+							,
+							
+							
+							{
 							"title" : "TP-Link路由器怎么reset - ",
 							"url" : "/MyBlog/web/2021/08/15/reset.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "ranking - ",
+							"url" : "/MyBlog/algorithm/2021/08/15/ranking.html"
 							}
 							
 							,
@@ -5167,6 +5216,14 @@ ID为1的进程，通常是init进程，在自举过程结束时由内核调用�
 							
 							
 							{
+							"title" : "MSE、RMSE、MAE、R-Squared - ",
+							"url" : "/MyBlog/algorithm/2021/08/15/mse.html"
+							}
+							
+							,
+							
+							
+							{
 							"title" : "monorepo - ",
 							"url" : "/MyBlog/web/2021/08/15/monorepo.html"
 							}
@@ -5175,8 +5232,24 @@ ID为1的进程，通常是init进程，在自举过程结束时由内核调用�
 							
 							
 							{
+							"title" : "k8s loadbalance - ",
+							"url" : "/MyBlog/k8s/2021/08/15/loadbalance.html"
+							}
+							
+							,
+							
+							
+							{
 							"title" : "knative serverless - ",
 							"url" : "/MyBlog/k8s/2021/08/15/knative.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "jmeter - ",
+							"url" : "/MyBlog/web/2021/08/15/jemeter.html"
 							}
 							
 							,
@@ -5217,6 +5290,22 @@ ID为1的进程，通常是init进程，在自举过程结束时由内核调用�
 							{
 							"title" : "gocyclo - ",
 							"url" : "/MyBlog/golang/2021/08/15/gocyclo.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "gdb in docker - ",
+							"url" : "/MyBlog/docker/2021/08/15/gdb.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "flatbuffers - ",
+							"url" : "/MyBlog/storage/2021/08/15/flatbuffers.html"
 							}
 							
 							,
@@ -5271,6 +5360,14 @@ ID为1的进程，通常是init进程，在自举过程结束时由内核调用�
 							
 							
 							{
+							"title" : "colly - ",
+							"url" : "/MyBlog/golang/2021/08/15/colly.html"
+							}
+							
+							,
+							
+							
+							{
 							"title" : "codeql - ",
 							"url" : "/MyBlog/web/2021/08/15/codeql.html"
 							}
@@ -5287,8 +5384,24 @@ ID为1的进程，通常是init进程，在自举过程结束时由内核调用�
 							
 							
 							{
+							"title" : "c10m - ",
+							"url" : "/MyBlog/web/2021/08/15/c10m.html"
+							}
+							
+							,
+							
+							
+							{
 							"title" : "axeslide - ",
 							"url" : "/MyBlog/node/2021/08/15/axeslide.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "plan 9 汇编 - ",
+							"url" : "/MyBlog/golang/2021/08/15/assembly.html"
 							}
 							
 							,
@@ -5345,6 +5458,14 @@ ID为1的进程，通常是init进程，在自举过程结束时由内核调用�
 							{
 							"title" : "Ardb redis geohash - ",
 							"url" : "/MyBlog/storage/2021/08/15/Ardb.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "408 - ",
+							"url" : "/MyBlog/web/2021/08/15/408.html"
 							}
 							
 							,
@@ -26199,7 +26320,7 @@ ID为1的进程，通常是init进程，在自举过程结束时由内核调用�
 								
 								
 									<a class="bold" href="/MyBlog/category/web">
-										web (269)
+										web (272)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -26262,7 +26383,7 @@ ID为1的进程，通常是init进程，在自举过程结束时由内核调用�
 								
 								
 									<a class="bold" href="/MyBlog/category/storage">
-										storage (245)
+										storage (246)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -26271,7 +26392,7 @@ ID为1的进程，通常是init进程，在自举过程结束时由内核调用�
 								
 								
 									<a class="bold" href="/MyBlog/category/golang">
-										golang (960)
+										golang (966)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -26298,7 +26419,7 @@ ID为1的进程，通常是init进程，在自举过程结束时由内核调用�
 								
 								
 									<a class="bold" href="/MyBlog/category/docker">
-										docker (70)
+										docker (71)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -26334,7 +26455,7 @@ ID为1的进程，通常是init进程，在自举过程结束时由内核调用�
 								
 								
 									<a class="bold" href="/MyBlog/category/algorithm">
-										algorithm (118)
+										algorithm (120)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -26361,7 +26482,7 @@ ID为1的进程，通常是init进程，在自举过程结束时由内核调用�
 								
 								
 									<a class="bold" href="/MyBlog/category/k8s">
-										k8s (53)
+										k8s (54)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -26475,6 +26596,10 @@ ID为1的进程，通常是init进程，在自举过程结束时由内核调用�
 									</li>
 									  
 								   <li>
+										<a href="/MyBlog/golang/2021/08/15/tui.html" style="font-size:40px;"> gdb tui</a>
+									</li>
+									  
+								   <li>
 										<a href="/MyBlog/golang/2021/08/15/trace.html" style="font-size:40px;"> opentracing</a>
 									</li>
 									  
@@ -26483,11 +26608,27 @@ ID为1的进程，通常是init进程，在自举过程结束时由内核调用�
 									</li>
 									  
 								   <li>
+										<a href="/MyBlog/golang/2021/08/15/sync.pool.html" style="font-size:40px;"> sync.pool</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/golang/2021/08/15/singleflight.html" style="font-size:40px;"> singleflight</a>
+									</li>
+									  
+								   <li>
 										<a href="/MyBlog/golang/2021/08/15/shed.html" style="font-size:40px;"> 上下文切换的开销在哪里</a>
 									</li>
 									  
 								   <li>
+										<a href="/MyBlog/golang/2021/08/15/restfull.html" style="font-size:40px;"> restfull</a>
+									</li>
+									  
+								   <li>
 										<a href="/MyBlog/web/2021/08/15/reset.html" style="font-size:40px;"> TP-Link路由器怎么reset</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/algorithm/2021/08/15/ranking.html" style="font-size:40px;"> ranking</a>
 									</li>
 									  
 								   <li>
@@ -26507,11 +26648,23 @@ ID为1的进程，通常是init进程，在自举过程结束时由内核调用�
 									</li>
 									  
 								   <li>
+										<a href="/MyBlog/algorithm/2021/08/15/mse.html" style="font-size:40px;"> MSE、RMSE、MAE、R-Squared</a>
+									</li>
+									  
+								   <li>
 										<a href="/MyBlog/web/2021/08/15/monorepo.html" style="font-size:40px;"> monorepo</a>
 									</li>
 									  
 								   <li>
+										<a href="/MyBlog/k8s/2021/08/15/loadbalance.html" style="font-size:40px;"> k8s loadbalance</a>
+									</li>
+									  
+								   <li>
 										<a href="/MyBlog/k8s/2021/08/15/knative.html" style="font-size:40px;"> knative serverless</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/web/2021/08/15/jemeter.html" style="font-size:40px;"> jmeter</a>
 									</li>
 									  
 								   <li>
@@ -26532,6 +26685,14 @@ ID为1的进程，通常是init进程，在自举过程结束时由内核调用�
 									  
 								   <li>
 										<a href="/MyBlog/golang/2021/08/15/gocyclo.html" style="font-size:40px;"> gocyclo</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/docker/2021/08/15/gdb.html" style="font-size:40px;"> gdb in docker</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/storage/2021/08/15/flatbuffers.html" style="font-size:40px;"> flatbuffers</a>
 									</li>
 									  
 								   <li>
@@ -26559,6 +26720,10 @@ ID为1的进程，通常是init进程，在自举过程结束时由内核调用�
 									</li>
 									  
 								   <li>
+										<a href="/MyBlog/golang/2021/08/15/colly.html" style="font-size:40px;"> colly</a>
+									</li>
+									  
+								   <li>
 										<a href="/MyBlog/web/2021/08/15/codeql.html" style="font-size:40px;"> codeql</a>
 									</li>
 									  
@@ -26567,63 +26732,19 @@ ID为1的进程，通常是init进程，在自举过程结束时由内核调用�
 									</li>
 									  
 								   <li>
+										<a href="/MyBlog/web/2021/08/15/c10m.html" style="font-size:40px;"> c10m</a>
+									</li>
+									  
+								   <li>
 										<a href="/MyBlog/node/2021/08/15/axeslide.html" style="font-size:40px;"> axeslide</a>
 									</li>
 									  
 								   <li>
+										<a href="/MyBlog/golang/2021/08/15/assembly.html" style="font-size:40px;"> plan 9 汇编</a>
+									</li>
+									  
+								   <li>
 										<a href="/MyBlog/architect/2021/08/15/Repository.html" style="font-size:40px;"> DDD Repository模式</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/node/2021/08/15/Luckysheet.html" style="font-size:40px;"> Luckysheet</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/k8s/2021/08/15/Kompose.html" style="font-size:40px;"> Kompose 将 Docker Compose 文件转换为 Kubernetes 资源</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/storage/2021/08/15/IGNORE.html" style="font-size:40px;"> 防止主键冲突报错-ignore</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/node/2021/08/15/Generator.html" style="font-size:40px;"> Generator</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2021/08/15/BeautifulSoup.html" style="font-size:40px;"> 爬虫html解析</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/storage/2021/08/15/Ardb.html" style="font-size:40px;"> Ardb redis geohash</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/node/2021/08/14/webpack.html" style="font-size:40px;"> vue init webpack project 一直处于...downloading template状态处理</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/node/2021/08/14/vue.html" style="font-size:40px;"> vue</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/node/2021/08/14/ssr.html" style="font-size:40px;"> 服务器端渲染 (SSR)</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/node/2021/08/14/quill.html" style="font-size:40px;"> quill 文本编辑器</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/web/2021/08/14/jekyll.html" style="font-size:40px;"> jekyll</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/web/2021/08/14/github_token.html" style="font-size:40px;"> github不再支持密码方式登录需要用token</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/web/2021/07/10/hub.html" style="font-size:40px;"> 路由器，集线器，交换机，网桥，光猫</a>
 									</li>
 									
 								</ul>
@@ -26652,6 +26773,12 @@ ID为1的进程，通常是init进程，在自举过程结束时由内核调用�
 							  
 							   <li>  
 								   <span>15 Aug 2021</span>
+								   <a href="/MyBlog/golang/2021/08/15/tui.html">  
+								   gdb tui</a>  
+							   </li>  
+							  
+							   <li>  
+								   <span>15 Aug 2021</span>
 								   <a href="/MyBlog/golang/2021/08/15/trace.html">  
 								   opentracing</a>  
 							   </li>  
@@ -26660,12 +26787,6 @@ ID为1的进程，通常是init进程，在自举过程结束时由内核调用�
 								   <span>15 Aug 2021</span>
 								   <a href="/MyBlog/web/2021/08/15/system.html">  
 								   系统集成商</a>  
-							   </li>  
-							  
-							   <li>  
-								   <span>15 Aug 2021</span>
-								   <a href="/MyBlog/golang/2021/08/15/shed.html">  
-								   上下文切换的开销在哪里</a>  
 							   </li>  
 							  
 						</ul>

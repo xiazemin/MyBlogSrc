@@ -147,21 +147,27 @@
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/golang/2018/12/25/gdb_.html">gdb 工作原理和内核实现</a>
+						<a class="post-link" href="/MyBlog/linux/2019/01/15/jiffies.html">jiffies</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/golang/2018/12/25/gdb_.html"> 夏泽民</a>
+						<a href="/MyBlog/linux/2019/01/15/jiffies.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Dec 25, 2018
+							Jan 15, 2019
 						</span>
 					</div>
-					<div class="excerpt"><p>gdb主要功能的实现依赖于一个系统函数ptrace，通过man手册可以了解到，ptrace可以让父进程观察和控制其子进程的检查、执行，改变其寄存器和内存的内容，主要应用于打断点（也是gdb的主要功能）和打印系统调用轨迹。</p>
+					<div class="excerpt"><p>HZ
+Linux核心每隔固定周期会发出timer interrupt (IRQ 0)，HZ是用来定义每一秒有几次timer interrupts。举例来说，HZ为1000，代表每秒有1000次timer interrupts。 HZ可在编译核心时设定，如下所示(以核心版本2.6.20-15为例)： 
+:~$ cd /usr/src/linux 
+:/usr/src/linux$ make menuconfig 
+ Processor type and features —&gt; Timer frequency (250 HZ) —&gt; 
+ Tick
+Tick是HZ的倒数，意即timer interrupt每发生一次中断的时间。如HZ为250时，tick为4毫秒(millisecond)。</p>
 
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/golang/2018/12/25/gdb_.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/linux/2019/01/15/jiffies.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -171,21 +177,32 @@
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/golang/2018/12/25/gdb.html">gdb 调试golang</a>
+						<a class="post-link" href="/MyBlog/linux/2019/01/15/clock_event_device.html">clock_event_device</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/golang/2018/12/25/gdb.html"> 夏泽民</a>
+						<a href="/MyBlog/linux/2019/01/15/clock_event_device.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Dec 25, 2018
+							Jan 15, 2019
 						</span>
 					</div>
-					<div class="excerpt"><p>编译过的二进制文件已经包含了 DWARFv3 调试信息，只要 GDB7.1 以上版本都可以进行调试。 在OSX下，如无法执行调试指令，可尝试用sudo方式执行gdb。</p>
+					<div class="excerpt"><p>早期的内核版本中，进程的调度基于一个称之为tick的时钟滴答，通常使用时钟中断来定时地产生tick信号，每次tick定时中断都会进行进程的统计和调度，并对tick进行计数，记录在一个jiffies变量中，定时器的设计也是基于jiffies。这时候的内核代码中，几乎所有关于时钟的操作都是在machine级的代码中实现，很多公共的代码要在每个平台上重复实现。随后，随着通用时钟框架的引入，内核需要支持高精度的定时器，为此，通用时间框架为定时器硬件定义了一个标准的接口：clock_event_device，machine级的代码只要按这个标准接口实现相应的硬件控制功能，剩下的与平台无关的特性则统一由通用时间框架层来实现。
+<!-- more --></p>
+<ol>
+  <li> 时钟事件软件架构
+本系列文章的第一节中，我们曾经讨论了时钟源设备：clocksource，现在又来一个时钟事件设备：clock_event_device，它们有何区别？看名字，好像都是给系统提供时钟的设备，实际上，clocksource不能被编程，没有产生事件的能力，它主要被用于timekeeper来实现对真实时间进行精确的统计，而clock_event_device则是可编程的，它可以工作在周期触发或单次触发模式，系统可以对它进行编程，以确定下一次事件触发的时间，clock_event_device主要用于实现普通定时器和高精度定时器，同时也用于产生tick事件，供给进程调度子系统使用。时钟事件设备与通用时间框架中的其他模块的关系如下图所示：
+<img src="https://xiazemin.github.io/MyBlog/img/clock_event_device.png" />
+与clocksource一样，系统中可以存在多个clock_event_device，系统会根据它们的精度和能力，选择合适的clock_event_device对系统提供时钟事件服务。在smp系统中，为了减少处理器间的通信开销，基本上每个cpu都会具备一个属于自己的本地clock_event_device，独立地为该cpu提供时钟事件服务，smp中的每个cpu基于本地的clock_event_device，建立自己的tick_device，普通定时器和高精度定时器。
+在软件架构上看，clock_event_device被分为了两层，与硬件相关的被放在了machine层，而与硬件无关的通用代码则被集中到了通用时间框架层，这符合内核对软件的设计需求，平台的开发者只需实现平台相关的接口即可，无需关注复杂的上层时间框架。
+tick_device是基于clock_event_device的进一步封装，用于代替原有的时钟滴答中断，给内核提供tick事件，以完成进程的调度和进程信息统计，负载平衡和时间更新等操作。
+struct clock_event_device
+时钟事件设备的核心数据结构是clock_event_device结构，它代表着一个时钟硬件设备，该设备就好像是一个具有事件触发能力（通常就是指中断）的clocksource，它不停地计数，当计数值达到预先编程设定的数值那一刻，会引发一个时钟事件中断，继而触发该设备的事件处理回调函数，以完成对时钟事件的处理。clock_event_device结构的定义如下：</li>
+</ol>
 
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/golang/2018/12/25/gdb.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/linux/2019/01/15/clock_event_device.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -195,23 +212,21 @@
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/golang/2018/12/24/go-bindata.html">go-bindata Go 语言打包静态文件</a>
+						<a class="post-link" href="/MyBlog/linux/2019/01/15/callout.html">时间轮算法</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/golang/2018/12/24/go-bindata.html"> 夏泽民</a>
+						<a href="/MyBlog/linux/2019/01/15/callout.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Dec 24, 2018
+							Jan 15, 2019
 						</span>
 					</div>
-					<div class="excerpt"><p>https://github.com/jteeuwen/go-bindata
-go get -u github.com/jteeuwen/go-bindata/…
-执行后仍然没有找到go-bindata命令</p>
+					<div class="excerpt"><p>内核自身的正常运行也依赖于时钟系统。Linux 是一个典型的分时系统，CPU 时间被分成多个时间片，这是多任务实现的基础。Linux 内核依赖 tick，即时钟中断来进行分时。</p>
 
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/golang/2018/12/24/go-bindata.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/linux/2019/01/15/callout.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -221,22 +236,21 @@ go get -u github.com/jteeuwen/go-bindata/…
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/golang/2018/12/24/esc.html">esc</a>
+						<a class="post-link" href="/MyBlog/architect/2019/01/13/ddd.html">ddd</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/golang/2018/12/24/esc.html"> 夏泽民</a>
+						<a href="/MyBlog/architect/2019/01/13/ddd.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Dec 24, 2018
+							Jan 13, 2019
 						</span>
 					</div>
-					<div class="excerpt"><p>https://github.com/mjibson/esc
-https://mattjibson.com/esc/</p>
+					<div class="excerpt"><p>2004年Eric Evans 发表Domain-Driven Design –Tackling Complexity in the Heart of Software （领域驱动设计），简称Evans DDD。领域驱动设计分为两个阶段：</p>
 
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/golang/2018/12/24/esc.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/architect/2019/01/13/ddd.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -246,21 +260,21 @@ https://mattjibson.com/esc/</p>
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/golang/2018/12/24/Generate.html">go Generate</a>
+						<a class="post-link" href="/MyBlog/architect/2019/01/13/4color.html">4色图</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/golang/2018/12/24/Generate.html"> 夏泽民</a>
+						<a href="/MyBlog/architect/2019/01/13/4color.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Dec 24, 2018
+							Jan 13, 2019
 						</span>
 					</div>
-					<div class="excerpt"><p>在有些场景下，我们会使用go generate：</p>
+					<div class="excerpt"><p>在图论的基本理论中，有加权顶点的概念。顶点具有的与之相关的数，称为权（weight）；该顶点称为加权顶点。</p>
 
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/golang/2018/12/24/Generate.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/architect/2019/01/13/4color.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -2380,6 +2394,14 @@ https://mattjibson.com/esc/</p>
 			  
 			    
 			      <a href="/MyBlog/page526/">526</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page527/">527</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page528/">528</a>
 			    
 			  
 
@@ -5041,6 +5063,16 @@ https://mattjibson.com/esc/</p>
 						  
 						
 
+						  
+							<li><a href="/MyBlog/page527">527</a></li>
+						  
+						
+
+						  
+							<li><a href="/MyBlog/page528">528</a></li>
+						  
+						
+
 						
 						  <li><a href="/MyBlog/page423">Next</a></li>
 						
@@ -5090,6 +5122,14 @@ https://mattjibson.com/esc/</p>
 							
 							
 							{
+							"title" : "gdb tui - ",
+							"url" : "/MyBlog/golang/2021/08/15/tui.html"
+							}
+							
+							,
+							
+							
+							{
 							"title" : "opentracing - ",
 							"url" : "/MyBlog/golang/2021/08/15/trace.html"
 							}
@@ -5106,6 +5146,22 @@ https://mattjibson.com/esc/</p>
 							
 							
 							{
+							"title" : "sync.pool - ",
+							"url" : "/MyBlog/golang/2021/08/15/sync.pool.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "singleflight - ",
+							"url" : "/MyBlog/golang/2021/08/15/singleflight.html"
+							}
+							
+							,
+							
+							
+							{
 							"title" : "上下文切换的开销在哪里 - ",
 							"url" : "/MyBlog/golang/2021/08/15/shed.html"
 							}
@@ -5114,8 +5170,24 @@ https://mattjibson.com/esc/</p>
 							
 							
 							{
+							"title" : "restfull - ",
+							"url" : "/MyBlog/golang/2021/08/15/restfull.html"
+							}
+							
+							,
+							
+							
+							{
 							"title" : "TP-Link路由器怎么reset - ",
 							"url" : "/MyBlog/web/2021/08/15/reset.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "ranking - ",
+							"url" : "/MyBlog/algorithm/2021/08/15/ranking.html"
 							}
 							
 							,
@@ -5154,6 +5226,14 @@ https://mattjibson.com/esc/</p>
 							
 							
 							{
+							"title" : "MSE、RMSE、MAE、R-Squared - ",
+							"url" : "/MyBlog/algorithm/2021/08/15/mse.html"
+							}
+							
+							,
+							
+							
+							{
 							"title" : "monorepo - ",
 							"url" : "/MyBlog/web/2021/08/15/monorepo.html"
 							}
@@ -5162,8 +5242,24 @@ https://mattjibson.com/esc/</p>
 							
 							
 							{
+							"title" : "k8s loadbalance - ",
+							"url" : "/MyBlog/k8s/2021/08/15/loadbalance.html"
+							}
+							
+							,
+							
+							
+							{
 							"title" : "knative serverless - ",
 							"url" : "/MyBlog/k8s/2021/08/15/knative.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "jmeter - ",
+							"url" : "/MyBlog/web/2021/08/15/jemeter.html"
 							}
 							
 							,
@@ -5204,6 +5300,22 @@ https://mattjibson.com/esc/</p>
 							{
 							"title" : "gocyclo - ",
 							"url" : "/MyBlog/golang/2021/08/15/gocyclo.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "gdb in docker - ",
+							"url" : "/MyBlog/docker/2021/08/15/gdb.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "flatbuffers - ",
+							"url" : "/MyBlog/storage/2021/08/15/flatbuffers.html"
 							}
 							
 							,
@@ -5258,6 +5370,14 @@ https://mattjibson.com/esc/</p>
 							
 							
 							{
+							"title" : "colly - ",
+							"url" : "/MyBlog/golang/2021/08/15/colly.html"
+							}
+							
+							,
+							
+							
+							{
 							"title" : "codeql - ",
 							"url" : "/MyBlog/web/2021/08/15/codeql.html"
 							}
@@ -5274,8 +5394,24 @@ https://mattjibson.com/esc/</p>
 							
 							
 							{
+							"title" : "c10m - ",
+							"url" : "/MyBlog/web/2021/08/15/c10m.html"
+							}
+							
+							,
+							
+							
+							{
 							"title" : "axeslide - ",
 							"url" : "/MyBlog/node/2021/08/15/axeslide.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "plan 9 汇编 - ",
+							"url" : "/MyBlog/golang/2021/08/15/assembly.html"
 							}
 							
 							,
@@ -5332,6 +5468,14 @@ https://mattjibson.com/esc/</p>
 							{
 							"title" : "Ardb redis geohash - ",
 							"url" : "/MyBlog/storage/2021/08/15/Ardb.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "408 - ",
+							"url" : "/MyBlog/web/2021/08/15/408.html"
 							}
 							
 							,
@@ -26186,7 +26330,7 @@ https://mattjibson.com/esc/</p>
 								
 								
 									<a class="bold" href="/MyBlog/category/web">
-										web (269)
+										web (272)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -26249,7 +26393,7 @@ https://mattjibson.com/esc/</p>
 								
 								
 									<a class="bold" href="/MyBlog/category/storage">
-										storage (245)
+										storage (246)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -26258,7 +26402,7 @@ https://mattjibson.com/esc/</p>
 								
 								
 									<a class="bold" href="/MyBlog/category/golang">
-										golang (960)
+										golang (966)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -26285,7 +26429,7 @@ https://mattjibson.com/esc/</p>
 								
 								
 									<a class="bold" href="/MyBlog/category/docker">
-										docker (70)
+										docker (71)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -26321,7 +26465,7 @@ https://mattjibson.com/esc/</p>
 								
 								
 									<a class="bold" href="/MyBlog/category/algorithm">
-										algorithm (118)
+										algorithm (120)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -26348,7 +26492,7 @@ https://mattjibson.com/esc/</p>
 								
 								
 									<a class="bold" href="/MyBlog/category/k8s">
-										k8s (53)
+										k8s (54)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -26462,6 +26606,10 @@ https://mattjibson.com/esc/</p>
 									</li>
 									  
 								   <li>
+										<a href="/MyBlog/golang/2021/08/15/tui.html" style="font-size:40px;"> gdb tui</a>
+									</li>
+									  
+								   <li>
 										<a href="/MyBlog/golang/2021/08/15/trace.html" style="font-size:40px;"> opentracing</a>
 									</li>
 									  
@@ -26470,11 +26618,27 @@ https://mattjibson.com/esc/</p>
 									</li>
 									  
 								   <li>
+										<a href="/MyBlog/golang/2021/08/15/sync.pool.html" style="font-size:40px;"> sync.pool</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/golang/2021/08/15/singleflight.html" style="font-size:40px;"> singleflight</a>
+									</li>
+									  
+								   <li>
 										<a href="/MyBlog/golang/2021/08/15/shed.html" style="font-size:40px;"> 上下文切换的开销在哪里</a>
 									</li>
 									  
 								   <li>
+										<a href="/MyBlog/golang/2021/08/15/restfull.html" style="font-size:40px;"> restfull</a>
+									</li>
+									  
+								   <li>
 										<a href="/MyBlog/web/2021/08/15/reset.html" style="font-size:40px;"> TP-Link路由器怎么reset</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/algorithm/2021/08/15/ranking.html" style="font-size:40px;"> ranking</a>
 									</li>
 									  
 								   <li>
@@ -26494,11 +26658,23 @@ https://mattjibson.com/esc/</p>
 									</li>
 									  
 								   <li>
+										<a href="/MyBlog/algorithm/2021/08/15/mse.html" style="font-size:40px;"> MSE、RMSE、MAE、R-Squared</a>
+									</li>
+									  
+								   <li>
 										<a href="/MyBlog/web/2021/08/15/monorepo.html" style="font-size:40px;"> monorepo</a>
 									</li>
 									  
 								   <li>
+										<a href="/MyBlog/k8s/2021/08/15/loadbalance.html" style="font-size:40px;"> k8s loadbalance</a>
+									</li>
+									  
+								   <li>
 										<a href="/MyBlog/k8s/2021/08/15/knative.html" style="font-size:40px;"> knative serverless</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/web/2021/08/15/jemeter.html" style="font-size:40px;"> jmeter</a>
 									</li>
 									  
 								   <li>
@@ -26519,6 +26695,14 @@ https://mattjibson.com/esc/</p>
 									  
 								   <li>
 										<a href="/MyBlog/golang/2021/08/15/gocyclo.html" style="font-size:40px;"> gocyclo</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/docker/2021/08/15/gdb.html" style="font-size:40px;"> gdb in docker</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/storage/2021/08/15/flatbuffers.html" style="font-size:40px;"> flatbuffers</a>
 									</li>
 									  
 								   <li>
@@ -26546,6 +26730,10 @@ https://mattjibson.com/esc/</p>
 									</li>
 									  
 								   <li>
+										<a href="/MyBlog/golang/2021/08/15/colly.html" style="font-size:40px;"> colly</a>
+									</li>
+									  
+								   <li>
 										<a href="/MyBlog/web/2021/08/15/codeql.html" style="font-size:40px;"> codeql</a>
 									</li>
 									  
@@ -26554,63 +26742,19 @@ https://mattjibson.com/esc/</p>
 									</li>
 									  
 								   <li>
+										<a href="/MyBlog/web/2021/08/15/c10m.html" style="font-size:40px;"> c10m</a>
+									</li>
+									  
+								   <li>
 										<a href="/MyBlog/node/2021/08/15/axeslide.html" style="font-size:40px;"> axeslide</a>
 									</li>
 									  
 								   <li>
+										<a href="/MyBlog/golang/2021/08/15/assembly.html" style="font-size:40px;"> plan 9 汇编</a>
+									</li>
+									  
+								   <li>
 										<a href="/MyBlog/architect/2021/08/15/Repository.html" style="font-size:40px;"> DDD Repository模式</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/node/2021/08/15/Luckysheet.html" style="font-size:40px;"> Luckysheet</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/k8s/2021/08/15/Kompose.html" style="font-size:40px;"> Kompose 将 Docker Compose 文件转换为 Kubernetes 资源</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/storage/2021/08/15/IGNORE.html" style="font-size:40px;"> 防止主键冲突报错-ignore</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/node/2021/08/15/Generator.html" style="font-size:40px;"> Generator</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2021/08/15/BeautifulSoup.html" style="font-size:40px;"> 爬虫html解析</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/storage/2021/08/15/Ardb.html" style="font-size:40px;"> Ardb redis geohash</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/node/2021/08/14/webpack.html" style="font-size:40px;"> vue init webpack project 一直处于...downloading template状态处理</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/node/2021/08/14/vue.html" style="font-size:40px;"> vue</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/node/2021/08/14/ssr.html" style="font-size:40px;"> 服务器端渲染 (SSR)</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/node/2021/08/14/quill.html" style="font-size:40px;"> quill 文本编辑器</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/web/2021/08/14/jekyll.html" style="font-size:40px;"> jekyll</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/web/2021/08/14/github_token.html" style="font-size:40px;"> github不再支持密码方式登录需要用token</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/web/2021/07/10/hub.html" style="font-size:40px;"> 路由器，集线器，交换机，网桥，光猫</a>
 									</li>
 									
 								</ul>
@@ -26639,6 +26783,12 @@ https://mattjibson.com/esc/</p>
 							  
 							   <li>  
 								   <span>15 Aug 2021</span>
+								   <a href="/MyBlog/golang/2021/08/15/tui.html">  
+								   gdb tui</a>  
+							   </li>  
+							  
+							   <li>  
+								   <span>15 Aug 2021</span>
 								   <a href="/MyBlog/golang/2021/08/15/trace.html">  
 								   opentracing</a>  
 							   </li>  
@@ -26647,12 +26797,6 @@ https://mattjibson.com/esc/</p>
 								   <span>15 Aug 2021</span>
 								   <a href="/MyBlog/web/2021/08/15/system.html">  
 								   系统集成商</a>  
-							   </li>  
-							  
-							   <li>  
-								   <span>15 Aug 2021</span>
-								   <a href="/MyBlog/golang/2021/08/15/shed.html">  
-								   上下文切换的开销在哪里</a>  
 							   </li>  
 							  
 						</ul>

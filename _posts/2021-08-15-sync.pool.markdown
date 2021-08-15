@@ -1,0 +1,59 @@
+---
+title: sync.pool
+layout: post
+category: golang
+author: 夏泽民
+---
+元素池化是常用的性能优化的手段（性能优化的几把斧头：并发，预处理，缓存
+
+创建一个 100 个元素的池，然后就可以在池子里面直接获取到元素，免去了申请和初始化的流程，大大提高了性能。释放元素也是直接丢回池子而免去了真正释放元素带来的开销。
+
+sync.Pool 除了最常见的池化提升性能的思路，最重要的是减少 GC 。常用于一些对象实例创建昂贵的场景。注意，Pool 是 Goroutine 并发安全的。
+
+Get 方法会返回 Pool 已经存在的对象，如果没有，那么就走慢路径，也就是调用初始化的时候定义的 New 方法（也就是最开始定义的初始化行为）来初始化一个对象。
+
+使用对象之后，调用 Put 方法声明把对象放回池子。注意了，这个调用之后仅仅是把这个对象放回池子，池子里面的对象啥时候真正释放外界是不清楚的，是不受外部控制的。
+<!-- more -->
+
+sync.Pool 本质用途是增加临时对象的重用率，减少 GC 负担；
+不能对 Pool.Get 出来的对象做预判，有可能是新的（新分配的），有可能是旧的（之前人用过，然后 Put 进去的）；
+不能对 Pool 池里的元素个数做假定，你不能够；
+sync.Pool 本身的 Get, Put 调用是并发安全的，sync.New 指向的初始化函数会并发调用，里面安不安全只有自己知道；
+当用完一个从 Pool 取出的实例时候，一定要记得调用 Put，否则 Pool 无法复用这个实例，通常这个用 defer 完成
+
+
+
+https://mp.weixin.qq.com/s?__biz=Mzg3NTU3OTgxOA==&mid=2247487011&idx=1&sn=a39e1cb829c5e5f504e096794e6c91da&chksm=cf3e1ee6f84997f0a8cae728d88e3f531ac1cd122a3a303c98fea4838f8e699f8fd9ab9f7446&scene=21#wechat_redirect
+
+https://mp.weixin.qq.com/s/u0HZYgPVec9CET5d4wTPbA
+
+```
+type Pool struct {
+    // 用于检测 Pool 池是否被 copy，因为 Pool 不希望被 copy；
+    // 有了这个字段之后，可用用 go vet 工具检测，在编译期间就发现问题；
+    noCopy noCopy   
+    
+    // 数组结构，对应每个 P，数量和 P 的数量一致；
+    local     unsafe.Pointer 
+    localSize uintptr        
+
+    // GC 到时，victim 和 victimSize 会分别接管 local 和 localSize；
+    // victim 的目的是为了减少 GC 后冷启动导致的性能抖动，让分配对象更平滑；
+    victim     unsafe.Pointer 
+    victimSize uintptr      
+
+    // 对象初始化构造方法，使用方定义
+    New func() interface{}
+}
+```
+
+有几个注意点：
+
+noCopy 为了防止 copy 加的打桩代码，但这个阻止不了编译，只能通过 go vet 检查出来；
+local 和 localSize 这两个字段实现了一个数组，数组元素为 poolLocal 结构，用来管理临时对象；
+victim 和 victimSize  这个是在 poolCleanup 流程里赋值了，赋值的内容就是 local  和 localSize 。victim 机制是把 Pool 池的清理由一轮 GC 改成 两轮 GC，进而提高对象的复用率，减少抖动；
+使用方只能赋值 New 字段，定义对象初始化构造行为；
+
+
+
+
