@@ -100,6 +100,53 @@ Traceback (most recent call last):
   File "/Users/xiazemin/MockingBird/toolbox/ui.py", line 339, in populate_models
     raise Exception("No synthesizer models found in %s" % synthesizer_models_dir)
 Exception: No synthesizer models found in synthesizer/saved_models
+
+
+https://pythonrepo.com/repo/babysor-MockingBird-python-natural-language-processing
+
+https://github.com/CorentinJ/Real-Time-Voice-Cloning/issues/524
+
+
+https://github.com/CorentinJ/Real-Time-Voice-Cloning
+https://github.com/fatchord/WaveRNN
+
+
+  % python3 vocoder_preprocess.py Realtime-Voice-Clone-Chinese训练模型
   
+  FileNotFoundError: [Errno 2] No such file or directory: 'synthesizer/saved_models/train3/train3.pt'
+  
+  https://zhuanlan.zhihu.com/p/404850933
+  
+  https://blog.csdn.net/weixin_41010198/article/details/113186232
+  
+   mkdir -p synthesizer/saved_models/logs-pretrained
+   
+    % cp -r Realtime-Voice-Clone-Chinese训练模型/synthesizer/saved_models  synthesizer/
+    
+    问题解决
+    
+    https://segmentfault.com/a/1190000040617552
+    
+    https://github.com/babysor/MockingBird/wiki
+    
+    https://blog.csdn.net/weixin_41010198/article/details/113186232
+    
+    https://github.com/babysor/MockingBird
+    https://github.com/fatchord/WaveRNN
+    https://github.com/babysor/MockingBird/wiki/Quick-Start-(Newbie)
+    https://github.com/babysor/MockingBird/wiki/Training-Tips#aidatatang_200zh
+    https://github.com/babysor/MockingBird/wiki/Quick-Start-(Newbie)
+    
+    https://github.com/babysor/MockingBird/wiki
+    
+     python3  demo_toolbox.py -d ./samples
+     
+     确保界面左边中间的 synthesizer 选择了上一步中 xxx.pt 文件对应的模型。
+点击Record录入你的5秒语音
+输入任意文字
+点击 Synthesizer and vocode 等待效果输出
+
+
+
  
  

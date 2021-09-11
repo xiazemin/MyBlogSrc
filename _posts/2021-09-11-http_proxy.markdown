@@ -1,0 +1,29 @@
+---
+title: http_proxy
+layout: post
+category: linux
+author: 夏泽民
+---
+对于curl,wget等命令,会受http_proxy和https_proxy的环境变量的影响
+vi /etc/profile 
+#设置http代理
+http_proxy=http://172.16.2.1:8000
+#设置https代理
+https_proxy=http://172.16.2.1:8000
+#设置不通过代理服务器链接
+no_proxy=*.xxx.com,10.*,www.baidu.com
+export all_proxy=http://proxy.example.com:8080
+<!-- more -->
+https://blog.csdn.net/weixin_42488171/article/details/108742570
+https://keqingrong.cn/blog/2021-02-19-proxy-and-pac/
+
+https://www.jianshu.com/p/81c90d9cb69f
+
+https://www.kaifa99.com/ubuntu/article_161591
+
+https://github.com/Newlearner365/Surge-config
+
+
+
+
+
