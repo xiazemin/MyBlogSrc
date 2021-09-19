@@ -147,28 +147,22 @@
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/linux/2019/07/21/tty.html">tty stdin stdout stderr</a>
+						<a class="post-link" href="/MyBlog/storage/2019/08/08/mvcc.html">MVCC 、CAS 和CopyOnWrite</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/linux/2019/07/21/tty.html"> 夏泽民</a>
+						<a href="/MyBlog/storage/2019/08/08/mvcc.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Jul 21, 2019
+							Aug 8, 2019
 						</span>
 					</div>
-					<div class="excerpt"><p>stdin是针对你的应用程序的，/dev/tty是针对设备的入口
-正常情况下stdin bind到/dev/tty,但是stdin不一定是/dev/tty
-比如在cgi环境中
-#include “apue.h”
-查看句柄是不是tty
- if(isatty(0)){
- 获取tty名字
-    name = ttyname(0);</p>
+					<div class="excerpt"><!-- more -->
+<p>update一行的时候的时候不是in-place的修改，而是产生一个行的新版本，在新行上修改，最后有点类似copy on write array，在提交的时候切换到新版本。好处是不影响现有数据的读取，一致性好。</p>
 
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/linux/2019/07/21/tty.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/storage/2019/08/08/mvcc.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -178,102 +172,28 @@
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/golang/2019/07/21/tiny.html">tiny compiler</a>
+						<a class="post-link" href="/MyBlog/golang/2019/08/08/mutex.html">mutex</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/golang/2019/07/21/tiny.html"> 夏泽民</a>
+						<a href="/MyBlog/golang/2019/08/08/mutex.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Jul 21, 2019
+							Aug 8, 2019
 						</span>
 					</div>
-					<div class="excerpt"><p>https://github.com/xiazemin/the-super-tiny-compiler-1/blob/master/compiler.go
-https://github.com/xiazemin/the-super-tiny-compiler
-https://adampresley.github.io/2015/06/01/writing-a-lexer-and-parser-in-go-part-3.html
-https://adampresley.github.io/2015/06/01/writing-a-lexer-and-parser-in-go-part-2.html
-https://adampresley.github.io/2015/06/01/writing-a-lexer-and-parser-in-go-part-1.html
+					<div class="excerpt"><p>CAS原子操作。
+需要有一种阻塞和唤醒机制。
+尽量减少阻塞和唤醒切换成本。
+锁尽量公平，后来者要排队。即使被后来者插队了，也要照顾先来者，不能有“饥饿”现象。
+先看3，4点。再看2，1点。最后是源码。
 <!-- more -->
-/**</p>
-<ul>
-  <li>TTTTTTTTTTTTTTTTTTTTTTTHHHHHHHHH     HHHHHHHHHEEEEEEEEEEEEEEEEEEEEEE</li>
-  <li>T:::::::::::::::::::::TH:::::::H     H:::::::HE::::::::::::::::::::E</li>
-  <li>T:::::::::::::::::::::TH:::::::H     H:::::::HE::::::::::::::::::::E</li>
-  <li>T:::::TT:::::::TT:::::THH::::::H     H::::::HHEE::::::EEEEEEEEE::::E</li>
-  <li>TTTTTT  T:::::T  TTTTTT  H:::::H     H:::::H    E:::::E       EEEEEE</li>
-  <li>T:::::T          H:::::H     H:::::H    E:::::E</li>
-  <li>T:::::T          H::::::HHHHH::::::H    E::::::EEEEEEEEEE</li>
-  <li>T:::::T          H:::::::::::::::::H    E:::::::::::::::E</li>
-  <li>T:::::T          H:::::::::::::::::H    E:::::::::::::::E</li>
-  <li>T:::::T          H::::::HHHHH::::::H    E::::::EEEEEEEEEE</li>
-  <li>T:::::T          H:::::H     H:::::H    E:::::E</li>
-  <li>T:::::T          H:::::H     H:::::H    E:::::E       EEEEEE</li>
-  <li>TT:::::::TT      HH::::::H     H::::::HHEE::::::EEEEEEEE:::::E</li>
-  <li>T:::::::::T      H:::::::H     H:::::::HE::::::::::::::::::::E</li>
-  <li>T:::::::::T      H:::::::H     H:::::::HE::::::::::::::::::::E</li>
-  <li>TTTTTTTTTTT      HHHHHHHHH     HHHHHHHHHEEEEEEEEEEEEEEEEEEEEEE
- *</li>
-  <li>SSSSSSSSSSSSSSS UUUUUUUU     UUUUUUUUPPPPPPPPPPPPPPPPP   EEEEEEEEEEEEEEEEEEEEEERRRRRRRRRRRRRRRRR</li>
-  <li>SS:::::::::::::::SU::::::U     U::::::UP::::::::::::::::P  E::::::::::::::::::::ER::::::::::::::::R</li>
-  <li>S:::::SSSSSS::::::SU::::::U     U::::::UP::::::PPPPPP:::::P E::::::::::::::::::::ER::::::RRRRRR:::::R</li>
-  <li>S:::::S     SSSSSSSUU:::::U     U:::::UUPP:::::P     P:::::PEE::::::EEEEEEEEE::::ERR:::::R     R:::::R</li>
-  <li>S:::::S             U:::::U     U:::::U   P::::P     P:::::P  E:::::E       EEEEEE  R::::R     R:::::R</li>
-  <li>S:::::S             U:::::U     U:::::U   P::::P     P:::::P  E:::::E               R::::R     R:::::R</li>
-  <li>S::::SSSS          U:::::U     U:::::U   P::::PPPPPP:::::P   E::::::EEEEEEEEEE     R::::RRRRRR:::::R</li>
-  <li>SS::::::SSSSS     U:::::U     U:::::U   P:::::::::::::PP    E:::::::::::::::E     R:::::::::::::RR</li>
-  <li>SSS::::::::SS   U:::::U     U:::::U   P::::PPPPPPPPP      E:::::::::::::::E     R::::RRRRRR:::::R</li>
-  <li>SSSSSS::::S  U:::::U     U:::::U   P::::P              E::::::EEEEEEEEEE     R::::R     R:::::R</li>
-  <li>S:::::S U:::::U     U:::::U   P::::P              E:::::E               R::::R     R:::::R</li>
-  <li>S:::::S U::::::U   U::::::U   P::::P              E:::::E       EEEEEE  R::::R     R:::::R</li>
-  <li>SSSSSSS     S:::::S U:::::::UUU:::::::U PP::::::PP          EE::::::EEEEEEEE:::::ERR:::::R     R:::::R</li>
-  <li>S::::::SSSSSS:::::S  UU:::::::::::::UU  P::::::::P          E::::::::::::::::::::ER::::::R     R:::::R</li>
-  <li>S:::::::::::::::SS     UU:::::::::UU    P::::::::P          E::::::::::::::::::::ER::::::R     R:::::R</li>
-  <li>SSSSSSSSSSSSSSS         UUUUUUUUU      PPPPPPPPPP          EEEEEEEEEEEEEEEEEEEEEERRRRRRRR     RRRRRRR
- *</li>
-  <li>TTTTTTTTTTTTTTTTTTTTTTTIIIIIIIIIINNNNNNNN        NNNNNNNNYYYYYYY       YYYYYYY</li>
-  <li>T:::::::::::::::::::::TI::::::::IN:::::::N       N::::::NY:::::Y       Y:::::Y</li>
-  <li>T:::::::::::::::::::::TI::::::::IN::::::::N      N::::::NY:::::Y       Y:::::Y</li>
-  <li>T:::::TT:::::::TT:::::TII::::::IIN:::::::::N     N::::::NY::::::Y     Y::::::Y</li>
-  <li>TTTTTT  T:::::T  TTTTTT  I::::I  N::::::::::N    N::::::NYYY:::::Y   Y:::::YYY</li>
-  <li>T:::::T          I::::I  N:::::::::::N   N::::::N   Y:::::Y Y:::::Y</li>
-  <li>T:::::T          I::::I  N:::::::N::::N  N::::::N    Y:::::Y:::::Y</li>
-  <li>T:::::T          I::::I  N::::::N N::::N N::::::N     Y:::::::::Y</li>
-  <li>T:::::T          I::::I  N::::::N  N::::N:::::::N      Y:::::::Y</li>
-  <li>T:::::T          I::::I  N::::::N   N:::::::::::N       Y:::::Y</li>
-  <li>T:::::T          I::::I  N::::::N    N::::::::::N       Y:::::Y</li>
-  <li>T:::::T          I::::I  N::::::N     N:::::::::N       Y:::::Y</li>
-  <li>TT:::::::TT      II::::::IIN::::::N      N::::::::N       Y:::::Y</li>
-  <li>T:::::::::T      I::::::::IN::::::N       N:::::::N    YYYY:::::YYYY</li>
-  <li>T:::::::::T      I::::::::IN::::::N        N::::::N    Y:::::::::::Y</li>
-  <li>TTTTTTTTTTT      IIIIIIIIIINNNNNNNN         NNNNNNN    YYYYYYYYYYYYY
- *</li>
-  <li>CCCCCCCCCCCCC     OOOOOOOOO     MMMMMMMM               MMMMMMMMPPPPPPPPPPPPPPPPP   IIIIIIIIIILLLLLLLLLLL             EEEEEEEEEEEEEEEEEEEEEERRRRRRRRRRRRRRRRR</li>
-  <li>CCC::::::::::::C   OO:::::::::OO   M:::::::M             M:::::::MP::::::::::::::::P  I::::::::IL:::::::::L             E::::::::::::::::::::ER::::::::::::::::R</li>
-  <li>CC:::::::::::::::C OO:::::::::::::OO M::::::::M           M::::::::MP::::::PPPPPP:::::P I::::::::IL:::::::::L             E::::::::::::::::::::ER::::::RRRRRR:::::R</li>
-  <li>C:::::CCCCCCCC::::CO:::::::OOO:::::::OM:::::::::M         M:::::::::MPP:::::P     P:::::PII::::::IILL:::::::LL             EE::::::EEEEEEEEE::::ERR:::::R     R:::::R</li>
-  <li>C:::::C       CCCCCCO::::::O   O::::::OM::::::::::M       M::::::::::M  P::::P     P:::::P  I::::I    L:::::L                 E:::::E       EEEEEE  R::::R     R:::::R</li>
-  <li>C:::::C              O:::::O     O:::::OM:::::::::::M     M:::::::::::M  P::::P     P:::::P  I::::I    L:::::L                 E:::::E               R::::R     R:::::R</li>
-  <li>C:::::C              O:::::O     O:::::OM:::::::M::::M   M::::M:::::::M  P::::PPPPPP:::::P   I::::I    L:::::L                 E::::::EEEEEEEEEE     R::::RRRRRR:::::R</li>
-  <li>C:::::C              O:::::O     O:::::OM::::::M M::::M M::::M M::::::M  P:::::::::::::PP    I::::I    L:::::L                 E:::::::::::::::E     R:::::::::::::RR</li>
-  <li>C:::::C              O:::::O     O:::::OM::::::M  M::::M::::M  M::::::M  P::::PPPPPPPPP      I::::I    L:::::L                 E:::::::::::::::E     R::::RRRRRR:::::R</li>
-  <li>C:::::C              O:::::O     O:::::OM::::::M   M:::::::M   M::::::M  P::::P              I::::I    L:::::L                 E::::::EEEEEEEEEE     R::::R     R:::::R</li>
-  <li>C:::::C              O:::::O     O:::::OM::::::M    M:::::M    M::::::M  P::::P              I::::I    L:::::L                 E:::::E               R::::R     R:::::R</li>
-  <li>C:::::C       CCCCCCO::::::O   O::::::OM::::::M     MMMMM     M::::::M  P::::P              I::::I    L:::::L         LLLLLL  E:::::E       EEEEEE  R::::R     R:::::R</li>
-  <li>C:::::CCCCCCCC::::CO:::::::OOO:::::::OM::::::M               M::::::MPP::::::PP          II::::::IILL:::::::LLLLLLLLL:::::LEE::::::EEEEEEEE:::::ERR:::::R     R:::::R</li>
-  <li>CC:::::::::::::::C OO:::::::::::::OO M::::::M               M::::::MP::::::::P          I::::::::IL::::::::::::::::::::::LE::::::::::::::::::::ER::::::R     R:::::R</li>
-  <li>CCC::::::::::::C   OO:::::::::OO   M::::::M               M::::::MP::::::::P          I::::::::IL::::::::::::::::::::::LE::::::::::::::::::::ER::::::R     R:::::R</li>
-  <li>CCCCCCCCCCCCC     OOOOOOOOO     MMMMMMMM               MMMMMMMMPPPPPPPPPP          IIIIIIIIIILLLLLLLLLLLLLLLLLLLLLLLLEEEEEEEEEEEEEEEEEEEEEERRRRRRRR     RRRRRRR
- *</li>
-  <li>=======================================================================================================================================================================</li>
-  <li>=======================================================================================================================================================================</li>
-  <li>=======================================================================================================================================================================</li>
-  <li>=======================================================================================================================================================================
- */</li>
-</ul>
+尽量减少阻塞和唤醒切换成本
+减少切换成本的方法就是不切换，简单而直接。</p>
 
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/golang/2019/07/21/tiny.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/golang/2019/08/08/mutex.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -283,22 +203,23 @@ https://adampresley.github.io/2015/06/01/writing-a-lexer-and-parser-in-go-part-1
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/golang/2019/07/21/link.html">compile link</a>
+						<a class="post-link" href="/MyBlog/golang/2019/08/08/fasthttp.html">fasthttp</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/golang/2019/07/21/link.html"> 夏泽民</a>
+						<a href="/MyBlog/golang/2019/08/08/fasthttp.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Jul 21, 2019
+							Aug 8, 2019
 						</span>
 					</div>
-					<div class="excerpt"><p>go build
--gcflags: 传递给编译器的参数</p>
+					<div class="excerpt"><p>https://github.com/valyala/fasthttp
+是 golang 中一个标志性的高性能 HTTP库, 主要用于 webserver 开发, 以及 web client / proxy 等. 
+Fast HTTP package for Go. Tuned for high performance. Zero memory allocations in hot paths. Up to 10x faster than net/http</p>
 
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/golang/2019/07/21/link.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/golang/2019/08/08/fasthttp.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -308,24 +229,23 @@ https://adampresley.github.io/2015/06/01/writing-a-lexer-and-parser-in-go-part-1
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/linux/2019/07/21/elf.html">elf</a>
+						<a class="post-link" href="/MyBlog/algorithm/2019/08/08/Treap.html">Treap</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/linux/2019/07/21/elf.html"> 夏泽民</a>
+						<a href="/MyBlog/algorithm/2019/08/08/Treap.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Jul 21, 2019
+							Aug 8, 2019
 						</span>
 					</div>
-					<div class="excerpt"><p>UNIX系统实验室（USL）作为应用程序二进制接口（Application Binary Interface，ABI）而开发和发布的，也是Linux的主要可执行文件格式。
-被86open项目选为x86架构上的类Unix操作系统的二进制文件标准格式，用来取代COFF
+					<div class="excerpt"><p> Treap=Tree+Heap。Treap是一棵二叉排序树，它的左子树和右子树分别是一个Treap，和一般的二叉排序树不同的是, Treap记录一个额外的数据， 就是优先级。Treap在以关键码构成二叉排序树的同时，还满足堆的性质(在这里我们假设节点的优先级大于该节点的孩子的优先级)。但是这里要注意的是Treap和二叉堆有一点不同，就是 二叉堆必须是完全二叉树，而Treap不一定是完全二叉树。 
 <!-- more -->
-ELF文件由4部分组成，分别是ELF头（ELF header）、程序头表（Program header table）、节（Section）和节头表（Section header table）。实际上，一个文件中不一定包含全部内容，而且他们的位置也未必如同所示这样安排，只有ELF头的位置是固定的，其余各部分的位置、大小等信息由ELF头中的各项值来决定。</p>
+在二叉查找树中，当插入的数据为随机的时候，其有较好的性能使得孩子节点大体上左右均匀分布。但是，当插入的数据为有序的时候，其会退化为一个链表的状态，从而达不到效果。一般，我们有AVL或者红黑树以及Splay等平衡二叉树结构。但是，其在实现上难度较高。为此，引入了Treap，treap采用了二叉堆的性质来保持二叉树的平衡性。因为对于一个堆而言，其需要满足如下的性质：一个节点的两个孩子节点的值都小于节点的本身的值。但是，对于一棵二叉查找树而言，其需要满足一棵树的左孩子节点的值小于根节点的值并且右孩子节点的值大于根节点的值。这显然出现了冲突。为此，我们需要增加一个变量，用于满足这样的性质。我们将用于满足二叉搜索树的性质的值称之为key，用于满足堆的性质的值称之为priority(优先级)。</p>
 
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/linux/2019/07/21/elf.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/algorithm/2019/08/08/Treap.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -335,22 +255,24 @@ ELF文件由4部分组成，分别是ELF头（ELF header）、程序头表（Pro
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/golang/2019/07/20/tscan.html">tscan</a>
+						<a class="post-link" href="/MyBlog/linux/2019/08/07/load.html">load average</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/golang/2019/07/20/tscan.html"> 夏泽民</a>
+						<a href="/MyBlog/linux/2019/08/07/load.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Jul 20, 2019
+							Aug 7, 2019
 						</span>
 					</div>
-					<div class="excerpt"><p>https://github.com/google/sanitizers/wiki/AddressSanitizer
-ThreadSanitizer又叫TSan，是一个检查线程Data Race的C/C++工具。它集成在新版的gcc和clang中，通过编译时加-fsanitize=thread，可以在运行时检测出Data Race的问题。</p>
+					<div class="excerpt"><p>在Linux系统中，我们一般使用uptime命令查看（w命令和top命令也行）。（另外，它们在苹果公司的Mac电脑上也适用。）
+显示”load average”，它的意思是”系统的平均负荷”，里面有三个数字，我们可以从中判断系统负荷是大还是小。
+它们的意思分别是1分钟、5分钟、15分钟内系统的平均负荷。
+平均负荷为0；当CPU工作量饱和的时候，平均负荷为1。</p>
 
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/golang/2019/07/20/tscan.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/linux/2019/08/07/load.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -2526,6 +2448,18 @@ ThreadSanitizer又叫TSan，是一个检查线程Data Race的C/C++工具。它�
 			  
 			    
 			      <a href="/MyBlog/page540/">540</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page541/">541</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page542/">542</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page543/">543</a>
 			    
 			  
 
@@ -5257,6 +5191,21 @@ ThreadSanitizer又叫TSan，是一个检查线程Data Race的C/C++工具。它�
 						  
 						
 
+						  
+							<li><a href="/MyBlog/page541">541</a></li>
+						  
+						
+
+						  
+							<li><a href="/MyBlog/page542">542</a></li>
+						  
+						
+
+						  
+							<li><a href="/MyBlog/page543">543</a></li>
+						  
+						
+
 						
 						  <li><a href="/MyBlog/page382">Next</a></li>
 						
@@ -5291,7 +5240,7 @@ ThreadSanitizer又叫TSan，是一个检查线程Data Race的C/C++工具。它�
 							
 							{
 							"title" : " - ",
-							"url" : "/MyBlog/2021/09/11/2021-09-05-count.html"
+							"url" : "/MyBlog/2021/09/19/2021-09-05-count.html"
 							}
 							
 							,
@@ -5299,7 +5248,7 @@ ThreadSanitizer又叫TSan，是一个检查线程Data Race的C/C++工具。它�
 							
 							{
 							"title" : " - ",
-							"url" : "/MyBlog/2021/09/11/2021-06-06-show_columns.html"
+							"url" : "/MyBlog/2021/09/19/2021-06-06-show_columns.html"
 							}
 							
 							,
@@ -5307,7 +5256,135 @@ ThreadSanitizer又叫TSan，是一个检查线程Data Race的C/C++工具。它�
 							
 							{
 							"title" : " - ",
-							"url" : "/MyBlog/2021/09/11/2020-11-24-mysql.html"
+							"url" : "/MyBlog/2021/09/19/2020-11-24-mysql.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "底纹推荐优化 - ",
+							"url" : "/MyBlog/storage/2021/09/19/%E5%BA%95%E7%BA%B9%E6%8E%A8%E8%8D%90%E4%BC%98%E5%8C%96.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "字符串拼接性能 - ",
+							"url" : "/MyBlog/golang/2021/09/19/string.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "selector - ",
+							"url" : "/MyBlog/k8s/2021/09/19/selector.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "httputil ReverseProxy - ",
+							"url" : "/MyBlog/golang/2021/09/19/proxy.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "jwt - ",
+							"url" : "/MyBlog/golang/2021/09/19/jwt.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "jaguar walle - ",
+							"url" : "/MyBlog/web/2021/09/19/jaguar.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "ip2location-go - ",
+							"url" : "/MyBlog/golang/2021/09/19/ip2location-go.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "go-i18n - ",
+							"url" : "/MyBlog/golang/2021/09/19/i18n.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "geetest - ",
+							"url" : "/MyBlog/web/2021/09/19/geetest.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "es function_score - ",
+							"url" : "/MyBlog/storage/2021/09/19/function_score.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "es boost权重提升 - ",
+							"url" : "/MyBlog/storage/2021/09/19/boost.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "es bm25 - ",
+							"url" : "/MyBlog/storage/2021/09/19/bm25.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "HyperKit、VPNKit和DataKit - ",
+							"url" : "/MyBlog/docker/2021/09/19/VPNKit.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "Rancher 菜单 - ",
+							"url" : "/MyBlog/k8s/2021/09/19/Rancher.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "Int转string几种方式性能 - ",
+							"url" : "/MyBlog/golang/2021/09/19/FormatInt.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "es Explain - ",
+							"url" : "/MyBlog/storage/2021/09/19/Explain.html"
 							}
 							
 							,
@@ -26986,7 +27063,7 @@ ThreadSanitizer又叫TSan，是一个检查线程Data Race的C/C++工具。它�
 								
 								
 									<a class="bold" href="/MyBlog/category/web">
-										web (274)
+										web (276)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -27049,7 +27126,7 @@ ThreadSanitizer又叫TSan，是一个检查线程Data Race的C/C++工具。它�
 								
 								
 									<a class="bold" href="/MyBlog/category/storage">
-										storage (257)
+										storage (262)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -27058,7 +27135,7 @@ ThreadSanitizer又叫TSan，是一个检查线程Data Race的C/C++工具。它�
 								
 								
 									<a class="bold" href="/MyBlog/category/golang">
-										golang (986)
+										golang (992)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -27085,7 +27162,7 @@ ThreadSanitizer又叫TSan，是一个检查线程Data Race的C/C++工具。它�
 								
 								
 									<a class="bold" href="/MyBlog/category/docker">
-										docker (80)
+										docker (81)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -27148,7 +27225,7 @@ ThreadSanitizer又叫TSan，是一个检查线程Data Race的C/C++工具。它�
 								
 								
 									<a class="bold" href="/MyBlog/category/k8s">
-										k8s (63)
+										k8s (65)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -27254,15 +27331,79 @@ ThreadSanitizer又叫TSan，是一个检查线程Data Race的C/C++工具。它�
 								<ul style="display:none;width:250px;height:250px;">
 								     
 								   <li>
-										<a href="/MyBlog/2021/09/11/2021-09-05-count.html" style="font-size:40px;"> </a>
+										<a href="/MyBlog/2021/09/19/2021-09-05-count.html" style="font-size:40px;"> </a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/2021/09/11/2021-06-06-show_columns.html" style="font-size:40px;"> </a>
+										<a href="/MyBlog/2021/09/19/2021-06-06-show_columns.html" style="font-size:40px;"> </a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/2021/09/11/2020-11-24-mysql.html" style="font-size:40px;"> </a>
+										<a href="/MyBlog/2021/09/19/2020-11-24-mysql.html" style="font-size:40px;"> </a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/storage/2021/09/19/%E5%BA%95%E7%BA%B9%E6%8E%A8%E8%8D%90%E4%BC%98%E5%8C%96.html" style="font-size:40px;"> 底纹推荐优化</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/golang/2021/09/19/string.html" style="font-size:40px;"> 字符串拼接性能</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/k8s/2021/09/19/selector.html" style="font-size:40px;"> selector</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/golang/2021/09/19/proxy.html" style="font-size:40px;"> httputil ReverseProxy</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/golang/2021/09/19/jwt.html" style="font-size:40px;"> jwt</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/web/2021/09/19/jaguar.html" style="font-size:40px;"> jaguar walle</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/golang/2021/09/19/ip2location-go.html" style="font-size:40px;"> ip2location-go</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/golang/2021/09/19/i18n.html" style="font-size:40px;"> go-i18n</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/web/2021/09/19/geetest.html" style="font-size:40px;"> geetest</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/storage/2021/09/19/function_score.html" style="font-size:40px;"> es function_score</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/storage/2021/09/19/boost.html" style="font-size:40px;"> es boost权重提升</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/storage/2021/09/19/bm25.html" style="font-size:40px;"> es bm25</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/docker/2021/09/19/VPNKit.html" style="font-size:40px;"> HyperKit、VPNKit和DataKit</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/k8s/2021/09/19/Rancher.html" style="font-size:40px;"> Rancher 菜单</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/golang/2021/09/19/FormatInt.html" style="font-size:40px;"> Int转string几种方式性能</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/storage/2021/09/19/Explain.html" style="font-size:40px;"> es Explain</a>
 									</li>
 									  
 								   <li>
@@ -27348,70 +27489,6 @@ ThreadSanitizer又叫TSan，是一个检查线程Data Race的C/C++工具。它�
 								   <li>
 										<a href="/MyBlog/storage/2021/09/05/groupid.html" style="font-size:40px;"> kafka 不同topic 相同groupid ，会造成rebalance</a>
 									</li>
-									  
-								   <li>
-										<a href="/MyBlog/k8s/2021/09/05/gitlab-ci.html" style="font-size:40px;"> gitlab-ci 结合k8s</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2021/09/05/geoip.html" style="font-size:40px;"> geoip</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/linux/2021/09/05/env.html" style="font-size:40px;"> env 环境变量存哪里</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/storage/2021/09/05/confluent.html" style="font-size:40px;"> confluent kafka</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/storage/2021/09/05/bufferpool.html" style="font-size:40px;"> mysql buffer pool</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/python/2021/09/05/Jumpserver.html" style="font-size:40px;"> Jumpserver</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/storage/2021/08/30/minio.html" style="font-size:40px;"> minio</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/docker/2021/08/29/prune.html" style="font-size:40px;"> prune</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/docker/2021/08/29/pipework.html" style="font-size:40px;"> pipework fopnp</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/storage/2021/08/29/parseTime.html" style="font-size:40px;"> mysql parseTime</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/k8s/2021/08/29/microk8s.html" style="font-size:40px;"> microk8s</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/k8s/2021/08/29/ingress.html" style="font-size:40px;"> ingress</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/k8s/2021/08/29/ingress-nginx.html" style="font-size:40px;"> ingress-nginx</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/docker/2021/08/29/image.html" style="font-size:40px;"> docker for mac 升级镜像和容器丢失</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2021/08/29/goa.html" style="font-size:40px;"> goa</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2021/08/29/generic.html" style="font-size:40px;"> generic</a>
-									</li>
 									
 								</ul>
 							</div>
@@ -27426,33 +27503,33 @@ ThreadSanitizer又叫TSan，是一个检查线程Data Race的C/C++工具。它�
                 		<ul class="posts" span="recent">  
 							  
 							   <li>  
-								   <span>11 Sep 2021</span>
-								   <a href="/MyBlog/2021/09/11/2021-09-05-count.html">  
+								   <span>19 Sep 2021</span>
+								   <a href="/MyBlog/2021/09/19/2021-09-05-count.html">  
 								   </a>  
 							   </li>  
 							  
 							   <li>  
-								   <span>11 Sep 2021</span>
-								   <a href="/MyBlog/2021/09/11/2021-06-06-show_columns.html">  
+								   <span>19 Sep 2021</span>
+								   <a href="/MyBlog/2021/09/19/2021-06-06-show_columns.html">  
 								   </a>  
 							   </li>  
 							  
 							   <li>  
-								   <span>11 Sep 2021</span>
-								   <a href="/MyBlog/2021/09/11/2020-11-24-mysql.html">  
+								   <span>19 Sep 2021</span>
+								   <a href="/MyBlog/2021/09/19/2020-11-24-mysql.html">  
 								   </a>  
 							   </li>  
 							  
 							   <li>  
-								   <span>11 Sep 2021</span>
-								   <a href="/MyBlog/linux/2021/09/11/uname.html">  
-								   查看Linux系统架构类型的5条常用命令</a>  
+								   <span>19 Sep 2021</span>
+								   <a href="/MyBlog/storage/2021/09/19/%E5%BA%95%E7%BA%B9%E6%8E%A8%E8%8D%90%E4%BC%98%E5%8C%96.html">  
+								   底纹推荐优化</a>  
 							   </li>  
 							  
 							   <li>  
-								   <span>11 Sep 2021</span>
-								   <a href="/MyBlog/golang/2021/09/11/sarama.html">  
-								   sarama kafka client</a>  
+								   <span>19 Sep 2021</span>
+								   <a href="/MyBlog/golang/2021/09/19/string.html">  
+								   字符串拼接性能</a>  
 							   </li>  
 							  
 						</ul>
