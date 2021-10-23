@@ -147,43 +147,22 @@
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/web/2017/11/29/go_update.html">go升级遇到问题及解决方案</a>
+						<a class="post-link" href="/MyBlog/linux/2017/12/22/fork.html">fork</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/web/2017/11/29/go_update.html"> 夏泽民</a>
+						<a href="/MyBlog/linux/2017/12/22/fork.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Nov 29, 2017
+							Dec 22, 2017
 						</span>
 					</div>
 					<div class="excerpt"><!-- more -->
-<div class="container">
-brew install  go
-会将新版go安装到  /usr/local/Cellar/go/1.9.2/
-$ ls /usr/local/Cellar/go/1.9.2/
-AUTHORS			LICENSE			bin
-INSTALL_RECEIPT.json	README.md		libexec
-却少的库和编译工具都在libexec目录下，直接复制src 目录到goroot，虽然能解决找不到库文件的问题，但是会报
-go tool: no such tool "compile"
-将/usr/local/Cellar/go/1.9.2/libexec 设为gopath
-会报
-import cycle not allowed
-package cmd/dist
-    imports bytes
-    imports errors
-    imports runtime
-    imports unsafe
-    imports runtime
-    
-解决办法：
-go官网下载安装包
-https://golang.org/doc/install?download=go1.9.2.darwin-amd64.pkg
+<p>一、fork入门知识</p>
 
-</div>
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/web/2017/11/29/go_update.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/linux/2017/12/22/fork.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -193,24 +172,64 @@ https://golang.org/doc/install?download=go1.9.2.darwin-amd64.pkg
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/golang/2017/11/29/go_pprof.html">go_pprof</a>
+						<a class="post-link" href="/MyBlog/linux/2017/12/22/exec.html">Linux进程控制——exec函数族</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/golang/2017/11/29/go_pprof.html"> 夏泽民</a>
+						<a href="/MyBlog/linux/2017/12/22/exec.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Nov 29, 2017
+							Dec 22, 2017
 						</span>
 					</div>
-					<div class="excerpt"><!-- more -->
-<div class="container">
-go tool pprof
+					<div class="excerpt"><p>在Linux中，并不存在exec()函数，exec指的是一组函数，一共有6个，分别是：
+ #include <unistd.h>
+extern char **environ;
+int execl(const char *path, const char *arg, ...);
+int execlp(const char *file, const char *arg, ...);
+int execle(const char *path, const char *arg, ..., char * const envp[]);
+int execv(const char *path, char *const argv[]);
+int execvp(const char *file, char *const argv[]);
+int execve(const char *path, char *const argv[], char *const envp[]);
+其中只有execve是真正意义上的系统调用，其它都是在此基础上经过包装的库函数。
+exec函数族的作用是根据指定的文件名找到可执行文件，并用它来取代调用进程的内容，换句话说，就是在调用进程内部执行一个可执行文件。这里的可执行文件既可以是二进制文件，也可以是任何Linux下可执行的脚本文件。
+函数名与参数的关系：
+细看一下，这6个函数都是以exec开头（表示属于exec函数组），前3个函数接着字母l的，后3个接着字母v的，我的理解是l表示list（列举参数），v表示vector（参数向量表）
+。它们的区别在于，execv开头的函数是以"char *argv[]"(vector)形式传递命令行参数，而execl开头的函数采用了罗列(list)的方式，把参数一个一个列出来，然后以一个NULL表示结束。这里的NULL的作用和argv数组里的NULL作用是一样的。
+字母p是指在环境变量PATH的目录里去查找要执行的可执行文件。2个以p结尾的函数execlp和execvp，看起来，和execl与execv的差别很小，事实也如此，它们的区别从第一个参数名可以看出：除 execlp和execvp之外的4个函数都要求，它们的第1个参数path必须是一个完整的路径，如"/bin/ls"；而execlp和execvp 的第1个参数file可以仅仅只是一个文件名，如"ls"，这两个函数可以自动到环境变量PATH指定的目录里去查找。
+字母e是指给可执行文件指定环境变量。在全部6个函数中，只有execle和execve使用了char *envp[]传递环境变量，其它的4个函数都没有这个参数，这并不意味着它们不传递环境变量，这4个函数将把默认的环境变量不做任何修改地传给被执行的应用程序。而execle和execve用指定的环境变量去替代默认的那些。
+返回值
+与一般情况不同，exec函数族的函数执行成功后不会返回，因为调用进程的实体，包括代码段，数据段和堆栈等都已经被新的内容取代，只有进程ID等一些表面上的信息仍保持原样。调用失败时，会设置errno并返回-1，然后从原程序的调用点接着往下执行。
+与其他系统调用比起来，exec很容易失败，被执行文件的位置，权限等很多因素都能导致调用失败。因此，使用exec函数族时，一定要加错误判断语句。最常见的错误：
+找不到文件或路径，此时errno被设置为ENOENT；
+数组argv和envp忘记用NULL结束，此时errno被设置为EFAULT；
+没有对要执行文件的运行权限，此时errno被设置为EACCES。
+2、应用
+如果一个进程想执行另一个程序，它就可以fork或vfork出一个新进程，然后调用任何一个exec函数。
+为此，Linux还专门对fork作了优化：通常fork会将调用进程的所有内容原封不动的拷贝到新产生的子进程中去，这些拷贝的动作很消耗时 间，而如果fork完之后我们马上就调用exec，那这些辛辛苦苦拷贝来的东西就会被立刻抹掉，这看起来非常不划算，于是人们设计了一种"写时复制（copy-on-write）" 技术，使得fork结束后并不立刻复制父进程的内容到子进程，而是到了真正使用时才复制，这样如果下一条语句是exec，它就不会作无用功了。其实"写时 复制"还是有复制，进程的mm结构、页表都还是被复制了（"写时复制"也必须由这些信息来支撑。否则内核捕捉到CPU访存异常，怎么区分 这是“写时复制”引起的，还是真正的越权访问呢？）。
+而vfork就把事情做绝了，所有有关于内存的东西都不复制了，父子进程的内存是完全共享的。 但是这样一来又有问题了，虽然用户程序可以设计很多方法来避免父子进程间的访存冲突。但是关键的一点，父子进程共用着栈，这可不由用户程序控制的。一个进 程进行了关于函数调用或返回的操作，则另一个进程的调用栈 （实际上就是同一个栈）也被影响了。这样的程序没法运行下去。所以，vfork有个限制，子进程生成后，父进程在vfork中被内核挂起，直到子进程有了 自己的内存空间（exec**）或退出(_exit)。并且， 在此之前，子进程不能从调用vfork的函数中返回（同时，不能修改栈上变量、不能继续调用除_exit或exec系列之外的函数，否则父进程的数据可能 被改写）。
+尽管限制很多，vfork后马上exec效率会比fork高不少。
+<!-- more -->
+fork函数是用于创建一个子进程，该子进程几乎是父进程的副本，而有时我们希望子进程去执行另外的程序，exec函数族就提供了一个在进程中启动另一个程序执行的方法。它可以根据指定的文件名或目录名找到可执行文件，并用它来取代原调用进程的数据段、代码段和堆栈段，在执行完之后，原调用进程的内容除了进程号外，其他全部被新程序的内容替换了。另外，这里的可执行文件既可以是二进制文件，也可以是Linux下任何可执行脚本文件。
+（2）在Linux中使用exec函数族主要有以下两种情况
+a. 当进程认为自己不能再为系统和用户做出任何贡献时，就可以调用任何exec 函数族让自己重生。
+b. 如果一个进程想执行另一个程序，那么它就可以调用fork函数新建一个进程，然后调用任何一个exec函数使子进程重生。
+（3）exec函数族语法
+实际上，在Linux中并没有exec函数，而是有6个以exec开头的函数族，下表列举了exec函数族的6个成员函数的语法。
+所需头文件： #include <unistd.h>
+函数说明： 执行文件
+函数原型：
+[plain] view plain copy
+int execl(const char *path, const char *arg, ...)  
+int execv(const char *path, char *const argv[])  
+int execle(const char *path, const char *arg, ..., char *const envp[])  
+int execve(const char *path, char *const argv[], char *const envp[])  
+int execlp(const char *file, const char *arg, ...)  
+int execvp(const char *file, char *const argv[])</unistd.h></unistd.h></p>
 
-</div>
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/golang/2017/11/29/go_pprof.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/linux/2017/12/22/exec.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -220,24 +239,22 @@ go tool pprof
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/web/2017/11/28/go_vs_code.html">go_vs_code</a>
+						<a class="post-link" href="/MyBlog/storage/2017/12/13/tree.html">各种树的应用场景</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/web/2017/11/28/go_vs_code.html"> 夏泽民</a>
+						<a href="/MyBlog/storage/2017/12/13/tree.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Nov 28, 2017
+							Dec 13, 2017
 						</span>
 					</div>
 					<div class="excerpt"><!-- more -->
-<div class="container">
-	一、GoLang的安装
+<p>AVL树：平衡二叉树，一般是用平衡因子差值决定并通过旋转来实现，左右子树树高差不超过1，那么和红黑树比较它是严格的平衡二叉树，平衡条件非常严格（树高差只有1），只要插入或删除不满足上面的条件就要通过旋转来保持平衡。由于旋转是非常耗费时间的。我们可以推出AVL树适合用于插入删除次数比较少，但查找多的情况。</p>
 
-</div>
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/web/2017/11/28/go_vs_code.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/storage/2017/12/13/tree.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -247,27 +264,71 @@ go tool pprof
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/spark/2017/11/19/scala_tuple.html">scala tuple</a>
+						<a class="post-link" href="/MyBlog/spark/2017/12/13/sbt.html">sbt</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/spark/2017/11/19/scala_tuple.html"> 夏泽民</a>
+						<a href="/MyBlog/spark/2017/12/13/sbt.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Nov 19, 2017
+							Dec 13, 2017
 						</span>
 					</div>
 					<div class="excerpt"><!-- more -->
-<div>
-Scala元组将固定数量的项目组合在一起，以便它们可以作为一个整体传递。 与数组或列表不同，元组可以容纳不同类型的对象，但它们也是不可变的。
-val t = (1, "hello", Console)
-val t = new Tuple3(1, "hello", Console)
-元组的实际类型取决于它包含的数量和元素以及这些元素的类型。 因此，(99，"Luftballons")的类型是Tuple2 [Int，String]
+<p>SBT = (not so) Simple Build Tool,是scala的构建工具，与java的maven地位相同。其设计宗旨是让简单的项目可以简单的配置，而复杂的项目可以复杂的配置。。。
+sbt项目的目录规约
+和maven一样，sbt有约定了一个通用的目录结构，使用约定的结构会使后面的工作简单很多。
+base/<br />
+          build.sbt              //构建配置文件
+         /project                 //也是构建配置的一部分
+                      /build.scala                         //高级配置，可选
+         /src/
+                /main
+                          /scala
+                          /java
+                         /resources
+               /test
+                          /scala
+                          /java
+                         /resources
+base代表项目的根目录
+项目配置可以在build.sbt文件里定义，也可以在base/project/build.scala文件里定义，一般情况下build.sbt就已经足够，除非多工程项目或者需要很多特殊定义的项目
+常用命令
+在我读完sbt的getting started文档之前，我也经常有疑问：为什么scala不沿用maven，而要搞出sbt这么个(not so simple) Simple Build Tool ？
+在读完文档，并实际操作后，我现在感觉确实是物有所值的。
+checkout 我的sbtTemple项目后，进入命令行，进入到项目根目录，输入sbt回车进入sbt交互模式
+sbt有哪些命令可用？输入help命令查询，即会列出一堆可用的命令，比如exit,reload等，不知道某个命令的作用？help 命令名，比如输入help exit显示exit命令的作用。 
+列出的命令里并没有compile,test等常用的命令？因为那些不是sbt的命令而是当前工程的task. 输入 tasks命令，就可以看见 compile,test,package等等任务的说明了。
+想查看项目的配置？用show命令，输入show name,看当前项目的名字，输入show libraryDependencies看当前项目依赖的库，libraryDependencies太长记不住？输入lib后按tab键！ 交互窗口是有tab提示的！输入help show，你可以看到show命令的作用是显示配置的值，如果show之后跟的是任务，则执行该任务并显示任务执行的结果。 你可以试试show compile看什么结果,如果你不想执行compile，而是想看命令的说明，请用inspect命令,inspect命令比较复杂，执行后输出的结果也比较复杂，具体这个命令的作用是什么请help inspect, 不过得等理解了build definition的含义后才能看懂help说的是什么。。。
+常用的任务则有compile, test, run,package,doc等，请顾名思义或自行help之。另外这些任务常常还有些变种，比如package-doc,package-src等，用tasks命令查看任务的列表，必有一款适合您
+有一个强大的任务不得不特别拎出来说一下：console
+输入console回车，会在当前会话内启动一个REPL，不要告诉我你不知道REPL是scala解释器的意思。。。就是你在命令行下输入scala回车后进入的那个交互界面。
+强大的是，sbt会加载你的项目依赖的全部jar包和你自己的代码！ 你可以在这个解释器里实验你的半成品。 我的模板工程里有一个sample/Account.scala文件，十几行很简单的代码，你可以看一下，然后在console窗口里玩弄Account类和Account伴生对象.  不过别忘了先import sample._
+因为依赖的jar包也都被加载了，所以对于那些你可能还不熟悉的第三方库，你有可以在console里玩个痛快！这功能很给力，谁用谁知道。
+顺便在提一下，sbt命令有3种执行模式：
+1、交互式，即上文所描述的
+2、批处理式，即在命令行下输入sbt 命令名来执行，比如sbt compile就会编译代码，而不进入交互模式
+3、连绵不绝式，在命令名前加上~号，即会进入连绵不绝模式，比如~compile,会编译当前代码，然后监听代码改变，每当你编辑了代码并保存后，sbt就会自动编译代码，~test也一样，当你修改代码后自动编译并运行单元测试。按回车键可退出此模式。
+build definition释义
+你前面应该试过show name和show libraryDependencies了吧？show出来的结果就是来自你的build.sbt文件，也就是build definition了。打开build.sbt就可以看到name := “sbt11template”  还有其他的一堆xxx := xxxx，很显然的，这就是个key-value pair,  sbt就是读取配置文件并构建一个key-value的map. 但是在build.sbt里面并非key := value, 而是key := expression. 文件里的每一行其实是一句scala语句，不行你可以试试把
+name := “sbt11template” 改成
+name := {“sbt11template”.toUpperCase} 
+然后reload,  再show name,你会看到变成大写的SBT11TEMPLATE
+:=是最常用的方法，其作用就是将key设置成expression的值，相同的key如果被多次赋值，则后面的值会覆盖掉前面的值。适用于简单类型的key，比如name,version等。
+其他的常用方法有
++=，将值添加进现有值里，适用于集合类型的key，比如libraryDependencies
+++=,将一个集合值加入当前集合里
+~= ，。。这个牛X，你在~=后面写个函数，~=将key的当前值传给你的函数，然后将函数结果作为新值，比如你可以在name := xxx后面再来一句 
+name ~= { _. toUpperCase },一样是把name变成大写
+«= 将另一个key的值赋给当前key,比如auther «= name ,这个方法还有个高级用法，你可以组合多个其他key的值，赋给当前key，用文档里的例子
+name «= (name, organization, version) { (n, o, v) =&gt; “project “ + n + “ from “ + o + “ version “ + v }
+还有适用于集合类型的版本
+&lt;+= 和 &lt;++=
+这些语法的官方文档在此https://github.com/harrah/xsbt/wiki/Getting-Started-More-About-Settings</p>
 
-</div>
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/spark/2017/11/19/scala_tuple.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/spark/2017/12/13/sbt.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -277,30 +338,21 @@ val t = new Tuple3(1, "hello", Console)
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/storage/2017/11/18/redis_protocal.html">redis协议</a>
+						<a class="post-link" href="/MyBlog/linux/2017/12/13/radix_tree.html">radix tree</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/storage/2017/11/18/redis_protocal.html"> 夏泽民</a>
+						<a href="/MyBlog/linux/2017/12/13/radix_tree.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Nov 18, 2017
+							Dec 13, 2017
 						</span>
 					</div>
-					<div class="excerpt"><!-- more -->
-<p>redis命令发送格式：
-*<参数数量> CRLF 
-$&lt;参数 1 的字节数量&gt; CRLF
-&lt;参数 1 的数据&gt; CRLF 
-... 
-$<参数 N="" 的字节数量=""> CRLF</参数></参数数量></p>
-<参数 N="" 的数据=""> CRLF 
-其中CRLF表示 rn
+					<div class="excerpt"><p>基数树</p>
 
-</参数>
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/storage/2017/11/18/redis_protocal.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/linux/2017/12/13/radix_tree.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -2500,6 +2552,26 @@ $<参数 N="" 的字节数量=""> CRLF</参数></参数数量></p>
 			  
 			    
 			      <a href="/MyBlog/page546/">546</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page547/">547</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page548/">548</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page549/">549</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page550/">550</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page551/">551</a>
 			    
 			  
 
@@ -5261,6 +5333,31 @@ $<参数 N="" 的字节数量=""> CRLF</参数></参数数量></p>
 						  
 						
 
+						  
+							<li><a href="/MyBlog/page547">547</a></li>
+						  
+						
+
+						  
+							<li><a href="/MyBlog/page548">548</a></li>
+						  
+						
+
+						  
+							<li><a href="/MyBlog/page549">549</a></li>
+						  
+						
+
+						  
+							<li><a href="/MyBlog/page550">550</a></li>
+						  
+						
+
+						  
+							<li><a href="/MyBlog/page551">551</a></li>
+						  
+						
+
 						
 						  <li><a href="/MyBlog/page530">Next</a></li>
 						
@@ -5295,7 +5392,7 @@ $<参数 N="" 的字节数量=""> CRLF</参数></参数数量></p>
 							
 							{
 							"title" : " - ",
-							"url" : "/MyBlog/2021/09/25/2021-09-05-count.html"
+							"url" : "/MyBlog/2021/10/23/2021-09-05-count.html"
 							}
 							
 							,
@@ -5303,7 +5400,7 @@ $<参数 N="" 的字节数量=""> CRLF</参数></参数数量></p>
 							
 							{
 							"title" : " - ",
-							"url" : "/MyBlog/2021/09/25/2021-06-06-show_columns.html"
+							"url" : "/MyBlog/2021/10/23/2021-06-06-show_columns.html"
 							}
 							
 							,
@@ -5311,7 +5408,207 @@ $<参数 N="" 的字节数量=""> CRLF</参数></参数数量></p>
 							
 							{
 							"title" : " - ",
-							"url" : "/MyBlog/2021/09/25/2020-11-24-mysql.html"
+							"url" : "/MyBlog/2021/10/23/2020-11-24-mysql.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "time zone Elasticsearch时区问题 - ",
+							"url" : "/MyBlog/elasticsearch/2021/10/23/time_zone.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "tf idf - ",
+							"url" : "/MyBlog/elasticsearch/2021/10/23/tf_idf.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "Dockerfile RUN CMD ENTRYPOINT命令区别 - ",
+							"url" : "/MyBlog/docker/2021/10/23/run_cmd.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "refresh flush - ",
+							"url" : "/MyBlog/elasticsearch/2021/10/23/refresh.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "redis 性能指标和监控方法 info monitor - ",
+							"url" : "/MyBlog/storage/2021/10/23/redis.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "修改请求参数http网络请求方法 - ",
+							"url" : "/MyBlog/web/2021/10/23/post_put.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "nsenter - ",
+							"url" : "/MyBlog/docker/2021/10/23/nsenter.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "match_phrase和term区别 - ",
+							"url" : "/MyBlog/elasticsearch/2021/10/23/match_phrase.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "局部变量及local命令 - ",
+							"url" : "/MyBlog/linux/2021/10/23/local.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "k8s_oauth - ",
+							"url" : "/MyBlog/k8s/2021/10/23/k8s_oauth.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "ik分词器安装 - ",
+							"url" : "/MyBlog/elasticsearch/2021/10/23/ik.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "golang 规则引擎 - ",
+							"url" : "/MyBlog/golang/2021/10/23/gengine.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "高亮使用plian postings fvh差异 - ",
+							"url" : "/MyBlog/elasticsearch/2021/10/23/fvh.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "flynn - ",
+							"url" : "/MyBlog/docker/2021/10/23/flynn.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "某个字段存在查询或不存在查询 - ",
+							"url" : "/MyBlog/elasticsearch/2021/10/23/exists.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "ephemeral-storage - ",
+							"url" : "/MyBlog/k8s/2021/10/23/ephemeral-storage.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "ejs - ",
+							"url" : "/MyBlog/node/2021/10/23/ejs.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "DSL查询语句对照 - ",
+							"url" : "/MyBlog/elasticsearch/2021/10/23/dsl.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "dry-run diff - ",
+							"url" : "/MyBlog/k8s/2021/10/23/dry-run.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "docker-registry - ",
+							"url" : "/MyBlog/docker/2021/10/23/docker-registry.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "es删除字段 - ",
+							"url" : "/MyBlog/elasticsearch/2021/10/23/delete.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "加速 Docker Build 构建过程 - ",
+							"url" : "/MyBlog/docker/2021/10/23/build.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "apn - ",
+							"url" : "/MyBlog/web/2021/10/23/apn.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "Scroll与Scan - ",
+							"url" : "/MyBlog/elasticsearch/2021/10/23/Scan.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "国内公共DNS - ",
+							"url" : "/MyBlog/web/2021/10/23/DNS.html"
 							}
 							
 							,
@@ -27238,7 +27535,7 @@ $<参数 N="" 的字节数量=""> CRLF</参数></参数数量></p>
 								
 								
 									<a class="bold" href="/MyBlog/category/web">
-										web (279)
+										web (282)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -27274,7 +27571,7 @@ $<参数 N="" 的字节数量=""> CRLF</参数></参数数量></p>
 								
 								
 									<a class="bold" href="/MyBlog/category/linux">
-										linux (386)
+										linux (387)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -27301,7 +27598,7 @@ $<参数 N="" 的字节数量=""> CRLF</参数></参数数量></p>
 								
 								
 									<a class="bold" href="/MyBlog/category/storage">
-										storage (265)
+										storage (266)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -27310,7 +27607,7 @@ $<参数 N="" 的字节数量=""> CRLF</参数></参数数量></p>
 								
 								
 									<a class="bold" href="/MyBlog/category/golang">
-										golang (1000)
+										golang (1001)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -27337,7 +27634,7 @@ $<参数 N="" 的字节数量=""> CRLF</参数></参数数量></p>
 								
 								
 									<a class="bold" href="/MyBlog/category/docker">
-										docker (81)
+										docker (86)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -27355,7 +27652,7 @@ $<参数 N="" 的字节数量=""> CRLF</参数></参数数量></p>
 								
 								
 									<a class="bold" href="/MyBlog/category/elasticsearch">
-										elasticsearch (25)
+										elasticsearch (35)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -27400,7 +27697,7 @@ $<参数 N="" 的字节数量=""> CRLF</参数></参数数量></p>
 								
 								
 									<a class="bold" href="/MyBlog/category/k8s">
-										k8s (65)
+										k8s (69)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -27418,7 +27715,7 @@ $<参数 N="" 的字节数量=""> CRLF</参数></参数数量></p>
 								
 								
 									<a class="bold" href="/MyBlog/category/node">
-										node (43)
+										node (44)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -27428,15 +27725,6 @@ $<参数 N="" 的字节数量=""> CRLF</参数></参数数量></p>
 								
 									<a class="bold" href="/MyBlog/category/strorage">
 										strorage (1)
-									</a>
-                        </div>
-                        <div class="col-lg-6">
-                        	
-								
-								
-								
-									<a class="bold" href="/MyBlog/category/k8s">
-										K8S (1)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -27506,15 +27794,115 @@ $<参数 N="" 的字节数量=""> CRLF</参数></参数数量></p>
 								<ul style="display:none;width:250px;height:250px;">
 								     
 								   <li>
-										<a href="/MyBlog/2021/09/25/2021-09-05-count.html" style="font-size:40px;"> </a>
+										<a href="/MyBlog/2021/10/23/2021-09-05-count.html" style="font-size:40px;"> </a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/2021/09/25/2021-06-06-show_columns.html" style="font-size:40px;"> </a>
+										<a href="/MyBlog/2021/10/23/2021-06-06-show_columns.html" style="font-size:40px;"> </a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/2021/09/25/2020-11-24-mysql.html" style="font-size:40px;"> </a>
+										<a href="/MyBlog/2021/10/23/2020-11-24-mysql.html" style="font-size:40px;"> </a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/elasticsearch/2021/10/23/time_zone.html" style="font-size:40px;"> time zone Elasticsearch时区问题</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/elasticsearch/2021/10/23/tf_idf.html" style="font-size:40px;"> tf idf</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/docker/2021/10/23/run_cmd.html" style="font-size:40px;"> Dockerfile RUN CMD ENTRYPOINT命令区别</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/elasticsearch/2021/10/23/refresh.html" style="font-size:40px;"> refresh flush</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/storage/2021/10/23/redis.html" style="font-size:40px;"> redis 性能指标和监控方法 info monitor</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/web/2021/10/23/post_put.html" style="font-size:40px;"> 修改请求参数http网络请求方法</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/docker/2021/10/23/nsenter.html" style="font-size:40px;"> nsenter</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/elasticsearch/2021/10/23/match_phrase.html" style="font-size:40px;"> match_phrase和term区别</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/linux/2021/10/23/local.html" style="font-size:40px;"> 局部变量及local命令</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/k8s/2021/10/23/k8s_oauth.html" style="font-size:40px;"> k8s_oauth</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/elasticsearch/2021/10/23/ik.html" style="font-size:40px;"> ik分词器安装</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/golang/2021/10/23/gengine.html" style="font-size:40px;"> golang 规则引擎</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/elasticsearch/2021/10/23/fvh.html" style="font-size:40px;"> 高亮使用plian postings fvh差异</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/docker/2021/10/23/flynn.html" style="font-size:40px;"> flynn</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/elasticsearch/2021/10/23/exists.html" style="font-size:40px;"> 某个字段存在查询或不存在查询</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/k8s/2021/10/23/ephemeral-storage.html" style="font-size:40px;"> ephemeral-storage</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/node/2021/10/23/ejs.html" style="font-size:40px;"> ejs</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/elasticsearch/2021/10/23/dsl.html" style="font-size:40px;"> DSL查询语句对照</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/k8s/2021/10/23/dry-run.html" style="font-size:40px;"> dry-run diff</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/docker/2021/10/23/docker-registry.html" style="font-size:40px;"> docker-registry</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/elasticsearch/2021/10/23/delete.html" style="font-size:40px;"> es删除字段</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/docker/2021/10/23/build.html" style="font-size:40px;"> 加速 Docker Build 构建过程</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/web/2021/10/23/apn.html" style="font-size:40px;"> apn</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/elasticsearch/2021/10/23/Scan.html" style="font-size:40px;"> Scroll与Scan</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/web/2021/10/23/DNS.html" style="font-size:40px;"> 国内公共DNS</a>
 									</li>
 									  
 								   <li>
@@ -27564,106 +27952,6 @@ $<参数 N="" 的字节数量=""> CRLF</参数></参数数量></p>
 								   <li>
 										<a href="/MyBlog/web/2021/09/25/code-server.html" style="font-size:40px;"> code-server</a>
 									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2021/09/21/Redcon.html" style="font-size:40px;"> Redcon</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2021/09/20/happens-before.html" style="font-size:40px;"> happens-before</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2021/09/20/geo.html" style="font-size:40px;"> geo s2  geohash</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/storage/2021/09/19/%E5%BA%95%E7%BA%B9%E6%8E%A8%E8%8D%90%E4%BC%98%E5%8C%96.html" style="font-size:40px;"> 底纹推荐优化</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2021/09/19/string.html" style="font-size:40px;"> 字符串拼接性能</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/k8s/2021/09/19/selector.html" style="font-size:40px;"> selector</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2021/09/19/proxy.html" style="font-size:40px;"> httputil ReverseProxy</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2021/09/19/jwt.html" style="font-size:40px;"> jwt</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/web/2021/09/19/jaguar.html" style="font-size:40px;"> jaguar walle</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2021/09/19/ip2location-go.html" style="font-size:40px;"> ip2location-go</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2021/09/19/i18n.html" style="font-size:40px;"> go-i18n</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/web/2021/09/19/geetest.html" style="font-size:40px;"> geetest</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/storage/2021/09/19/function_score.html" style="font-size:40px;"> es function_score</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/storage/2021/09/19/boost.html" style="font-size:40px;"> es boost权重提升</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/storage/2021/09/19/bm25.html" style="font-size:40px;"> es bm25</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/docker/2021/09/19/VPNKit.html" style="font-size:40px;"> HyperKit、VPNKit和DataKit</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/k8s/2021/09/19/Rancher.html" style="font-size:40px;"> Rancher 菜单</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2021/09/19/FormatInt.html" style="font-size:40px;"> Int转string几种方式性能</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/storage/2021/09/19/Explain.html" style="font-size:40px;"> es Explain</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/linux/2021/09/11/uname.html" style="font-size:40px;"> 查看Linux系统架构类型的5条常用命令</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2021/09/11/sarama.html" style="font-size:40px;"> sarama kafka client</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2021/09/11/ratelimit.html" style="font-size:40px;"> ratelimit的实现对比</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/docker/2021/09/11/pull.html" style="font-size:40px;"> docker pull 指定 os arch</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/docker/2021/09/11/linuxkit.html" style="font-size:40px;"> linuxkit</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/linux/2021/09/11/http_proxy.html" style="font-size:40px;"> http_proxy</a>
-									</li>
 									
 								</ul>
 							</div>
@@ -27678,33 +27966,33 @@ $<参数 N="" 的字节数量=""> CRLF</参数></参数数量></p>
                 		<ul class="posts" span="recent">  
 							  
 							   <li>  
-								   <span>25 Sep 2021</span>
-								   <a href="/MyBlog/2021/09/25/2021-09-05-count.html">  
+								   <span>23 Oct 2021</span>
+								   <a href="/MyBlog/2021/10/23/2021-09-05-count.html">  
 								   </a>  
 							   </li>  
 							  
 							   <li>  
-								   <span>25 Sep 2021</span>
-								   <a href="/MyBlog/2021/09/25/2021-06-06-show_columns.html">  
+								   <span>23 Oct 2021</span>
+								   <a href="/MyBlog/2021/10/23/2021-06-06-show_columns.html">  
 								   </a>  
 							   </li>  
 							  
 							   <li>  
-								   <span>25 Sep 2021</span>
-								   <a href="/MyBlog/2021/09/25/2020-11-24-mysql.html">  
+								   <span>23 Oct 2021</span>
+								   <a href="/MyBlog/2021/10/23/2020-11-24-mysql.html">  
 								   </a>  
 							   </li>  
 							  
 							   <li>  
-								   <span>25 Sep 2021</span>
-								   <a href="/MyBlog/node/2021/09/25/socketio.html">  
-								   socketio</a>  
+								   <span>23 Oct 2021</span>
+								   <a href="/MyBlog/elasticsearch/2021/10/23/time_zone.html">  
+								   time zone Elasticsearch时区问题</a>  
 							   </li>  
 							  
 							   <li>  
-								   <span>25 Sep 2021</span>
-								   <a href="/MyBlog/golang/2021/09/25/redcon.html">  
-								   redcon miniredis</a>  
+								   <span>23 Oct 2021</span>
+								   <a href="/MyBlog/elasticsearch/2021/10/23/tf_idf.html">  
+								   tf idf</a>  
 							   </li>  
 							  
 						</ul>
