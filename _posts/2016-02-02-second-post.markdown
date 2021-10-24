@@ -2,7 +2,7 @@
 layout: post
 title:  "second post"
 date:   2016-02-02
-categories: technology computer news
+categories: jekyll web
 tags: holiday
 
 # Author.

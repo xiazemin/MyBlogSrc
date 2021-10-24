@@ -2,7 +2,7 @@
 layout: post
 title:  "first post"
 date:   2016-02-01
-categories: jekyll technology
+categories: jekyll web
 tags: css html hosting openshift wordpress
 
 # author
