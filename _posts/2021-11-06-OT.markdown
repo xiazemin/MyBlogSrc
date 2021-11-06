@@ -1,0 +1,216 @@
+---
+title: OT算法
+layout: post
+category: algorithm
+author: 夏泽民
+---
+在协同编辑的产品中广泛应用，各种开源实现在GitHub上都能找到，Google spreadsheet也是基于这项技术
+
+https://zhuanlan.zhihu.com/p/33512693
+
+先有Operation，再有Operational Transformation。OT算法实现的优劣，首先依赖于Operation设计的优劣。对于协同编辑产品的操作，我以为，应该是面向OT的设计，即在设计时，本着更有利于OT算法的实现的原则为第一，有利于减少网络传输量的原则为第二
+<!-- more -->
+协同编辑的三个问题是convergence, causal order and intention preservation.其中Operational transformation算法解决的主要是intention preservation的问题，但是，仅仅将OT算法做对，还远远不能完成一款协同编辑产品。
+
+多人协同编辑时，必须支持客户端之间互相发送和接收编辑操作的消息。无论使用长连接还是Websocket等技术，都需要考虑在通信协议层面能否支持消息的顺序性。即，客户端接收的消息的顺序能否保证与发送时一致。并且，这里需要澄清，客户端的消息传递的顺序性跟后台系统的消息中间件的顺序性是两件事情。消息中间件的顺序性是保证消息中间件的消费者接收消息的顺序性，与客户端的通信协议的顺序性是保证客户端接收到的消息的顺序性。
+
+OT服务是CPU-bound的，DB服务是IO-bound，必然瓶颈在于DB服务。
+
+https://blog.csdn.net/pheecian10/article/details/81461390
+
+解决方案一：丢了丢了
+
+这可能是最简单粗暴的方法了，我发现有冲突，就告诉用户，主子，咱这里有冲突了，臣妾解决不了啊
+
+解决方案二：锁
+
+有些小伙伴想到，上面出现问题，还不是因为大家编辑了都立即应用了，我们编辑后不立即应用不就好了
+
+OT算法
+B的编辑的行为就是第3个字符行后面插入了一个‘d’
+但是在A已经接受的情况下，正确的通知应该是：
+B的编辑的行为就是第4个字符行后面插入了一个‘d’
+就是把每个人提交的行为转变一下再告诉别人，其实这个技术就是OT算法。
+OT算法全名叫Operation Transformation，你看从名字就对应了上面我说的转变算法。
+假设我们的OT算法的转换功能叫transform，那transform（A，B）= A',B'。
+也就是说你输入两个先后执行的行为，它会告诉你两个转换过后的行为，然后把A'行为告诉B，把B'行为告诉A，这样大家再应用就相安无事了。
+
+OT的经典菱形图，也就是说A会变成A'在B这边执行，B会变成B'在A这边执行。
+这里实际抽象一下，用户永远就只有两个人，一个是自己，一个是服务端，只是服务端的操作可能来自很多人，如果不这样抽象，那一个个进行冲突处理可能会让你觉得无法理解。
+
+OT算法的实现
+这里怎么转换成程序识别或者能用代码表达的呢？其实这也是OT的关键。
+这里我直接揭晓答案：
+所有对文本的操作都可以抽象成三个原子行为：
+
+R = Retain，保持操作
+I = Insert，插入操作
+D = Delete，删除操作
+
+那之前的行为
+第3个字符行后面插入了一个‘d’
+就会变成
+R(3), I('d')
+也就是保持三个字符后插入1个‘d’，其实应该也很好理解，这里的操作就像操作数组一样，不管干什么，第一步你得先找到操作的下标。
+有了这三个原子以后，我们就可以看到：
+A = R(3),I('c')
+B = R(3), I('d')
+一切准备就绪，我们可以开始看OT了，这里OT算法现在已经很成熟了，这里我以一个github上的repo为例：ot.js
+
+https://github.com/Operational-Transformation/ot.js
+https://codemirror.net/
+
+这里就是OT的transform实现，本质上就是把用户的原子操作数组拿到以后，然后做transform操作，这里我只选了一小段来大概解析下，具体的可以看注释，其实原本的注释已经很全了。
+其实上面那段代码，因为我们的原子操作只有三种，根据排列组合，最多只会有9种情况，只是上面把很多情况合并了，你要是不理解，也可以拆开，帮助理解。
+其实上面的文件还有compose，invert等方法，但是其实transform才是我们理解的核心
+
+OT算法的时序
+之前说的时序都是指时间先后顺序，冲突也是指同时产生编辑。但是其实这里的同时不是时间上的同时，而是版本上的同时。
+也就是说我们需要用一个东西表示每一个版本，类似git的每次提交，每次提交到服务端的时候就要告诉后端，我的修改是基于哪个版本的修改。
+最简单的标志位就是递增的数字。那基于版本的冲突，可以简单理解为我们都是基于100版本的提交，那就是冲突了，也许我们并不是同时，谁先到后台决定了谁先被接受而已。这里最夸张的就是离线编辑，可能正常版本已经到了1000了，某个用户因为离线了，本地的版本一直停留在100，提交上来的版本是基于100的。
+
+那有了时序的概念，我们再看上面这个菱形，它可以理解成A和B都基于100提交了数据，但是在A的提交还没被后台确认的时候，A又编辑了，但是因为上一次提交没被确认，所以这次不会发到后台，这时服务器告诉它B基于100做了提交。
+
+这种情况下如何处理，就有点类似于OT落地到实践当中，你怎么实现了，上面提到的github的那个repo的实现其实非常巧妙，你看完注释应该就能全部理解，这里给出代码链接
+
+https://github.com/Operational-Transformation/ot.js/blob/8873b7e28e83f9adbf6c3a28ec639c9151a838ae/lib/client.js
+
+精华就在于它把本地分成了几个状态：
+
+Synchronized 没有正在提交并且等待回包的operation
+AwaitingConfirm 有一个operation提交了但是等后台确认，本地没有编辑数据
+AwaitingWithBuffer 有一个operation提交了但是等后台确认，本地有编辑数据
+
+剩下的就是在这三种状态下，收到了本地和服务端的数据，分别应该怎么处理
+
+
+其实OT对应的只是一种思想，具体怎么实现是根据具体情况来区分的，比如我们现在讨论的就是文本的OT，那有可能图的OT、表格的OT又是其他的实现。OT的核心就是transform，而transform的核心就在于你怎么找到这样的原子操作了，然后原子操作的复杂度决定了transform实现的复杂度。
+https://blog.csdn.net/tianshan2010/article/details/109695439
+
+基于range的操作指令表达方式以及OT算法
+基于ID的操作指令表达方式以及OT算法
+https://www.zhihu.com/collection/521172552
+
+Easysync双边OT
+本地应用的操作和协同给别人的操作不相同。对于A来说，B操作协同过来后，本地应用的是Follow(A,B)，而协同给B的是Follow(B,A)，这也是称之为双边的原因。
+Follow函数需要保证上述等式恒成立
+多冲突处理更加复杂
+
+基于undo的单边OT
+对于B用户来说，B用户先执行了B操作，那么其实我们可以对B操作先执行一次undo，让B用户当前的文档状态和A用户的初始状态一致，再执行和A用户同样的操作序列。
+
+本地应用的操作和协同给别人的操作相同。对于A用户来说，均为Follow(A,B)。这也就是称之为单边的原因，只有一种Follow操作在传递。
+对于Follow函数的要求更低，无需保证顺序Follow的幂等
+需要额外的undo支持，undo操作也需要Follow
+多冲突处理更为简单
+
+https://www.jianshu.com/p/e09ef405faf5
+
+https://segmentfault.com/a/1190000019827632
+
+协同编辑OT算法client端实现原理
+client {
+    version //记录当前版本
+    state   //记录当前状态
+}
+
+//三种状态
+Synchronized {
+}
+
+AwaitingConfirm {
+    hassendop //记录已经发送的op操作
+}
+
+AwaitingWithBuffer {
+    hassendop //记录已经发送的op操作
+    needsendop //记录需要发送的op操作
+}
+Synchronized状态：当前客户端已同步服务器状态 AwaitingConfirm状态：当前客户端向服务器发送了op操作命令，还没有收到确认消息 AwaitingWithBuffer：当前客户端向服务器发送了op操作，还没有收到确认消息，且客户端有进行了新的操作
+
+每种状态下均有可执行三种操作applyclient、serverack、applyserver，下面分别说明每种状态下各种操作的具体含义
+
+Synchronized状态 applyclient：向服务器发送op操作命令，并设置client状态为AwaitingConfirm serverack：无 applyserver：收到服务器op操作指令，执行服务器op操作指令，版本号加1
+
+AwaitingConfirm状态 applyclient: 缓存客户端新的op操作命令，并设置client状态为AwaitingWithBuffer serverack: 设置客户端状态为Synchronized，版本号加1 applyserver: 客户端执行OT变换后的服务端op操作，对hassendop进行OT变换，状态保持不变，版本号加1
+
+AwaitingWithBuffer状态 applyclient: 缓存合并客户端新的op操作指令，状态不变 serverack: 发送缓存的客户端新指令，设置状态为AwaitingConfirm，版本号加1 applyserver: 客户端执行OT变换后的服务端op操作，对hassendop进行OT变换，对needsendop进行OT变换，版本号加1
+http://hupengfoot.github.io/2019/01/08/OT-client.html
+
+
+协同编辑OT算法server端实现原理
+OT算法解决协同编辑问题已经是一项较为常见的技术，OT算法本身很简单，客户端A对文档做了OP1操作，客户端B对文档做了OP2操作，OT算法提供一个函数transform，描述如下：
+
+transform(OP1, OP2){
+    ...
+    return { OT(OP1, OP2), OT(OP2, OP1) }
+}
+
+OT(OP1, OP2)：对OP2的OT变换
+OT(OP2, OP1)：对OP1的OT变换
+使得 OP1 * OT(OP1, OP2) === OP2 * OT(OP2, OP1) 
+那么，生产环境中OT算法是如何应用的呢？首先服务端对每个文档维护如下数据结构:
+
+alt
+
+维护一份当前文档内容，记录下对该数据结构初始化后所有的OP操作，记录下当前访问的用户，用户协同编辑的时序图如下：
+
+alt
+
+上诉时序图描述的是A客户端和B客户端对同一个版本的文档进行协同编辑，那如果A客户端对文档进行了多次编辑，B客户端因为网络原因没有及时同步到A客户端的OP操作，继续在老版本编辑并向服务端发送OP操作会出现什么情况呢？OT算法通过链式反应法则解决对老版本OP操作的问题，链式反应法则描述如下：
+
+Vm: m版本文件内容
+OPm: 服务器记录的对m版本的操作
+BOPm: B客户端对Vm的修改
+DOOP: 服务器OT变换后执行操作
+REOP：B客户端OT变换后执行操作
+
+Vm * OPm * OT(OPm, BOPm) = Vm * BOPm * OT(BOPm, OPm)
+DOOP = OT(OPm, BOPm)
+REOP = OT(BOPm, OPm)
+{ Vm * OPm * DOOP * OT(DOOP, OPm+1) =
+Vm * OPm * OPm+1 * OT(OPm+1, DOOP) =
+Vm * BOPm * REOP * OT(DOOP, OPm+1) }
+DOOP = OT(OPm+1, DOOP)
+REOP = REOP * OT(DOOP, OPm+1)
+OT算法有大量字符串拼接的操作，对较大的文档协同编辑存在一定的性能问题
+http://hupengfoot.github.io/2019/01/08/OT-server.html
+
+协同编辑OT算法client端UNDO和REDO的实现
+客户端维护两个操作栈，undo操作栈和redo操作栈，数据结构如下：
+
+UndoManager {
+    maxItems //undo，redo栈最大深度
+    undoStack //undo操作栈
+    redoStack //redo操作栈
+}
+undo，redo处理会出现如下四种情况：
+
+客户端有新的op操作：将 inverse(op) 压入undoStack 接收到服务端新的op操作：将服务端op操作应用到客户端文档，遍历undoStack所有操作进行OT转换，遍历redoStack所有操作进行OT转换 执行undo操作：将undoStack.pop应用到客户端文档，并发送给服务端，将inverse(undoStack.pop)压入redoStack 执行redo操作：将redoStack.pop应用到客户端文档，并发送给服务端，将inverse(redoStack.pop)压入undoStack
+
+和单机文档编辑中的undo和redo相比，这里最大的区别是当服务端有新的操作发送到客户端时，客户端需要遍历undoStack和redoStack做相应的OT转换
+
+http://hupengfoot.github.io/2019/01/08/OT-client-redo-undo.html
+
+算法-OT和CRDT之间的差异
+两种方法相似之处在于它们提供最终的一致性。 不同之处在于他们的操作方式。 一种查看方式是：
+
+OT通过更改操作来做到这一点。 操作是通过有线方式发送的，并发操作在收到后即被转换。
+CRDT通过更改状态来做到这一点。 在本地CRDT上进行操作。 其状态通过网络发送，并与副本状态合并。 合并多少次或以什么顺序无关紧要-所有副本都收敛。
+没错，OT主要用于文本，并且早于CRDT，但研究表明：
+
+文献中许多OT算法不满足收敛性 不像他们的作者所说的
+
+换句话说，CRDT合并是可交换的，而OT转换功能有时不是。
+
+从CRDT上的Wikipedia文章：
+
+OT通常很复杂且不可扩展
+
+有不同类型的CRDT（集合，计数器等）适用于不同类型的问题。 有一些是专为文本编辑而设计的。 例如，Treedoc-用于协作编辑的可交换复制数据类型。
+https://www.itranslater.com/qa/details/2583866884827382784
+
+https://www.qedev.com/bigdata/81835.html
+
+
+
