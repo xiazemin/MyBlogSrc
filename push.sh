@@ -1,6 +1,6 @@
 #!/bin/bash
 bundle exec jekyll clean
-bundle exec jekyll build --trace
+bundle exec jekyll build --trace |grep -v 'warning: Using the last argument'
 #git add *
 ls |xargs git add -f
 t=`date`
