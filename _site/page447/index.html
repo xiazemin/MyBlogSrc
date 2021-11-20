@@ -147,26 +147,51 @@
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/linux/2019/03/03/awk.html">awk 用法总结</a>
+						<a class="post-link" href="/MyBlog/storage/2019/03/23/codis.html">Codis Twemproxy redis集群</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/linux/2019/03/03/awk.html"> 夏泽民</a>
+						<a href="/MyBlog/storage/2019/03/23/codis.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Mar 3, 2019
+							Mar 23, 2019
 						</span>
 					</div>
-					<div class="excerpt"><p>1，awk 大小写敏感</p>
+					<div class="excerpt"><p>Redis本身仅支持单实例，内存一般最多10~20GB。这无法支撑大型线上业务系统的需求。而且也造成资源的利用率过低——毕竟现在服务器内存动辄100~200GB。
+1.1 客户端分片
+这种方案将分片工作放在业务程序端，程序代码根据预先设置的路由规则，直接对多个Redis实例进行分布式访问。这样的好处是，不依赖于第三方分布式中间件，实现方法和代码都自己掌控，可随时调整，不用担心踩到坑。
+这实际上是一种静态分片技术。Redis实例的增减，都得手工调整分片程序。基于此分片机制的开源产品，现在仍不多见。
+这种分片机制的性能比代理式更好（少了一个中间分发环节）。但缺点是升级麻烦，对研发人员的个人依赖性强——需要有较强的程序开发能力做后盾。如果主力程序员离职，可能新的负责人，会选择重写一遍。
+所以，这种方式下，可运维性较差。出现故障，定位和解决都得研发和运维配合着解决，故障时间变长。
+这种方案，难以进行标准化运维，不太适合中小公司（除非有足够的DevOPS）。
+1.2 代理分片
+这种方案，将分片工作交给专门的代理程序来做。代理程序接收到来自业务程序的数据请求，根据路由规则，将这些请求分发给正确的Redis实例并返回给业务程序。
+这种机制下，一般会选用第三方代理程序（而不是自己研发），因为后端有多个Redis实例，所以这类程序又称为分布式中间件。
+这样的好处是，业务程序不用关心后端Redis实例，运维起来也方便。虽然会因此带来些性能损耗，但对于Redis这种内存读写型应用，相对而言是能容忍的。
+这是我们推荐的集群实现方案。像基于该机制的开源产品Twemproxy，便是其中代表之一，应用非常广泛。
+1.3 Redis Cluster
+在这种机制下，没有中心节点（和代理模式的重要不同之处）。所以，一切开心和不开心的事情，都将基于此而展开。
+Redis Cluster将所有Key映射到16384个Slot中，集群中每个Redis实例负责一部分，业务程序通过集成的Redis Cluster客户端进行操作。客户端可以向任一实例发出请求，如果所需数据不在该实例中，则该实例引导客户端自动去对应实例读写数据。
+Redis Cluster的成员管理（节点名称、IP、端口、状态、角色）等，都通过节点之间两两通讯，定期交换并更新。
+由此可见，这是一种非常“重”的方案。已经不是Redis单实例的“简单、可依赖”了。可能这也是延期多年之后，才近期发布的原因之一。
+这令人想起一段历史。因为Memcache不支持持久化，所以有人写了一个Membase，后来改名叫Couchbase，说是支持Auto Rebalance，好几年了，至今都没多少家公司在使用。
+这是个令人忧心忡忡的方案。为解决仲裁等集群管理的问题，Oracle RAC还会使用存储设备的一块空间。而Redis Cluster，是一种完全的去中心化……
+本方案目前不推荐使用，从了解的情况来看，线上业务的实际应用也并不多见。</p>
 <ol>
-  <li>awk命令格式和选项
-2.1. awk的语法有两种形式
-awk [options] ‘script’ var=value file(s)</li>
+  <li>Twemproxy及不足之处
+Twemproxy是一种代理分片机制，由Twitter开源。Twemproxy作为代理，可接受来自多个程序的访问，按照路由规则，转发给后台的各个Redis服务器，再原路返回。
+这个方案顺理成章地解决了单个Redis实例承载能力的问题。当然，Twemproxy本身也是单点，需要用Keepalived做高可用方案。
+我想很多人都应该感谢Twemproxy，这么些年来，应用范围最广、稳定性最高、最久经考验的分布式中间件，应该就是它了。只是，他还有诸多不方便之处。
+Twemproxy最大的痛点在于，无法平滑地扩容/缩容。
+这样导致运维同学非常痛苦：业务量突增，需增加Redis服务器；业务量萎缩，需要减少Redis服务器。但对Twemproxy而言，基本上都很难操作（那是一种锥心的、纠结的痛……）。
+或者说，Twemproxy更加像服务器端静态sharding。有时为了规避业务量突增导致的扩容需求，甚至被迫新开一个基于Twemproxy的Redis集群。
+Twemproxy另一个痛点是，运维不友好，甚至没有控制面板。
+Codis刚好击中Twemproxy的这两大痛点，并且提供诸多其他令人激赏的特性。</li>
 </ol>
 
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/linux/2019/03/03/awk.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/storage/2019/03/23/codis.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -176,22 +201,21 @@ awk [options] ‘script’ var=value file(s)</li>
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/web/2019/03/02/ht.html">线程技术(Hyper-Threading Technology)</a>
+						<a class="post-link" href="/MyBlog/storage/2019/03/19/gapLock.html">gap Lock 间隙锁</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/web/2019/03/02/ht.html"> 夏泽民</a>
+						<a href="/MyBlog/storage/2019/03/19/gapLock.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Mar 2, 2019
+							Mar 19, 2019
 						</span>
 					</div>
-					<div class="excerpt"><p>有多线程（multi-threading）的概念，这很好理解，因为线程是进程最小的调度单位，一个进程至少包含一个线程。
-CPU特有的超线程技术。简单来说就是，多线程比较软，超线程比较硬，二者本质上都是虚拟化。</p>
+					<div class="excerpt"><p>InnoDB有三种行锁的算法：</p>
 
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/web/2019/03/02/ht.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/storage/2019/03/19/gapLock.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -201,21 +225,22 @@ CPU特有的超线程技术。简单来说就是，多线程比较软，超线�
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/algorithm/2019/03/02/ConcurrentHashMap.html">ConcurrentHashMap 分段锁</a>
+						<a class="post-link" href="/MyBlog/linux/2019/03/17/strace.html">strace</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/algorithm/2019/03/02/ConcurrentHashMap.html"> 夏泽民</a>
+						<a href="/MyBlog/linux/2019/03/17/strace.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Mar 2, 2019
+							Mar 17, 2019
 						</span>
 					</div>
-					<div class="excerpt"><p>在并发程序中，串行操作是会降低可伸缩性，并且上下文切换也会减低性能。在锁上发生竞争时将通水导致这两种问题，使用独占锁时保护受限资源的时候，基本上是采用串行方式—-每次只能有一个线程能访问它。所以对于可伸缩性来说最大的威胁就是独占锁。</p>
+					<div class="excerpt"><p>strace是用来跟踪用户空间进程的系统调用和信号的
+系统调用提供用户程序与操作系统之间的接口。操作系统的进程空间分为用户空间和内核空间：</p>
 
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/algorithm/2019/03/02/ConcurrentHashMap.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/linux/2019/03/17/strace.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -225,22 +250,29 @@ CPU特有的超线程技术。简单来说就是，多线程比较软，超线�
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/web/2019/02/27/lock.html">锁</a>
+						<a class="post-link" href="/MyBlog/linux/2019/03/17/pstack.html">pstack 原理</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/web/2019/02/27/lock.html"> 夏泽民</a>
+						<a href="/MyBlog/linux/2019/03/17/pstack.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Feb 27, 2019
+							Mar 17, 2019
 						</span>
 					</div>
-					<div class="excerpt"><p>悲观锁
-总是假设最坏的情况，每次去拿数据的时候都认为别人会修改，所以每次在拿数据的时候都会上锁，这样别人想拿这个数据就会阻塞直到它拿到锁（共享资源每次只给一个线程使用，其它线程阻塞，用完后再把资源转让给其它线程）。传统的关系型数据库里边就用到了很多这种锁机制，比如行锁，表锁等，读锁，写锁等，都是在做操作之前先上锁。Java中synchronized和ReentrantLock等独占锁就是悲观锁思想的实现。</p>
+					<div class="excerpt"><p>注意和ptrace（ptrace()系统调用提供了一个方法，该方法使一个程序（追踪者）可以观察和控制另外一个程序（被追踪者）的执行，并检查和改变被追踪者的内存及寄存器。它主要用于实现断点调试和追踪系统调用。GDB的工作机制）区分</p>
+
+<p>和jstack一样, pstack亦能展现进程的线程堆栈快照, 非常方便验证和性能评估.
+ pstack的作用, 大致可以归纳如下:
+　　1). 查看线程数(比pstree, 包含了详细的堆栈信息)
+　　2). 能简单验证是否按照预定的调用顺序/调用栈执行
+　　3). 采用高频率多次采样使用时, 能发现程序当前的阻塞在哪里, 以及性能消耗点在哪里?
+　　4). 能反映出疑似的死锁现象(多个线程同时在wait lock, 具体需要进一步验证)
+　　当然还能举例更多的作用, 相信使用过jstack的coder, 必然深以为然.</p>
 
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/web/2019/02/27/lock.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/linux/2019/03/17/pstack.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -250,22 +282,22 @@ CPU特有的超线程技术。简单来说就是，多线程比较软，超线�
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/linux/2019/02/27/futex.html">futex 快速用户空间互斥体</a>
+						<a class="post-link" href="/MyBlog/linux/2019/03/17/mqueue.html">Linux进程间通信-消息队列（mqueue）</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/linux/2019/02/27/futex.html"> 夏泽民</a>
+						<a href="/MyBlog/linux/2019/03/17/mqueue.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Feb 27, 2019
+							Mar 17, 2019
 						</span>
 					</div>
-					<div class="excerpt"><!-- more -->
-<p>版内核中出现。</p>
+					<div class="excerpt"><p>消息队列的实现分为两种，一种为System V的消息队列，一种是Posix消息队列；
+消息队列可以认为是一个消息链表，某个进程往一个消息队列中写入消息之前，不需要另外某个进程在该队列上等待消息的达到，这一点与管道和FIFO相反。Posix消息队列与System V消息队列的区别如下：</p>
 
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/linux/2019/02/27/futex.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/linux/2019/03/17/mqueue.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -2517,6 +2549,18 @@ CPU特有的超线程技术。简单来说就是，多线程比较软，超线�
 			  
 			    
 			      <a href="/MyBlog/page559/">559</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page560/">560</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page561/">561</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page562/">562</a>
 			    
 			  
 
@@ -5343,6 +5387,21 @@ CPU特有的超线程技术。简单来说就是，多线程比较软，超线�
 						  
 						
 
+						  
+							<li><a href="/MyBlog/page560">560</a></li>
+						  
+						
+
+						  
+							<li><a href="/MyBlog/page561">561</a></li>
+						  
+						
+
+						  
+							<li><a href="/MyBlog/page562">562</a></li>
+						  
+						
+
 						
 						  <li><a href="/MyBlog/page448">Next</a></li>
 						
@@ -5377,7 +5436,7 @@ CPU特有的超线程技术。简单来说就是，多线程比较软，超线�
 							
 							{
 							"title" : " - ",
-							"url" : "/MyBlog/2021/11/13/2021-09-05-count.html"
+							"url" : "/MyBlog/2021/11/20/2021-09-05-count.html"
 							}
 							
 							,
@@ -5385,7 +5444,7 @@ CPU特有的超线程技术。简单来说就是，多线程比较软，超线�
 							
 							{
 							"title" : " - ",
-							"url" : "/MyBlog/2021/11/13/2021-06-06-show_columns.html"
+							"url" : "/MyBlog/2021/11/20/2021-06-06-show_columns.html"
 							}
 							
 							,
@@ -5393,7 +5452,135 @@ CPU特有的超线程技术。简单来说就是，多线程比较软，超线�
 							
 							{
 							"title" : " - ",
-							"url" : "/MyBlog/2021/11/13/2020-11-24-mysql.html"
+							"url" : "/MyBlog/2021/11/20/2020-11-24-mysql.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "vitness - ",
+							"url" : "/MyBlog/mysql/2021/11/20/vitness.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "tree store - ",
+							"url" : "/MyBlog/mysql/2021/11/20/tree.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "Shell去除空格和空行的方法 - ",
+							"url" : "/MyBlog/linux/2021/11/20/space.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "route print netstat nr - ",
+							"url" : "/MyBlog/linux/2021/11/20/route_print.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "roaring bitmap - ",
+							"url" : "/MyBlog/elasticsearch/2021/11/20/roaring.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "批量 Kill  mysql processlist 进程 - ",
+							"url" : "/MyBlog/mysql/2021/11/20/processlist.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "next-key lock - ",
+							"url" : "/MyBlog/mysql/2021/11/20/next-key.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "netlink - ",
+							"url" : "/MyBlog/docker/2021/11/20/netlink.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "long_query_time - ",
+							"url" : "/MyBlog/mysql/2021/11/20/long_query_time.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "kubectl logs - ",
+							"url" : "/MyBlog/k8s/2021/11/20/loggs.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "kingshard shardingsphere - ",
+							"url" : "/MyBlog/mysql/2021/11/20/kingshard.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "dockershim - ",
+							"url" : "/MyBlog/docker/2021/11/20/dockershim.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "connections - ",
+							"url" : "/MyBlog/mysql/2021/11/20/connections.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "api-resources - ",
+							"url" : "/MyBlog/k8s/2021/11/20/api-resources.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "UUID - ",
+							"url" : "/MyBlog/web/2021/11/20/UUID.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "NewIncomingContext - ",
+							"url" : "/MyBlog/golang/2021/11/20/NewIncomingContext.html"
 							}
 							
 							,
@@ -27789,7 +27976,7 @@ CPU特有的超线程技术。简单来说就是，多线程比较软，超线�
 								
 								
 									<a class="bold" href="/MyBlog/category/web">
-										web (291)
+										web (292)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -27816,7 +28003,7 @@ CPU特有的超线程技术。简单来说就是，多线程比较软，超线�
 								
 								
 									<a class="bold" href="/MyBlog/category/linux">
-										linux (389)
+										linux (391)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -27852,7 +28039,7 @@ CPU特有的超线程技术。简单来说就是，多线程比较软，超线�
 								
 								
 									<a class="bold" href="/MyBlog/category/golang">
-										golang (1006)
+										golang (1007)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -27879,7 +28066,7 @@ CPU特有的超线程技术。简单来说就是，多线程比较软，超线�
 								
 								
 									<a class="bold" href="/MyBlog/category/docker">
-										docker (93)
+										docker (95)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -27897,7 +28084,7 @@ CPU特有的超线程技术。简单来说就是，多线程比较软，超线�
 								
 								
 									<a class="bold" href="/MyBlog/category/elasticsearch">
-										elasticsearch (36)
+										elasticsearch (37)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -27942,7 +28129,7 @@ CPU特有的超线程技术。简单来说就是，多线程比较软，超线�
 								
 								
 									<a class="bold" href="/MyBlog/category/k8s">
-										k8s (75)
+										k8s (77)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -27969,7 +28156,7 @@ CPU特有的超线程技术。简单来说就是，多线程比较软，超线�
 								
 								
 									<a class="bold" href="/MyBlog/category/mysql">
-										mysql (7)
+										mysql (14)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -28030,15 +28217,79 @@ CPU特有的超线程技术。简单来说就是，多线程比较软，超线�
 								<ul style="display:none;width:250px;height:250px;">
 								     
 								   <li>
-										<a href="/MyBlog/2021/11/13/2021-09-05-count.html" style="font-size:40px;"> </a>
+										<a href="/MyBlog/2021/11/20/2021-09-05-count.html" style="font-size:40px;"> </a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/2021/11/13/2021-06-06-show_columns.html" style="font-size:40px;"> </a>
+										<a href="/MyBlog/2021/11/20/2021-06-06-show_columns.html" style="font-size:40px;"> </a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/2021/11/13/2020-11-24-mysql.html" style="font-size:40px;"> </a>
+										<a href="/MyBlog/2021/11/20/2020-11-24-mysql.html" style="font-size:40px;"> </a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/mysql/2021/11/20/vitness.html" style="font-size:40px;"> vitness</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/mysql/2021/11/20/tree.html" style="font-size:40px;"> tree store</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/linux/2021/11/20/space.html" style="font-size:40px;"> Shell去除空格和空行的方法</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/linux/2021/11/20/route_print.html" style="font-size:40px;"> route print netstat nr</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/elasticsearch/2021/11/20/roaring.html" style="font-size:40px;"> roaring bitmap</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/mysql/2021/11/20/processlist.html" style="font-size:40px;"> 批量 Kill  mysql processlist 进程</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/mysql/2021/11/20/next-key.html" style="font-size:40px;"> next-key lock</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/docker/2021/11/20/netlink.html" style="font-size:40px;"> netlink</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/mysql/2021/11/20/long_query_time.html" style="font-size:40px;"> long_query_time</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/k8s/2021/11/20/loggs.html" style="font-size:40px;"> kubectl logs</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/mysql/2021/11/20/kingshard.html" style="font-size:40px;"> kingshard shardingsphere</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/docker/2021/11/20/dockershim.html" style="font-size:40px;"> dockershim</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/mysql/2021/11/20/connections.html" style="font-size:40px;"> connections</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/k8s/2021/11/20/api-resources.html" style="font-size:40px;"> api-resources</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/web/2021/11/20/UUID.html" style="font-size:40px;"> UUID</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/golang/2021/11/20/NewIncomingContext.html" style="font-size:40px;"> NewIncomingContext</a>
 									</li>
 									  
 								   <li>
@@ -28124,70 +28375,6 @@ CPU特有的超线程技术。简单来说就是，多线程比较软，超线�
 								   <li>
 										<a href="/MyBlog/docker/2021/11/06/elf.html" style="font-size:40px;"> ELF not found</a>
 									</li>
-									  
-								   <li>
-										<a href="/MyBlog/k8s/2021/11/06/crd.html" style="font-size:40px;"> crd</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/docker/2021/11/06/charles.html" style="font-size:40px;"> charles 代理的坑</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/python/2021/11/06/chaostoolkit.html" style="font-size:40px;"> chaostoolkit 混沌工程</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2021/11/06/Signal.html" style="font-size:40px;"> Signal</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/mysql/2021/11/06/POLARDB.html" style="font-size:40px;"> POLARDB</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/algorithm/2021/11/06/OT.html" style="font-size:40px;"> OT算法</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/mysql/2021/11/06/Closure.html" style="font-size:40px;"> 树状数据的存储</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/node/2021/10/30/protobuf2json.html" style="font-size:40px;"> protobuf2json</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/storage/2021/10/30/kcat.html" style="font-size:40px;"> kcat</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/docker/2021/10/30/ipvlan.html" style="font-size:40px;"> ipvlan实现容器和节点间通信</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/web/2021/10/30/console.html" style="font-size:40px;"> console</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/mysql/2021/10/30/comma.html" style="font-size:40px;"> MySQL中各种引号的区别</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/storage/mysql/2021/10/30/case_when.html" style="font-size:40px;"> 批量更新</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/docker/k8s/2021/10/30/bhyve.html" style="font-size:40px;"> bhyve</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/k8s/2021/10/30/CustomResourceDefinition.html" style="font-size:40px;"> CustomResourceDefinition</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/linux/docker/2021/10/30/Cgroup.html" style="font-size:40px;"> Cgroup</a>
-									</li>
 									
 								</ul>
 							</div>
@@ -28202,33 +28389,33 @@ CPU特有的超线程技术。简单来说就是，多线程比较软，超线�
                 		<ul class="posts" span="recent">  
 							  
 							   <li>  
-								   <span>13 Nov 2021</span>
-								   <a href="/MyBlog/2021/11/13/2021-09-05-count.html">  
+								   <span>20 Nov 2021</span>
+								   <a href="/MyBlog/2021/11/20/2021-09-05-count.html">  
 								   </a>  
 							   </li>  
 							  
 							   <li>  
-								   <span>13 Nov 2021</span>
-								   <a href="/MyBlog/2021/11/13/2021-06-06-show_columns.html">  
+								   <span>20 Nov 2021</span>
+								   <a href="/MyBlog/2021/11/20/2021-06-06-show_columns.html">  
 								   </a>  
 							   </li>  
 							  
 							   <li>  
-								   <span>13 Nov 2021</span>
-								   <a href="/MyBlog/2021/11/13/2020-11-24-mysql.html">  
+								   <span>20 Nov 2021</span>
+								   <a href="/MyBlog/2021/11/20/2020-11-24-mysql.html">  
 								   </a>  
 							   </li>  
 							  
 							   <li>  
-								   <span>13 Nov 2021</span>
-								   <a href="/MyBlog/elasticsearch/2021/11/13/prefix.html">  
-								   prefix查询</a>  
+								   <span>20 Nov 2021</span>
+								   <a href="/MyBlog/mysql/2021/11/20/vitness.html">  
+								   vitness</a>  
 							   </li>  
 							  
 							   <li>  
-								   <span>13 Nov 2021</span>
-								   <a href="/MyBlog/storage/2021/11/13/obj_store.html">  
-								   obj_store</a>  
+								   <span>20 Nov 2021</span>
+								   <a href="/MyBlog/mysql/2021/11/20/tree.html">  
+								   tree store</a>  
 							   </li>  
 							  
 						</ul>

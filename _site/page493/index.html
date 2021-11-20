@@ -147,21 +147,40 @@
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/elasticsearch/2018/06/29/map.html">map 映射</a>
+						<a class="post-link" href="/MyBlog/storage/2018/06/30/redis_slave.html">redis主从复制</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/elasticsearch/2018/06/29/map.html"> 夏泽民</a>
+						<a href="/MyBlog/storage/2018/06/30/redis_slave.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Jun 29, 2018
+							Jun 30, 2018
 						</span>
 					</div>
-					<div class="excerpt"><p>映射是存储在索引中的文档的大纲。它定义数据类型，如geo_point或文档和规则中存在的字段的字符串和格式，以控制动态添加的字段的映射。 例如，</p>
+					<div class="excerpt"><p>和MySQL主从复制的原因一样，Redis虽然读取写入的速度都特别快，但是也会产生读压力特别大的情况。为了分担读压力，Redis支持主从复制，Redis的主从结构可以采用一主多从或者级联结构，Redis主从复制可以根据是否是全量分为全量同步和增量同步。
+<!-- more -->
+1 全量同步
+　　Redis全量复制一般发生在Slave初始化阶段，这时Slave需要将Master上的所有数据都复制一份。具体步骤如下： 
+　　1）从服务器连接主服务器，发送SYNC命令； 
+　　2）主服务器接收到SYNC命名后，开始执行BGSAVE命令生成RDB文件并使用缓冲区记录此后执行的所有写命令； 
+　　3）主服务器BGSAVE执行完后，向所有从服务器发送快照文件，并在发送期间继续记录被执行的写命令； 
+　　4）从服务器收到快照文件后丢弃所有旧数据，载入收到的快照； 
+　　5）主服务器快照发送完毕后开始向从服务器发送缓冲区中的写命令； 
+　　6）从服务器完成对快照的载入，开始接收命令请求，并执行来自主服务器缓冲区的写命令； 
+完成上面几个步骤后就完成了从服务器数据初始化的所有操作，从服务器此时可以接收来自用户的读请求。
+2 增量同步
+　　Redis增量复制是指Slave初始化后开始正常工作时主服务器发生的写操作同步到从服务器的过程。 
+增量复制的过程主要是主服务器每执行一个写命令就会向从服务器发送相同的写命令，从服务器接收并执行收到的写命令。</p>
+
+<p>3 Redis主从同步策略
+　　主从刚刚连接的时候，进行全量同步；全同步结束后，进行增量同步。当然，如果有需要，slave 在任何时候都可以发起全量同步。redis 策略是，无论如何，首先会尝试进行增量同步，如不成功，要求从机进行全量同步。</p>
+
+<p>4 注意点
+如果多个Slave断线了，需要重启的时候，因为只要Slave启动，就会发送sync请求和主机全量同步，当多个同时出现的时候，可能会导致Master IO剧增宕机。</p>
 
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/elasticsearch/2018/06/29/map.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/storage/2018/06/30/redis_slave.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -171,28 +190,27 @@
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/elasticsearch/2018/06/29/logstash_elasticsearch.html">logstash输出到elasticsearch</a>
+						<a class="post-link" href="/MyBlog/storage/2018/06/30/redis_replication.html">redis主从复制原理、断点续传、无磁盘化复制、过期key处理</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/elasticsearch/2018/06/29/logstash_elasticsearch.html"> 夏泽民</a>
+						<a href="/MyBlog/storage/2018/06/30/redis_replication.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Jun 29, 2018
+							Jun 30, 2018
 						</span>
 					</div>
 					<div class="excerpt"><!-- more -->
-<p>output配置中elasticsearch配置
-action
-index 给一个文档建立索引
-delete 通过id值删除一个文档（这个action需要指定一个id值）
-create 插入一条文档信息，如果这条文档信息在索引中已经存在，那么本次插入工作失败
-update 通过id值更新一个文档。更新有个特殊的案例upsert，如果被更新的文档还不存在，那么就会用到upsert
-示例：</p>
+<p>一、redis replication概括
+1、主从架构的核心原理
+当启动一个slave node的时候，它会发送一个PSYNC命令给master node
+如果这是slave node重新连接master node，那么master node仅仅会复制给slave部分缺少的数据; 如果是slave node第一次连接master node，那么会触发一次full resynchronization(全量复制)
+开始full resynchronization的时候，master会启动一个后台线程，开始生成一份RDB快照文件，同时还会将从客户端收到的所有写命令缓存在内存中。RDB文件生成完毕之后，master会将这个RDB发送给slave，slave会先写入本地磁盘，然后再从本地磁盘加载到内存中。然后master会将内存中缓存的写命令发送给slave，slave也会同步这些数据。
+slave node如果跟master node有网络故障，断开了连接，会自动重连。master如果发现有多个slave node都来重新连接，仅仅会启动一个rdb save操作，用一份数据服务所有slave node。</p>
 
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/elasticsearch/2018/06/29/logstash_elasticsearch.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/storage/2018/06/30/redis_replication.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -202,37 +220,27 @@ update 通过id值更新一个文档。更新有个特殊的案例upsert，如�
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/elasticsearch/2018/06/29/kibana.html">kibana</a>
+						<a class="post-link" href="/MyBlog/storage/2018/06/30/redis_mysql.html">redis_mysql</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/elasticsearch/2018/06/29/kibana.html"> 夏泽民</a>
+						<a href="/MyBlog/storage/2018/06/30/redis_mysql.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Jun 29, 2018
+							Jun 30, 2018
 						</span>
 					</div>
-					<div class="excerpt"><p>https://www.elastic.co/guide/en/kibana/current/tutorial-load-dataset.html
-下载测试数据
-<!-- more -->
-Kibana Dev Tools &gt; Console , set up a mapping for the Shakespeare data set:
-PUT /shakespeare
-{
- “mappings”: {
-  “doc”: {
-   “properties”: {
-    “speaker”: {“type”: “keyword”},
-    “play_name”: {“type”: “keyword”},
-    “line_id”: {“type”: “integer”},
-    “speech_number”: {“type”: “integer”}
-   }
-  }
- }
-}</p>
+					<div class="excerpt"><p>redis的介绍：
+Redis的主从复制功能非常强大，一个master可以拥有多个slave，而一个slave又可以拥有多个slave，如此下去，形成了强大的多级服务器集群架构。下面是关于redis主从复制的一些特点：
+1.master可以有多个slave
+2.除了多个slave连到相同的master外，slave也可以连接其他slave形成图状结构
+3.主从复制不会阻塞master。也就是说当一个或多个slave与master进行初次同步数据时，master可以继续处理client发来的请求。相反slave在初次同步数据时则会阻塞不能处理client的请求。
+4.主从复制可以用来提高系统的可伸缩性,我们可以用多个slave 专门用于client的读请求，比如sort操作可以使用slave来处理。也可以用来做简单的数据冗余
+5.可以在master禁用数据持久化，只需要注释掉master 配置文件中的所有save配置，然后只在slave上配置数据持久化。</p>
 
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/elasticsearch/2018/06/29/kibana.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/storage/2018/06/30/redis_mysql.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -242,22 +250,21 @@ PUT /shakespeare
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/elasticsearch/2018/06/29/index.html">index</a>
+						<a class="post-link" href="/MyBlog/storage/2018/06/30/redis_memcache.html">redis_memcache</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/elasticsearch/2018/06/29/index.html"> 夏泽民</a>
+						<a href="/MyBlog/storage/2018/06/30/redis_memcache.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Jun 29, 2018
+							Jun 30, 2018
 						</span>
 					</div>
-					<div class="excerpt"><p>2.1 Node 与 Cluster
-Elastic 本质上是一个分布式数据库，允许多台服务器协同工作，每台服务器可以运行多个 Elastic 实例。</p>
+					<div class="excerpt"><p>Memcached 是一个高性能的分布式内存对象缓存系统，用于动态Web应用以减轻数据库负载。它通过在内存中缓存数据和对象来减少读取数据库的次数，从而提供动态、数据库驱动网站的速度，现在已被LiveJournal、hatena、Facebook、Vox、LiveJournal等公司所使用。</p>
 
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/elasticsearch/2018/06/29/index.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/storage/2018/06/30/redis_memcache.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -267,24 +274,24 @@ Elastic 本质上是一个分布式数据库，允许多台服务器协同工作
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/elasticsearch/2018/06/29/ik.html">ik</a>
+						<a class="post-link" href="/MyBlog/storage/2018/06/30/redis.html">Redis原理及使用</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/elasticsearch/2018/06/29/ik.html"> 夏泽民</a>
+						<a href="/MyBlog/storage/2018/06/30/redis.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Jun 29, 2018
+							Jun 30, 2018
 						</span>
 					</div>
-					<div class="excerpt"><p>https://github.com/medcl/elasticsearch-analysis-ik/releases
-<!-- more -->
-中文分词器下载
-$elasticsearch-plugin install https://github.com/medcl/elasticsearch-analysis-ik/releases/download/v6.2.4/elasticsearch-analysis-ik-6.2.4.zip</p>
+					<div class="excerpt"><!-- more -->
+<p>Redis本质上是一个Key-Value类型的内存数据库，很像memcached，整个数据库统统加载在内存当中进行操作，定期通过异步操作把数据库数据flush到硬盘上进行保存。因为是纯内存操作，Redis的性能非常出色，每秒可以处理超过 10万次读写操作，是已知性能最快的Key-Value DB。
+Redis的出色之处不仅仅是性能，Redis最大的魅力是支持保存多种数据结构，此外单个value的最大限制是1GB，不像 memcached只能保存1MB的数据，因此Redis可以用来实现很多有用的功能，比方说用他的List来做FIFO双向链表，实现一个轻量级的高性 能消息队列服务，用他的Set可以做高性能的tag系统等等。另外Redis也可以对存入的Key-Value设置expire时间，因此也可以被当作一 个功能加强版的memcached来用。
+Redis的主要缺点是数据库容量受到物理内存的限制，不能用作海量数据的高性能读写，因此Redis适合的场景主要局限在较小数据量的高性能操作和运算上。</p>
 
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/elasticsearch/2018/06/29/ik.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/storage/2018/06/30/redis.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -2536,6 +2543,18 @@ $elasticsearch-plugin install https://github.com/medcl/elasticsearch-analysis-ik
 			  
 			    
 			      <a href="/MyBlog/page559/">559</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page560/">560</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page561/">561</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page562/">562</a>
 			    
 			  
 
@@ -5362,6 +5381,21 @@ $elasticsearch-plugin install https://github.com/medcl/elasticsearch-analysis-ik
 						  
 						
 
+						  
+							<li><a href="/MyBlog/page560">560</a></li>
+						  
+						
+
+						  
+							<li><a href="/MyBlog/page561">561</a></li>
+						  
+						
+
+						  
+							<li><a href="/MyBlog/page562">562</a></li>
+						  
+						
+
 						
 						  <li><a href="/MyBlog/page494">Next</a></li>
 						
@@ -5396,7 +5430,7 @@ $elasticsearch-plugin install https://github.com/medcl/elasticsearch-analysis-ik
 							
 							{
 							"title" : " - ",
-							"url" : "/MyBlog/2021/11/13/2021-09-05-count.html"
+							"url" : "/MyBlog/2021/11/20/2021-09-05-count.html"
 							}
 							
 							,
@@ -5404,7 +5438,7 @@ $elasticsearch-plugin install https://github.com/medcl/elasticsearch-analysis-ik
 							
 							{
 							"title" : " - ",
-							"url" : "/MyBlog/2021/11/13/2021-06-06-show_columns.html"
+							"url" : "/MyBlog/2021/11/20/2021-06-06-show_columns.html"
 							}
 							
 							,
@@ -5412,7 +5446,135 @@ $elasticsearch-plugin install https://github.com/medcl/elasticsearch-analysis-ik
 							
 							{
 							"title" : " - ",
-							"url" : "/MyBlog/2021/11/13/2020-11-24-mysql.html"
+							"url" : "/MyBlog/2021/11/20/2020-11-24-mysql.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "vitness - ",
+							"url" : "/MyBlog/mysql/2021/11/20/vitness.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "tree store - ",
+							"url" : "/MyBlog/mysql/2021/11/20/tree.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "Shell去除空格和空行的方法 - ",
+							"url" : "/MyBlog/linux/2021/11/20/space.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "route print netstat nr - ",
+							"url" : "/MyBlog/linux/2021/11/20/route_print.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "roaring bitmap - ",
+							"url" : "/MyBlog/elasticsearch/2021/11/20/roaring.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "批量 Kill  mysql processlist 进程 - ",
+							"url" : "/MyBlog/mysql/2021/11/20/processlist.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "next-key lock - ",
+							"url" : "/MyBlog/mysql/2021/11/20/next-key.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "netlink - ",
+							"url" : "/MyBlog/docker/2021/11/20/netlink.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "long_query_time - ",
+							"url" : "/MyBlog/mysql/2021/11/20/long_query_time.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "kubectl logs - ",
+							"url" : "/MyBlog/k8s/2021/11/20/loggs.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "kingshard shardingsphere - ",
+							"url" : "/MyBlog/mysql/2021/11/20/kingshard.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "dockershim - ",
+							"url" : "/MyBlog/docker/2021/11/20/dockershim.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "connections - ",
+							"url" : "/MyBlog/mysql/2021/11/20/connections.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "api-resources - ",
+							"url" : "/MyBlog/k8s/2021/11/20/api-resources.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "UUID - ",
+							"url" : "/MyBlog/web/2021/11/20/UUID.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "NewIncomingContext - ",
+							"url" : "/MyBlog/golang/2021/11/20/NewIncomingContext.html"
 							}
 							
 							,
@@ -27808,7 +27970,7 @@ $elasticsearch-plugin install https://github.com/medcl/elasticsearch-analysis-ik
 								
 								
 									<a class="bold" href="/MyBlog/category/web">
-										web (291)
+										web (292)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -27835,7 +27997,7 @@ $elasticsearch-plugin install https://github.com/medcl/elasticsearch-analysis-ik
 								
 								
 									<a class="bold" href="/MyBlog/category/linux">
-										linux (389)
+										linux (391)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -27871,7 +28033,7 @@ $elasticsearch-plugin install https://github.com/medcl/elasticsearch-analysis-ik
 								
 								
 									<a class="bold" href="/MyBlog/category/golang">
-										golang (1006)
+										golang (1007)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -27898,7 +28060,7 @@ $elasticsearch-plugin install https://github.com/medcl/elasticsearch-analysis-ik
 								
 								
 									<a class="bold" href="/MyBlog/category/docker">
-										docker (93)
+										docker (95)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -27916,7 +28078,7 @@ $elasticsearch-plugin install https://github.com/medcl/elasticsearch-analysis-ik
 								
 								
 									<a class="bold" href="/MyBlog/category/elasticsearch">
-										elasticsearch (36)
+										elasticsearch (37)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -27961,7 +28123,7 @@ $elasticsearch-plugin install https://github.com/medcl/elasticsearch-analysis-ik
 								
 								
 									<a class="bold" href="/MyBlog/category/k8s">
-										k8s (75)
+										k8s (77)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -27988,7 +28150,7 @@ $elasticsearch-plugin install https://github.com/medcl/elasticsearch-analysis-ik
 								
 								
 									<a class="bold" href="/MyBlog/category/mysql">
-										mysql (7)
+										mysql (14)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -28049,15 +28211,79 @@ $elasticsearch-plugin install https://github.com/medcl/elasticsearch-analysis-ik
 								<ul style="display:none;width:250px;height:250px;">
 								     
 								   <li>
-										<a href="/MyBlog/2021/11/13/2021-09-05-count.html" style="font-size:40px;"> </a>
+										<a href="/MyBlog/2021/11/20/2021-09-05-count.html" style="font-size:40px;"> </a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/2021/11/13/2021-06-06-show_columns.html" style="font-size:40px;"> </a>
+										<a href="/MyBlog/2021/11/20/2021-06-06-show_columns.html" style="font-size:40px;"> </a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/2021/11/13/2020-11-24-mysql.html" style="font-size:40px;"> </a>
+										<a href="/MyBlog/2021/11/20/2020-11-24-mysql.html" style="font-size:40px;"> </a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/mysql/2021/11/20/vitness.html" style="font-size:40px;"> vitness</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/mysql/2021/11/20/tree.html" style="font-size:40px;"> tree store</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/linux/2021/11/20/space.html" style="font-size:40px;"> Shell去除空格和空行的方法</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/linux/2021/11/20/route_print.html" style="font-size:40px;"> route print netstat nr</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/elasticsearch/2021/11/20/roaring.html" style="font-size:40px;"> roaring bitmap</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/mysql/2021/11/20/processlist.html" style="font-size:40px;"> 批量 Kill  mysql processlist 进程</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/mysql/2021/11/20/next-key.html" style="font-size:40px;"> next-key lock</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/docker/2021/11/20/netlink.html" style="font-size:40px;"> netlink</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/mysql/2021/11/20/long_query_time.html" style="font-size:40px;"> long_query_time</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/k8s/2021/11/20/loggs.html" style="font-size:40px;"> kubectl logs</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/mysql/2021/11/20/kingshard.html" style="font-size:40px;"> kingshard shardingsphere</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/docker/2021/11/20/dockershim.html" style="font-size:40px;"> dockershim</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/mysql/2021/11/20/connections.html" style="font-size:40px;"> connections</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/k8s/2021/11/20/api-resources.html" style="font-size:40px;"> api-resources</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/web/2021/11/20/UUID.html" style="font-size:40px;"> UUID</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/golang/2021/11/20/NewIncomingContext.html" style="font-size:40px;"> NewIncomingContext</a>
 									</li>
 									  
 								   <li>
@@ -28143,70 +28369,6 @@ $elasticsearch-plugin install https://github.com/medcl/elasticsearch-analysis-ik
 								   <li>
 										<a href="/MyBlog/docker/2021/11/06/elf.html" style="font-size:40px;"> ELF not found</a>
 									</li>
-									  
-								   <li>
-										<a href="/MyBlog/k8s/2021/11/06/crd.html" style="font-size:40px;"> crd</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/docker/2021/11/06/charles.html" style="font-size:40px;"> charles 代理的坑</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/python/2021/11/06/chaostoolkit.html" style="font-size:40px;"> chaostoolkit 混沌工程</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2021/11/06/Signal.html" style="font-size:40px;"> Signal</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/mysql/2021/11/06/POLARDB.html" style="font-size:40px;"> POLARDB</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/algorithm/2021/11/06/OT.html" style="font-size:40px;"> OT算法</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/mysql/2021/11/06/Closure.html" style="font-size:40px;"> 树状数据的存储</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/node/2021/10/30/protobuf2json.html" style="font-size:40px;"> protobuf2json</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/storage/2021/10/30/kcat.html" style="font-size:40px;"> kcat</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/docker/2021/10/30/ipvlan.html" style="font-size:40px;"> ipvlan实现容器和节点间通信</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/web/2021/10/30/console.html" style="font-size:40px;"> console</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/mysql/2021/10/30/comma.html" style="font-size:40px;"> MySQL中各种引号的区别</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/storage/mysql/2021/10/30/case_when.html" style="font-size:40px;"> 批量更新</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/docker/k8s/2021/10/30/bhyve.html" style="font-size:40px;"> bhyve</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/k8s/2021/10/30/CustomResourceDefinition.html" style="font-size:40px;"> CustomResourceDefinition</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/linux/docker/2021/10/30/Cgroup.html" style="font-size:40px;"> Cgroup</a>
-									</li>
 									
 								</ul>
 							</div>
@@ -28221,33 +28383,33 @@ $elasticsearch-plugin install https://github.com/medcl/elasticsearch-analysis-ik
                 		<ul class="posts" span="recent">  
 							  
 							   <li>  
-								   <span>13 Nov 2021</span>
-								   <a href="/MyBlog/2021/11/13/2021-09-05-count.html">  
+								   <span>20 Nov 2021</span>
+								   <a href="/MyBlog/2021/11/20/2021-09-05-count.html">  
 								   </a>  
 							   </li>  
 							  
 							   <li>  
-								   <span>13 Nov 2021</span>
-								   <a href="/MyBlog/2021/11/13/2021-06-06-show_columns.html">  
+								   <span>20 Nov 2021</span>
+								   <a href="/MyBlog/2021/11/20/2021-06-06-show_columns.html">  
 								   </a>  
 							   </li>  
 							  
 							   <li>  
-								   <span>13 Nov 2021</span>
-								   <a href="/MyBlog/2021/11/13/2020-11-24-mysql.html">  
+								   <span>20 Nov 2021</span>
+								   <a href="/MyBlog/2021/11/20/2020-11-24-mysql.html">  
 								   </a>  
 							   </li>  
 							  
 							   <li>  
-								   <span>13 Nov 2021</span>
-								   <a href="/MyBlog/elasticsearch/2021/11/13/prefix.html">  
-								   prefix查询</a>  
+								   <span>20 Nov 2021</span>
+								   <a href="/MyBlog/mysql/2021/11/20/vitness.html">  
+								   vitness</a>  
 							   </li>  
 							  
 							   <li>  
-								   <span>13 Nov 2021</span>
-								   <a href="/MyBlog/storage/2021/11/13/obj_store.html">  
-								   obj_store</a>  
+								   <span>20 Nov 2021</span>
+								   <a href="/MyBlog/mysql/2021/11/20/tree.html">  
+								   tree store</a>  
 							   </li>  
 							  
 						</ul>
