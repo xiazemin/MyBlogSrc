@@ -1,0 +1,101 @@
+---
+title: lock
+layout: post
+category: mysql
+author: 夏泽民
+---
+show status like 'Table%';
+
++----------------------------+----------+
+
+| Variable_name        | Value |
+
++----------------------------+----------+
+
+| Table_locks_immediate | 105         |
+
+| Table_locks_waited   | 3           |
+
++----------------------------+----------+
+
+
+Table_locks_immediate  指的是能够立即获得表级锁的次数
+Table_locks_waited  指的是不能立即获取表级锁而需要等待的次数
+查看正在被锁定的的表
+
+show OPEN TABLES where In_use > 0;
+怎么查找mysql中的锁表语句
+show processlist;
+SHOW PROCESSLIST显示哪些线程正在运行。您也可以使用mysqladmin processlist语句得到此信息。如果您有SUPER权限，您可以看到所有线程。否则，您只能看到您自己的线程（也就是，与您正在使用的MySQL账户相关的线程）。如果有线程在update或者insert 某个表，此时进程的status为updating 或者 sending data。
+-- 查看那些表锁到了
+show OPEN TABLES where In_use > 0;
+-- 查看进程号
+show processlist;
+--删除进程
+ kill 1085850；
+<!-- more -->
+https://www.cnblogs.com/jpfss/p/9203541.html
+
+https://blog.csdn.net/qq_39313596/article/details/90203546
+可直接在mysql命令行执行：show engine innodb status\G;（只能通过cmd或者shell登录mysql）
+
+查看造成死锁的sql语句，分析索引情况，然后优化sql然后show processlist;
+show status like ‘%lock%’
+show OPEN TABLES where In_use > 0; 这个语句记录当前锁表状态 
+另外可以打开慢查询日志，linux下打开需在my.cnf的[mysqld]里面加上以下内容：
+show full processlist;
+show processlist;只列出前100条，如果想全列出请使用show full processlist;
+
+3 show open tables;
+这条命令能够查看当前有那些表是打开的。In_use列表示有多少线程正在使用某张表，Name_locked表示表名是否被锁，这一般发生在Drop或Rename命令操作这张表时。所以这条命令不能帮助解答我们常见的问题：当前某张表是否有死锁，谁拥有表上的这个锁等。
+show open tables from database;
+https://www.cnblogs.com/jpfss/p/9203679.html
+我查看了一下mysql服务器的key_blocks参数的各项值：
+
+mysql> show global status like 'key_blocks_u%'
+Variable_name	Value
+Key_blocks_unused	138231
+Key_blocks_used	3
++-------------------+--------+
+也google了下相关资料：
+Key_blocks_unused 未使用的缓存簇(blocks)数
+Key_blocks_used 曾经用到的最大的blocks数
+https://developer.aliyun.com/ask/58466?spm=a2c6h.13159736
+
+https://www.oschina.net/question/107929_62735
+连接数 
+　　经常会遇见”MySQL: ERROR 1040: Too many connections”的情况，一种是访问量确实很高，MySQL服务器抗不住，这个时候就要考虑增加从服务器分散读压力，另外一种情况是MySQL配置文件中max_connections值过小： 
+　　mysql> show variables like 'max_connections'; 
+　　+-----------------+-------+ 
+　　| Variable_name | Value | 
+　　+-----------------+-------+ 
+　　| max_connections | 256 | 
+　　+-----------------+-------+　　
+
+       这台MySQL服务器最大连接数是256，然后查询一下服务器响应的最大连接数： 
+　　mysql> show global status like ‘Max_used_connections’;
+　　MySQL服务器过去的最大连接数是245，没有达到服务器连接数上限256，应该没有出现1040错误，比较理想的设置是：
+　　Max_used_connections / max_connections * 100% ≈ 85%
+　　最大连接数占上限连接数的85%左右，如果发现比例在10%以下，MySQL服务器连接数上限设置的过高了
+　　
+　　Key_buffer_size 
+　　key_buffer_size是对MyISAM表性能影响最大的一个参数，下面一台以MyISAM为主要存储引擎服务器的配置： 
+　　mysql> show variables like ‘key_buffer_size’; 
+　　
+　https://www.cnblogs.com/terryguan/p/6524950.html
+　https://www.cnblogs.com/bluealine/p/11038148.html
+　
+　在5.5中，information_schema 库中增加了三个关于锁的表（innoDB引擎）：
+
+innodb_trx         ## 当前运行的所有事务
+innodb_locks       ## 当前出现的锁
+innodb_lock_waits  ## 锁等待的对应关系
+在分析innodb中锁阻塞时，几种方法的对比情况：
+
+（1）使用show processlist查看不靠谱；
+（2）直接使用show engine innodb status查看，无法判断到问题的根因；
+（3）使用mysqladmin debug查看，能看到所有产生锁的线程，但无法判断哪个才是根因；
+（4）开启innodb_lock_monitor后，再使用show engine innodb status查看，能够找到锁阻塞的根因。
+https://www.cnblogs.com/jpfss/p/11491526.html
+
+　
