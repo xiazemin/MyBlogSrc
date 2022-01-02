@@ -58,9 +58,9 @@ t.Execute(os.Stdout, nil)
 
 如果非要一起使用，那么要记住，
 
-New(“TName”) 中的 TName 必须要和 header.tmpl 中定义的{{define name}}中的 name 同名。
+New(“TName”) 中的 TName 必须要和 header.tmpl 中定义的{\{define name}\}中的 name 同名。
 
-但是正常的做法应该是这样的，同样的 ExecuteTemplate() 中输入的 name 也必须和模板中 {{define name}} 相同。
+但是正常的做法应该是这样的，同样的 ExecuteTemplate() 中输入的 name 也必须和模板中 {\{define name}\} 相同。
 
 t, _ := template.ParseFiles("header.tmpl")
 t.ExecuteTemplate(os.Stdout, "header", nil)
@@ -69,7 +69,7 @@ t.ExecuteTemplate(os.Stdout, "header", nil)
 
 如果模板中没有与填充数据对应的模板语言，那么很有可能panic。
 
-模板中 {{}} 花括号表达式，自动实现了对js代码的过滤，如何不过滤js代码呢，只需要使用 text/template 包下的template，因为html/template包下的模板实现一些针对html的安全操作包括过滤js代码。
+模板中 {\{\}\} 花括号表达式，自动实现了对js代码的过滤，如何不过滤js代码呢，只需要使用 text/template 包下的template，因为html/template包下的模板实现一些针对html的安全操作包括过滤js代码。
 
 Golang 当中支持 Pipeline，一样是使用 |，
 

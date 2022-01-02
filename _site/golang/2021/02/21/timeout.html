@@ -190,7 +190,7 @@ IdleTimetout：当开启了保持活动状态(keep-alive)时允许的最大空�
 ReadHeaderTimeout：允许读请求头的最大时长<br />
 <!-- more --><br />
 timeout 和 deadline<br />
-如果我们查看 net/http 的源码，尤其是看到 <code class="highlighter-rouge">conn</code> 类型[1] 时，我们会发现conn 实际上使用了 net.Conn 连接，net.Conn 表示底层的网络连接：</p><br />
+如果我们查看 net/http 的源码，尤其是看到 <code class="language-plaintext highlighter-rouge">conn</code> 类型[1] 时，我们会发现conn 实际上使用了 net.Conn 连接，net.Conn 表示底层的网络连接：</p><br />
 <br />
 <p>// Taken from: https://github.com/golang/go/blob/bbbc658/src/net/http/server.go#L247 <br />
 // A conn represents the server-side of an HTTP connection. <br />
@@ -199,7 +199,7 @@ type conn struct { <br />
     // Immutable; never nil. <br />
     server *Server</p><br />
 <br />
-<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code>// * Snipped * <br />
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>// * Snipped * <br />
  <br />
 // rwc is the underlying network connection. <br />
 // This is never wrapped by other types and is the value given out <br />
@@ -217,7 +217,7 @@ rwc net.Conn <br />
 func (c <em>conn) readRequest(ctx context.Context) (w *response, err error) { <br />
         // *Snipped</em></p><br />
 <br />
-<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    t0 := time.Now() <br />
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    t0 := time.Now() <br />
     if d := c.server.readHeaderTimeout(); d != 0 { <br />
             hdrDeadline = t0.Add(d) <br />
     } <br />
@@ -283,9 +283,9 @@ curl localhost:8888  0.01s user 0.01s system 0% CPU 2.021 total <br />
 <p>处理超时<br />
 我们的目标是确保我们的 slowHandler 在 1s 内完成处理。如果超过了 1s，我们的服务会停止运行并返回对应的超时错误。</p><br />
 <br />
-<p>在 Go 和一些其它编程语言中，组合往往是设计和开发中最好的方式。标准库的 <code class="highlighter-rouge">net/http</code> 包[5]有很多相互兼容的元素，开发者可以不需经过复杂的设计考虑就可以轻易将它们组合在一起。</p><br />
+<p>在 Go 和一些其它编程语言中，组合往往是设计和开发中最好的方式。标准库的 <code class="language-plaintext highlighter-rouge">net/http</code> 包[5]有很多相互兼容的元素，开发者可以不需经过复杂的设计考虑就可以轻易将它们组合在一起。</p><br />
 <br />
-<p>基于此，net/http 包提供了<code class="highlighter-rouge">TimeoutHandler</code>[6] — 返回了一个在给定的时间限制内运行的 handler。</p><br />
+<p>基于此，net/http 包提供了<code class="language-plaintext highlighter-rouge">TimeoutHandler</code>[6] — 返回了一个在给定的时间限制内运行的 handler。</p><br />
 <br />
 <p>函数签名：</p><br />
 <br />
@@ -384,13 +384,13 @@ curl localhost:8888  0.01s user 0.01s system 1% CPU 1.021 total <br />
 <p>所以，我们怎么保护系统，使之不会出现类似的未优化的超时或取消请求呢?</p><br />
 <br />
 <p>上下文超时和取消<br />
-Go 有一个包名为 <code class="highlighter-rouge">context</code>[8] 专门处理类似的场景。</p><br />
+Go 有一个包名为 <code class="language-plaintext highlighter-rouge">context</code>[8] 专门处理类似的场景。</p><br />
 <br />
-<p>context 包在 Go 1.7 版本中提升为标准库，在之前的版本中，以<code class="highlighter-rouge">golang.org/x/net/context</code>[9] 的路径作为 Go Sub-repository Packages[10]出现。</p><br />
+<p>context 包在 Go 1.7 版本中提升为标准库，在之前的版本中，以<code class="language-plaintext highlighter-rouge">golang.org/x/net/context</code>[9] 的路径作为 Go Sub-repository Packages[10]出现。</p><br />
 <br />
 <p>这个包定义了 Context 类型。它最初的目的是保存不同 API 和不同处理的截止时间、取消信号和其他请求相关的值。如果你想了解关于 context 包的其他信息，可以阅读 Golang’s blog[11] 中的 “Go 并发模式：Context”(译注：Go Concurrency Patterns: Context) .</p><br />
 <br />
-<p>net/http 包中的的 Request 类型已经有 context 与之绑定。从 Go 1.7 开始，Request 新增了一个返回请求的上下文的 <code class="highlighter-rouge">Context</code> 方法[12]。对于进来的请求，在客户端关闭连接、请求被取消(HTTP/2 中)或 ServeHTTP 方法返回后，服务端会取消上下文。</p><br />
+<p>net/http 包中的的 Request 类型已经有 context 与之绑定。从 Go 1.7 开始，Request 新增了一个返回请求的上下文的 <code class="language-plaintext highlighter-rouge">Context</code> 方法[12]。对于进来的请求，在客户端关闭连接、请求被取消(HTTP/2 中)或 ServeHTTP 方法返回后，服务端会取消上下文。</p><br />
 <br />
 <p>我们期望的现象是，当客户端取消请求(输入了 CTRL + C)或一段时间后TimeoutHandler 继续执行然后终止请求时，服务端会停止后续的处理。进而关闭所有的连接，释放所有被运行中的处理进程(及它的所有子协程)占用的资源。</p><br />
 <br />
@@ -409,7 +409,7 @@ Go 有一个包名为 <code class="highlighter-rouge">context</code>[8] 专门�
  result := slowAPICall(r.Context()) <br />
  io.WriteString(w, result+”\n”) <br />
 } <br />
-在例子中我们利用了请求上下文，实际中怎么用呢?<code class="highlighter-rouge">Context</code> 类型[13]有个 Done 属性，类型为 &lt;-chan struct{}。当进程处理完成时，Done 关闭，此时表示上下文应该被取消，而这正是例子中我们需要的。</p><br />
+在例子中我们利用了请求上下文，实际中怎么用呢?<code class="language-plaintext highlighter-rouge">Context</code> 类型[13]有个 Done 属性，类型为 &lt;-chan struct{}。当进程处理完成时，Done 关闭，此时表示上下文应该被取消，而这正是例子中我们需要的。</p><br />
 <br />
 <p>我们在 slowAPICall 函数中用 select 处理 ctx.Done 通道。当我们通过 Done 通道接收一个空的 struct 时，意味着上下文取消，我们需要让 slowAPICall 函数返回一个空字符串。</p><br />
 <br />
@@ -440,7 +440,7 @@ Timeout!</p><br />
 2019/12/30 00:07:15 slowAPICall was supposed to take 2 seconds, but was canceled. <br />
 检查输出：我们发送了 cRUL 请求到服务，它耗时超过 1 秒，服务取消了 slowAPICall 函数。我们几乎不需要写任何代码。TimeoutHandler 为我们代劳了 – 当处理耗时超过预期时，TimeoutHandler 终止了处理进程并取消请求上下文。</p><br />
 <br />
-<p>TimeoutHandler 是在 <code class="highlighter-rouge">timeoutHandler.ServeHTTP</code> 方法[14] 中取消上下文的：</p><br />
+<p>TimeoutHandler 是在 <code class="language-plaintext highlighter-rouge">timeoutHandler.ServeHTTP</code> 方法[14] 中取消上下文的：</p><br />
 <br />
 <p>// Taken from: https://github.com/golang/go/blob/bbbc658/src/net/http/server.go#L3217-L3263 <br />
 func (h *timeoutHandler) ServeHTTP(w ResponseWriter, r *Request) { <br />
@@ -452,7 +452,7 @@ func (h *timeoutHandler) ServeHTTP(w ResponseWriter, r *Request) { <br />
         } <br />
         r = r.WithContext(ctx)</p><br />
 <br />
-<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    // *Snipped*  }  上面例子中，我们通过调用 context.WithTimeout 来使用请求上下文。超时值 h.dt (TimeoutHandler 的第二个参数)设置给了上下文。返回的上下文是请求上下文设置了超时值后的一份拷贝。随后，它作为请求上下文传给r.WithContext(ctx)。<br />
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    // *Snipped*  }  上面例子中，我们通过调用 context.WithTimeout 来使用请求上下文。超时值 h.dt (TimeoutHandler 的第二个参数)设置给了上下文。返回的上下文是请求上下文设置了超时值后的一份拷贝。随后，它作为请求上下文传给r.WithContext(ctx)。<br />
 </code></pre></div></div><br />
 <br />
 <p>context.WithTimeout 方法执行了上下文取消。它返回了 Context 设置了一个超时值之后的副本。当到达超时时间后，就取消上下文。</p><br />
@@ -468,7 +468,7 @@ func WithTimeout(parent Context, timeout time.Duration) (Context, CancelFunc) { 
 func WithDeadline(parent Context, d time.Time) (Context, CancelFunc) { <br />
         // <em>Snipped</em></p><br />
 <br />
-<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    c := &amp;timerCtx{ <br />
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    c := &amp;timerCtx{ <br />
      cancelCtx: newCancelCtx(parent), <br />
      deadline:  d, <br />
     } <br />
@@ -485,7 +485,7 @@ func WithDeadline(parent Context, d time.Time) (Context, CancelFunc) { <br />
 <br />
 <p>Done 通道的关闭有效地取消了上下文，使我们的 slowAPICall 函数终止了它的执行。这就是 TimeoutHandler 终止耗时长的处理进程的原理。</p><br />
 <br />
-<p>(如果你想阅读上面提到的源码，你可以去看 <code class="highlighter-rouge">cancelCtx</code> 类型[15] 和<code class="highlighter-rouge">timerCtx</code> 类型[16])</p><br />
+<p>(如果你想阅读上面提到的源码，你可以去看 <code class="language-plaintext highlighter-rouge">cancelCtx</code> 类型[15] 和<code class="language-plaintext highlighter-rouge">timerCtx</code> 类型[16])</p><br />
 <br />
 <p>有弹性的 net/http 服务<br />
 连接截止时间提供了低级的细粒度控制。虽然它们的名字中含有“超时”，但它们并没有表现出人们通常期望的“超时”。实际上它们非常强大，但是使用它们有一定的门槛。</p><br />

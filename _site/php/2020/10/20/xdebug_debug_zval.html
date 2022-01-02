@@ -145,58 +145,55 @@
 					 <p>众所周知php的变量都是通过zend引擎来处理的 而zval结构体则是管理我们变量的一个容器<br />
 而 xdebug_debug_zval 函数则是我们调试 zval结构体的一个好工具</p><br />
 <br />
-<?php<br />
+<p>&lt;?php</p><br />
 <br />
-//php zval变量容器<br />
+<p>//php zval变量容器</p><br />
 <br />
-$a = range(0, 3);<br />
+<p>$a = range(0, 3);</p><br />
 <br />
-xdebug_debug_zval('a');<br />
-上面的代码 在浏览器中 会输出 以下结果<br />
+<p>xdebug_debug_zval(‘a’);<br />
+上面的代码 在浏览器中 会输出 以下结果</p><br />
 <br />
-a: <br />
+<p>a: <br />
 (refcount=1, is_ref=0),<br />
 array (size=4)<br />
-  0 => (refcount=1, is_ref=0),int 0<br />
-  1 => (refcount=1, is_ref=0),int 1<br />
-  2 => (refcount=1, is_ref=0),int 2<br />
-  3 => (refcount=1, is_ref=0),int 3<br />
+  0 =&gt; (refcount=1, is_ref=0),int 0<br />
+  1 =&gt; (refcount=1, is_ref=0),int 1<br />
+  2 =&gt; (refcount=1, is_ref=0),int 2<br />
+  3 =&gt; (refcount=1, is_ref=0),int 3</p><br />
 <br />
-refcount代表的是 有多少个变量指向这一个内存空间 is_ref代表的是是不是引用<br />
+<p>refcount代表的是 有多少个变量指向这一个内存空间 is_ref代表的是是不是引用</p><br />
 <br />
-https://www.php.net/manual/zh/features.gc.refcounting-basics.php<br />
+<p>https://www.php.net/manual/zh/features.gc.refcounting-basics.php<br />
 <!-- more --><br />
-概述<br />
+概述</p><br />
 <br />
-    在5.2及更早版本的PHP中，没有专门的垃圾回收器GC（Garbage Collection），引擎在判断一个变量空间是否能够被释放的时候是依据这个变量的zval的refcount的值，如果refcount为0，那么变量的空间可以被释放，否则就不释放，这是一种非常简单的GC实现。然而在这种简单的GC实现方案中，出现了意想不到的变量内存泄漏情况（Bug:http://bugs.php.net/bug.php?id=33595），引擎将无法回收这些内存，于是在PHP5.3中出现了新的GC，新的GC有专门的机制负责清理垃圾数据，防止内存泄漏。本文将详细的阐述PHP5.3中新的GC运行机制。<br />
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>在5.2及更早版本的PHP中，没有专门的垃圾回收器GC（Garbage Collection），引擎在判断一个变量空间是否能够被释放的时候是依据这个变量的zval的refcount的值，如果refcount为0，那么变量的空间可以被释放，否则就不释放，这是一种非常简单的GC实现。然而在这种简单的GC实现方案中，出现了意想不到的变量内存泄漏情况（Bug:http://bugs.php.net/bug.php?id=33595），引擎将无法回收这些内存，于是在PHP5.3中出现了新的GC，新的GC有专门的机制负责清理垃圾数据，防止内存泄漏。本文将详细的阐述PHP5.3中新的GC运行机制。<br />
 <br />
-    目前很少有详细的资料介绍新的GC，本文将是目前国内最为详细的从源码角度介绍PHP5.3中GC原理的文章。其中关于垃圾产生以及算法简介部分由笔者根据手册翻译而来，当然其中融入了本人的一些看法。手册中相关内容：Garbage Collection<br />
+目前很少有详细的资料介绍新的GC，本文将是目前国内最为详细的从源码角度介绍PHP5.3中GC原理的文章。其中关于垃圾产生以及算法简介部分由笔者根据手册翻译而来，当然其中融入了本人的一些看法。手册中相关内容：Garbage Collection<br />
 <br />
-    在介绍这个新的GC之前，读者必须先了解PHP中变量的内部存储相关知识，请先阅读 变量的内部存储：引用和计数 <br />
+在介绍这个新的GC之前，读者必须先了解PHP中变量的内部存储相关知识，请先阅读 变量的内部存储：引用和计数 <br />
+</code></pre></div></div><br />
 <br />
- <br />
+<p>什么算垃圾</p><br />
 <br />
-什么算垃圾<br />
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>首先我们需要定义一下“垃圾”的概念，新的GC负责清理的垃圾是指变量的容器zval还存在，但是又没有任何变量名指向此zval。因此GC判断是否为垃圾的一个重要标准是有没有变量名指向变量容器zval。<br />
 <br />
-    首先我们需要定义一下“垃圾”的概念，新的GC负责清理的垃圾是指变量的容器zval还存在，但是又没有任何变量名指向此zval。因此GC判断是否为垃圾的一个重要标准是有没有变量名指向变量容器zval。<br />
+假设我们有一段PHP代码，使用了一个临时变量$tmp存储了一个字符串，在处理完字符串之后，就不需要这个$tmp变量了，$tmp变量对于我们来说可以算是一个“垃圾”了，但是对于GC来说，$tmp其实并不是一个垃圾，$tmp变量对我们没有意义，但是这个变量实际还存在，$tmp符号依然指向它所对应的zval，GC会认为PHP代码中可能还会使用到此变量，所以不会将其定义为垃圾。<br />
 <br />
-    假设我们有一段PHP代码，使用了一个临时变量$tmp存储了一个字符串，在处理完字符串之后，就不需要这个$tmp变量了，$tmp变量对于我们来说可以算是一个“垃圾”了，但是对于GC来说，$tmp其实并不是一个垃圾，$tmp变量对我们没有意义，但是这个变量实际还存在，$tmp符号依然指向它所对应的zval，GC会认为PHP代码中可能还会使用到此变量，所以不会将其定义为垃圾。<br />
+那么如果我们在PHP代码中使用完$tmp后，调用unset删除这个变量，那么$tmp是不是就成为一个垃圾了呢。很可惜，GC仍然不认为$tmp是一个垃圾，因为$tmp在unset之后，refcount减少1变成了0(这里假设没有别的变量和$tmp指向相同的zval),这个时候GC会直接将$tmp对应的zval的内存空间释放，$tmp和其对应的zval就根本不存在了。此时的$tmp也不是新的GC所要对付的那种“垃圾”。那么新的GC究竟要对付什么样的垃圾呢，下面我们将生产一个这样的垃圾。  <br />
+</code></pre></div></div><br />
 <br />
-    那么如果我们在PHP代码中使用完$tmp后，调用unset删除这个变量，那么$tmp是不是就成为一个垃圾了呢。很可惜，GC仍然不认为$tmp是一个垃圾，因为$tmp在unset之后，refcount减少1变成了0(这里假设没有别的变量和$tmp指向相同的zval),这个时候GC会直接将$tmp对应的zval的内存空间释放，$tmp和其对应的zval就根本不存在了。此时的$tmp也不是新的GC所要对付的那种“垃圾”。那么新的GC究竟要对付什么样的垃圾呢，下面我们将生产一个这样的垃圾。  <br />
+<p>顽固垃圾的产生过程</p><br />
 <br />
- <br />
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>如果读者已经阅读了变量内部存储相关的内容，想必对refcount和isref这些变量内部的信息有了一定的了解。这里我们将结合手册中的一个例子来介绍垃圾的产生过程：<br />
+</code></pre></div></div><br />
 <br />
-顽固垃圾的产生过程<br />
+<p>&lt;?php</p><br />
 <br />
-    如果读者已经阅读了变量内部存储相关的内容，想必对refcount和isref这些变量内部的信息有了一定的了解。这里我们将结合手册中的一个例子来介绍垃圾的产生过程：<br />
+<p>$a = “new string”;</p><br />
 <br />
- <br />
-<br />
-<?php<br />
-<br />
-$a = "new string";<br />
-<br />
-?><br />
+<p>?&gt;</p><br />
 <br />
 <p>在这么简单的一个代码中，$a变量内部存储信息为</p><br />
 <br />
@@ -204,36 +201,36 @@ $a = "new string";<br />
 <br />
 <p>当把$a赋值给另外一个变量的时候，$a对应的zval的refcount会加1</p><br />
 <br />
-<?php<br />
+<p>&lt;?php</p><br />
 <br />
-$a = "new string";<br />
+<p>$a = “new string”;</p><br />
 <br />
-$b = $a;<br />
+<p>$b = $a;</p><br />
 <br />
-?><br />
-<p>此时$a和$b变量对应的内部存储信息为</p><br />
+<p>?&gt;<br />
+此时$a和$b变量对应的内部存储信息为</p><br />
 <br />
 <p>a,b: (refcount=2, is_ref=0)=’new string’</p><br />
 <br />
 <p>当我们用unset删除$b变量的时候，$b对应的zval的refcount会减少1</p><br />
 <br />
-<?php<br />
+<p>&lt;?php</p><br />
 <br />
-$a = "new string"; //a: (refcount=1, is_ref=0)='new string'<br />
+<p>$a = “new string”; //a: (refcount=1, is_ref=0)=’new string’</p><br />
 <br />
-$b = $a;                 //a,b: (refcount=2, is_ref=0)='new string'<br />
+<p>$b = $a;                 //a,b: (refcount=2, is_ref=0)=’new string’</p><br />
 <br />
-unset($b);              //a: (refcount=1, is_ref=0)='new string'<br />
+<p>unset($b);              //a: (refcount=1, is_ref=0)=’new string’</p><br />
 <br />
-?><br />
+<p>?&gt;</p><br />
 <br />
 <p>对于普通的变量来说，这一切似乎很正常，但是在复合类型变量（数组和对象）中，会发生比较有意思的事情：</p><br />
 <br />
-<?php<br />
+<p>&lt;?php</p><br />
 <br />
-$a = array('meaning' => 'life', 'number' => 42);<br />
+<p>$a = array(‘meaning’ =&gt; ‘life’, ‘number’ =&gt; 42);</p><br />
 <br />
-?><br />
+<p>?&gt;</p><br />
 <br />
 <p>a的内部存储信息为:</p><br />
 <br />

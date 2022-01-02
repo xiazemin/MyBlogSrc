@@ -152,7 +152,7 @@
 <!-- more --><br />
 struct timer_list {</p><br />
 <br />
-<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code>struct list_head entry;<br />
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>struct list_head entry;<br />
 <br />
 <br />
 unsigned long expires;<br />
@@ -176,7 +176,7 @@ struct tvec_base *base;<br />
    Linux是怎样为其内核定时器机制提供动态扩展能力的呢？其关键就在于“定时器向量”的概念。所谓“定时器向量”就是指这样一条双向循环定时器队列（对列中的每一个元素都是一个timer_list结构）：对列中的所有定时器都在同一个时刻到期，也即对列中的每一个timer_list结构都具有相同的expires值。显然，可以用一个timer_list结构类型的指针来表示一个定时器向量。 <br />
    显然，定时器expires成员的值与jiffies变量的差值决定了一个定时器将在多长时间后到期。在32位系统中，这个时间差值的最大值应该是0xffffffff。因此如果是基于“定时器向量”基本定义，内核将至少要维护0xffffffff个timer_list结构类型的指针，这显然是不现实的。</p><br />
 <br />
-<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code>  另一方面，从内核本身这个角度看，它所关心的定时器显然不是那些已经过期而被执行过的定时器（这些定时器完全可以被丢弃），也不是那些要经过很长时间才会到期的定时器，而是那些当前已经到期或者马上就要到期的定时器（注意！时间间隔是以滴答次数为计数单位的）。 <br />
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>  另一方面，从内核本身这个角度看，它所关心的定时器显然不是那些已经过期而被执行过的定时器（这些定时器完全可以被丢弃），也不是那些要经过很长时间才会到期的定时器，而是那些当前已经到期或者马上就要到期的定时器（注意！时间间隔是以滴答次数为计数单位的）。 <br />
 <br />
  基于上述考虑，并假定一个定时器要经过interval个时钟滴答后才到期（interval＝expires－jiffies），则Linux采用了下列思想来实现其动态内核定时器机制：对于那些0≤interval≤255的定时器，Linux严格按照定时器向量的基本语义来组织这些定时器，也即Linux内核最关心那些在接下来的255个时钟节拍内就要到期的定时器，因此将它们按照各自不同的expires值组织成256个定时器向量。而对于那些256≤interval≤0xffffffff的定时器，由于他们离到期还有一段时间，因此内核并不关心他们，而是将它们以一种扩展的定时器向量语义（或称为“松散的定时器向量语义”）进行组织。所谓“松散的定时器向量语义”就是指：各定时器的expires值可以互不相同的一个定时器队列。 <br />
 </code></pre></div></div><br />
@@ -216,7 +216,7 @@ timerqueue_head结构在红黑树的基础上，增加了一个next字段，用�
 <p>void hrtimer_run_queues(void)<br /><br />
 {</p><br />
 <br />
-<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code>if (hrtimer_hres_active())  <br />
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>if (hrtimer_hres_active())  <br />
     return;   如果hrtimer_hres_active返回false，说明目前处于低精度模式下，则继续处理，它用一个for循环遍历各个时间基准系统，查询每个hrtimer_clock_base对应红黑树的左下节点，判断它的时间是否到期，如果到期，通过__run_hrtimer函数，对到期定时器进行处理，包括：调用定时器的回调函数、从红黑树中移除该定时器、根据回调函数的返回值决定是否重新启动该定时器等等    上面的timerqueue_getnext函数返回红黑树中的左下节点，之所以可以在while循环中使用该函数，是因为__run_hrtimer会在移除旧的左下节点时，新的左下节点会被更新到base-&gt;active-&gt;next字段中，使得循环可以继续执行，直到没有新的到期定时器为止。<br />
 </code></pre></div></div><br />
 <br />

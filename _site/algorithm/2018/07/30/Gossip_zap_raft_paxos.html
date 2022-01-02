@@ -181,7 +181,7 @@ follower 节点不可用的情况相对容易解决。因为集群中的日志�
 <p>3，Zookeeper ZAB协议<br />
   ZooKeeper为高可用的一致性协调框架，自然的ZooKeeper也有着一致性算法的实现，ZooKeeper使用的是ZAB协议作为数据一致性的算法，ZAB（ZooKeeper Atomic Broadcast ）全称为：原子消息广播协议；ZAB协议设计了支持崩溃恢复，ZooKeeper使用唯一主节点Leader用于处理客户端所有事务请求，采用ZAB协议将服务器数状态以事务形式广播到所有Follower上，还有若干个只提供读，不提供写和投票的observer。由于事务间可能存在着依赖关系，ZAB协议保证Leader广播的变更序列被顺序的处理（维护一个队列）：一个状态被处理那么它所依赖的状态也已经提前被处理；ZAB协议支持的崩溃恢复可以保证在Leader进程崩溃的时候可以重新选出Leader并且保证数据的完整性</p><br />
 <br />
-<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code>  ZAB可以说是在Paxos算法基础上进行了扩展改造而来的，在ZooKeeper中所有的事务请求都由一个主服务器也就是Leader来处理，其他服务器为Follower，Leader将客户端的事务请求转换为事务Proposal，并且将Proposal分发给集群中其他所有的Follower，然后Leader等待Follwer反馈，当有过半数（&gt;=N/2+1）的Follower反馈信息后，Leader将再次向集群内Follower广播Commit信息，Commit为将之前的Proposal提交；<br />
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>  ZAB可以说是在Paxos算法基础上进行了扩展改造而来的，在ZooKeeper中所有的事务请求都由一个主服务器也就是Leader来处理，其他服务器为Follower，Leader将客户端的事务请求转换为事务Proposal，并且将Proposal分发给集群中其他所有的Follower，然后Leader等待Follwer反馈，当有过半数（&gt;=N/2+1）的Follower反馈信息后，Leader将再次向集群内Follower广播Commit信息，Commit为将之前的Proposal提交；<br />
 </code></pre></div></div><br />
 <br />
 <p>节点状态<br />
@@ -192,7 +192,7 @@ Following：Follower节点所处的状态，Follower与Leader处于数据同步�
 Leading：Leader所处状态，当前集群中有一个Leader为主进程；<br />
       ZooKeeper启动时所有节点初始状态为Looking，这时集群会尝试选举出一个Leader节点，选举出的Leader节点切换为Leading状态；当节点发现集群中已经选举出Leader则该节点会切换到Following状态，然后和Leader节点保持同步；当Follower节点与Leader失去联系时Follower节点则会切换到Looking状态，开始新一轮选举；在ZooKeeper的整个生命周期中每个节点都会在Looking、Following、Leading状态间不断转换；</p><br />
 <br />
-<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code>  状态切换图<br />
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>  状态切换图<br />
 <br />
   选举出Leader节点后ZAB进入原子广播阶段，这时Leader为和自己同步的每个节点Follower创建一个操作序列，一个时期一个Follower只能和一个Leader保持同步，Leader节点与Follower节点使用心跳检测来感知对方的存在；当Leader节点在超时时间内收到来自Follower的心跳检测那Follower节点会一直与该节点保持连接；若超时时间内Leader没有接收到来自过半Follower节点的心跳检测或TCP连接断开，那Leader会结束当前周期的领导，切换到Looking状态，所有Follower节点也会放弃该Leader节点切换到Looking状态，然后开始新一轮选举；<br />
 </code></pre></div></div><br />
@@ -205,7 +205,7 @@ Leading：Leader所处状态，当前集群中有一个Leader为主进程；<br 
       4. Broadcast：Leader广播Proposal与Commit，Follower接受Proposal与Commit(下面详解)；<br />
       5. Recovery：在Election阶段选举出Leader后本阶段主要工作就是进行数据的同步，使Leader具有highestZXID，集群保持数据的一致性(下面详解)；</p><br />
 <br />
-<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code>  选举（Election）<br />
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>  选举（Election）<br />
   election阶段必须确保选出的Leader具有highestZXID，否则在Recovery阶段没法保证数据的一致性，Recovery阶段Leader要求Follower向自己同步数据而不是Follower要求Leader保持数据同步，所有选举出来的Leader要具有最新的ZXID；<br />
   在选举的过程中会对每个Follower节点的ZXID进行对比只有highestZXID的Follower才可能当选Leader；<br />
   选举流程：<br />
@@ -311,7 +311,7 @@ Leader网络异常同样会导致其它节点收不到心跳，但有可能leade
 1.Paxos协议数据同步方式相对于基于传统1主N备的同步方式有啥区别？<br />
       一般情况下，传统数据库的高可用都是基于主备来实现，1主1备2个副本，主库crash后，通过HA工具来进行切换，提升备库为主库。在强一致场景下，复制可以开启强同步，Oracle和Mysql都是类似的复制模式。但是如果备库网络抖动，或者crash，都会导致日志同步失败，服务不可用。为此，可以引入1主N备的多副本形式，我们对比都是3副本的情况，一个是基于传统的1主2备，另一种基于paxos的1主2备。传统的1主两备，进行日志同步时，只要有一个副本接收到日志并就持久化成功，就可以返回，在一定程度上解决了网络抖动和备库crash问题。但如果主库出问题后，还是要借助于HA工具来进行切换，那么HA切换工具的可用性如何来保证又成为一个问题。基于Paxos的多副本同步其实是在1主N备的基础上引入了一致性协议，这样整个系统的可用性完全有3个副本控制，不需要额外的HA工具。而实际上，很多系统为了保证多节点HA工具获取主备信息的一致性，采用了zookeeper等第三方接口来实现分布式锁，其实本质也是基于Paxos来实现的。</p><br />
 <br />
-<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code>  我这里以MySQL的主备复制一套体系为例来具体说明传统的主备保持强一致性的一些问题。整个系统中主要包含以下几种角色：Master，Slave，Zookeeper-Service(zk)，HA-Console(HA)，Zookeeper-Agent(Agent) Master,Slave:分别表示主节点和备节点,主节点提供读写服务，备节点可以提供读服务，或者完全用于容灾。 Zookeeper-Service(zk):分布式一致性服务，负责管理Master/Slave节点的存活信息和切换信息。zk基于zab协议，zab协议是一种一致性协议，与paxos，raft协议类似，它主要有两种模式，包括恢复模式(选主)和广播模式(同步)。一般zk包含N个节点(zk-node)，只要有超过半数的zk-node存活且相互连通，则zk可以对外提供一致性服务。 HA-Console:切换工具，负责具体的切换流程 Zookeeper-Agent(Agent):Master/Slave实例上的监听进程，与监听的实例保持心跳，维护Master/Slave的状态，每个实例有一个对应的Agent。大概工作流程如下： (1).Master/Slave正常启动并搭建好了复制关系，对应的Agent会调用zk接口去注册alive节点信息，假设分别为A和B。 (2).如果此时Master Crash，则实例对应的Agent发现心跳失败，如果重试几次后仍然失败，则将调用zk接口注销掉A节点信息。 (3).HA工具通过zk接口比较两次的节点信息，发现少了A节点，表示A可能不存在了，需要切换，尝试连接A，如果仍然不通，注册A的dead节点，并开始切换流程。 (4).HA工具读取配置信息，找到对应的Slave节点B，(更改读写比配置信息，设置B提供写)，打开写。 (5).应用程序通过拉取最新的配置信息，得知新主B，新的写入会写入B。 前面几部基本介绍了MySQL借助zk实现高可用的流程，由于zk-node可以多地部署，HA无状态，因此可以很容易实现同城或者是异地的高可用系统，并且动态可扩展，一个HA节点可以同时管理多个Master/Slave的切换。那么能保证一致性吗？前面提到的Agent除了做监听，还有一个作用是尽可能保持主备一致，并且不丢数据。 (6).假设此时A节点重启，Agent检测到，通过zk接口发现A节点在dead目录下，表示被切换过，需要kill上面的所有连接，并回滚crash时A比B多的binlog，为了尽可能的少丢数据，然后再开启binlog后，将这部分数据重做。这里要注意rollback和replay都在old-Master上面进行，rollback时需要关闭binlog，而replay需要开启binlog，保证这部分数据能流向new-Master。 (7).从第6步来看，可以一定程度上保证主备一致性，但是进行rollback和replay时，实际上是往new-Slave上写数据，这一定程度上造成了双写，如果此时new—Master也在写同一条记录，可能会导致写覆盖等问题。 (8).如果开启半同步呢？old-Master crash时，仍然可能比old-Slave多一个group的binlog，所以仍然需要借助于rollback和replay，依然避免不了双写，所以也不能做到严格意义上的强一致。<br />
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>  我这里以MySQL的主备复制一套体系为例来具体说明传统的主备保持强一致性的一些问题。整个系统中主要包含以下几种角色：Master，Slave，Zookeeper-Service(zk)，HA-Console(HA)，Zookeeper-Agent(Agent) Master,Slave:分别表示主节点和备节点,主节点提供读写服务，备节点可以提供读服务，或者完全用于容灾。 Zookeeper-Service(zk):分布式一致性服务，负责管理Master/Slave节点的存活信息和切换信息。zk基于zab协议，zab协议是一种一致性协议，与paxos，raft协议类似，它主要有两种模式，包括恢复模式(选主)和广播模式(同步)。一般zk包含N个节点(zk-node)，只要有超过半数的zk-node存活且相互连通，则zk可以对外提供一致性服务。 HA-Console:切换工具，负责具体的切换流程 Zookeeper-Agent(Agent):Master/Slave实例上的监听进程，与监听的实例保持心跳，维护Master/Slave的状态，每个实例有一个对应的Agent。大概工作流程如下： (1).Master/Slave正常启动并搭建好了复制关系，对应的Agent会调用zk接口去注册alive节点信息，假设分别为A和B。 (2).如果此时Master Crash，则实例对应的Agent发现心跳失败，如果重试几次后仍然失败，则将调用zk接口注销掉A节点信息。 (3).HA工具通过zk接口比较两次的节点信息，发现少了A节点，表示A可能不存在了，需要切换，尝试连接A，如果仍然不通，注册A的dead节点，并开始切换流程。 (4).HA工具读取配置信息，找到对应的Slave节点B，(更改读写比配置信息，设置B提供写)，打开写。 (5).应用程序通过拉取最新的配置信息，得知新主B，新的写入会写入B。 前面几部基本介绍了MySQL借助zk实现高可用的流程，由于zk-node可以多地部署，HA无状态，因此可以很容易实现同城或者是异地的高可用系统，并且动态可扩展，一个HA节点可以同时管理多个Master/Slave的切换。那么能保证一致性吗？前面提到的Agent除了做监听，还有一个作用是尽可能保持主备一致，并且不丢数据。 (6).假设此时A节点重启，Agent检测到，通过zk接口发现A节点在dead目录下，表示被切换过，需要kill上面的所有连接，并回滚crash时A比B多的binlog，为了尽可能的少丢数据，然后再开启binlog后，将这部分数据重做。这里要注意rollback和replay都在old-Master上面进行，rollback时需要关闭binlog，而replay需要开启binlog，保证这部分数据能流向new-Master。 (7).从第6步来看，可以一定程度上保证主备一致性，但是进行rollback和replay时，实际上是往new-Slave上写数据，这一定程度上造成了双写，如果此时new—Master也在写同一条记录，可能会导致写覆盖等问题。 (8).如果开启半同步呢？old-Master crash时，仍然可能比old-Slave多一个group的binlog，所以仍然需要借助于rollback和replay，依然避免不了双写，所以也不能做到严格意义上的强一致。<br />
 </code></pre></div></div><br />
 <br />
 <p>2.分布式事务与Paxos协议的关系？<br />

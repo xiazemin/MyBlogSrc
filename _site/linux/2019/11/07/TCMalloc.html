@@ -362,7 +362,7 @@ bool TCMalloc_SystemRelease(void* start, size_t length) {<br />
           new_end - new_start, MADV_FREE);<br />
     } while (result == -1 &amp;&amp; errno == EAGAIN);</p><br />
 <br />
-<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code>return result != -1;   } #endif   return false; } 　　因为 Linux 不支持 MADV_FREE，所以使用了 MADV_DONTNEED。使用 MADV_DONTNEED 调用 madvise，告诉内核这段内存今后『很可能』用不到了，其映射的物理内存尽管拿去好了！ 　　因此，TCMalloc_SystemRelease 只是告诉内核，物理内存可以回收以做它用，但虚拟空间还留着。 　　那么，是不是 TCMalloc 永远不会归还虚拟空间呢？一般来说，是的。但当虚拟空间耗尽，或者虚拟空间有碎片，无法满足内存需要时，TCMalloc 会试图合并，然后把所有空闲的虚拟空间归还，然后从新分配。 　　 　　所谓内存碎片，就是有一部分内存不能够分配给程序使用，因为它们以碎片的方式存在。内存碎片可以分两种，内部碎片和外部碎片，内部碎片是分配器分配的内存大于程序申请的内存，外部碎片是内存块太小，无法分配给程序使用。 　　 　　首先是 free-list，通过链表，把内存中空闲块连接起来。分配的时候，找到大小合适的 Block，把它切分成两块，一块是待分配的大小，另一块放回 free-list；释放的时候，插入到链表中，并且合并一下前后的内存块方便下次分配。<br />
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>return result != -1;   } #endif   return false; } 　　因为 Linux 不支持 MADV_FREE，所以使用了 MADV_DONTNEED。使用 MADV_DONTNEED 调用 madvise，告诉内核这段内存今后『很可能』用不到了，其映射的物理内存尽管拿去好了！ 　　因此，TCMalloc_SystemRelease 只是告诉内核，物理内存可以回收以做它用，但虚拟空间还留着。 　　那么，是不是 TCMalloc 永远不会归还虚拟空间呢？一般来说，是的。但当虚拟空间耗尽，或者虚拟空间有碎片，无法满足内存需要时，TCMalloc 会试图合并，然后把所有空闲的虚拟空间归还，然后从新分配。 　　 　　所谓内存碎片，就是有一部分内存不能够分配给程序使用，因为它们以碎片的方式存在。内存碎片可以分两种，内部碎片和外部碎片，内部碎片是分配器分配的内存大于程序申请的内存，外部碎片是内存块太小，无法分配给程序使用。 　　 　　首先是 free-list，通过链表，把内存中空闲块连接起来。分配的时候，找到大小合适的 Block，把它切分成两块，一块是待分配的大小，另一块放回 free-list；释放的时候，插入到链表中，并且合并一下前后的内存块方便下次分配。<br />
 </code></pre></div></div><br />
 <br />
 <p>分配的时候，选择哪块内存进行分裂？第一个满足大小的？还是大小最合适的？通常有 First-Fit、Next-Fit、Best-Fit这几种策略。</p><br />
@@ -674,7 +674,7 @@ TCMalloc采用了 Segregated-Freelist 的算法，提前分配好多种 size-cla
 <br />
 <p>一. SizeMap</p><br />
 <br />
-<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code> 在介绍三个缓存模块之前，先需要介绍一下sizeMap。<br />
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code> 在介绍三个缓存模块之前，先需要介绍一下sizeMap。<br />
  TCMalloc为了提高内存分配效率和减少内存的浪费，对小内存进行了细化分类，在默认的情况下：     <br />
  size在(0, 16)之间时，以8字节对齐分配内存，size在[16,128)之间，按16字节对齐来分配内存，size在[128,256*1024),按(2^(n+1)-2^n)/8字节对齐来分配内存(n的值为log2(size)取整，见函数AlignmentForSize())。<br />
   TCMalloc对这些细化分类构建了两个映射表，即class_array_[kClassArraySize]和class_to_size_[kNumClasses]。class_array_[kClassArraySize]表示了size到class的映射关系(size需要先经过函数ClassIndex(size)转换)，class_to_size_[kNumClasses]表示了class到size的映射关系。要申请一个size的内存时，先从class_array_[ClassIndex(size)]查到size对应的sizeclass，然后从映射表class_to_size_[kNumClasses]获取实际获取的内存大小。<br />
@@ -683,7 +683,7 @@ TCMalloc采用了 Segregated-Freelist 的算法，提前分配好多种 size-cla
 <br />
 <p>二. 线程缓存ThreadCache</p><br />
 <br />
-<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code>  ThreadCache是线程缓存的对象，每个线程都有一个ThreadCache对象作为本线程的内存缓存池，当线程需要申请内存时，就从自己的ThreadCache中获取。所有线程的ThreadCache通过双向链表(next_，prev_)连接起来，链表头是静态变量ThreadCache::thread_heaps_ 。<br />
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>  ThreadCache是线程缓存的对象，每个线程都有一个ThreadCache对象作为本线程的内存缓存池，当线程需要申请内存时，就从自己的ThreadCache中获取。所有线程的ThreadCache通过双向链表(next_，prev_)连接起来，链表头是静态变量ThreadCache::thread_heaps_ 。<br />
   线程对本线程的ThreadCache的访问采用线程私有数据的接口进行访问，线程的私有数据有两种实现方式：<br />
    1. 静态局部缓存线程私有数据，通过关键字static __thread定义一个静态变量，这个在TCMalloc由编译宏HAVE_TLS来控制；<br />
    2. 动态线程私有数据，通过POSIX接口pthread_key_create,pthread_setspecific,pthread_getspecific来实现。<br />

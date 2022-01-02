@@ -168,14 +168,14 @@
 <br />
 <p>在5.2及更早版本的PHP中，没有专门的垃圾回收器GC（Garbage Collection），引擎在判断一个变量空间是否能够被释放的时候是依据这个变量的zval的refcount的值，如果refcount为0，那么变量的空间可以被释放，否则就不释放，这是一种非常简单的GC实现。然而在这种简单的GC实现方案中，出现了意想不到的变量内存泄漏情况（Bug:http://bugs.php.net/bug.php?id=33595），引擎将无法回收这些内存，于是在PHP5.3中出现了新的GC，新的GC有专门的机制负责清理垃圾数据，防止内存泄漏。本文将详细的阐述PHP5.3中新的GC运行机制。</p><br />
 <br />
-<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code>目前很少有详细的资料介绍新的GC，本文将是目前国内最为详细的从源码角度介绍PHP5.3中GC原理的文章。其中关于垃圾产生以及算法简介部分由笔者根据手册翻译而来，当然其中融入了本人的一些看法。手册中相关内容：Garbage Collection<br />
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>目前很少有详细的资料介绍新的GC，本文将是目前国内最为详细的从源码角度介绍PHP5.3中GC原理的文章。其中关于垃圾产生以及算法简介部分由笔者根据手册翻译而来，当然其中融入了本人的一些看法。手册中相关内容：Garbage Collection<br />
 <br />
 在介绍这个新的GC之前，读者必须先了解PHP中变量的内部存储相关知识，请先阅读 变量的内部存储：引用和计数 <br />
 </code></pre></div></div><br />
 <br />
 <p>什么算垃圾</p><br />
 <br />
-<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code>首先我们需要定义一下“垃圾”的概念，新的GC负责清理的垃圾是指变量的容器zval还存在，但是又没有任何变量名指向此zval。因此GC判断是否为垃圾的一个重要标准是有没有变量名指向变量容器zval。<br />
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>首先我们需要定义一下“垃圾”的概念，新的GC负责清理的垃圾是指变量的容器zval还存在，但是又没有任何变量名指向此zval。因此GC判断是否为垃圾的一个重要标准是有没有变量名指向变量容器zval。<br />
 <br />
 假设我们有一段PHP代码，使用了一个临时变量$tmp存储了一个字符串，在处理完字符串之后，就不需要这个$tmp变量了，$tmp变量对于我们来说可以算是一个“垃圾”了，但是对于GC来说，$tmp其实并不是一个垃圾，$tmp变量对我们没有意义，但是这个变量实际还存在，$tmp符号依然指向它所对应的zval，GC会认为PHP代码中可能还会使用到此变量，所以不会将其定义为垃圾。<br />
 <br />
@@ -184,14 +184,14 @@
 <br />
 <p>顽固垃圾的产生过程</p><br />
 <br />
-<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code>如果读者已经阅读了变量内部存储相关的内容，想必对refcount和isref这些变量内部的信息有了一定的了解。这里我们将结合手册中的一个例子来介绍垃圾的产生过程：<br />
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>如果读者已经阅读了变量内部存储相关的内容，想必对refcount和isref这些变量内部的信息有了一定的了解。这里我们将结合手册中的一个例子来介绍垃圾的产生过程：<br />
 </code></pre></div></div><br />
 <br />
-<?php<br />
+<p>&lt;?php</p><br />
 <br />
-$a = "new string";<br />
+<p>$a = “new string”;</p><br />
 <br />
-?><br />
+<p>?&gt;</p><br />
 <br />
 <p>在这么简单的一个代码中，$a变量内部存储信息为</p><br />
 <br />
@@ -199,36 +199,36 @@ $a = "new string";<br />
 <br />
 <p>当把$a赋值给另外一个变量的时候，$a对应的zval的refcount会加1</p><br />
 <br />
-<?php<br />
+<p>&lt;?php</p><br />
 <br />
-$a = "new string";<br />
+<p>$a = “new string”;</p><br />
 <br />
-$b = $a;<br />
+<p>$b = $a;</p><br />
 <br />
-?><br />
-<p>此时$a和$b变量对应的内部存储信息为</p><br />
+<p>?&gt;<br />
+此时$a和$b变量对应的内部存储信息为</p><br />
 <br />
 <p>a,b: (refcount=2, is_ref=0)=’new string’</p><br />
 <br />
 <p>当我们用unset删除$b变量的时候，$b对应的zval的refcount会减少1</p><br />
 <br />
-<?php<br />
+<p>&lt;?php</p><br />
 <br />
-$a = "new string"; //a: (refcount=1, is_ref=0)='new string'<br />
+<p>$a = “new string”; //a: (refcount=1, is_ref=0)=’new string’</p><br />
 <br />
-$b = $a;                 //a,b: (refcount=2, is_ref=0)='new string'<br />
+<p>$b = $a;                 //a,b: (refcount=2, is_ref=0)=’new string’</p><br />
 <br />
-unset($b);              //a: (refcount=1, is_ref=0)='new string'<br />
+<p>unset($b);              //a: (refcount=1, is_ref=0)=’new string’</p><br />
 <br />
-?><br />
+<p>?&gt;</p><br />
 <br />
 <p>对于普通的变量来说，这一切似乎很正常，但是在复合类型变量（数组和对象）中，会发生比较有意思的事情：</p><br />
 <br />
-<?php<br />
+<p>&lt;?php</p><br />
 <br />
-$a = array('meaning' => 'life', 'number' => 42);<br />
+<p>$a = array(‘meaning’ =&gt; ‘life’, ‘number’ =&gt; 42);</p><br />
 <br />
-?><br />
+<p>?&gt;</p><br />
 <br />
 <p>a的内部存储信息为:</p><br />
 <br />
@@ -242,13 +242,13 @@ $a = array('meaning' => 'life', 'number' => 42);<br />
 <p>所以实际上那一行代码中一共生成了3个zval,这3个zval都遵循变量的引用和计数原则，<br />
 下面在$a中添加一个元素，并将现有的一个元素的值赋给新的元素:</p><br />
 <br />
-<?php<br />
+<p>&lt;?php</p><br />
 <br />
-$a = array('meaning' => 'life', 'number' => 42);<br />
+<p>$a = array(‘meaning’ =&gt; ‘life’, ‘number’ =&gt; 42);</p><br />
 <br />
-$a['life'] = $a['meaning'];<br />
+<p>$a[‘life’] = $a[‘meaning’];</p><br />
 <br />
-?><br />
+<p>?&gt;</p><br />
 <br />
 <p>那么$a的内部存储为:</p><br />
 <br />
@@ -261,13 +261,13 @@ $a['life'] = $a['meaning'];<br />
 <br />
 <p>现在，如果我们试一下，将数组的引用赋值给数组中的一个元素，有意思的事情就发生了：</p><br />
 <br />
-<?php<br />
+<p>&lt;?php</p><br />
 <br />
-$a = array('one');<br />
+<p>$a = array(‘one’);</p><br />
 <br />
-$a[] = &$a;<br />
+<p>$a[] = &amp;$a;</p><br />
 <br />
-?><br />
+<p>?&gt;</p><br />
 <br />
 <p>这样$a数组就有两个元素，一个索引为0，值为字符one,另外一个索引为1，为$a自身的引用，内部存储如下:</p><br />
 <br />
@@ -280,15 +280,15 @@ $a[] = &$a;<br />
 <br />
 <p>这个时候我们对$a进行unset,那么$a会从符号表中删除，同时$a指向的zval的refcount减少1</p><br />
 <br />
-<?php<br />
+<p>&lt;?php</p><br />
 <br />
-$a = array('one');<br />
+<p>$a = array(‘one’);</p><br />
 <br />
-$a[] = &$a;<br />
+<p>$a[] = &amp;$a;</p><br />
 <br />
-unset($a);<br />
+<p>unset($a);</p><br />
 <br />
-?><br />
+<p>?&gt;</p><br />
 <br />
 <p>那么问题也就产生了，$a已经不在符号表中了，用户无法再访问此变量，但是$a之前指向的zval的refcount变为1而不是0，因此不能被回收，这样产生了内存泄露</p><br />
 <br />
@@ -296,12 +296,12 @@ unset($a);<br />
 <br />
 <p>为解决这种垃圾，产生了新的GC</p><br />
 <br />
-<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code>在PHP5.3版本中，使用了专门GC机制清理垃圾，在之前的版本中是没有专门的GC，那么垃圾产生的时候，没有办法清理，内存就白白浪费掉了。在PHP5.3源代码中多了以下文件:{PHPSRC}/Zend/zend_gc.h {PHPSRC}/Zend/zend_gc.c, 这里就是新的GC的实现，我们先简单的介绍一下算法思路，然后再从源码的角度详细介绍引擎中如何实现这个算法的。<br />
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>在PHP5.3版本中，使用了专门GC机制清理垃圾，在之前的版本中是没有专门的GC，那么垃圾产生的时候，没有办法清理，内存就白白浪费掉了。在PHP5.3源代码中多了以下文件:{PHPSRC}/Zend/zend_gc.h {PHPSRC}/Zend/zend_gc.c, 这里就是新的GC的实现，我们先简单的介绍一下算法思路，然后再从源码的角度详细介绍引擎中如何实现这个算法的。<br />
 </code></pre></div></div><br />
 <br />
 <p>新的GC算法</p><br />
 <br />
-<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code>在较新的PHP手册中有简单的介绍新的GC使用的垃圾清理算法，这个算法名为 Concurrent Cycle Collection in Reference Counted Systems ， 这里不详细介绍此算法，根据手册中的内容来先简单的介绍一下思路：<br />
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>在较新的PHP手册中有简单的介绍新的GC使用的垃圾清理算法，这个算法名为 Concurrent Cycle Collection in Reference Counted Systems ， 这里不详细介绍此算法，根据手册中的内容来先简单的介绍一下思路：<br />
 </code></pre></div></div><br />
 <br />
 <p>首先我们有几个基本的准则：</p><br />
@@ -338,7 +338,7 @@ unset($a);<br />
 <br />
 <p>PHP中运用新的GC的算法</p><br />
 <br />
-<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code>在PHP中，GC默认是开启的，你可以通过ini文件中的 zend.enable_gc 项来开启或则关闭GC。当GC开启的时候，垃圾分析算法将在节点缓冲区(roots buffer)满了之后启动。缓冲区默认可以放10,000个节点，当然你也可以通过修改Zend/zend_gc.c中的GC_ROOT_BUFFER_MAX_ENTRIES 来改变这个数值，需要重新编译链接PHP。当GC关闭的时候，垃圾分析算法就不会运行，但是相关节点还会被放入节点缓冲区，这个时候如果缓冲区节点已经放满，那么新的节点就不会被记录下来，这些没有被记录下来的节点就永远也不会被垃圾分析算法分析。如果这些节点中有循环引用，那么有可能产生内存泄漏。之所以在GC关闭的时候还要记录这些节点，是因为简单的记录这些节点比在每次产生节点的时候判断GC是否开启更快，另外GC是可以在脚本运行中开启的，所以记录下这些节点，在代码运行的某个时候如果又开启了GC，这些节点就能被分析算法分析。当然垃圾分析算法是一个比较耗时的操作。<br />
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>在PHP中，GC默认是开启的，你可以通过ini文件中的 zend.enable_gc 项来开启或则关闭GC。当GC开启的时候，垃圾分析算法将在节点缓冲区(roots buffer)满了之后启动。缓冲区默认可以放10,000个节点，当然你也可以通过修改Zend/zend_gc.c中的GC_ROOT_BUFFER_MAX_ENTRIES 来改变这个数值，需要重新编译链接PHP。当GC关闭的时候，垃圾分析算法就不会运行，但是相关节点还会被放入节点缓冲区，这个时候如果缓冲区节点已经放满，那么新的节点就不会被记录下来，这些没有被记录下来的节点就永远也不会被垃圾分析算法分析。如果这些节点中有循环引用，那么有可能产生内存泄漏。之所以在GC关闭的时候还要记录这些节点，是因为简单的记录这些节点比在每次产生节点的时候判断GC是否开启更快，另外GC是可以在脚本运行中开启的，所以记录下这些节点，在代码运行的某个时候如果又开启了GC，这些节点就能被分析算法分析。当然垃圾分析算法是一个比较耗时的操作。<br />
 <br />
 在PHP代码中我们可以通过gc_enable()和gc_disable()函数来开启和关闭GC，也可以通过调用gc_collect_cycles()在节点缓冲区未满的情况下强制执行垃圾分析算法。这样用户就可以在程序的某些部分关闭或则开启GC，也可强制进行垃圾分析算法。 <br />
 </code></pre></div></div><br />
@@ -347,49 +347,49 @@ unset($a);<br />
 <br />
 <p>1.防止泄漏节省内存</p><br />
 <br />
-<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code>新的GC算法的目的就是为了防止循环引用的变量引起的内存泄漏问题，在PHP中GC算法，当节点缓冲区满了之后，垃圾分析算法会启动，并且会释放掉发现的垃圾，从而回收内存，在PHP手册上给了一段代码和内存使用状况图：<br />
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>新的GC算法的目的就是为了防止循环引用的变量引起的内存泄漏问题，在PHP中GC算法，当节点缓冲区满了之后，垃圾分析算法会启动，并且会释放掉发现的垃圾，从而回收内存，在PHP手册上给了一段代码和内存使用状况图：<br />
 </code></pre></div></div><br />
 <br />
-<?php<br />
+<p>&lt;?php<br />
 class Foo<br />
 {<br />
-    public $var = '3.1415962654';<br />
-}<br />
+    public $var = ‘3.1415962654’;<br />
+}</p><br />
 <br />
-$baseMemory = memory_get_usage();<br />
+<p>$baseMemory = memory_get_usage();</p><br />
 <br />
-for ( $i = 0; $i <= 100000; $i++ )<br />
+<p>for ( $i = 0; $i &lt;= 100000; $i++ )<br />
 {<br />
     $a = new Foo;<br />
-    $a->self = $a;<br />
+    $a-&gt;self = $a;<br />
     if ( $i % 500 === 0 )<br />
     {<br />
-        echo sprintf( '%8d: ', $i ), memory_get_usage() - $baseMemory, "/n";<br />
+        echo sprintf( ‘%8d: ‘, $i ), memory_get_usage() - $baseMemory, “/n”;<br />
     }<br />
 }<br />
-?><br />
+?&gt;</p><br />
 <br />
 <p>这段代码的循环体中，新建了一个对象变量，并且用对象的一个成员指向了自己，这样就形成了一个循环引用，当进入下一次循环的时候，又一次给对象变量重新赋值，这样会导致之前的对象变量内存泄漏，在这个例子里面有两个变量泄漏了，一个是对象本身，另外一个是对象中的成员self，但是这两个变量只有对象会作为垃圾收集器的节点被放入缓冲区(因为重新赋值相当于对它进行了unset操作，满足前面的准则3)。在这里我们进行了100,000次循环，而GC在缓冲区中有10,000节点的时候会启动垃圾分析算法，所以这里一共会进行10次的垃圾分析算法。从图中可以清晰的看到，在5.3版本PHP中，每次GC的垃圾分析算法被触发后，内存会有一个明显的减少。而在5.2版本的PHP中，内存使用量会一直增加。</p><br />
 <br />
 <p>2：运行效率影响</p><br />
 <br />
-<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code>启用了新的GC后，垃圾分析算法将是一个比较耗时的操作，手册中给了一段测试代码：<br />
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>启用了新的GC后，垃圾分析算法将是一个比较耗时的操作，手册中给了一段测试代码：<br />
 </code></pre></div></div><br />
 <br />
-<?php<br />
+<p>&lt;?php<br />
 class Foo<br />
 {<br />
-    public $var = '3.1415962654';<br />
-}<br />
+    public $var = ‘3.1415962654’;<br />
+}</p><br />
 <br />
-for ( $i = 0; $i <= 1000000; $i++ )<br />
+<p>for ( $i = 0; $i &lt;= 1000000; $i++ )<br />
 {<br />
     $a = new Foo;<br />
-    $a->self = $a;<br />
-}<br />
+    $a-&gt;self = $a;<br />
+}</p><br />
 <br />
-echo memory_get_peak_usage(), "/n";<br />
-?><br />
+<p>echo memory_get_peak_usage(), “/n”;<br />
+?&gt;</p><br />
 <br />
 <p>然后分别在GC开启和关闭的情况下执行这段代码：</p><br />
 <br />
@@ -409,7 +409,7 @@ echo memory_get_peak_usage(), "/n";<br />
 <br />
 <p>1.zval的变化</p><br />
 <br />
-<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code>在文件Zend/zend_gc.h中，重新定义了分配一个zval结构的宏:<br />
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>在文件Zend/zend_gc.h中，重新定义了分配一个zval结构的宏:<br />
 </code></pre></div></div><br />
 <br />
 <p>[cpp] view plain copy</p><br />
@@ -418,7 +418,7 @@ echo memory_get_peak_usage(), "/n";<br />
 <br />
 <p>#define ALLOC_ZVAL(z)                                   /</p><br />
 <br />
-<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code>do {                                                /  <br />
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>do {                                                /  <br />
 <br />
     (z) = (zval*)emalloc(sizeof(zval_gc_info));     /  <br />
 <br />
@@ -433,7 +433,7 @@ echo memory_get_peak_usage(), "/n";<br />
 <br />
 <p>typedef struct _zval_gc_info {</p><br />
 <br />
-<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code>zval z;  <br />
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>zval z;  <br />
 <br />
 union {  <br />
 <br />
@@ -452,7 +452,7 @@ union {  <br />
 <br />
 <p>#define GC_ZVAL_INIT(z) /</p><br />
 <br />
-<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code>((zval_gc_info*)(z))-&gt;u.buffered = NULL  <br />
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>((zval_gc_info*)(z))-&gt;u.buffered = NULL  <br />
 </code></pre></div></div><br />
 <br />
 <p>这个u.buffered指针就是用来表示这个zval对应的节点信息指针。</p><br />
@@ -469,7 +469,7 @@ union {  <br />
 <br />
 <p>typedef struct _gc_root_buffer {</p><br />
 <br />
-<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code>struct _gc_root_buffer   *prev;     /* double-linked list               */  <br />
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>struct _gc_root_buffer   *prev;     /* double-linked list               */  <br />
 <br />
 struct _gc_root_buffer   *next;  <br />
 <br />
@@ -494,7 +494,7 @@ union {  <br />
 <br />
 <p>3.为zval设置节点信息以及节点颜色信息</p><br />
 <br />
-<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code>这里GC应用了一些小技巧，先看看下面相关的宏:<br />
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>这里GC应用了一些小技巧，先看看下面相关的宏:<br />
 </code></pre></div></div><br />
 <br />
 <p>[cpp] view plain copy</p><br />
@@ -511,67 +511,67 @@ union {  <br />
 <br />
 <p>#define GC_ADDRESS(v) /</p><br />
 <br />
-<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code>((gc_root_buffer*)(((zend_uintptr_t)(v)) &amp; ~GC_COLOR))  <br />
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>((gc_root_buffer*)(((zend_uintptr_t)(v)) &amp; ~GC_COLOR))  <br />
 </code></pre></div></div><br />
 <br />
 <p>#define GC_SET_ADDRESS(v, a) /</p><br />
 <br />
-<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code>(v) = ((gc_root_buffer*)((((zend_uintptr_t)(v)) &amp; GC_COLOR) | ((zend_uintptr_t)(a))))  <br />
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>(v) = ((gc_root_buffer*)((((zend_uintptr_t)(v)) &amp; GC_COLOR) | ((zend_uintptr_t)(a))))  <br />
 </code></pre></div></div><br />
 <br />
 <p>#define GC_GET_COLOR(v) /</p><br />
 <br />
-<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code>(((zend_uintptr_t)(v)) &amp; GC_COLOR)  <br />
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>(((zend_uintptr_t)(v)) &amp; GC_COLOR)  <br />
 </code></pre></div></div><br />
 <br />
 <p>#define GC_SET_COLOR(v, c) /</p><br />
 <br />
-<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code>(v) = ((gc_root_buffer*)((((zend_uintptr_t)(v)) &amp; ~GC_COLOR) | (c)))  <br />
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>(v) = ((gc_root_buffer*)((((zend_uintptr_t)(v)) &amp; ~GC_COLOR) | (c)))  <br />
 </code></pre></div></div><br />
 <br />
 <p>#define GC_SET_BLACK(v) /</p><br />
 <br />
-<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code>(v) = ((gc_root_buffer*)(((zend_uintptr_t)(v)) &amp; ~GC_COLOR))  <br />
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>(v) = ((gc_root_buffer*)(((zend_uintptr_t)(v)) &amp; ~GC_COLOR))  <br />
 </code></pre></div></div><br />
 <br />
 <p>#define GC_SET_PURPLE(v) /</p><br />
 <br />
-<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code>(v) = ((gc_root_buffer*)(((zend_uintptr_t)(v)) | GC_PURPLE))  <br />
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>(v) = ((gc_root_buffer*)(((zend_uintptr_t)(v)) | GC_PURPLE))  <br />
 </code></pre></div></div><br />
 <br />
 <p>#define GC_ZVAL_INIT(z) /</p><br />
 <br />
-<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code>((zval_gc_info*)(z))-&gt;u.buffered = NULL  <br />
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>((zval_gc_info*)(z))-&gt;u.buffered = NULL  <br />
 </code></pre></div></div><br />
 <br />
 <p>#define GC_ZVAL_ADDRESS(v) /</p><br />
 <br />
-<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code>GC_ADDRESS(((zval_gc_info*)(v))-&gt;u.buffered)  <br />
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>GC_ADDRESS(((zval_gc_info*)(v))-&gt;u.buffered)  <br />
 </code></pre></div></div><br />
 <br />
 <p>#define GC_ZVAL_SET_ADDRESS(v, a) /</p><br />
 <br />
-<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code>GC_SET_ADDRESS(((zval_gc_info*)(v))-&gt;u.buffered, (a))  <br />
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>GC_SET_ADDRESS(((zval_gc_info*)(v))-&gt;u.buffered, (a))  <br />
 </code></pre></div></div><br />
 <br />
 <p>#define GC_ZVAL_GET_COLOR(v) /</p><br />
 <br />
-<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code>GC_GET_COLOR(((zval_gc_info*)(v))-&gt;u.buffered)  <br />
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>GC_GET_COLOR(((zval_gc_info*)(v))-&gt;u.buffered)  <br />
 </code></pre></div></div><br />
 <br />
 <p>#define GC_ZVAL_SET_COLOR(v, c) /</p><br />
 <br />
-<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code>GC_SET_COLOR(((zval_gc_info*)(v))-&gt;u.buffered, (c))  <br />
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>GC_SET_COLOR(((zval_gc_info*)(v))-&gt;u.buffered, (c))  <br />
 </code></pre></div></div><br />
 <br />
 <p>#define GC_ZVAL_SET_BLACK(v) /</p><br />
 <br />
-<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code>GC_SET_BLACK(((zval_gc_info*)(v))-&gt;u.buffered)  <br />
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>GC_SET_BLACK(((zval_gc_info*)(v))-&gt;u.buffered)  <br />
 </code></pre></div></div><br />
 <br />
 <p>#define GC_ZVAL_SET_PURPLE(v) /</p><br />
 <br />
-<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code>GC_SET_PURPLE(((zval_gc_info*)(v))-&gt;u.buffered)  <br />
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>GC_SET_PURPLE(((zval_gc_info*)(v))-&gt;u.buffered)  <br />
 </code></pre></div></div><br />
 <br />
 <p>其中宏GC_ZVAL_SET_ADDRESS(v, a)是为v这个zval设置节点信息的指针a，这个宏先得到v中的节点信息指针字段u.buffered，然后调用GC_ADDRESS(v,a)宏，将u.buffered字段设置成指针a。</p><br />
@@ -612,7 +612,7 @@ union {  <br />
 <br />
 <p>typedef struct _zend_gc_globals {</p><br />
 <br />
-<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code>zend_bool         gc_enabled;  <br />
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>zend_bool         gc_enabled;  <br />
 <br />
 zend_bool         gc_active;  <br />
 <br />
@@ -645,7 +645,7 @@ zend_uint collected;  <br />
 <br />
 <p>#if GC_BENCH</p><br />
 <br />
-<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code>zend_uint root_buf_length;  <br />
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>zend_uint root_buf_length;  <br />
 <br />
 zend_uint root_buf_peak;  <br />
 <br />
@@ -676,22 +676,22 @@ zend_uint zobj_marked_grey;  <br />
 <br />
 <p>zend_bool  gc_enabled:</p><br />
 <br />
-<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code>是否开启GC<br />
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>是否开启GC<br />
 </code></pre></div></div><br />
 <br />
 <p>zend_bool  gc_active:</p><br />
 <br />
-<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code>GC是否正在进行垃圾分析<br />
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>GC是否正在进行垃圾分析<br />
 </code></pre></div></div><br />
 <br />
 <p>gc_root_buffer   *buf：</p><br />
 <br />
-<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code> 节点缓冲区指针，在GC初始化的时候，会分配10,000个gc_root_buffer结构的空间，buf为第1个节点的地址<br />
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code> 节点缓冲区指针，在GC初始化的时候，会分配10,000个gc_root_buffer结构的空间，buf为第1个节点的地址<br />
 </code></pre></div></div><br />
 <br />
 <p>gc_root_buffer    roots;</p><br />
 <br />
-<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code>  GC每次开始垃圾分析算法的时候，都是从这个节点开始进行(注意不是直接在缓冲区中按顺序来分析节点，缓冲区值是存放节点信息内容，roots是分析的节点入口，是一个双链表的入口)<br />
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>  GC每次开始垃圾分析算法的时候，都是从这个节点开始进行(注意不是直接在缓冲区中按顺序来分析节点，缓冲区值是存放节点信息内容，roots是分析的节点入口，是一个双链表的入口)<br />
 </code></pre></div></div><br />
 <br />
 <p>其他节点和垃圾分析过程中的一些临时数据有关，这里暂不介绍。</p><br />
@@ -704,7 +704,7 @@ zend_uint zobj_marked_grey;  <br />
 <br />
 <p>{</p><br />
 <br />
-<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code>if (GC_G(buf) == NULL &amp;&amp; GC_G(gc_enabled)) {  <br />
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>if (GC_G(buf) == NULL &amp;&amp; GC_G(gc_enabled)) {  <br />
 <br />
     GC_G(buf) = (gc_root_buffer*) malloc(sizeof(gc_root_buffer) * GC_ROOT_BUFFER_MAX_ENTRIES);  <br />
 <br />
@@ -737,12 +737,12 @@ zend_uint zobj_marked_grey;  <br />
 <br />
 <p>#if DEBUG_ZEND&gt;=2</p><br />
 <br />
-<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code>printf("Reducing refcount for %x (%x): %d-&gt;%d/n", *zval_ptr, zval_ptr, Z_REFCOUNT_PP(zval_ptr), Z_REFCOUNT_PP(zval_ptr) – 1);  <br />
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>printf("Reducing refcount for %x (%x): %d-&gt;%d/n", *zval_ptr, zval_ptr, Z_REFCOUNT_PP(zval_ptr), Z_REFCOUNT_PP(zval_ptr) – 1);  <br />
 </code></pre></div></div><br />
 <br />
 <p>#endif</p><br />
 <br />
-<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code>Z_DELREF_PP(zval_ptr);  <br />
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>Z_DELREF_PP(zval_ptr);  <br />
 <br />
 if (Z_REFCOUNT_PP(zval_ptr) == 0) {  <br />
 <br />
@@ -795,14 +795,14 @@ if (Z_REFCOUNT_PP(zval_ptr) == 0) {  <br />
 <br />
 <p>#define GC_ZVAL_CHECK_POSSIBLE_ROOT(z) /</p><br />
 <br />
-<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code>gc_zval_check_possible_root((z) TSRMLS_CC)  <br />
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>gc_zval_check_possible_root((z) TSRMLS_CC)  <br />
 </code></pre></div></div><br />
 <br />
 <p>static zend_always_inline void gc_zval_check_possible_root(zval *z TSRMLS_DC)</p><br />
 <br />
 <p>{</p><br />
 <br />
-<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code>if (z-&gt;type == IS_ARRAY || z-&gt;type == IS_OBJECT) {  <br />
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>if (z-&gt;type == IS_ARRAY || z-&gt;type == IS_OBJECT) {  <br />
 <br />
     gc_zval_possible_root(z TSRMLS_CC);  <br />
 <br />
@@ -815,7 +815,7 @@ if (Z_REFCOUNT_PP(zval_ptr) == 0) {  <br />
 <br />
 <p>{</p><br />
 <br />
-<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code>if (UNEXPECTED(GC_G(free_list) != NULL &amp;&amp;  <br />
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>if (UNEXPECTED(GC_G(free_list) != NULL &amp;&amp;  <br />
 <br />
                GC_ZVAL_ADDRESS(zv) != NULL &amp;&amp;  <br />
 <br />
@@ -988,7 +988,7 @@ if (GC_ZVAL_GET_COLOR(zv) != GC_PURPLE) {  <br />
 <br />
 <p>{</p><br />
 <br />
-<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code>int count = 0;  <br />
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>int count = 0;  <br />
 <br />
   <br />
 <br />

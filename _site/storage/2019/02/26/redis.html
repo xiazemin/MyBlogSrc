@@ -371,7 +371,7 @@
 <p>要理解Redis 集群如何将槽从一个节点移动到另一个节点， 我们需要对 CLUSTER 命令的各个子命令进行介绍，这些命理负责管理集群节点的槽转换表（slots translation table）。</p><br />
 <br />
 <p>以下是CLUSTER 命令可用的子命令：<br />
-\<br />
+<br /><br />
 最开头的两条命令ADDSLOTS 和 DELSLOTS 分别用于向节点指派（assign）或者移除节点，当槽被指派或者移除之后， 节点会将这一信息通过 Gossip 协议传播到整个集群。 ADDSLOTS 命令通常在新创建集群时， 作为一种快速地将各个槽指派给各个节点的手段来使用。<br />
 CLUSTERSETSLOT slot NODE node 子命令可以将指定的槽 slot 指派给节点node 。<br />
 至于CLUSTER SETSLOT slot MIGRATING node 命令和 CLUSTER SETSLOTslot IMPORTING node 命令， 前者用于将给定节点 node 中的槽 slot 迁移出节点， 而后者用于将给定槽 slot导入到节点 node ：<br />
@@ -476,7 +476,7 @@ ASK 转向：<br />
 <!-- more --><br />
 第一种：传统的数据分布方法,将key的hash值对机器数取模</p><br />
 <br />
-<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code>这个算法的实现非常简单，计算hash(key)/n，n为机器数，得到的值就是该key需要路由到的服务器编号了。<br />
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>这个算法的实现非常简单，计算hash(key)/n，n为机器数，得到的值就是该key需要路由到的服务器编号了。<br />
 <br />
 优点:实现简单<br />
 缺点：在服务器数量发生变化的时候，缓存会大量失效。<br />
@@ -484,14 +484,14 @@ ASK 转向：<br />
 <br />
 <p>第二种：一致性hash</p><br />
 <br />
-<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code>试想下如果使用传统取模算法。如果有一个key要存到缓存中，根据hash(key)/n (n表示有n台缓存服务器),可以计算出缓存所在的服务器id。这个时候有一台服务器挂掉了，剩下n-1台服务器。这时候，同样一个key，根据hash(key)/(n-1) ，这个时候就命中不了缓存了，基本所有的缓存都会失效，这个情况在线上可能是灾难性的。 一致性hash可以解决部分问题。<br />
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>试想下如果使用传统取模算法。如果有一个key要存到缓存中，根据hash(key)/n (n表示有n台缓存服务器),可以计算出缓存所在的服务器id。这个时候有一台服务器挂掉了，剩下n-1台服务器。这时候，同样一个key，根据hash(key)/(n-1) ，这个时候就命中不了缓存了，基本所有的缓存都会失效，这个情况在线上可能是灾难性的。 一致性hash可以解决部分问题。<br />
 通常可以考虑[0,(2^32-1)]为hash值的取值范围。我们可以把取值范围想象成一个闭环，2^32-1 和 0 相连接。如下图所示。<br />
 </code></pre></div></div><br />
 <br />
 <p>这个时候假设我们有4个缓存服务器节点。（node1~node4） 首先计算这四个值的hash值，并且这四个点占据了闭环的四个位置，如上图所示，这个时候需要根据key来路由缓存服务器，首先计算hash(key)值（这个hash算法需要保证hash(key)的值落在在区间[0,2^32-1]中）。然后我们可以想象这个hash（key）值位于闭环的其中一个点，然后用这个hash(key)依次加一，直到命中其中一个node为止，命中的node就是key需要路由的服务器，如上图，需要找到key2的缓存值所在的服务器，首先计算hash(key2)，落在如图的闭环中，然后顺时针找到离这个hash值最近的node，可以看到是node1。key2对应的缓存值就存在node1中。<br />
     如果这个时候如果增加了节点node5如下图：</p><br />
 <br />
-<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    看下缓存失效的情况，如上图，只有hash(key)落在node4~node5之间的key才会有影响，在未增加node5之前落在这个范围的key最终路由到node1,增加node5之后路由到node5了，缓存失效了。除此之外，落在其他范围的hash值就不受影响。如上图，增加node5之后key6原来会路由到node1的，现在路由到node5。而key1不受影响，还是路由到node1。<br />
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    看下缓存失效的情况，如上图，只有hash(key)落在node4~node5之间的key才会有影响，在未增加node5之前落在这个范围的key最终路由到node1,增加node5之后路由到node5了，缓存失效了。除此之外，落在其他范围的hash值就不受影响。如上图，增加node5之后key6原来会路由到node1的，现在路由到node5。而key1不受影响，还是路由到node1。<br />
 同理，如果少掉一个节点，还是上图为例，假如这个时候node5失效了，node5失效之前落在node4~node5之间的hash值，会路由到node5，失效之后会路由到node1,也就是原本落在node4~node5之间的hash值失效了。由此可见一致性hash能在节点变动的时候减少缓存失效的比例。  <br />
 还有一种情况，当cache的数量很少的或者缓存服务器很少的时候，会导致缓存分布不均衡。如下图所示：<br />
  <br />
@@ -509,7 +509,7 @@ ASK 转向：<br />
 <br />
 <p>第三种：tair负载均衡算法,构造一张对照表</p><br />
 <br />
-<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code>首先看下如何构建一张对照表。<br />
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>首先看下如何构建一张对照表。<br />
 tair中数据的存储是以bucket为单位的，一个bucket对应一个dateServer,一个dateServer中会有多个bucket。bucket的数目是固定的，这里假设bucket的数量为1024个，并且每个bucket有属于自己的id，依次从0到1023。如下图：<br />
 <br />
 可以看到对key进行hash之后首先会路由到某个bucket然后根据对应关系，再路由到对应的dataServer。     在tair中，你可以设置同一个bucket的备份数目，我们称其中一个bucket为master,其他的备份称为slave。configServer启动的时候会构造三张bucket和dataServer的对照表，分别是hash_table, m_hash_table, d_hash_table，这三张对照表在初始构建的时候都是一样的，但是在dataServer发生增加的时候会暂时不一样，但是最终会趋向一致，三张表分别有什么用处下面会讲到。configServer在构建对照表的时候有两种模式，一种是均衡模式，这种模式会尽量保证每个节点的bucket数目差不多。一种是安全模式，这种模式会尽量保证一份数据以及它的备份分配在不同的区域的服务器上。client通过configServer获取对照表(hash_table)之后，根据（hash(key)%bucket的总数）算出bucket的id并且参照对照表,就能知道这个key对应的dataServer了。对照表的结构大概如下（这里为了简化，一共只有5个bucket，4个dataServer(ds1,ds2,ds3,ds4),这个是初始时的对照表，hash_table, m_hash_table, d_hash_table的内容都是一样的）。<br />

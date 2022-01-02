@@ -208,7 +208,7 @@ $ sudo docker inspect -f {{.State.Pid}} 44fc0f0582d9</p><br />
 <p>在大多数Linux发行版中，util-linux包中含有nsenter.如果没有，你需要安装它.</p><br />
 <br />
 <p>cd /tmp<br />
-curl https://www.kernel.org/pub/linux/utils/util-linux/v2.24/util-linux-2.24.tar.gz \<br />
+curl https://www.kernel.org/pub/linux/utils/util-linux/v2.24/util-linux-2.24.tar.gz <br /><br />
 	| tar -zxf-<br />
 cd util-linux-2.24<br />
 ./configure –without-ncurses<br />
@@ -216,40 +216,40 @@ make nsenter<br />
 cp nsenter /usr/local/bin<br />
 使用shell脚本 docker-enter，将如下代码保存为docker-enter, chomod +x docker-enter</p><br />
 <br />
-<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c">#!/bin/sh</span><br />
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>#!/bin/sh<br />
 <br />
-<span class="k">if</span> <span class="o">[</span> <span class="nt">-e</span> <span class="k">$(</span>dirname <span class="s2">"</span><span class="nv">$0</span><span class="s2">"</span><span class="k">)</span>/nsenter <span class="o">]</span><span class="p">;</span> <span class="k">then</span><br />
-	<span class="c"># with boot2docker, nsenter is not in the PATH but it is in the same folder</span><br />
-	<span class="nv">NSENTER</span><span class="o">=</span><span class="k">$(</span>dirname <span class="s2">"</span><span class="nv">$0</span><span class="s2">"</span><span class="k">)</span>/nsenter<br />
-<span class="k">else<br />
-	</span><span class="nv">NSENTER</span><span class="o">=</span>nsenter<br />
-<span class="k">fi<br />
+if [ -e $(dirname "$0")/nsenter ]; then<br />
+	# with boot2docker, nsenter is not in the PATH but it is in the same folder<br />
+	NSENTER=$(dirname "$0")/nsenter<br />
+else<br />
+	NSENTER=nsenter<br />
+fi<br />
 <br />
-if</span> <span class="o">[</span> <span class="nt">-z</span> <span class="s2">"</span><span class="nv">$1</span><span class="s2">"</span> <span class="o">]</span><span class="p">;</span> <span class="k">then<br />
-	</span><span class="nb">echo</span> <span class="s2">"Usage: </span><span class="sb">`</span>basename <span class="s2">"</span><span class="nv">$0</span><span class="s2">"</span><span class="sb">`</span><span class="s2"> CONTAINER [COMMAND [ARG]...]"</span><br />
-	<span class="nb">echo</span> <span class="s2">""</span><br />
-	<span class="nb">echo</span> <span class="s2">"Enters the Docker CONTAINER and executes the specified COMMAND."</span><br />
-	<span class="nb">echo</span> <span class="s2">"If COMMAND is not specified, runs an interactive shell in CONTAINER."</span><br />
-<span class="k">else<br />
-	</span><span class="nv">PID</span><span class="o">=</span><span class="k">$(</span>docker inspect <span class="nt">--format</span> <span class="s2">"</span><span class="se">\{\{</span><span class="s2">.State.Pid</span><span class="se">\}\}</span><span class="s2">"</span> <span class="s2">"</span><span class="nv">$1</span><span class="s2">"</span><span class="k">)</span><br />
-	<span class="k">if</span> <span class="o">[</span> <span class="nt">-z</span> <span class="s2">"</span><span class="nv">$PID</span><span class="s2">"</span> <span class="o">]</span><span class="p">;</span> <span class="k">then<br />
-		</span><span class="nb">exit </span>1<br />
-	<span class="k">fi<br />
-	</span><span class="nb">shift<br />
+if [ -z "$1" ]; then<br />
+	echo "Usage: `basename "$0"` CONTAINER [COMMAND [ARG]...]"<br />
+	echo ""<br />
+	echo "Enters the Docker CONTAINER and executes the specified COMMAND."<br />
+	echo "If COMMAND is not specified, runs an interactive shell in CONTAINER."<br />
+else<br />
+	PID=$(docker inspect --format "\{\{.State.Pid\}\}" "$1")<br />
+	if [ -z "$PID" ]; then<br />
+		exit 1<br />
+	fi<br />
+	shift<br />
 <br />
-	</span><span class="nv">OPTS</span><span class="o">=</span><span class="s2">"--target </span><span class="nv">$PID</span><span class="s2"> --mount --uts --ipc --net --pid --"</span><br />
+	OPTS="--target $PID --mount --uts --ipc --net --pid --"<br />
 <br />
-	<span class="k">if</span> <span class="o">[</span> <span class="nt">-z</span> <span class="s2">"</span><span class="nv">$1</span><span class="s2">"</span> <span class="o">]</span><span class="p">;</span> <span class="k">then</span><br />
-		<span class="c"># No command given.</span><br />
-		<span class="c"># Use su to clear all host environment variables except for TERM,</span><br />
-		<span class="c"># initialize the environment variables HOME, SHELL, USER, LOGNAME, PATH,</span><br />
-		<span class="c"># and start a login shell.</span><br />
-		<span class="s2">"</span><span class="nv">$NSENTER</span><span class="s2">"</span> <span class="nv">$OPTS</span> su - root<br />
-	<span class="k">else</span><br />
-		<span class="c"># Use env to clear all host environment variables.</span><br />
-		<span class="s2">"</span><span class="nv">$NSENTER</span><span class="s2">"</span> <span class="nv">$OPTS</span> env <span class="nt">--ignore-environment</span> <span class="nt">--</span> <span class="s2">"</span><span class="nv">$@</span><span class="s2">"</span><br />
-	<span class="k">fi<br />
-fi </span>运行 docker-enter &lt;container id&gt; ，这样就进入到指定的容器中<br />
+	if [ -z "$1" ]; then<br />
+		# No command given.<br />
+		# Use su to clear all host environment variables except for TERM,<br />
+		# initialize the environment variables HOME, SHELL, USER, LOGNAME, PATH,<br />
+		# and start a login shell.<br />
+		"$NSENTER" $OPTS su - root<br />
+	else<br />
+		# Use env to clear all host environment variables.<br />
+		"$NSENTER" $OPTS env --ignore-environment -- "$@"<br />
+	fi<br />
+fi 运行 docker-enter &lt;container id&gt; ，这样就进入到指定的容器中<br />
 </code></pre></div></div><br />
 <br />
 <p>四、使用docker exec进入Docker容器<br />

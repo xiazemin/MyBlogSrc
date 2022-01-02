@@ -1,7 +1,7 @@
 ---
-title:mysql 获取表结构
-layout:post
-category:storage
+title: mysql获取表结构
+layout: post
+category: storage
 author: 夏泽民
 ---
 //SELECT TABLE_SCHEMA, TABLE_NAME FROM INFORMATION_SCHEMA.TABLES;
