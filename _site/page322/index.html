@@ -147,22 +147,392 @@
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/algorithm/2020/01/05/BCrypt.html">BCrypt 如何存储密码</a>
+						<a class="post-link" href="/MyBlog/linux/2020/01/05/socket.html">UNIX域套接字传递描述符的应用</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/algorithm/2020/01/05/BCrypt.html"> 夏泽民</a>
+						<a href="/MyBlog/linux/2020/01/05/socket.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
 							Jan 5, 2020
 						</span>
 					</div>
-					<div class="excerpt"><p>不一定非要自己存储用户的密码
-最简单的存储密码的方式就是自己并不存储，而是委托给信任的第三方存储。这就是OpenID技术，它的理念是用第三方来完成用户验证的操作。目前国外的网站如谷歌、雅虎等，国内的如腾讯等都已经提供OpenID的服务。如果我们开发一个网站并选择谷歌的OpenID服务，那么用户就可以用Gmail的账号和密码登录，接下来用户认证的事情将由谷歌完成。</p>
+					<div class="excerpt"><p> 传送文件描述符是高并发网络服务编程的一种常见实现方式。Nebula 高性能通用网络框架即采用了UNIX域套接字传递文件描述符设计和实现
+ https://github.com/Bwar/Nebula
+<!-- more -->
+ 在Unix 域套接字概述一节中介绍了什么是 Unix 及相关函数，本文将继续介绍 Unix 域套接字在进程间传递描述符的应用。
+        在进程间传递打开的描述符时通常会采用如下两种方法：
+        （1）fork 调用返回后，子进程自动共享父进程的所有打开的描述符。
+        （2）exec 调用执行后，所有描述符通常保持打开状态不变。
+        第一种方法中，进程先打开一个描述符，再调用 fork，之后父进程关闭这个描述符，子进程则处理该描述符。这样一个打开的描述符就从父进程传递到子进程。不过有时候可能想让子进程打开一个描述符并把他传递给父进程。
+        使用 Unix 域套接字，可以从一个进程向任一其他进程传递打开的描述符，而无需这两个进程之间存在亲缘关系。这种技术要求首先在这两个进程之间创建一个 Unix 域套接字，然后使用 sendmsg 跨这个套接字发送一个特殊消息。该消息由内核来专门处理，会把打开的描述符从发送进程传递到接收进程。
+        使用 Unix 域套接字在两个进程之间传递描述符涉及的步骤如下。
+        （1）创建一个字节流或数据报的 Unix 域套接字。如果目标是让子进程将打开的描述符传递回父进程，则父进程可以预先调用 socketpair 函数创建一个可用于在父子进程之间交换描述符的流管道。如果进程间没有亲缘关系，则服务器进程必须先创建一个 Unix 域字节流套接字（也可以是 Unix 域数据报套接字，不过这没什么好处，而且数据报还存在被丢弃的可能性），然后 bind 一个路径名到该套接字，以允许客户进程 connect 到套接字，发送一个打开某个描述符的请求。
+        （2）发送进程通过调用返回描述符的任一 Unix 函数（如 open、pipe、mkfifo、socket 和 accept，可以在进程之间传递的描述符不限类型）打开一个描述符。
+        （3）发送进程创建一个 msghdr 结构，其中含有待传递的描述符。POSIX 规定描述符作为辅助数据（msghdr 结构的 msg_control 成员，见辅助数据）发送。发送进程调用 sendmsg 跨来自步骤 1 的 Unix 域套接字发送该描述符。至此，称这个描述符“在飞行中（in flight）”。即使发送进程在调用 sendmsg 之后但在接收进程调用 recvmsg 之前关闭了该描述符，对于接收进程它仍然保持打开状态。发送一个描述符会使该描述符的引用计数加一。
+        （4）接收进程调用 recvmsg 在来自步骤 1 的 Unix 域套接字上接收这个描述符。这个描述符在接收进程中的描述符号不同于它在发送进程中的描述符号是正常的，因为传递一个描述符并不是传递一个描述符号，而是涉及在接收进程中创建一个新的描述符，该描述符和发送进程中飞行前的那个描述符指向内核中相同的文件表项。</p>
+
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    参考文献：1） 《Unix网络编程》
+    2）  http://book.51cto.com/art/200912/168560.htm
+</code></pre></div></div>
+
+<p>最近学习了使用Unix域套接字在进程间传递文件描述符，仿照参考资料，自己也写了简单的程序来实践这种技术。</p>
+
+<p>其他不多说了，具体理论知识参见参考资料，开始我自己的程序介绍（在OpenSolaris 2009.06平台上测试）：</p>
+
+<p>1  程序作用说明：父进程，子进程以及另外一个进程向同一个文件的文件描述符向这个文件中写内容。
+   具体如下：
+   1）父进程指定要打开的文件名，打开权限，打开模式；
+   2）fork一个子进程；
+   3）子进程调用execl函数来执行程序openfile：该新程序取得指定文件的文件描述符；向指定文件中写入“openfileprog write test”；向父进程返回该文件描述符；
+   4）父进程收到该文件描述符后，向文件中写“paraent process write ppp”；
+   5）父进程作为server端建立域socket等待客户端进程连接；
+   6）客户端进程连接父进程；
+   7）父进程向该客户端进程返回从子进程得到的文件描述符；
+   8）客户端进程收到该文件描述符后使用它在文件中写“this is client process ccc”；</p>
+
+<p>其中父子进程传递文件描述符通过建立的一对套接字管道，父进程和客户端进程传递文件描述符通过Unix域套接字。</p>
+
+<p>2 具体代码说明：</p>
+
+<p>1） 首先看openfile程序，这时子进程通过调用execl执行的。调用方法如下：
+  execl(“./openfileprog”, “openfileprog”, permit, mode, argsockfd, (char *)NULL);
+其中参数1： openfile程序路径；
+   参数2： openfile程序名；
+   参数3： 待打开文件的权限；
+   参数4： 待打开文件模式；
+   参数5： 父进程建立的一对套接字管道的其中之一；</p>
+
+<p>作为openfile程序，主要按照execl传的参数，打开指定文件，取得文件描述符；向该文件中写入内容；然后调用func_send_fd函数通过argsockfd把取得的文件描述符传给父进程。该程序代码如下：</p>
+
+<p>int main(int argc, char <em>argv[]) /</em> openfileprog <em>/
+{
+ int i, fd, ret;
+ ssize_t size;
+ size_t buflen;
+ char data[10];
+ char buf[] = “openfileprog write test\n”; /</em> 向文件中写入的内容 <em>/
+        /</em> execl(“./openfileprog”, permit, mode, argsockfd, (char *)NULL); */
+  fd = -1;
+ if((fd = open(“./file”, atoi(argv[1]), atoi(argv[2]))) &lt; 0)
+ {
+  printf(“in openfileprog, open failed\n”);
+  exit(-1);
+ }</p>
+
+<p>size = -1;
+ buflen = sizeof(buf);
+ if((size = write(fd, buf, buflen)) &lt;= 0)
+ {
+  printf(“in openfileprog, write failed\n”);
+ }</p>
+
+<p>/* 把设定的data信息也传给父进程 */
+ ret = ‘a’;
+ for(i = 0; i &lt; sizeof(data); i++, ret++)
+ {
+  data[i] = ret;
+ }
+ data[sizeof(data) - 1] = ‘\0’;</p>
+
+<p>ret = -1;
+ if(0 &gt; (ret = func_send_fd(atoi(argv[3]), fd, data, 10)))
+ {
+  printf(“in openfileprog, func_send_fd failed\n”);
+ }</p>
+
+<p>close(fd);</p>
+
+<p>return 0; 
+}</p>
+
+<p>func_send_fd函数负责把取得的文件描述符传出去：</p>
+
+<p>int func_send_fd(int send_sock, int send_fd, void *data, int bytes)
+{
+    struct msghdr msghead; 
+ struct iovec passdata[1];
+ int ret;</p>
+
+<p>/* 填充msghead结构 */
+ msghead.msg_accrights = (caddr_t)&amp;send_fd;
+ msghead.msg_accrightslen = sizeof(send_fd);</p>
+
+<p>msghead.msg_name = NULL;
+ msghead.msg_namelen = 0;
+ passdata[0].iov_base = data;
+ passdata[0].iov_len = bytes;</p>
+
+<p>msghead.msg_iov = passdata;
+ msghead.msg_iovlen = 1;</p>
+
+<p>/* 发送信息 */
+ if(0 &gt; (ret = sendmsg(send_sock, &amp;msghead, 0)))
+ {
+  printf(“in func_send, send_fd is %d, sendsock is %d, sendmsg failed,errno is %d\n”, send_fd,send_sock,errno);
+  return -1;
+ }</p>
+
+<p>return ret;
+}</p>
+
+<p>在上述两个函数之前，加上以下必要头文件和宏：</p>
+
+<p>#include
+#include
+#include
+#include
+#include
+#include
+#include
+#define SLEEPTIME  3
+#define ARGLEN     20</p>
+
+<p>以上作为一个c文件。</p>
+
+<p>2）然后看父进程代码</p>
+
+<p>下面是父进程程序：</p>
+
+<p>int main(int argc, char *argv)
+{
+ int status,sockfd[2];
+ char permit[ARGLEN];
+ char mode[ARGLEN];
+ char argsockfd[ARGLEN];
+ int recvfd;
+ char data[20];
+ int bytes;
+ int ret,i;
+ ssize_t size;
+ int buflen;
+ pid_t pid,chldpid;</p>
+
+<p>/* 以下几行是使用域套接字必要变量 */
+ int fdsock, fdaccept;
+ struct sockaddr_un addr_server; <br />
+ int len; <br />
+ const char path[] = “/export/home/temp/test/other_prog/fengxianzhong”;</p>
+
+<p>/* 以下是父进程写入文件的内容 */  <br />
+ char buf[] = “paraent process write ppp\n”;</p>
+
+<p>/* 父进程同时向处理向client发送的数据 */
+ char datasend[] = “send by myopen\n”;</p>
+
+<p>memset(permit, ‘\0’, sizeof(permit));
+ memset(mode, ‘\0’, sizeof(mode));
+ memset(argsockfd, ‘\0’, sizeof(argsockfd));
+ memset(data, ‘\0’, sizeof(data));</p>
+
+<p>printf(“now it is parent process,now will fork a child process\n”);
+ sleep(SLEEPTIME);</p>
+
+<p>/* 设置文件权限和打开模式 */ 
+snprintf(permit, sizeof(permit), “%d”,PERMIT);
+ snprintf(mode, sizeof(mode), “%d”,MODE); 
+ // printf(“in myopen %s, %s\n”, permit, mode);</p>
+
+<p>/* 建立和子进程通信的socket套接字管道 */
+ ret = socketpair(AF_UNIX,SOCK_STREAM,0,sockfd);
+ if(0 &gt; ret)
+ {
+  printf(“socketpair failed,errno is %d \n”,errno);
+ }</p>
+
+<p>/* fork 子进程 <em>/
+ if(0 == (chldpid = fork())) /</em> child process */
+ {
+  printf(“now it is child process, sendsock is %d\n”,sockfd[1]);
+  close(sockfd[0]);
+  snprintf(argsockfd, sizeof(argsockfd), “%d”, sockfd[1]);</p>
+
+<p>/* 子进程中执行新程序openfile */
+  execl(“./openfileprog”, “openfileprog”, permit, mode, argsockfd, (char *)NULL);
+  printf(“execl failed, perimit is %s, mode is %s\n”,permit, mode);
+  exit(-1);
+ }</p>
+
+<p>/* paraent process start to write the file opened by child process */</p>
+
+<p>printf(“now it is parent process\n”);
+ close(sockfd[1]);
+ bytes = sizeof(data);</p>
+
+<p>/* 等待子进程结束 <em>/
+ pid = wait(&amp;status);
+ if((status = WEXITSTATUS(status)) == 0) /</em> child process terminate */
+ {
+  printf(“child %d process terminate,now parent will write file …\n”,pid);
+ }</p>
+
+<p>/* 从子进程取得文件描述符 <em>/
+ recvfd = -1;
+ // printf(“recv sock is %d\n”, sockfd[0]);
+ ret = func_recv_fd(sockfd[0], &amp;recvfd, data, bytes);
+ if(ret &lt; 0)
+ {
+  printf(“paraent recv failed\n”);
+ }
+ /</em>
+ else
+ {
+  printf(“fd %d paraent recv %d bytes data is %s\n”, recvfd,strlen(data),data);
+ }
+ */</p>
+
+<p>/* 向文件写入数据  */
+ size = -1;
+ buflen = sizeof(buf);</p>
+
+<p>if((size = write(recvfd, buf, buflen)) &lt;= 0)
+ {
+  printf(“in openfileprog, write failed\n”);
+ }</p>
+
+<p>/* 父进程作为server建立域套接字，等待client连接 */
+  printf(“parent write over! Accept other process ……\n”);</p>
+
+<p>fdsock = socket(AF_UNIX, SOCK_STREAM, 0);
+ if(-1 == fdsock)
+ {
+  printf(“myopen creat socket error!errno is %d\n”, errno);
+ }</p>
+
+<p>unlink(path);</p>
+
+<p>memset(&amp;addr_server, 0, sizeof(addr_server));
+ addr_server.sun_family = AF_UNIX;
+ strcpy(addr_server.sun_path, path);
+ len = sizeof(struct sockaddr_un);</p>
+
+<p>ret = bind(fdsock, (struct sockaddr*)&amp;addr_server, len);
+ if(-1 == ret)
+ {
+  printf(“in myopen bind error, errorno is %d\n”,errno);
+  close(fdsock);
+  unlink(path);
+ }</p>
+
+<p>ret = listen(fdsock,1);
+ if(-1 == ret)
+ {
+  printf(“in myopen listen error, errorno is %d\n”,errno);
+  close(fdsock);
+  unlink(path);
+ }</p>
+
+<p>fdaccept = accept(fdsock, (struct sockaddr*)&amp;addr_server, &amp;len);
+ if(-1 == ret)
+ {
+  printf(“in myopen accept error, errorno is %d\n”,errno);
+  close(fdsock);
+  unlink(path);
+ }</p>
+
+<p>/* 向已经连接的client传递该文件描述符 */
+ ret = func_send_fd(fdaccept, recvfd, datasend, sizeof(datasend));
+ if(0 &gt; ret)
+ {
+  printf(“in myopen, func_send_fd failed\n”);
+ }</p>
+
+<p>printf(“send fd over! Will sleep 10s \n”);</p>
+
+<p>sleep(10);</p>
+
+<p>exit(0);</p>
+
+<p>}</p>
+
+<p>func_recv_fd函数负责从子进程接受文件描述符：</p>
+
+<p>int func_recv_fd(int recv_sock, int *recvfd, void *data, int bytes)
+{
+ struct msghdr msghead; 
+ struct iovec passdata[1];
+ int ret;
+ int temp;
+ int newfd;</p>
+
+<p>struct cmsghdr  *msgptr1;</p>
+
+<p>struct cmsghdr  *msgptr = NULL;</p>
+
+<p>memset(&amp;msghead, 0, sizeof(msghead));</p>
+
+<p>/* 同func_send_fd ，填充所需要的结构 */
+ msghead.msg_accrights = (caddr_t)&amp;newfd;
+ msghead.msg_accrightslen = sizeof(recvfd);</p>
+
+<p>msghead.msg_name = NULL;
+ msghead.msg_namelen = 0;
+ passdata[0].iov_base = data;
+ passdata[0].iov_len = bytes;</p>
+
+<p>msghead.msg_iov = passdata;
+ msghead.msg_iovlen = 1;</p>
+
+<p>/* 接收信息（文件描述符 ）*/
+ if(0 &gt; (ret = recvmsg(recv_sock, &amp;msghead, 0)))
+ {
+  printf(“in func_recv_fd, recvmsg failed\n”);
+  return -1;
+ }</p>
+
+<p>if(msghead.msg_accrightslen == sizeof(recvfd))
+ {
+  <em>recvfd = newfd;  /</em> 文件描述符 */
+ }</p>
+
+<p>return ret;
+}</p>
+
+<p>其中父进程向client进程发送文件描述符也使用了func_send_fd函数，该函数在此c文件中重新写了一遍；其实没有必要这样重复。我们可以把它作为一个库来使用；不过这里暂且这样使用。函数代码参考上面所写的。</p>
+
+<p>在这个c文件中还要加入以下头文件和宏定义：</p>
+
+<p>#include
+#include
+#include
+#include
+#include
+#include
+#include
+#include
+#include
+#include
+#define SLEEPTIME  3
+#define ARGLEN     20
+#define MODE       S_IRUSR | S_IWUSR | S_IXUSR | S_IRGRP | S_IROTH    /* -rwxr–r– <em>/
+#define PERMIT     O_RDWR | O_APPEND | O_CREAT                         /</em> if the file not exit ,creat it , data written to it append */</p>
+
+<p>3）最后看client进程代码：</p>
+
+<p>int main()
+{
+ int sockfd, recvfd,ret;</p>
+
+<p>struct sockaddr_un addr_client; <br />
+ int length,buflen; 
+ char data[10]; 
+ ssize_t size;
+ const char path[] = “/export/home/temp/test/other_prog/fengxianzhong”; <br />
+ char buf[] = “this is client process ccc\n” ;</p>
+
+<p>sockfd = socket(AF_UNIX, SOCK_STREAM, 0);
+ if(-1 == sockfd)
+ {
+  printf(“client creat socket error!errno is %d\n”, errno);
+ }</p>
+
+<p>addr_client.sun_family = AF_UNIX;
+    strcpy(addr_client.sun_path, path);
+    length = sizeof(addr_client.sun_family) + sizeof(addr_client.sun_path);</p>
 
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/algorithm/2020/01/05/BCrypt.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/linux/2020/01/05/socket.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -172,21 +542,25 @@
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/linux/2020/01/05/206.html">206 http 1.1断点续传</a>
+						<a class="post-link" href="/MyBlog/golang/2020/01/05/rest.html">rest</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/linux/2020/01/05/206.html"> 夏泽民</a>
+						<a href="/MyBlog/golang/2020/01/05/rest.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
 							Jan 5, 2020
 						</span>
 					</div>
-					<div class="excerpt"><p>要实现断点续传的功能，通常都需要客户端记录下当前的下载进度，并在需要续传的时候通知服务端本次需要下载的内容片段。</p>
+					<div class="excerpt"><p>https://github.com/emicklei/go-restful-swagger12
+https://github.com/emicklei/go-restful-openapi
+https://github.com/emicklei/go-restful
+https://github.com/ant0ine/go-json-rest/
+go-restful库：https://github.com/emicklei/go-restful</p>
 
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/linux/2020/01/05/206.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/golang/2020/01/05/rest.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -196,21 +570,22 @@
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/linux/2020/01/04/uniq.html">uniq</a>
+						<a class="post-link" href="/MyBlog/algorithm/2020/01/05/rainbow.html">rainbow table 彩虹表</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/linux/2020/01/04/uniq.html"> 夏泽民</a>
+						<a href="/MyBlog/algorithm/2020/01/05/rainbow.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Jan 4, 2020
+							Jan 5, 2020
 						</span>
 					</div>
-					<div class="excerpt"><p>Linux uniq 命令用于检查及删除文本文件中重复出现的行列，一般与 sort 命令结合使用。</p>
+					<div class="excerpt"><p>如何存储密码才是安全的？
+密码存储有几种方式：</p>
 
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/linux/2020/01/04/uniq.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/algorithm/2020/01/05/rainbow.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -220,21 +595,21 @@
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/linux/2020/01/04/sort.html">sort</a>
+						<a class="post-link" href="/MyBlog/algorithm/2020/01/05/pki.html">pki Public Key Infrastructure</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/linux/2020/01/04/sort.html"> 夏泽民</a>
+						<a href="/MyBlog/algorithm/2020/01/05/pki.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Jan 4, 2020
+							Jan 5, 2020
 						</span>
 					</div>
-					<div class="excerpt"><p>sort是在Linux里非常常用的一个命令，管排序的，集中精力，五分钟搞定sort，现在开始！</p>
+					<div class="excerpt"><p>公开密钥基础建设（英语：Public Key Infrastructure，缩写：PKI），又称公开密钥基础架构、公钥基础建设、公钥基础设施、公开密码匙基础建设或公钥基础架构，是一组由硬件、软件、参与者、管理政策与流程组成的基础架构，其目的在于创造、管理、分配、使用、存储以及撤销数字证书。</p>
 
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/linux/2020/01/04/sort.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/algorithm/2020/01/05/pki.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -244,21 +619,27 @@
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/linux/2020/01/04/log.html">nginx 日志访问量统计</a>
+						<a class="post-link" href="/MyBlog/storage/2020/01/05/mysqldump.html">mysqldump Mysql 大量数据快速导出</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/linux/2020/01/04/log.html"> 夏泽民</a>
+						<a href="/MyBlog/storage/2020/01/05/mysqldump.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Jan 4, 2020
+							Jan 5, 2020
 						</span>
 					</div>
-					<div class="excerpt"><p>1.根据访问IP统计UV</p>
+					<div class="excerpt"><p>mysqldump -u root -p -q -e -t  webgps4 dn_location2 &gt; dn_location2.sql 
+mysqldump -u root -p -q -e -t –single-transaction  webgps4 dn_location2 &gt; dn_location2.sql
+source dn_location2.sql
+以上是导入导出数据的语句，该方法15分钟导出1.6亿条记录，导出的文件中平均7070条记录拼成一个insert语句，通过source进行批量插入，导入1.6亿条数据耗时将近5小时。平均速度：3200W条/h。后来尝试加上–single-transaction参数，结果影响不大。另外，若在导出时增加-w参数，表示对导出数据进行筛选，那么导入导出的速度基本不变，筛选出的数据量越大，时间越慢而已。对于其中的参数这里进行说明：
+<!-- more -->
+–quick，-q
+该选项在导出大表时很有用，它强制 mysqldump 从服务器查询取得记录直接输出而不是取得所有记录后将它们缓存到内存中。</p>
 
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/linux/2020/01/04/log.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/storage/2020/01/05/mysqldump.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -2562,6 +2943,18 @@
 			  
 			    
 			      <a href="/MyBlog/page572/">572</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page573/">573</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page574/">574</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page575/">575</a>
 			    
 			  
 
@@ -5453,6 +5846,21 @@
 						  
 						
 
+						  
+							<li><a href="/MyBlog/page573">573</a></li>
+						  
+						
+
+						  
+							<li><a href="/MyBlog/page574">574</a></li>
+						  
+						
+
+						  
+							<li><a href="/MyBlog/page575">575</a></li>
+						  
+						
+
 						
 						  <li><a href="/MyBlog/page323">Next</a></li>
 						
@@ -5487,7 +5895,7 @@
 							
 							{
 							"title" : " - ",
-							"url" : "/MyBlog/2021/12/25/2021-09-05-count.html"
+							"url" : "/MyBlog/2022/01/02/2021-09-05-count.html"
 							}
 							
 							,
@@ -5495,7 +5903,7 @@
 							
 							{
 							"title" : " - ",
-							"url" : "/MyBlog/2021/12/25/2021-06-06-show_columns.html"
+							"url" : "/MyBlog/2022/01/02/2021-06-06-show_columns.html"
 							}
 							
 							,
@@ -5503,7 +5911,119 @@
 							
 							{
 							"title" : " - ",
-							"url" : "/MyBlog/2021/12/25/2020-11-24-mysql.html"
+							"url" : "/MyBlog/2022/01/02/2020-11-24-mysql.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "webpack vue - ",
+							"url" : "/MyBlog/node/2022/01/02/webpack.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "reflect 修改map slice struct - ",
+							"url" : "/MyBlog/golang/2022/01/02/reflect.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "max_old_space_size - ",
+							"url" : "/MyBlog/node/2022/01/02/max_old_space_size.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "max_content_length - ",
+							"url" : "/MyBlog/elasticsearch/2022/01/02/max_content_length.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "kind type - ",
+							"url" : "/MyBlog/golang/2022/01/02/kind.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "grpc 4MB 的限制 - ",
+							"url" : "/MyBlog/golang/2022/01/02/grpc.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "explain - ",
+							"url" : "/MyBlog/elasticsearch/2022/01/02/explain.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "dumb-init - ",
+							"url" : "/MyBlog/docker/2022/01/02/dumb-init.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "一个dockerfile 编译多个镜像 默认镜像 - ",
+							"url" : "/MyBlog/docker/2022/01/02/dockerfile.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "deepcopy 反射 实现任意类型属性拷贝 - ",
+							"url" : "/MyBlog/golang/2022/01/02/deepcopy.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "channel实现消息的批量处理 - ",
+							"url" : "/MyBlog/golang/2022/01/02/channel.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "ace 编辑器 - ",
+							"url" : "/MyBlog/node/2022/01/02/ace.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "YSLOW - ",
+							"url" : "/MyBlog/node/2022/01/02/YSLOW.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "Sort - ",
+							"url" : "/MyBlog/elasticsearch/2022/01/02/Sort.html"
 							}
 							
 							,
@@ -5528,6 +6048,14 @@
 							{
 							"title" : "oliver elasticsearch - ",
 							"url" : "/MyBlog/elasticsearch/2021/12/25/oliver.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "lorca electron - ",
+							"url" : "/MyBlog/golang/2021/12/25/lorca.html"
 							}
 							
 							,
@@ -28506,7 +29034,7 @@
 								
 								
 									<a class="bold" href="/MyBlog/category/golang">
-										golang (1024)
+										golang (1030)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -28533,7 +29061,7 @@
 								
 								
 									<a class="bold" href="/MyBlog/category/docker">
-										docker (95)
+										docker (97)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -28551,7 +29079,7 @@
 								
 								
 									<a class="bold" href="/MyBlog/category/elasticsearch">
-										elasticsearch (41)
+										elasticsearch (44)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -28614,7 +29142,7 @@
 								
 								
 									<a class="bold" href="/MyBlog/category/node">
-										node (49)
+										node (53)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -28693,15 +29221,71 @@
 								<ul style="display:none;width:250px;height:250px;">
 								     
 								   <li>
-										<a href="/MyBlog/2021/12/25/2021-09-05-count.html" style="font-size:40px;"> </a>
+										<a href="/MyBlog/2022/01/02/2021-09-05-count.html" style="font-size:40px;"> </a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/2021/12/25/2021-06-06-show_columns.html" style="font-size:40px;"> </a>
+										<a href="/MyBlog/2022/01/02/2021-06-06-show_columns.html" style="font-size:40px;"> </a>
 									</li>
 									  
 								   <li>
-										<a href="/MyBlog/2021/12/25/2020-11-24-mysql.html" style="font-size:40px;"> </a>
+										<a href="/MyBlog/2022/01/02/2020-11-24-mysql.html" style="font-size:40px;"> </a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/node/2022/01/02/webpack.html" style="font-size:40px;"> webpack vue</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/golang/2022/01/02/reflect.html" style="font-size:40px;"> reflect 修改map slice struct</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/node/2022/01/02/max_old_space_size.html" style="font-size:40px;"> max_old_space_size</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/elasticsearch/2022/01/02/max_content_length.html" style="font-size:40px;"> max_content_length</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/golang/2022/01/02/kind.html" style="font-size:40px;"> kind type</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/golang/2022/01/02/grpc.html" style="font-size:40px;"> grpc 4MB 的限制</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/elasticsearch/2022/01/02/explain.html" style="font-size:40px;"> explain</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/docker/2022/01/02/dumb-init.html" style="font-size:40px;"> dumb-init</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/docker/2022/01/02/dockerfile.html" style="font-size:40px;"> 一个dockerfile 编译多个镜像 默认镜像</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/golang/2022/01/02/deepcopy.html" style="font-size:40px;"> deepcopy 反射 实现任意类型属性拷贝</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/golang/2022/01/02/channel.html" style="font-size:40px;"> channel实现消息的批量处理</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/node/2022/01/02/ace.html" style="font-size:40px;"> ace 编辑器</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/node/2022/01/02/YSLOW.html" style="font-size:40px;"> YSLOW</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/elasticsearch/2022/01/02/Sort.html" style="font-size:40px;"> Sort</a>
 									</li>
 									  
 								   <li>
@@ -28714,6 +29298,10 @@
 									  
 								   <li>
 										<a href="/MyBlog/elasticsearch/2021/12/25/oliver.html" style="font-size:40px;"> oliver elasticsearch</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/golang/2021/12/25/lorca.html" style="font-size:40px;"> lorca electron</a>
 									</li>
 									  
 								   <li>
@@ -28791,66 +29379,6 @@
 								   <li>
 										<a href="/MyBlog/linux/2021/12/05/nginx.html" style="font-size:40px;"> nginx惊群问题</a>
 									</li>
-									  
-								   <li>
-										<a href="/MyBlog/web/2021/12/05/lsof.html" style="font-size:40px;"> mac lsof</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2021/12/05/fgprof.html" style="font-size:40px;"> fgprof</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/storage/2021/12/04/tree.html" style="font-size:40px;"> Redis-Lua树形结构存储</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/mysql/2021/12/04/threadpool.html" style="font-size:40px;"> threadpool</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/web/2021/12/04/sourcegraph.html" style="font-size:40px;"> sourcegraph</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/mysql/2021/12/04/profile.html" style="font-size:40px;"> profile</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/mysql/2021/12/04/processlist.html" style="font-size:40px;"> processlist</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/mysql/2021/12/04/lock.html" style="font-size:40px;"> lock</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2021/12/04/gui.html" style="font-size:40px;"> gui</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2021/12/04/grpc.html" style="font-size:40px;"> nginx grpc</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/mysql/2021/12/04/file.html" style="font-size:40px;"> 文件模型</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/golang/2021/12/04/diff.html" style="font-size:40px;"> vscode diff</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/storage/2021/12/04/Region.html" style="font-size:40px;"> Region</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/elasticsearch/2021/12/04/Ingest-Attachment.html" style="font-size:40px;"> Ingest-Attachment 对 word和PDF文档的全文搜索</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/node/2021/12/04/EventSource.html" style="font-size:40px;"> EventSource</a>
-									</li>
 									
 								</ul>
 							</div>
@@ -28865,33 +29393,33 @@
                 		<ul class="posts" span="recent">  
 							  
 							   <li>  
-								   <span>25 Dec 2021</span>
-								   <a href="/MyBlog/2021/12/25/2021-09-05-count.html">  
+								   <span>02 Jan 2022</span>
+								   <a href="/MyBlog/2022/01/02/2021-09-05-count.html">  
 								   </a>  
 							   </li>  
 							  
 							   <li>  
-								   <span>25 Dec 2021</span>
-								   <a href="/MyBlog/2021/12/25/2021-06-06-show_columns.html">  
+								   <span>02 Jan 2022</span>
+								   <a href="/MyBlog/2022/01/02/2021-06-06-show_columns.html">  
 								   </a>  
 							   </li>  
 							  
 							   <li>  
-								   <span>25 Dec 2021</span>
-								   <a href="/MyBlog/2021/12/25/2020-11-24-mysql.html">  
+								   <span>02 Jan 2022</span>
+								   <a href="/MyBlog/2022/01/02/2020-11-24-mysql.html">  
 								   </a>  
 							   </li>  
 							  
 							   <li>  
-								   <span>25 Dec 2021</span>
-								   <a href="/MyBlog/golang/2021/12/25/wails.html">  
-								   wails</a>  
+								   <span>02 Jan 2022</span>
+								   <a href="/MyBlog/node/2022/01/02/webpack.html">  
+								   webpack vue</a>  
 							   </li>  
 							  
 							   <li>  
-								   <span>25 Dec 2021</span>
-								   <a href="/MyBlog/web/2021/12/25/outsystems.html">  
-								   outsystems低代码</a>  
+								   <span>02 Jan 2022</span>
+								   <a href="/MyBlog/golang/2022/01/02/reflect.html">  
+								   reflect 修改map slice struct</a>  
 							   </li>  
 							  
 						</ul>
