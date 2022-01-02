@@ -1,6 +1,6 @@
 ---
 title:mysql 获取表结构
-layout: post
+layout:post
 category:storage
 author: 夏泽民
 ---
