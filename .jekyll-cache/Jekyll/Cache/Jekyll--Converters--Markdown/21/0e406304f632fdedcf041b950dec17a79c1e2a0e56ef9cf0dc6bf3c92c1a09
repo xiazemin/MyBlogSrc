@@ -1,0 +1,267 @@
+I"�&<p>编译过的二进制文件已经包含了 DWARFv3 调试信息，只要 GDB7.1 以上版本都可以进行调试。 在OSX下，如无法执行调试指令，可尝试用sudo方式执行gdb。</p>
+
+<p>删除调试符号：go build -ldflags “-s -w”</p>
+
+<p>-s: 去掉符号信息。
+-w: 去掉DWARF调试信息。
+关闭内联优化：go build -gcflags “-N -l”</p>
+
+<p>调试相关函数：
+runtime.Breakpoint()：触发调试器断点。
+runtime/debug.PrintStack()：显示调试堆栈。
+log：适合替代 print显示调试信息。
+GDB 调试支持：</p>
+
+<p>参数载入：gdb -d $GCROOT 。
+手工载入：source pkg/runtime/runtime-gdb.py。
+更多细节，请参考: http://golang.org/doc/gdb
+<!-- more -->
+$ go build -gcflags “-N -l” // 编译，关闭内联优化。</p>
+
+<p>$ sudo gdb demo // 启动 gdb 调试器，手工载入 Go Runtime 。
+GNU gdb (GDB) 7.5.1
+Reading symbols from demo…done.
+(gdb) source /usr/local/go/src/pkg/runtime/runtime-gdb.py
+Loading Go Runtime support.</p>
+
+<p>(gdb) l main.main // 以 .方式查看源码。
+9 r = fmt.Sprintf(“test: %s %d”, s, x)
+10 runtime.Breakpoint()
+11 return r
+12 }
+13
+14 func main() {
+15 s := “haha”
+16 i := 1234
+17 println(test(s, i))
+18 }</p>
+
+<p>(gdb) l main.go:8 // 以 :方式查看源码。
+3 import (
+4 “fmt”
+5 “runtime”
+6 )
+7
+8 func test(s string, x int) (r string) {
+9 r = fmt.Sprintf(“test: %s %d”, s, x)
+10 runtime.Breakpoint()
+11 return r
+12 }</p>
+
+<p>(gdb) b main.main // 以 .方式设置断点。
+Breakpoint 1 at 0x2131: file main.go, line 14.</p>
+
+<p>(gdb) b main.go:17 // 以 :方式设置断点。
+Breakpoint 2 at 0x2167: file main.go, line 17.</p>
+
+<p>(gdb) info breakpoints // 查看所有断点。
+Num Type Disp Enb Address What
+1 breakpoint keep y 0x0000000000002131 in main.main at main.go:14
+2 breakpoint keep y 0x0000000000002167 in main.main at main.go:17</p>
+
+<p>(gdb) r // 启动进程，触发第一个断点。
+Starting program: demo
+[New Thread 0x1c03 of process 4088]
+[Switching to Thread 0x1c03 of process 4088]
+Breakpoint 1, main.main () at main.go:14
+14 func main() {</p>
+
+<p>(gdb) info goroutines // 查看 goroutines 信息。</p>
+<ul>
+  <li>1 running runtime.gosched</li>
+  <li>2 syscall runtime.entersyscall</li>
+</ul>
+
+<p>(gdb) goroutine 1 bt // 查看指定序号的 goroutine 调用堆栈。
+#0 0x000000000000f6c0 in runtime.gosched () at pkg/runtime/proc.c:927
+#1 0x000000000000e44c in runtime.main () at pkg/runtime/proc.c:244
+#2 0x000000000000e4ef in schedunlock () at pkg/runtime/proc.c:267
+#3 0x0000000000000000 in ?? ()</p>
+
+<p>(gdb) goroutine 2 bt // 这个 goroutine 貌似跟 GC 有关。
+#0 runtime.entersyscall () at pkg/runtime/proc.c:989
+#1 0x000000000000d01d in runtime.MHeap_Scavenger () at pkg/runtime/mheap.c:363
+#2 0x000000000000e4ef in schedunlock () at pkg/runtime/proc.c:267
+#3 0x0000000000000000 in ?? ()</p>
+
+<p>(gdb) c / / 继续执行，触发下一个断点。
+Continuing.
+Breakpoint 2, main.main () at main.go:17
+17! ! println(test(s, i))</p>
+
+<p>(gdb) info goroutines // 当前 goroutine 序号为 1。</p>
+<ul>
+  <li>1 running runtime.gosched
+2 runnable runtime.gosched</li>
+</ul>
+
+<p>(gdb) goroutine 1 bt // 当前 goroutine 调用堆栈。
+#0 0x000000000000f6c0 in runtime.gosched () at pkg/runtime/proc.c:927
+#1 0x000000000000e44c in runtime.main () at pkg/runtime/proc.c:244
+#2 0x000000000000e4ef in schedunlock () at pkg/runtime/proc.c:267
+#3 0x0000000000000000 in ?? ()</p>
+
+<p>(gdb) bt // 查看当前调⽤堆栈，可以与当前 goroutine 调用堆栈对比。
+#0 main.main () at main.go:17
+#1 0x000000000000e44c in runtime.main () at pkg/runtime/proc.c:244
+#2 0x000000000000e4ef in schedunlock () at pkg/runtime/proc.c:267
+#3 0x0000000000000000 in ?? ()</p>
+
+<p>(gdb) info frame // 堆栈帧信息。
+Stack level 0, frame at 0x442139f88:
+rip = 0x2167 in main.main (main.go:17); saved rip 0xe44c
+called by frame at 0x442139fb8
+source language go.
+Arglist at 0x442139f28, args:
+Locals at 0x442139f28, Previous frame’s sp is 0x442139f88
+Saved registers:
+rip at 0x442139f80</p>
+
+<p>(gdb) info locals // 查看局部变量。
+i = 1234
+s = “haha”</p>
+
+<p>(gdb) p s // 以 Pretty-Print 方式查看变量。
+$1 = “haha”</p>
+
+<p>(gdb) p $len(s) // 获取对象长度($cap)
+$2 = 4</p>
+
+<p>(gdb) whatis i // 查看对象类型。
+type = int</p>
+
+<p>(gdb) c // 继续执行，触发 breakpoint() 断点。
+Continuing.
+Program received signal SIGTRAP, Trace/breakpoint trap.
+runtime.breakpoint () at pkg/runtime/asm_amd64.s:81
+81 RET</p>
+
+<p>(gdb) n // 从 breakpoint() 中出来，执行源码下一行代码。
+main.test (s=”haha”, x=1234, r=”test: haha 1234″) at main.go:11
+11 return r</p>
+
+<p>(gdb) info args // 从参数信息中，我们可以看到命名返回参数的值。
+s = “haha”
+x = 1234
+r = “test: haha 1234”</p>
+
+<p>(gdb) x/3xw &amp;r // 查看 r 内存数据。(指针 8 + 长度 4)
+0x442139f48: 0x42121240 0x00000000 0x0000000f
+(gdb) x/15xb 0x42121240 // 查看字符串字节数组
+0x42121240: 0x74 0x65 0x73 0x74 0x3a 0x20 0x68 0x61
+0x42121248: 0x68 0x61 0x20 0x31 0x32 0x33 0x34</p>
+
+<p>(gdb) c // 继续执行，进程结束。</p>
+
+<p>Continuing.
+test: haha 1234
+[Inferior 1 (process 4088) exited normally]</p>
+
+<p>(gdb) q // 退出 GDB</p>
+
+<p>2. 常用命令
+2.1. list
+简写命令l，用来显示源代码，默认显示十行代码，后面可以带上参数显示的具体行，例如：list 15，显示十行代码，其中第15行在显示的十行里面的中间，如下所示。</p>
+
+<p>10	        time.Sleep(2 * time.Second)
+  11	        c &lt;- i
+  12	    }
+  13	    close(c)
+  14	}
+  15	
+  16	func main() {
+  17	    msg := “Starting main”
+  18	    fmt.Println(msg)
+  19	    bus := make(chan int)
+2.2. break
+简写命令 b,用来设置断点，后面跟上参数设置断点的行数，例如b 10在第十行设置断点。</p>
+
+<p>2.3. delete
+简写命令 d,用来删除断点，后面跟上断点设置的序号，这个序号可以通过info breakpoints获取相应的设置的断点序号，如下是显示的设置断点序号。</p>
+
+<p>Num     Type           Disp Enb Address            What
+  2       breakpoint     keep y   0x0000000000400dc3 in main.main at /home/xiemengjun/gdb.go:23
+  breakpoint already hit 1 time
+2.4. backtrace
+简写命令 bt,用来打印执行的代码过程，如下所示：</p>
+
+<p>#0  main.main () at /home/xiemengjun/gdb.go:23
+  #1  0x000000000040d61e in runtime.main () at /home/xiemengjun/go/src/pkg/runtime/proc.c:244
+  #2  0x000000000040d6c1 in schedunlock () at /home/xiemengjun/go/src/pkg/runtime/proc.c:267
+  #3  0x0000000000000000 in ?? ()
+2.5. info
+info命令用来显示信息，后面有几种参数，我们常用的有如下几种：</p>
+
+<p>info locals</p>
+
+<p>显示当前执行的程序中的变量值</p>
+
+<p>info breakpoints</p>
+
+<p>显示当前设置的断点列表</p>
+
+<p>info goroutines</p>
+
+<p>显示当前执行的goroutine列表，如下代码所示,带*的表示当前执行的</p>
+
+<ul>
+  <li>1  running runtime.gosched</li>
+  <li>2  syscall runtime.entersyscall
+3  waiting runtime.gosched
+4 runnable runtime.gosched
+2.6. print
+简写命令p，用来打印变量或者其他信息，后面跟上需要打印的变量名，当然还有一些很有用的函数$len()和$cap()，用来返回当前string、slices或者maps的长度和容量。</li>
+</ul>
+
+<p>2.7. whatis
+用来显示当前变量的类型，后面跟上变量名，例如whatis msg,显示如下：</p>
+
+<p>type = struct string
+2.8. next
+简写命令 n,用来单步调试，跳到下一步，当有断点之后，可以输入n跳转到下一步继续执行</p>
+
+<p>2.9. coutinue
+简称命令 c，用来跳出当前断点处，后面可以跟参数N，跳过多少次断点</p>
+
+<p>2.10. set variable
+该命令用来改变运行过程中的变量值，格式如：set variable <var>=<value></value></var></p>
+
+<ol>
+  <li>调试步骤
+编译文件，生成可执行文件gdbfile:
+go build -gcflags “-N -l” gdbfile.go
+通过gdb命令启动调试：
+gdb gdbfile</li>
+</ol>
+
+<p>启动之后首先看看这个程序是不是可以运行起来，只要输入run命令回车后程序就开始运行，程序正常的话可以看到程序输出如下，和我们在命令行直接执行程序输出是一样的：
+(gdb) run
+Starting program: /home/xiemengjun/gdbfile
+Starting main</p>
+
+<p>start                         //开始调试
+n                             //一条一条执行
+step/s                        //执行下一条，如果函数进入函数
+backtrace/bt                  //查看函数调用栈帧
+info/i locals                 //查看当前栈帧局部变量
+frame/f                       //选择栈帧，再查看局部变量
+print/p                       //打印变量的值
+finish                        //运行到当前函数返回
+set var sum=0                 //修改变量值
+list/l 行号或函数名             //列出源码
+display/undisplay sum         //每次停下显示变量的值/取消跟踪
+break/b  行号或函数名           //设置断点
+continue/c                    //连续运行
+info/i breakpoints            //查看已经设置的断点
+delete breakpoints 2          //删除某个断点
+disable/enable breakpoints 3  //禁用/启用某个断点
+break 9 if sum != 0           //满足条件才激活断点
+run/r                         //重新从程序开头连续执行
+watch input[4]                //设置观察点
+info/i watchpoints            //查看设置的观察点
+x/7b input                    //打印存储器内容，b–每个字节一组，7–7组
+disassemble                   //反汇编当前函数或指定函数
+si                            // 一条指令一条指令调试 而 s 是一行一行代码
+info registers                // 显示所有寄存器的当前值
+x/20 $esp                    //查看内存中开始的20个数</p>
+:ET

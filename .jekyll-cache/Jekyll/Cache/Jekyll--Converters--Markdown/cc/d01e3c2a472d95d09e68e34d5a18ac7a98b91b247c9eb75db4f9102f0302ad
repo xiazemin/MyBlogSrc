@@ -1,0 +1,195 @@
+I"�<p>TCMalloc的全称为Thread-Caching Malloc，是谷歌开发的开源工具google-perftools中的一个成员。与标准的glibc库的Malloc相比，TCMalloc库在内存分配效率和速度上要高很多，这在很大程度上提高了服务器在高并发情况下的性能，从而降低了系统的负载。</p>
+
+<p>1.安装libunwind库
+ 可以从http://download.savannah.gnu.org/releases/libunwind下载相应的libunwind版本
+#wget http://ftp.twaren.net/Unix/NonGNU//libunwind/libunwind-1.1.tar.gz
+#tar zxvf libunwind-1.1.tar.gz
+#cd libunwind-1.1
+#CFLAGS=-fPIC ./configure 
+#make CFLAGS=-fPIC 
+#make CFLAGS=-fPIC install</p>
+
+<p> </p>
+
+<p>2.安装google-perftools
+#wget http://gperftools.googlecode.com/files/gperftools-2.1.tar.gz
+#tar zxvf gperftools-2.1.tar.gz
+#cd gperftools-2.1</p>
+<h1 id="configure">./configure </h1>
+<p>#make &amp;&amp; make install 
+#echo “/usr/local/lib” &gt; /etc/ld.so.conf.d/usr_local_lib.conf </p>
+<h1 id="ldconfig">ldconfig</h1>
+
+<p> </p>
+
+<p>3.编译安装nginx</p>
+
+<h1 id="wget-httpnginxorgdownloadnginx-142targz">wget http://nginx.org/download/nginx-1.4.2.tar.gz</h1>
+
+<h1 id="tar--zvxf-nginx-142targz">tar -zvxf nginx-1.4.2.tar.gz</h1>
+
+<h1 id="cd-nginx-142">cd ./nginx-1.4.2</h1>
+
+<p>注意需要添加–with-google_perftools_module</p>
+
+<p>#./configure –with-google_perftools_module –prefix=/usr/local/nginx </p>
+
+<p>参考：Linux环境Nginx安装与调试(Nginx+PHP/phpfpm)</p>
+
+<p>#make</p>
+
+<p>#make install</p>
+
+<p> </p>
+
+<p>4.修改Nginx主配置文件</p>
+
+<p>修改nginx.conf文件，在pid这行的下面添加如下代码：
+#pid        logs/nginx.pid; 
+google_perftools_profiles /tmp/tcmalloc;</p>
+
+<p>同时我们设置nginx启动2个工作进程</p>
+
+<p>worker_processes  2;
+daemon on;
+master_process  on;</p>
+
+<p> </p>
+
+<p>5.为google-perftools添加线程目录</p>
+
+<p>创建一个线程目录，将文件放在/tmp/tcmalloc下。</p>
+
+<p>#mkdir /tmp/tcmalloc
+#chmod 0777 /tmp/tcmalloc</p>
+
+<p> </p>
+
+<p>6.启动Nginx</p>
+
+<p>#/usr/local/nginx/sbin/nginx -c /usr/local/nginx/conf/nginx.conf</p>
+
+<p> </p>
+
+<p>7.验证运行状态
+为了验证google-perftools已经正常加载，可通过如下命令查看：</p>
+<h1 id="lsof--n--grep-tcmalloc">lsof -n | grep tcmalloc </h1>
+
+<p> </p>
+
+<p>8.安装redis</p>
+
+<p>Redis并没有自己实现内存池，没有在标准的系统内存分配器上再加上自己的东西。所以系统内存分配器的性能及碎片率会对Redis造成一些性能上的影响。</p>
+
+<p>在Redis的 zmalloc.c 源码中，我们可以看到如下代码：</p>
+
+<p>/* Explicitly override malloc/free etc when using tcmalloc. */
+#if defined(USE_TCMALLOC)
+#define malloc(size) tc_malloc(size)
+#define calloc(count,size) tc_calloc(count,size)
+#define realloc(ptr,size) tc_realloc(ptr,size)
+#define free(ptr) tc_free(ptr)
+#elif defined(USE_JEMALLOC)
+#define malloc(size) je_malloc(size)
+#define calloc(count,size) je_calloc(count,size)
+#define realloc(ptr,size) je_realloc(ptr,size)
+#define free(ptr) je_free(ptr)
+#endif</p>
+
+<p>注意：redis-2.4以上自带jemalloc，你不需要加任何参数，通过zmalloc.c源码中我们可以看到，Redis在编译时，会先判断是否使用tcmalloc，如果是，会用tcmalloc对应的函数替换掉标准的libc中的函数实现。其次会判断jemalloc是否使得，最后如果都没有使用才会用标准的libc中的内存管理函数。所以用tcmalloc优化请谨慎使用，这两着分配器碎片率相差不大，建议用自带jemalloc。</p>
+
+<p>如果要安装tcmalloc可以这样：</p>
+
+<p>注意需要删除原先的redis的解压文件，不然安装无效！</p>
+
+<h1 id="make-use_tcmallocyes">make USE_TCMALLOC=yes</h1>
+
+<h1 id="make-install">make install</h1>
+
+<p>检测tcmall信息</p>
+
+<p>使用info命令查看内存信息：
+<!-- more -->
+redis内存管理方式：支持tcmalloc，jemalloc，malloc三种内存分配</p>
+
+<p>redis并没有自己实现内存池，没有在标准的系统内存分配器上再加上自己的东西。所以系统内存分配器的性能及碎片率会对redis造成一些性能上的影响。</p>
+
+<p>一、那redis是如何避免内存分配器的性能和碎片的问题的呢？</p>
+
+<p>在Redis的 zmalloc.c 源码中，我们可以看到如下代码：</p>
+
+<p>48 /* Explicitly override malloc/free etc when using tcmalloc. */
+ 49 #if defined(USE_TCMALLOC)
+ 50 #define malloc(size) tc_malloc(size)
+ 51 #define calloc(count,size) tc_calloc(count,size)
+ 52 #define realloc(ptr,size) tc_realloc(ptr,size)
+ 53 #define free(ptr) tc_free(ptr)
+ 54 #elif defined(USE_JEMALLOC)
+ 55 #define malloc(size) je_malloc(size)
+ 56 #define calloc(count,size) je_calloc(count,size)
+ 57 #define realloc(ptr,size) je_realloc(ptr,size)
+ 58 #define free(ptr) je_free(ptr)
+ 59 #endif
+    从上面的代码中我们可以看到，Redis在编译时，会先判断是否使用tcmalloc，如果是，会用tcmalloc对应的函数替换掉标准的libc中的函数实现。其次会判断jemalloc是否使得，最后如果都没有使用才会用标准的libc中的内存管理函数。
+    而在最新的Redis2.4.4版本中，jemalloc已经作为源码包的一部分包含在源码包中，所以可以直接被使用。而如果你要使用tcmalloc的话，是需要自己安装的。</p>
+
+<p>二、对于tcmalloc，jemalloc和libc对应的三个内存分配器。其性能和碎片率如何呢？
+下面是一个简单测试结果，使用Redis自带的redis-benchmark写入等量数据进行测试，数据摘自采用不同分配器时Redis info信息。
+我们可以看到，采用tcmalloc时碎片率是最低的，为1.01，jemalloc为1.02，而libc的分配器碎片率为1.31，如下所未：
+used_memory:708391440
+used_menory_human:675.57M
+used_memory_rss:715169792
+used_memory_peak:708814040
+used_memory_peak_human:675.98M
+mem_fragmentation_ratio:1.01
+mem_allocator:tcmalloc-1.7 
+used_memory:708381168
+used_menory_human:675.56M
+used_memory_rss:723587072
+used_memory_peak:708803768
+used_memory_peak_human:675.97M
+mem_fragmentation_ratio:1.02
+mem_allocator:jemalloc-2.2.1 
+used_memory:869000400
+used_menory_human:828.74M
+used_memory_rss:1136689152
+used_memory_peak:868992208
+used_memory_peak_human:828.74M
+mem_fragmentation_ratio:1.31
+mem_allocator:libc 
+上面的测试数据都是小数据，也就是说单条数据并不大，下面我们尝试设置benchmark的-d参数，将value值调整为1k大小，测试结果发生了一些变化：
+used_memory:830573680
+used_memory_human:792.10M
+used_memory_rss:849068032
+used_memory_peak:831436048
+used_memory_peak_human:792.92M
+mem_fragmentation_ratio:1.02
+mem_allocator:tcmalloc-1.7 
+used_memory:915911024
+used_memory_human:873.48M
+used_memory_rss:927047680
+used_memory_peak:916773392
+used_memory_peak_human:874.30M
+mem_fragmentation_ratio:1.01
+mem_allocator:jemalloc-2.2.1 
+used_memory:771963304
+used_memory_human:736.20M
+used_memory_rss:800583680
+used_memory_peak:772784056
+used_memory_peak_human:736.98M
+mem_fragmentation_ratio:1.04
+mem_allocator:libc 
+可以看出，在分配大块内存和小块内存上，几种分配器的碎片率差距还是比较大的，大家在使用Redis的时候，还是尽量用自己真实的数据去做测试，以选择最适合自己数据的分配器。</p>
+
+<p>三、memcached的slabs内存分配器；</p>
+
+<p>slabs内存分配器算法限定了单个item最大能存储的空间是1M；</p>
+
+<p>slabs内存分配器将内存分成大小相等的slabs，然后每个slab被分成大小相等的chunk，但是不同的slab中的chunk大小是不同的。chunk从一个最小值按照一个因子增长到最大值（slabs.c:POWER_BLOCK）。slab中chunk的值越大，它和前面slab中chunk的间隙就越大。</p>
+
+<p>在往memcached中放一个item时，memcached找一个和value大小匹配较好的chunk存放，因为定长，所以内存会有一定的浪费。</p>
+
+<p>malloc和free的缺陷：
+1、频繁调用malloc，free会造成大量内存碎片，无法回收重新利用，造成内存使用率低；
+2、作为系统调用，其系统开销远远大于一般函数。</p>
+:ET

@@ -1,0 +1,214 @@
+I"Q"<p>https://segmentfault.com/a/1190000022792874
+JSON Web Token（JWT）是一个开放标准（RFC 7519），它定义了一种紧凑且自包含的方式，用于在各方之间以JSON方式安全地传输信息。由于此信息是经过数字签名的，因此可以被验证和信任。可以使用秘密（使用HMAC算法）或使用RSA或ECDSA的公钥/私钥对对JWT进行签名。</p>
+
+<p>直白的讲jwt就是一种用户认证（区别于session、cookie）的解决方案。</p>
+
+<p>出现的背景
+众所周知，在jwt出现之前，我们已经有session、cookie来解决用户登录等认证问题，为什么还要jwt呢？</p>
+
+<p>这里我们先了解一下session，cookie。
+<!-- more -->
+session
+熟悉session运行机制的同学都知道，用户的session数据以file或缓存（redis、memcached）等方式存储在服务器端，客户端浏览器cookie中只保存sessionid。服务器端session属于集中存储，数量不大的情况下，没什么问题，当用户数据逐渐增多到一程度，就会给服务端管理和维护带来大的负担。</p>
+
+<p>session有两个弊端：</p>
+
+<p>1、无法实现跨域。</p>
+
+<p>2、由于session数据属于集中管理里，量大的时候服务器性能是个问题。</p>
+
+<p>优点：</p>
+
+<p>1、session存在服务端，数据相对比较安全。</p>
+
+<p>2、session集中管理也有好处，就是用户登录、注销服务端可控。</p>
+
+<p>cookie
+cookie也是一种解决网站用户认证的实现方式，用户登录时，服务器会发送包含登录凭据的Cookie到用户浏览器客户端，浏览器会将Cookie的key/value保存用户本地（内存或硬盘），用户再访问网站，浏览器会发送cookie信息到服务器端，服务器端接收cookie并解析来维护用户的登录状态。</p>
+
+<p>cookie避免session集中管理的问题，但也存在弊端：</p>
+
+<p>1、跨域问题。</p>
+
+<p>2、数据存储在浏览器端，数据容易被窃取及被csrf攻击，安全性差。</p>
+
+<p>优点：</p>
+
+<p>1、相对于session简单，不用服务端维护用户认证信息。</p>
+
+<p>2、数据持久性。</p>
+
+<p>jwt
+jwt通过json传输，php、java、golang等很多语言支持，通用性比较好，不存在跨域问题。传输数据通过数据签名相对比较安全。客户端与服务端通过jwt交互，服务端通过解密token信息，来实现用户认证。不需要服务端集中维护token信息，便于扩展。当然jwt也有其缺点。</p>
+
+<p>缺点：</p>
+
+<p>1、用户无法主动登出，只要token在有效期内就有效。这里可以考虑redis设置同token有效期一直的黑名单解决此问题。</p>
+
+<p>2、token过了有效期，无法续签问题。可以考虑通过判断旧的token什么时候到期，过期的时候刷新token续签接口产生新token代替旧token。</p>
+
+<p>jwt设置有效期
+可以设置有效期，加入有效期是为了增加安全性，即token被黑客截获，也只能攻击较短时间。设置有效期就会面临token续签问题，解决方案如下</p>
+
+<p>通常服务端设置两个token</p>
+
+<p>Access Token：添加到 HTTP 请求的 header 中，进行用户认证，请求接口资源。
+refresh token：用于当 Access Token过期后，客户端传递refresh token刷新 Access Token续期接口，获取新的Access Token和refresh token。其有效期比 Access Token有效期长。
+jwt构成：
+Header：TOKEN 的类型，就是JWT，签名的算法，如 HMAC SHA256、HS384
+Payload：载荷又称为Claim，携带的信息，比如用户名、过期时间等，一般叫做 Claim
+Signature：签名，是由header、payload 和你自己维护的一个 secret 经过加密得来的</p>
+
+<p>jwt使用
+这里推荐个使用比较多的开源项目<a href="">github.com/dgrijalva/jwt-go</a>，更多文档。</p>
+
+<p>示例：</p>
+
+<p>package main</p>
+
+<p>import (
+    “fmt”
+    “github.com/dgrijalva/jwt-go”
+    “time”
+)
+const (
+    SECRETKEY = “243223ffslsfsldfl412fdsfsdf”//私钥
+)
+//自定义Claims
+type CustomClaims struct {
+    UserId int64
+    jwt.StandardClaims
+}
+func main() {
+    //生成token
+    maxAge:=60<em>60</em>24
+    customClaims :=&amp;CustomClaims{
+        UserId: 11,//用户id
+        StandardClaims: jwt.StandardClaims{
+            ExpiresAt: time.Now().Add(time.Duration(maxAge)*time.Second).Unix(), // 过期时间，必须设置
+            Issuer:”jerry”,   // 非必须，也可以填充用户名，
+        },
+    }
+    //采用HMAC SHA256加密算法
+    token:=jwt.NewWithClaims(jwt.SigningMethodHS256, customClaims)
+    tokenString,err:= token.SignedString([]byte(SECRETKEY))
+    if err!=nil {
+        fmt.Println(err)
+    }
+    fmt.Printf(“token: %v\n”, tokenString)</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>//解析token
+ret,err :=ParseToken(tokenString)
+if err!=nil {
+    fmt.Println(err)
+}
+fmt.Printf("userinfo: %v\n", ret) }
+</code></pre></div></div>
+
+<p>//解析token
+func ParseToken(tokenString string)(<em>CustomClaims,error)  {
+    token, err := jwt.ParseWithClaims(tokenString, &amp;CustomClaims{}, func(token *jwt.Token) (interface{}, error) {
+        if _, ok := token.Method.(</em>jwt.SigningMethodHMAC); !ok {
+            return nil, fmt.Errorf(“Unexpected signing method: %v”, token.Header[“alg”])
+        }
+        return []byte(SECRETKEY), nil
+    })
+    if claims, ok := token.Claims.(*CustomClaims); ok &amp;&amp; token.Valid {
+        return claims,nil
+    } else {
+        return nil,err
+    }
+}
+运行结果：</p>
+
+<p>token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJVc2VySWQiOjExLCJleHAiOjE1OTA5MTk1NDAsImlzcyI6ImplcnJ5In0.FppmbbHRrS4wd5wen73vYPOvtzycOrn2JZlK6JRjEGk
+userinfo: &amp;{11 { 1590919540 0 jerry 0 }}</p>
+
+<p>以上用到了CustomClaims，也可以用简单的方法</p>
+
+<p>示例</p>
+
+<p>package main</p>
+
+<p>import (
+    “fmt”
+    “github.com/dgrijalva/jwt-go”
+    “time”
+)
+const (
+    SECRETKEY = “243223ffslsfsldfl412fdsfsdf”//私钥
+)
+//自定义Claims
+type CustomClaims struct {
+    UserId int64
+    jwt.StandardClaims
+}
+func main() {
+    //生成token
+    maxAge:=60<em>60</em>24
+    // Create the Claims
+    //claims := &amp;jwt.StandardClaims{
+    //    //    ExpiresAt: time.Now().Add(time.Duration(maxAge)*time.Second).Unix(), // 过期时间，必须设置,
+    //    //    Issuer:    “jerry”,// 非必须，也可以填充用户名，
+    //    //}</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>//或者用下面自定义claim
+claims := jwt.MapClaims{
+    "id":       11,
+    "name":       "jerry",
+    "exp": time.Now().Add(time.Duration(maxAge)*time.Second).Unix(), // 过期时间，必须设置,
+}
+
+token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+tokenString, err := token.SignedString([]byte(SECRETKEY))
+if err!=nil {
+    fmt.Println(err)
+}
+fmt.Printf("token: %v\n", tokenString)
+
+//解析token
+ret,err :=ParseToken(tokenString)
+if err!=nil {
+    fmt.Println(err)
+}
+fmt.Printf("userinfo: %v\n", ret) }
+</code></pre></div></div>
+
+<p>//解析token
+func ParseToken(tokenString string)(jwt.MapClaims,error)  {
+    token, err := jwt.Parse(tokenString, func(token <em>jwt.Token) (interface{}, error) {
+        // Don’t forget to validate the alg is what you expect:
+        if _, ok := token.Method.(</em>jwt.SigningMethodHMAC); !ok {
+            return nil, fmt.Errorf(“Unexpected signing method: %v”, token.Header[“alg”])
+        }</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    // hmacSampleSecret is a []byte containing your secret, e.g. []byte("my_secret_key")
+    return []byte(SECRETKEY), nil
+})
+if claims, ok := token.Claims.(jwt.MapClaims); ok &amp;&amp; token.Valid {
+    return claims,nil
+} else {
+    return nil,err
+} } 运行结果类似
+</code></pre></div></div>
+
+<p>token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjE1OTA5MzUzMDUsImlkIjoxMSwibmFtZSI6ImplcnJ5In0.fapE0IiOEe_TqoMCThbNTHUvgWiHPEk0rm-9uPIcvPU
+userinfo: map[exp:1.590935305e+09 id:11 name:jerry]</p>
+
+<p>小结：
+服务端生成的jwt返回客户端可以存到cookie也可以存到localStorage中（相比cookie容量大），存在cookie中需加上 HttpOnly 的标记，可以防止 XSS) 攻击。
+尽量用https带证书网址访问。
+session和jwt没有绝对好与不好，各有其擅长的应用环境，请根据实际情况选择。
+参考资料</p>
+
+<p>https://github.com/guyan0319/…</p>
+
+<p>https://godoc.org/github.com/…</p>
+
+<p>https://blog.csdn.net/weixin_…</p>
+
+<p>https://www.cnblogs.com/flipp…</p>
+
+<p>https://segmentfault.com/a/1190000022792874
+https://godoc.org/github.com/dgrijalva/jwt-go</p>
+:ET

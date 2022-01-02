@@ -1,0 +1,293 @@
+I"�J<p>Docker跨主机容器间网络通信实现的工具有Pipework、Flannel、Weave、Open vSwitch（虚拟交换机）、Calico
+<!-- more -->
+Weave的思路
+在每个宿主机上布置一个特殊的route的容器，不同宿主机的route容器连接起来。 route拦截所有普通容器的ip请求，并通过udp包发送到其他宿主机上的普通容器。这样在跨机的多个容器端看到的就是同一个扁平网络。 weave解决了网络问题，不过部署依然是单机的。</p>
+
+<p>Flannel的思路
+Flannel是CoreOS团队针对Kubernetes设计的一个网络规划服务，简单来说，它的功能是让集群中的不同节点主机创建的Docker容器都具有全集群唯一的虚拟IP地址。但在默认的Docker配置中，每个节点上的Docker服务会分别负责所在节点容器的IP分配。这样导致的一个问题是，不同节点上容器可能获得相同的内外IP地址。并使这些容器之间能够之间通过IP地址相互找到，也就是相互ping通。Flannel设计目的就是为集群中所有节点重新规划IP地址的使用规则，从而使得不同节点上的容器能够获得”同属一个内网”且”不重复的”IP地址，并让属于不同节点上的容器能够直接通过内网IP通信。</p>
+
+<p>Flannel实质上是一种”覆盖网络(overlay network)”，即表示运行在一个网上的网（应用层网络），并不依靠ip地址来传递消息，而是采用一种映射机制，把ip地址和identifiers做映射来资源定位。也就是将TCP数据包装在另一种网络包里面进行路由转发和通信，目前已经支持UDP、VxLAN、AWS VPC和GCE路由等数据转发方式。</p>
+
+<p>Flannel 使用etcd存储配置数据和子网分配信息。flannel 启动之后，后台进程首先检索配置和正在使用的子网列表，然后选择一个可用的子网，然后尝试去注册它。etcd也存储这个每个主机对应的ip。flannel 使用etcd的watch机制监视/coreos.com/network/subnets下面所有元素的变化信息，并且根据它来维护一个路由表。为了提高性能，flannel优化了Universal TAP/TUN设备，对TUN和UDP之间的ip分片做了代理。</p>
+
+<p>Flannel工作原理
+每个主机配置一个ip段和子网个数。例如，可以配置一个覆盖网络使用 10.100.0.0/16段，每个主机/24个子网。因此主机a可以接受10.100.5.0/24，主机B可以接受10.100.18.0/24的包。flannel使用etcd来维护分配的子网到实际的ip地址之间的映射。对于数据路径，flannel 使用udp来封装ip数据报，转发到远程主机。选择UDP作为转发协议是因为他能穿透防火墙。例如，AWS Classic无法转发IPoIP or GRE 网络包，是因为它的安全组仅仅支持TCP/UDP/ICMP。 Flannel工作原理流程图如下 (默认的节点间数据通信方式是UDP转发;  flannel默认使用8285端口作为UDP封装报文的端口，VxLan使用8472端口)</p>
+
+<p>对上图的简单说明 (Flannel的工作原理可以解释如下)：
+-&gt; 数据从源容器中发出后，经由所在主机的docker0虚拟网卡转发到flannel0虚拟网卡，这是个P2P的虚拟网卡，flanneld服务监听在网卡的另外一端。
+-&gt; Flannel通过Etcd服务维护了一张节点间的路由表，该张表里保存了各个节点主机的子网网段信息。
+-&gt; 源主机的flanneld服务将原本的数据内容UDP封装后根据自己的路由表投递给目的节点的flanneld服务，数据到达以后被解包，然后直接进入目的节点的flannel0虚拟网卡，然后被转发到目的主机的docker0虚拟网卡，最后就像本机容器通信一样的由docker0路由到达目标容器。</p>
+
+<p>这样整个数据包的传递就完成了，这里需要解释三个问题：
+1) UDP封装是怎么回事？
+在UDP的数据内容部分其实是另一个ICMP（也就是ping命令）的数据包。原始数据是在起始节点的Flannel服务上进行UDP封装的，投递到目的节点后就被另一端的Flannel服务
+还原成了原始的数据包，两边的Docker服务都感觉不到这个过程的存在。</p>
+
+<p>2) 为什么每个节点上的Docker会使用不同的IP地址段？
+这个事情看起来很诡异，但真相十分简单。其实只是单纯的因为Flannel通过Etcd分配了每个节点可用的IP地址段后，偷偷的修改了Docker的启动参数。
+在运行了Flannel服务的节点上可以查看到Docker服务进程运行参数（ps aux|grep docker|grep “bip”），例如“–bip=182.48.25.1/24”这个参数，它限制了所在节
+点容器获得的IP范围。这个IP范围是由Flannel自动分配的，由Flannel通过保存在Etcd服务中的记录确保它们不会重复。</p>
+
+<p>3) 为什么在发送节点上的数据会从docker0路由到flannel0虚拟网卡，在目的节点会从flannel0路由到docker0虚拟网卡？
+例如现在有一个数据包要从IP为172.17.18.2的容器发到IP为172.17.46.2的容器。根据数据发送节点的路由表，它只与172.17.0.0/16匹配这条记录匹配，因此数据从docker0
+出来以后就被投递到了flannel0。同理在目标节点，由于投递的地址是一个容器，因此目的地址一定会落在docker0对于的172.17.46.0/24这个记录上，自然的被投递到了docker0网卡。</p>
+
+<p>pipework的思路
+pipework是一个单机的工具，组合了brctl等工具，可以认为pipework解决的是宿主机上的设置容器的虚拟网卡、网桥、ip等，可以配合其他网络使用。</p>
+
+<p>如果容器数量不多，想简单的组一个大的3层网络，可以考虑weave
+如果容器数量很多，而且你们的环境复杂,需要多个子网，可以考虑open vswitch或者fannel
+weave的总体网络性能表现欠佳， flannel VXLAN 能满足要求，一般推荐用flannel</p>
+
+<p>Flannel环境部署记录</p>
+
+<p>1）机器环境（centos7系统）</p>
+
+<p>1
+2
+182.48.115.233     部署etcd，flannel，docker      主机名：node-1   主控端（通过etcd）
+182.48.115.235     部署flannel，docker            主机名：node-2   被控端
+2）node-1（182.48.115.233）机器操作
+设置主机名及绑定hosts
+[root@node-1 ~]# hostnamectl –static set-hostname  node-1
+[root@node-1 ~]# vim /etc/hosts
+182.48.115.233    node-1
+182.48.115.233    etcd
+182.48.115.235    node-2</p>
+
+<p>关闭防火墙，如果开启防火墙，则最好打开2379和4001端口
+[root@node-1 ~]# systemctl disable firewalld.service
+[root@node-1 ~]# systemctl stop firewalld.service</p>
+
+<p>先安装docker环境
+[root@node-1 ~]# yum install -y docker</p>
+
+<p>安装etcd
+k8s运行依赖etcd，需要先部署etcd，下面采用yum方式安装：
+[root@node-1 ~]# yum install etcd -y</p>
+
+<p>yum安装的etcd默认配置文件在/etc/etcd/etcd.conf，编辑配置文件：
+[root@node-1 ~]# cp /etc/etcd/etcd.conf /etc/etcd/etcd.conf.bak
+[root@node-1 ~]# cat /etc/etcd/etcd.conf
+#[member]
+ETCD_NAME=master                                            #节点名称
+ETCD_DATA_DIR=”/var/lib/etcd/default.etcd”                  #数据存放位置
+#ETCD_WAL_DIR=””
+#ETCD_SNAPSHOT_COUNT=”10000”
+#ETCD_HEARTBEAT_INTERVAL=”100”
+#ETCD_ELECTION_TIMEOUT=”1000”
+#ETCD_LISTEN_PEER_URLS=”http://0.0.0.0:2380”
+ETCD_LISTEN_CLIENT_URLS=”http://0.0.0.0:2379,http://0.0.0.0:4001”             #监听客户端地址
+#ETCD_MAX_SNAPSHOTS=”5”
+#ETCD_MAX_WALS=”5”
+#ETCD_CORS=””
+#
+#[cluster]
+#ETCD_INITIAL_ADVERTISE_PEER_URLS=”http://localhost:2380”</p>
+<h1 id="if-you-use-different-etcd_name-eg-test-set-etcd_initial_cluster-value-for-this-name-ie-testhttp">if you use different ETCD_NAME (e.g. test), set ETCD_INITIAL_CLUSTER value for this name, i.e. “test=http://…”</h1>
+<p>#ETCD_INITIAL_CLUSTER=”default=http://localhost:2380”
+#ETCD_INITIAL_CLUSTER_STATE=”new”
+#ETCD_INITIAL_CLUSTER_TOKEN=”etcd-cluster”
+ETCD_ADVERTISE_CLIENT_URLS=”http://etcd:2379,http://etcd:4001”           #通知客户端地址
+#ETCD_DISCOVERY=””
+#ETCD_DISCOVERY_SRV=””
+#ETCD_DISCOVERY_FALLBACK=”proxy”
+#ETCD_DISCOVERY_PROXY=””</p>
+
+<p>启动etcd并验证状态
+[root@node-1 ~]# systemctl start etcd</p>
+
+<p>[root@node-1 ~]# ps -ef|grep etcd
+etcd     28145     1  1 14:38 ?        00:00:00 /usr/bin/etcd –name=master –data-dir=/var/lib/etcd/default.etcd –listen-client-urls=http://0.0.0.0:2379,http://0.0.0.0:4001
+root     28185 24819  0 14:38 pts/1    00:00:00 grep –color=auto etcd
+[root@node-1 ~]# lsof -i:2379
+COMMAND   PID USER   FD   TYPE  DEVICE SIZE/OFF NODE NAME
+etcd    28145 etcd    6u  IPv6 1283822      0t0  TCP *:2379 (LISTEN)
+etcd    28145 etcd   18u  IPv6 1284133      0t0  TCP localhost:53203-&gt;localhost:2379 (ESTABLISHED)
+……..</p>
+
+<p>[root@node-1 ~]# etcdctl set testdir/testkey0 0
+0
+[root@node-1 ~]# etcdctl get testdir/testkey0
+0
+[root@node-1 ~]# etcdctl -C http://etcd:4001 cluster-health
+member 8e9e05c52164694d is healthy: got healthy result from http://etcd:2379
+cluster is healthy
+[root@node-1 ~]# etcdctl -C http://etcd:2379 cluster-health
+member 8e9e05c52164694d is healthy: got healthy result from http://etcd:2379
+cluster is healthy</p>
+
+<p>安装覆盖网络Flannel
+[root@node-1 ~]# yum install flannel</p>
+
+<p>配置Flannel
+[root@node-1 ~]# cp /etc/sysconfig/flanneld /etc/sysconfig/flanneld.bak
+[root@node-1 ~]# vim /etc/sysconfig/flanneld</p>
+<h1 id="flanneld-configuration-options">Flanneld configuration options</h1>
+
+<h1 id="etcd-url-location--point-this-to-the-server-where-etcd-runs">etcd url location.  Point this to the server where etcd runs</h1>
+<p>FLANNEL_ETCD_ENDPOINTS=”http://etcd:2379”</p>
+
+<h1 id="etcd-config-key--this-is-the-configuration-key-that-flannel-queries">etcd config key.  This is the configuration key that flannel queries</h1>
+<h1 id="for-address-range-assignment">For address range assignment</h1>
+<p>FLANNEL_ETCD_PREFIX=”/atomic.io/network”</p>
+
+<h1 id="any-additional-options-that-you-want-to-pass">Any additional options that you want to pass</h1>
+<p>#FLANNEL_OPTIONS=””</p>
+
+<p>配置etcd中关于flannel的key（这个只在安装了etcd的机器上操作）
+Flannel使用Etcd进行配置，来保证多个Flannel实例之间的配置一致性，所以需要在etcd上进行如下配置（’/atomic.io/network/config’这个key与上文/etc/sysconfig/flannel中的配置项FLANNEL_ETCD_PREFIX是相对应的，错误的话启动就会出错）：
+[root@node-1 ~]# etcdctl mk /atomic.io/network/config ‘{ “Network”: “182.48.0.0/16” }’
+{ “Network”: “182.48.0.0/16” }</p>
+
+<p>温馨提示：上面flannel设置的ip网段可以任意设定，随便设定一个网段都可以。容器的ip就是根据这个网段进行自动分配的，ip分配后，容器一般是可以对外联网的（网桥模式，只要宿主机能上网就可以）</p>
+
+<p>启动Flannel
+[root@node-1 ~]# systemctl enable flanneld.service
+[root@node-1 ~]# systemctl start flanneld.service
+[root@node-1 ~]# ps -ef|grep flannel
+root      9305  9085  0 09:12 pts/2    00:00:00 grep –color=auto flannel
+root     28876     1  0 May15 ?        00:00:07 /usr/bin/flanneld -etcd-endpoints=http://etcd:2379 -etcd-prefix=/atomic.io/network</p>
+
+<p>启动Flannel后，一定要记得重启docker，这样Flannel配置分配的ip才能生效，即docker0虚拟网卡的ip会变成上面flannel设定的ip段
+[root@node-1 ~]# systemctl restart docker
+3）node-2（182.48.115.235）机器操作
+设置主机名及绑定hosts
+[root@node-2 ~]# hostnamectl –static set-hostname  node-2
+[root@node-2 ~]# vim /etc/hosts
+182.48.115.233    node-1
+182.48.115.233    etcd
+182.48.115.235    node-2</p>
+
+<p>关闭防火墙，如果开启防火墙，则最好打开2379和4001端口
+[root@node-2 ~]# systemctl disable firewalld.service
+[root@node-2 ~]# systemctl stop firewalld.service</p>
+
+<p>先安装docker环境
+[root@node-2 ~]# yum install -y docker</p>
+
+<p>安装覆盖网络Flannel
+[root@node-2 ~]# yum install flannel</p>
+
+<p>配置Flannel
+[root@node-2 ~]# cp /etc/sysconfig/flanneld /etc/sysconfig/flanneld.bak
+[root@node-2 ~]# vim /etc/sysconfig/flanneld</p>
+<h1 id="flanneld-configuration-options-1">Flanneld configuration options</h1>
+
+<h1 id="etcd-url-location--point-this-to-the-server-where-etcd-runs-1">etcd url location.  Point this to the server where etcd runs</h1>
+<p>FLANNEL_ETCD_ENDPOINTS=”http://etcd:2379”</p>
+
+<h1 id="etcd-config-key--this-is-the-configuration-key-that-flannel-queries-1">etcd config key.  This is the configuration key that flannel queries</h1>
+<h1 id="for-address-range-assignment-1">For address range assignment</h1>
+<p>FLANNEL_ETCD_PREFIX=”/atomic.io/network”</p>
+
+<h1 id="any-additional-options-that-you-want-to-pass-1">Any additional options that you want to pass</h1>
+<p>#FLANNEL_OPTIONS=””</p>
+
+<p>启动Flannel
+[root@node-2 ~]# systemctl enable flanneld.service
+[root@node-2 ~]# systemctl start flanneld.service
+[root@node-2 ~]# ps -ef|grep flannel
+root      3841  9649  0 09:11 pts/0    00:00:00 grep –color=auto flannel
+root     28995     1  0 May15 ?        00:00:07 /usr/bin/flanneld -etcd-endpoints=http://etcd:2379 -etcd-prefix=/atomic.io/network</p>
+
+<p>启动Flannel后，一定要记得重启docker，这样Flannel配置分配的ip才能生效，即docker0虚拟网卡的ip会变成上面flannel设定的ip段
+[root@node-2 ~]# systemctl restart docker
+4）创建容器，验证跨主机容器之间的网络联通性
+首先在node-1（182.48.115.233）上容器容器，如下，登陆容器发现已经按照上面flannel配置的分配了一个ip段（每个宿主机都会分配一个182.48.0.0/16的网段）</p>
+
+<p>[root@node-1 ~]# docker run -ti -d –name=node-1.test docker.io/nginx /bin/bash
+5e403bf93857fa28b42c9e2abaa5781be4e2bc118ba0c25cb6355b9793dd107e
+[root@node-1 ~]# docker exec -ti node-1.test /bin/bash
+root@5e403bf93857:/# ip addr
+1: lo: &lt;LOOPBACK,UP,LOWER_UP&gt; mtu 65536 qdisc noqueue state UNKNOWN group default
+    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
+    inet 127.0.0.1/8 scope host lo
+       valid_lft forever preferred_lft forever
+    inet6 ::1/128 scope host
+       valid_lft forever preferred_lft forever
+2953: eth0@if2954: &lt;BROADCAST,MULTICAST,UP,LOWER_UP&gt; mtu 1472 qdisc noqueue state UP group default
+    link/ether 02:42:b6:30:19:04 brd ff:ff:ff:ff:ff:ff link-netnsid 0
+    inet 182.48.25.4/24 scope global eth0
+       valid_lft forever preferred_lft forever
+    inet6 fe80::42:b6ff:fe30:1904/64 scope link
+       valid_lft forever preferred_lft forever</p>
+
+<p>接着在node-2（182.48.115.233）上容器容器
+[root@node-2 ~]# docker exec -ti node-2.test /bin/bash
+root@052a6a2a4a19:/# ip addr
+1: lo: &lt;LOOPBACK,UP,LOWER_UP&gt; mtu 65536 qdisc noqueue state UNKNOWN group default
+    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
+    inet 127.0.0.1/8 scope host lo
+       valid_lft forever preferred_lft forever
+    inet6 ::1/128 scope host
+       valid_lft forever preferred_lft forever
+10: eth0@if11: &lt;BROADCAST,MULTICAST,UP,LOWER_UP&gt; mtu 1472 qdisc noqueue state UP group default
+    link/ether 02:42:b6:30:43:03 brd ff:ff:ff:ff:ff:ff link-netnsid 0
+    inet 182.48.67.3/24 scope global eth0
+       valid_lft forever preferred_lft forever
+    inet6 fe80::42:b6ff:fe30:4303/64 scope link
+       valid_lft forever preferred_lft forever</p>
+
+<p>root@052a6a2a4a19:/# ping 182.48.25.4
+PING 182.48.25.4 (182.48.25.4): 56 data bytes
+64 bytes from 182.48.25.4: icmp_seq=0 ttl=60 time=2.463 ms
+64 bytes from 182.48.25.4: icmp_seq=1 ttl=60 time=1.211 ms
+…….</p>
+
+<p>root@052a6a2a4a19:/# ping www.baidu.com
+PING www.a.shifen.com (14.215.177.37): 56 data bytes
+64 bytes from 14.215.177.37: icmp_seq=0 ttl=51 time=39.404 ms
+64 bytes from 14.215.177.37: icmp_seq=1 ttl=51 time=39.437 ms
+…….</p>
+
+<p>发现，在两个宿主机的容器内，互相ping对方容器的ip，是可以ping通的！也可以直接连接外网（桥接模式）</p>
+
+<p>查看两台宿主机的网卡信息，发现docker0虚拟网卡的ip（相当于容器的网关）也已经变成了flannel配置的ip段，并且多了flannel0的虚拟网卡信息
+[root@node-1 ~]# ifconfig
+docker0: flags=4163&lt;UP,BROADCAST,RUNNING,MULTICAST&gt;  mtu 1472
+        inet 182.48.25.1  netmask 255.255.255.0  broadcast 0.0.0.0
+        inet6 fe80::42:31ff:fe0f:cf0f  prefixlen 64  scopeid 0x20<link />
+        ether 02:42:31:0f:cf:0f  txqueuelen 0  (Ethernet)
+        RX packets 48  bytes 2952 (2.8 KiB)
+        RX errors 0  dropped 0  overruns 0  frame 0
+        TX packets 31  bytes 2286 (2.2 KiB)
+        TX errors 0  dropped 0 overruns 0  carrier 0  collisions 0</p>
+
+<p>eth0: flags=4163&lt;UP,BROADCAST,RUNNING,MULTICAST&gt;  mtu 1500
+        inet 182.48.115.233  netmask 255.255.255.224  broadcast 182.48.115.255
+        inet6 fe80::5054:ff:fe34:782  prefixlen 64  scopeid 0x20<link />
+        ether 52:54:00:34:07:82  txqueuelen 1000  (Ethernet)
+        RX packets 10759798  bytes 2286314897 (2.1 GiB)
+        RX errors 0  dropped 40  overruns 0  frame 0
+        TX packets 21978639  bytes 1889026515 (1.7 GiB)
+        TX errors 0  dropped 0 overruns 0  carrier 0  collisions 0</p>
+
+<p>flannel0: flags=4305&lt;UP,POINTOPOINT,RUNNING,NOARP,MULTICAST&gt;  mtu 1472
+        inet 182.48.25.0  netmask 255.255.0.0  destination 182.48.25.0
+        unspec 00-00-00-00-00-00-00-00-00-00-00-00-00-00-00-00  txqueuelen 500  (UNSPEC)
+        RX packets 12  bytes 1008 (1008.0 B)
+        RX errors 0  dropped 0  overruns 0  frame 0
+        TX packets 12  bytes 1008 (1008.0 B)
+        TX errors 0  dropped 0 overruns 0  carrier 0  collisions 0</p>
+
+<p>通过下面命令，可以查看到本机的容器的ip所在的范围
+[root@node-1 ~]# ps aux|grep docker|grep “bip”
+root      2080  0.0  1.4 796864 28168 ?        Ssl  May15   0:18 /usr/bin/dockerd-current –add-runtime docker-runc=/usr/libexec/docker/docker-runc-current –default-runtime=docker-runc –exec-opt native.cgroupdriver=systemd –userland-proxy-path=/usr/libexec/docker/docker-proxy-current –insecure-registry registry:5000 –bip=182.48.25.1/24 –ip-masq=true –mtu=1472</p>
+
+<p>这里面的“–bip=182.48.25.1/24”这个参数，它限制了所在节点容器获得的IP范围。
+这个IP范围是由Flannel自动分配的，由Flannel通过保存在Etcd服务中的记录确保它们不会重复。
+==========================================================================
+温馨提示：
+如上面操作后，发现各容器内分配的ip之间相互ping不通，基本就是由于防火墙问题引起的！
+可是明明已经在前面部署的时候，通过”systemctl stop firewalld.service”关闭了防火墙，为什么还有防火墙问题？？
+这是因为linux还有底层的iptables，所以解决办法是在各节点上执行下面操作：</p>
+
+<p>[root@node-1 ~]# iptables -P INPUT ACCEPT
+[root@node-1 ~]# iptables -P FORWARD ACCEPT
+[root@node-1 ~]# iptables -F
+[root@node-1 ~]# iptables -L -n</p>
+
+<p>执行上面操作后，基本各容器间就能相互ping通了。
+docker通过Flannel可以实现各容器间的相互通信，即宿主机和容器，容器和容器之间都能相互通信。</p>
+:ET

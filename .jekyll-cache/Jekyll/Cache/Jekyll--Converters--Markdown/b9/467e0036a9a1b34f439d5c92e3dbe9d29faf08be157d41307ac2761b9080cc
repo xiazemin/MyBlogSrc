@@ -1,0 +1,753 @@
+I"��<p>有那么个组织叫freedesktop，它是专门为linux桌面制定标准的。什么KDE，GNOME都是按他的标准来的。而dbus是其中的桌面消息机制的一个标准。</p>
+
+<p>dbus是一个IPC的管理系统，其实就底层来说就是本地socket通信。但是他是将所有的消息都通过总线的方式来管理分发，易于管理和安全。</p>
+
+<p>dbus一般就是3层结构：</p>
+
+<ol>
+  <li>libdbus库，允许两个应用相互连接交换消息</li>
+  <li>一个建立在libdbus上的消息总线守护程序，这个守护程序可以路由消息</li>
+  <li>封装库，比如libdbus-glib或libdbus-qt。一般都是使用封装库来简化使用dbus的细节。
+<!-- more -->
+一般gtk（c语言）开发的话，可以使用gobject-dbus库，qt（c++）的话可以使用dbus-qt库，而python使用python-dbus模块。</li>
+</ol>
+
+<p>还有nodejs的话，我推荐使用node-native模块（配合nodewebkit还是比较好用的）。</p>
+
+<p>还有做dbus相关开发的话，使用一个叫d-feet工具，就可以查看当前所有在使用中的dbus名称及其他属性。</p>
+
+<p>dbus分为两种总线，一种叫SystemBus，一种叫SessionBus。SystemBus就只有一条，SessionBus是一个用户会话时会产生一条。至于这两种的区别，SystemBus一般是用于权限较高的系统级（root）进程与其他进程（可以是普通进程）的通信，而SessionBus是用于普通的用户进程之间的交流。</p>
+
+<p>dbus是单对单的通信，其实和C/S架构差不多，一个server端接收消息和发布信号，多个client端发送消息和接收信号。</p>
+
+<p>dbus通信的话有5个值需要注意：</p>
+
+<ol>
+  <li>
+    <p>Address：因为dbus也是通过本地socket来通信，所有会有socket文件。你可以直接连接这个sokcet文件的地址来通信，但这个我几乎不用。</p>
+  </li>
+  <li>
+    <p>Bus Name：当你使用总线守护进程时（你看进程表里不是有很多dbus-daemon嘛，3层结构的第二层），你只用通过一个Bus Name就可以直接将消息路由到你想要的地址。所以这么方便，干嘛用上面的。server端想要Bus Name需要向SystemBus或SessionBus申请。如果不申请连接到dbus，它会自动被分配一个唯一的名字，就是1.45之类的，这数字没什么意义，只是为了名字唯一。名字除了路由消息还有第二种用途，就是当一个程序退出，断开连接，消息总线就会提醒其他连接程序该名字失去了所有者。这样就容易管理其他程序了</p>
+  </li>
+  <li>
+    <p>Path：这个路径是指你在进程里的路径，你可以按模块来划分，比如NetwrokManager 有 无线和有线这两模块。</p>
+  </li>
+  <li>
+    <p>Interface：他就像是一组功能的集合名字，你可以按功能来划分。</p>
+  </li>
+  <li>
+    <p>Method/Signals：方法和信号，方法其实就是进程里的函数名，你发消息给这个函数名，这个函数就会被调用，并返回结果。信号就是当server端主动调用这个信号函数的时候，便会发出这个信号（信号名就是函数名），其他连接在同一总线上的程序，如果谁感兴趣就会接收处理。</p>
+  </li>
+</ol>
+
+<p>所以总的来说，其实可以这样理解，Address和Bus Name就相当于你家的城市地址，Path就相当于你家住哪个县哪个区，Interface就相当于你家哪个村哪个路，Method就相当于你家哪个人。dbus则充当了邮局的身份。</p>
+
+<p>那先尝试下发送个消息看看：</p>
+
+<p>d-feet在SystemBus下可以找到org.freedesktop.DBus这个Bus Name，它有个Path叫 “ / ”，“ / ”下面有org.freedesktop.DBus这个Interface，里面有个叫GetId的Methods，可以跟它通信一下。这里使用dbus-send命令来发送。dbus-send是dbus提供的一个命令，可直接向目标发送消息。</p>
+
+<p>~ dbus-send –system –print-reply –dest=org.freedesktop.DBus / org.freedesktop.DBus.GetId</p>
+
+<p>返回打印出了一个值，这个值就是GetId函数的执行结果。</p>
+
+<p>dbus-send使用方法： –system表示是System Bus，–print-reply表示打印回复信息， –desk=[Bus Name] [Path] [Interface].[Method] 表示地址，注意Method是接在Interface后面的。</p>
+
+<p>dbus python示例可以看http://dbus.freedesktop.org/doc/dbus-python/doc/tutorial.html  比较详细</p>
+
+<p>dbus官方wiki：http://www.freedesktop.org/wiki/Software/dbus/</p>
+
+<p>进程间使用D-Bus通信
+D-Bus是一种高级的进程间通信机制，它由freedesktop.org项目提供，使用GPL许可证发行。D-Bus最主要的用途是在Linux桌面环境为进程提供通信，同时能将Linux桌面环境和Linux内核事件作为消息传递到进程。D-Bus的主要概率为总线，注册后的进程可通过总线接收或传递消息，进程也可注册后等待内核事件响应，例如等待网络状态的转变或者计算机发出关机指令。目前，D-Bus已被大多数Linux发行版所采用，开发者可使用D-Bus实现各种复杂的进程间通信任务。</p>
+
+<p>D-Bus的基本概念
+D-Bus是一个消息总线系统，其功能已涵盖进程间通信的所有需求，并具备一些特殊的用途。D-Bus是三层架构的进程间通信系统，其中包括：</p>
+
+<p>接口层：接口层由函数库libdbus提供，进程可通过该库使用D-Bus的能力。</p>
+
+<p>总线层：总线层实际上是由D-Bus总线守护进程提供的。它在Linux系统启动时运行，负责进程间的消息路由和传递，其中包括Linux内核和Linux桌面环境的消息传递。</p>
+
+<p>包装层：包装层一系列基于特定应用程序框架的Wrapper库。</p>
+
+<p>D-Bus具备自身的协议，协议基于二进制数据设计，与数据结构和编码方式无关。该协议无需对数据进行序列化，保证了信息传递的高效性。无论是libdbus，还是D-Bus总线守护进程，均不需要太大的系统开销。</p>
+
+<p>总线是D-Bus的进程间通信机制，一个系统中通常存在多条总线，这些总线由D-Bus总线守护进程管理。最重要的总线为系统总线（System Bus），Linux内核引导时，该总线就已被装入内存。只有Linux内核、Linux桌面环境和权限较高的程序才能向该总线写入消息，以此保障系统安全性，防止有恶意进程假冒Linux发送消息。</p>
+
+<p>会话总线（Session Buses）由普通进程创建，可同时存在多条。会话总线属于某个进程私有，它用于进程间传递消息。</p>
+
+<p>进程必须注册后才能收到总线中的消息，并且可同时连接到多条总线中。D-Bus提供了匹配器（Matchers）使进程可以有选择性的接收消息，另外运行进程注册回调函数，在收到指定消息时进行处理。匹配器的功能等同与路由，用于避免处理无关消息造成进程的性能下降。除此以外，D-Bus机制的重要概念有以下几个。</p>
+
+<p>对象：对象是封装后的匹配器与回调函数，它以对等（peer-to-peer）协议使每个消息都有一个源地址和一个目的地址。这些地址又称为对象路径，或者称之为总线名称。对象的接口是回调函数，它以类似C++的虚拟函数实现。当一个进程注册到某个总线时，都要创建相应的消息对象。</p>
+
+<p>消息：D-Bus的消息分为信号（signals）、方法调用（method calls）、方法返回（method returns）和错误（errors）。信号是最基本的消息，注册的进程可简单地发送信号到总线上，其他进程通过总线读取消息。方法调用是通过总线传递参数，执行另一个进程接口函数的机制，用于某个进程控制另一个进程。方法返回是注册的进程在收到相关信息后，自动做出反应的机制，由回调函数实现。错误是信号的一种，是注册进程错误处理机制之一。</p>
+
+<p>服务：服务（Services）是进程注册的抽象。进程注册某个地址后，即可获得对应总线的服务。D-Bus提供了服务查询接口，进程可通过该接口查询某个服务是否存在。或者在服务结束时自动收到来自系统的消息。</p>
+
+<p>建立服务的流程:
+建立一个dbus连接之后 – dbus_bus_get()，为这个dbus连接(DbusConnection)起名 – dbus_bus_request_name()，这个名字将会成为我们在后续进行远程调用的时候的服务名，然后我们进入监听循环 – dbus_connection_read_write()。在循环中，我们从总线上取出消息 – dbus_connection_pop_message()，并通过比对消息中的方法接口名和方法名 – dbus_message_is_method_call()，如果一致，那么我们跳转到相应的处理中去。在相应的处理中，我们会从消息中取出远程调用的参数。并且建立起回传结果的通路 – reply_to_method_call()。回传动作本身等同于一次不需要等待结果的远程调用。
+发送信号的流程:
+建立一个dbus连接之后，为这个dbus连接起名，建立一个发送信号的通道，注意，在建立通道的函数中，需要我们填写该信号的接口名和信号名 – dbus_message_new_signal()。然后我们把信号对应的相关参数压进去 – dbus_message_iter_init_append(); dbus_message_iter_append_basic()。然后就可以启动发送了 – dbus_connection_send(); dbus_connection_flush。
+进行一次远程调用的流程:
+建立好dbus连接之后，为这dbus连接命名，申请一个远程调用通道 – dbus_message_new_method_call()，注意，在申请远程调用通道的时候，需要填写服务器名，本次调用的接口名，和本次调用名(方法名)。压入本次调用的参数 – dbus_message_iter_init_append(); dbus_message_iter_append_basic()，实际上是申请了一个首地址，我们就是把我们真正要传的参数，往这个首地址里面送(送完之后一般都会判断是否内存越界了)。然后就是启动发送调用并释放发送相关的消息结构 – dbus_connection_send_with_reply()。这个启动函数中带有一个句柄。我们马上会阻塞等待这个句柄给我们带回总线上回传的消息。当这个句柄回传消息之后，我们从消息结构中分离出参数。用dbus提供的函数提取参数的类型和参数 – dbus_message_iter_init(); dbus_message_iter_next(); dbus_message_iter_get_arg_type(); dbus_message_iter_get_basic()。也就达成了我们进行本次远程调用的目的了。
+信号接收流程:
+建立一个dbus连接之后，为这个dbus连接起名，为我们将要进行的消息循环添加匹配条件(就是通过信号名和信号接口名来进行匹配控制的) – dbus_bus_add_match()。我们进入等待循环后，只需要对信号名，信号接口名进行判断就可以分别处理各种信号了。在各个处理分支上。我们可以分离出消息中的参数。对参数类型进行判断和其他的处理。
+dbus_connection_read_write()
+As long as the connection is open, this function will block until it can read or write, then read or write, then return #TRUE.
+If the connection is closed, the function returns #FALSE.
+dbus_connection_pop_message()
+Returns the first-received message from the incoming message queue, removing it from the queue. The caller owns a reference to the returned message. If the queue is empty, returns #NULL.
+dbus_connection_send()
+Adds a message to the outgoing message queue. Does not block to write the message to the network; that happens asynchronously. To force the message to be written, call dbus_connection_flush(). Because this only queues the message, the only reason it can
+fail is lack of memory. Even if the connection is disconnected, no error will be returned.
+@param connection the connection.
+@param message the message to write.
+@param serial return location for message serial, or #NULL if you don’t care
+@returns #TRUE on success.
+dbus_connection_send_with_reply()</p>
+
+<p>Queues a message to send, as with dbus_connection_send(), but also returns a #DBusPendingCall used to receive a reply to the message. If no reply is received in the given timeout_milliseconds, this function expires the pending reply and generates a synthetic error reply (generated in-process, not by the remote application) indicating that a timeout occurred.
+A #DBusPendingCall will see a reply message before any filters or registered object path handlers. See dbus_connection_dispatch() for details on when handlers are run.
+A #DBusPendingCall will always see exactly one reply message, unless it’s cancelled with dbus_pending_call_cancel().
+If #NULL is passed for the pending_return, the #DBusPendingCall will still be generated internally, and used to track the message reply timeout. This means a timeout error will occur if no reply arrives, unlike with dbus_connection_send().
+If -1 is passed for the timeout, a sane default timeout is used. -1 is typically the best value for the timeout for this reason, unless you want a very short or very long timeout. There is no way to avoid a timeout entirely, other than passing INT_MAX for the
+timeout to mean “very long timeout.” libdbus clamps an INT_MAX timeout down to a few hours timeout though.
+@warning if the connection is disconnected, the #DBusPendingCall will be set to #NULL, so be careful with this.
+@param connection the connection
+@param message the message to send
+@param pending_return return location for a #DBusPendingCall object, or #NULL if connection is disconnected
+@param timeout_milliseconds timeout in milliseconds or -1 for default
+@returns #FALSE if no memory, #TRUE otherwise.
+dbus_message_is_signal()</p>
+
+<p>Checks whether the message is a signal with the given interface and member fields. If the message is not #DBUS_MESSAGE_TYPE_SIGNAL, or has a different interface or member field, returns #FALSE.
+dbus_message_iter_init()
+Initializes a #DBusMessageIter for reading the arguments of the message passed in.
+dbus_message_iter_next()
+Moves the iterator to the next field, if any. If there’s no next field, returns #FALSE. If the iterator moves forward, returns #TRUE.
+dbus_message_iter_get_arg_type()
+Returns the argument type of the argument that the message iterator points to. If the iterator is at the end of the message, returns #DBUS_TYPE_INVALID. 
+dbus_message_iter_get_basic()
+Reads a basic-typed value from the message iterator. Basic types are the non-containers such as integer and string.
+dbus_message_new_signal()
+Constructs a new message representing a signal emission. Returns #NULL if memory can’t be allocated for the message. A signal is identified by its originating object path, interface, and the name of the signal.
+Path, interface, and signal name must all be valid (the D-Bus specification defines the syntax of these fields).
+@param path the path to the object emitting the signal
+@param interface the interface the signal is emitted from
+@param name name of the signal
+@returns a new DBusMessage, free with dbus_message_unref()
+dbus_message_iter_init_append()
+Initializes a #DBusMessageIter for appending arguments to the end of a message.
+@param message the message
+@param iter pointer to an iterator to initialize
+dbus_message_iter_append_basic()
+Appends a basic-typed value to the message. The basic types are the non-container types such as integer and string.
+@param iter the append iterator
+@param type the type of the value
+@param value the address of the value
+@returns #FALSE if not enough memory
+dbus_message_new_method_call()
+Constructs a new message to invoke a method on a remote object. Returns #NULL if memory can’t be allocated for the message. The destination may be #NULL in which case no destination is set; this is appropriate when using D-Bus in a peer-to-peer context (no message bus). The interface may be #NULL, which means that if multiple methods with the given name exist it is undefined which one will be invoked.
+The path and method names may not be #NULL.
+Destination, path, interface, and method name can’t contain any invalid characters (see the D-Bus specification).
+@param destination name that the message should be sent to or #NULL
+@param path object path the message should be sent to
+@param interface interface to invoke method on, or #NULL
+@param method method to invoke
+@returns a new DBusMessage, free with dbus_message_unref()
+dbus_bus_get()
+Connects to a bus daemon and registers the client with it. If a connection to the bus already exists, then that connection is returned. The caller of this function owns a reference to the bus.
+@param type bus type
+@param error address where an error can be returned.
+@returns a #DBusConnection with new ref
+dbus_bus_request_name()
+Asks the bus to assign the given name to this connection by invoking the RequestName method on the bus.
+First you should know that for each bus name, the bus stores a queue of connections that would like to own it. Only one owns it at a time - called the primary owner. If the primary owner releases the name or disconnects, then the next owner in the queue atomically takes over.
+So for example if you have an application org.freedesktop.TextEditor and multiple instances of it can be run, you can have all of them sitting in the queue. The first one to start up will receive messages sent to org.freedesktop.TextEditor, but if that one exits another will become the primary owner and receive messages.
+The queue means you don’t need to manually watch for the current owner to disappear and then request the name again.
+@param connection the connection
+@param name the name to request
+@param flags flags
+@param error location to store the error
+@returns a result code, -1 if error is set
+给DBusConnection起名字(命名) – 两个相互通信的连接(connection)不能同名
+命名规则: xxx.xxx (zeng.xiaolong)
+dbus_bus_add_match()
+Adds a match rule to match messages going through the message bus. The “rule” argument is the string form of a match rule.
+@param connection connection to the message bus
+@param rule textual form of match rule
+@param error location to store any errors
+dbus_pending_call_block()
+Block until the pending call is completed. The blocking is as with dbus_connection_send_with_reply_and_block(); it does not enter the main loop or process other messages, it simply waits for the reply in question.
+If the pending call is already completed, this function returns immediately.
+@todo when you start blocking, the timeout is reset, but it should really only use time remaining since the pending call was created. This requires storing timestamps instead of intervals in the timeout
+@param pending the pending call
+dbus_pending_call_steal_reply()
+Gets the reply, or returns #NULL if none has been received yet. Ownership of the reply message passes to the caller. This function can only be called once per pending call, since the reply message is tranferred to the caller.
+@param pending the pending call
+@returns the reply message or #NULL.
+安装D-Bus可在其官方网站下载源码编译，地址为http://dbus.freedesktop.org。或者在终端上输入下列指令：</p>
+
+<p>yum install dbus dbus-devel dbus-doc
+安装后，头文件位于”/usr/include/dbus-<版本号>/dbus"目录中，编译使用D-Bus的程序时需加入编译指令"pkg-config --cflags --libs dbus-1"。</版本号></p>
+
+<p>D-Bus的用例
+在使用GNOME桌面环境的Linux系统中，通常用GLib库提供的函数来管理总线。在测试下列用例前，首先需要安装GTK+开发包（见22.3节）并配置编译环境。该用例一共包含两个程序文件，每个程序文件需单独编译成为可执行文件。</p>
+
+<p>1．消息发送程序</p>
+
+<p>“dbus-ding-send.c”程序每秒通过会话总线发送一个参数为字符串Ding!的信号。该程序的源代码如下：</p>
+
+<p>include <glib.h> // 包含glib库
+include &lt;dbus/dbus-glib.h&gt; // 包含
+glib库中D-Bus管理库</glib.h></p>
+
+<p>include <stdio.h>
+static gboolean send_ding(DBusConnection *bus);// 定义发送消息函数的原型
+int main ()
+{
+GMainLoop *loop; // 定义一个事件循环对象的指针
+DBusConnection *bus; // 定义总线连接对象的指针
+DBusError error; // 定义D-Bus错误消息对象
+loop = g_main_loop_new(NULL, FALSE); // 创建新事件循环对象
+dbus_error_init (&amp;error); // 将错误消息对象连接到D-Bus
+// 错误消息对象
+bus = dbus_bus_get(DBUS_BUS_SESSION, &amp;error);// 连接到总线
+if (!bus) { // 判断是否连接错误
+g_warning("连接到D-Bus失败: %s", error.message);
+// 使用GLib输出错误警告信息
+dbus_error_free(&amp;error); // 清除错误消息
+return 1;
+}
+dbus_connection_setup_with_g_main(bus, NULL);
+// 将总线设为接收GLib事件循环
+g_timeout_add(1000, (GSourceFunc)send_ding, bus);
+// 每隔1000ms调用一次send_ding()函数
+// 将总线指针作为参数
+g_main_loop_run(loop); // 启动事件循环
+return 0;
+}
+static gboolean send_ding(DBusConnection *bus) // 定义发
+送消息函数的细节
+{
+DBusMessage *message; // 创建消息对象指针
+message = dbus_message_new_signal("/com/burtonini/dbus/ding",
+"com.burtonini.dbus.Signal",
+"ding"); // 创建消息对象并标识路径
+dbus_message_append_args(message,
+DBUS_TYPE_STRING, "ding!",
+DBUS_TYPE_INVALID); //将字符串Ding!定义为消息
+dbus_connection_send(bus, message, NULL); // 发送该消息
+dbus_message_unref(message); // 释放消息对象
+g_print("ding!\n"); // 该函数等同与标准输入输出
+return TRUE;
+}
+main()函数创建一个GLib事件循环，获得会话总线的一个连接，并将D-Bus事件处理集成到GLib事件循环之中。然后它创建了一个名为send_ding()函数作为间隔为一秒的计时器，并启动事件循环。send_ding()函数构造一个来自于对象路径"/com/burtonini/dbus/ding"和接口"com.burtonini.dbus.Signal"的新的Ding信号。然后，字符串Ding!作为参数添加到信号中并通过总线发送。在标准输出中会打印一条消息以让用户知道发送了一个信号。</stdio.h></p>
+
+<p>2．消息接收程序</p>
+
+<p>dbus-ding-listen.c程序通过会话总线接收dbus-ding-send.c程序发送到消息。该程序的源代码如下：</p>
+
+<p>include <glib.h> // 包含glib库
+include &lt;dbus/dbus-glib.h&gt; // 包含glib库中D-Bus管理库
+static DBusHandlerResult signal_filter // 定义接收消息函数的原型
+(DBusConnection *connection, DBusMessage *message, void *user_data);
+int main()
+{
+GMainLoop *loop; // 定义一个事件循环对象的指针
+DBusConnection *bus; // 定义总线连接对象的指针
+DBusError error; // 定义D-Bus错误消息对象
+loop = g_main_loop_new(NULL, FALSE); // 创建新事件循环对象
+dbus_error_init(&amp;error); // 将错误消息对象连接到D-Bus
+// 错误消息对象
+bus = dbus_bus_get(DBUS_BUS_SESSION, &amp;error); // 连接到总线
+if (!bus) { // 判断是否连接错误
+g_warning("连接到D-Bus失败: %s", error.message);
+// 使用GLib输出错误警告信息
+dbus_error_free(&amp;error); // 清除错误消息
+return 1;
+}
+dbus_connection_setup_with_g_main(bus, NULL);
+// 将总线设为接收GLib事件循环
+dbus_bus_add_match(bus, "type='signal',interface
+='com.burtonini.dbus.Signal'"); // 定义匹配器
+dbus_connection_add_filter(bus, signal_filter, loop, NULL);
+// 调用函数接收消息
+g_main_loop_run(loop); // 启动事件循环
+return 0;
+}
+static DBusHandlerResult // 定义接收消息函数的细节
+signal_filter (DBusConnection *connection,
+DBusMessage *message, void *user_data)
+{
+GMainLoop *loop = user_data; // 定义事件循环对象的指针，并与主函数中的同步
+if (dbus_message_is_signal // 接收连接成功消息，判断是否连接失败
+(message, DBUS_INTERFACE_ORG_FREEDESKTOP_LOCAL,
+"Disconnected")) {
+g_main_loop_quit (loop); // 退出主循环
+return DBUS_HANDLER_RESULT_HANDLED;
+}
+if (dbus_message_is_signal(message, "com.burtonini.dbus.Signal",
+"Ping")) {
+// 指定消息对象路径，判断是否成功
+DBusError error; // 定义错误对象
+char *s;
+dbus_error_init(&amp;error); // 将错误消息对象连接到D-Bus错误
+// 消息对象
+if (dbus_message_get_args // 接收消息，并判断是否有错误
+(message, &amp;error, DBUS_TYPE_STRING, &amp;s,
+DBUS_TYPE_INVALID)) {
+g_print("接收到的消息是: %s\n", s); // 输出接收到的消息
+dbus_free (s); // 清除该消息
+}
+else { // 有错误时执行下列语句
+g_print("消息已收到，但有错误提示: %s\n", error.message);
+dbus_error_free (&amp;error);
+}
+return DBUS_HANDLER_RESULT_HANDLED;
+}
+return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
+}
+该程序侦听dbus-ping-send.c程序正在发出的信号。main()函数和前面一样启动，创建一个到总线的连接。然后它声明愿意在使用com.burtonini.dbus.Signal接口的信号被发送时得到通知，将signal_filter()函数设置为通知函数，然后进入事件循环。当满足匹配的消息被发送时，signal_func()函数会被调用。</glib.h></p>
+
+<p>如果需要确定在接收消息时如何处理，可通过检测消息头实现。若收到的消息为总线断开信号，则主事件循环将被终止，因为监听的总线已经不存在了。若收到其他的消息，首先将收到的消息与期待的消息进行比较，两者相同则输出其中参数，并退出程序。两者不相同则告知总线并没有处理该消息，这样消息会继续保留在总线中供别的程序处理。
+原文网址: http://www.cnblogs.com/wzh206/archive/2010/05/13/1734901.html</p>
+
+<p>[DBUS 资源]
+(http://www.cnblogs.com/wzh206/archive/2010/05/13/1734910.html)
+（1）Connect desktop apps using D-BUS:http://www-128.ibm.com/developerworks/linux/library/l-dbus.html?ca=dgr-lnxw95D-BUS.
+一个外国牛人写的有关DBUS的简介，附有简单的例程，但例程需要稍做修改才能编译通过，修改后的函数signal_filter和send_ping如下:
+（2）http://hi.baidu.com/zengzhaonong/blog/item/670b98d6e63ae42c07088bae.html
+这里的例子给出了DBus上几种消息的发送、接收程序框架，例子很容易看明白，一般在此框架上做些修改即可得到自己需要的代码。
+（3）http://blog.csdn.net/fmddlmyy/archive/2008/12/23/3585730.aspx
+这个博客的博主正准备详细深入的介绍DBus的方方面面，博主刚开始讨论DBus不久，博客还在持续更新中，估计博主已经在DBus上已经有深厚的功底，请特别关注 ：》
+（4）http://blog.chinaunix.net/u1/58649/showart_462468.html
+这里是一个比较全的例子，600多行的程序涉及了DBus的方方面面，有极高的参考价值。
+（5）http://blog.csdn.net/cuijpus
+这个博客的博主是做手机开发的，在DBus上也有很深的功底，一些例程很值得学习。
+（6）freedesktop.org - Software-dbus.url
+DBus Home，这个是最重要也是最有价值的参考资料，DBus的相关源代码和文档都在这里，另外网站还给出了一些使用DBus的开放源代码项目列表，如果你编写DBus某一方面的代码时遇到困惑，网上又找不到可供参考的例子，到这些open source中去serch相关源代码或许是一个很有效的方法。
+原文地址 http://cid-121d380d29ebce85.spaces.live.com/Blog/cns!121D380D29EBCE85!422.entry?fl=cat</p>
+
+<p>DBUS是实质上一个适用于桌面应用的进程间的通讯机制，即所谓的IPC机制。适合在同一台机器，不适合于INTERNET的IPC机制。DBUS不是一个为所有可能的应用的通用的IPC机制，不支持其他IPC机制的很多特性。DBUS提供了一个低时延、低消耗的IPC通讯，因为它采用了二进制的数据交换协议，不需要转换成文本化的数据进行交换，DBUS提供了面向多重对象系统的包装，可以在原有的面向对象的应用框架下使用DBUS，不需要学习新的概念和规范等。</p>
+
+<p>DBUS是支持一对一和多对多的对等通讯，在一对一的直接通讯时，两个应用程序连接在一起，这是最简单的工作方式。在多对多的通讯时，这就需要一个叫DBUS后台的角色去分转，一个应用程序发消息给另外一个应用程序，先到达后台，再让后台将信息发送到目的应用程序。在这里DBUS后台就充当着一个路由器的角色。</p>
+
+<p>DBUS包含了系统更新通知，如插入新设备通知、新软件安装通知等，和桌面应用的交互协作能力，可以作为文件系统监控器和配置服务器。</p>
+
+<p>Dbus由对象、消息、连接、Dbus后台几部分组成。</p>
+
+<p>对象是一个独立的处理消息的实体。对象有一个或多个接口，在每个接口有一个或多个的方法，每个方法实现了具体的消息处理。在一对一的通讯中，对象通过一个连接直接和另一个客户端应用程序连接起来。在多对多的通讯中，对象通过一个连接和Dbus后台进程连接起来。对象有一个路径用于指明该对象的存放位置，消息传递时通过该路径找到该对象。</p>
+
+<p>客户端应用是一个桌面应用程序，是请求消息的发起者。客户端应用通过和自身的相连的一个连接将请求消息发送出去，也通过该连接接收回应的消息、错误消息、系统更新消息等。在一对一的通讯中，请求消息直接到达对象。在多对多的通讯中，请求消息先到达Dbus后台，Dbus后台将消息转发到目的对象。</p>
+
+<p>连接是一个双向的消息传递通道。一个连接将对象和Dbus后台或客户端应用连接起来，连接支持非阻塞式的异步消息发送和阻塞式的同步消息发送。消息通过连接到达目的端后，连接会将挂起在该连接上的进程唤醒，由该进程将消息取走。每个连接都有一个唯一的名字和可选的其他多个名字，用于在多对多通讯时指明消息的发送者和接收者。</p>
+
+<p>连接基于操作系统提供的通讯端口实现消息的交换，现在基于的通讯端口有三种，分别是UNIX的socket、TCP/IP、管道（调试时用）。通讯端口拥有一个地址，服务器在这个地址上监听，客户端则连接到这个地址上。</p>
+
+<p>消息是Dbus的IPC机制中的一个信息传递媒介。调用者将调用的方法、方法的参数打包进一个消息，接收者将方法和参数从消息中解包出来，执行这个方法调用。执行完后，将结果打包进返回消息中，返回给调用者。消息有四种类型，分别是方法调用消息、结果返回消息、错误消息、信号消息。这里的信号消息是主动发送的事件，如新设备插入、文件更改的事件等。</p>
+
+<p>Dbus后台是在多对多通讯时用来转发消息，管理连接的一个后台进程。每个Dbus后台都和多个连接关联，其内部维护了连接名和连接实体的映射关系。Dbus后台就象一个路由器，将从发送者连接得到的消息转发到由消息中的接收者连接名指定的接收者连接中。</p>
+
+<p>Dbus后台有多个。有一个用于和系统通讯，监控系统更新事件，其类型为DBUS_BUS_SYSTEM的Dbus后台。每个桌面会话（session）有一个用于多个桌面应用之间相互通讯，其类型为DBUS_BUS_SESSION的Dbus后台。一般至少有两个Dbus后台，一个系统用，一个桌面会话用。系统用的Dbus后台只能处理系统的消息，桌面会话用的Dbus后台只能处理桌面会话应用的消息。</p>
+
+<p>1、客户端。</p>
+
+<p>在客户端使用DBUS比较简单，首先，从DBUS_BUS_SESSION类型的DBUS后台获得一个连接，再从这个连接创建得到一个对象的代理，以后对对象的所有操作都将通过这个代理来完成。</p>
+
+<p>得到服务代理后，可以在应用程序的各个地方通过对象代理的方法使用函数想对象发出一个方法调用的消息。请求对象的服务，可以发送异步的方法（异步服务），也可以发送同步方法（同步服务），方法是同步还是异步有对象定义。</p>
+
+<p>2、服务端。</p>
+
+<p>在服务器进程启动后，调用函数dbus_g_object_type_install_info将对象的安装信息结构告诉DBUS，随后，从DBUS_BUS_SESSION类型的DBUS获得一个连接，再从这个连接得到一个DBUS对象的代理。通过这个DBUS代理调用方法RequestName为这个连接得到一个命名，客户端应用可以使用这个名字将请求消息发送到连接。接着，服务器进程创建一个指定类型的对象（glib对象）。</p>
+
+<p>其中安装信息由XML文件，通过dbus-binding-tool转换成对象的头文件。</p>
+
+<p>3、消息。</p>
+
+<p>消息由消息头和消息体组成。消息头由消息的固有字段信息组成。消息体由一串字符串值组成。消息体的每个字符串值的意义由消息头中的描述指定，消息头的长度必须是8的倍数，相应的，消息体由8的倍数处开始。</p>
+
+<p>============================================================</p>
+
+<p>D-Bus体系</p>
+
+<p>有很多种IPC或者网络通信系统，如：CORBA, DCE, DCOM, DCOP, XML-RPC, SOAP, MBUS, Internet Communications Engine (ICE)等等，可能会有数百种，dbus的目的主要是下面两点：
+1.在同一个桌面会话中，进行桌面应用程序之间的通讯
+2.桌面程序与内核或者守护进程的通信。</p>
+
+<p>Dbus是一套进程通信体系，它有以下几层：
+1.libdbus库，提供给各个应用程序调用，使应用程序具有通信和数据交换的能力，两个应用程序可以直接进行通信，就像是一条socket通道，两个程序之间建立通道之后，就可以通讯了。
+2.消息守护进程，在libdbus的基础上创建，可以管理多个应用程序之间的通信。每个应用程序都和消息守护进程建立dbus的链接，然后由消息守护进程进行消息的分派。
+3.各种包装库，有libdbus-glib，libdbus-qt等等，目的是将dbus的底层api进行一下封装。</p>
+
+<p>下面有一张图可以很方便说明dbus的体系结构。
+dbus</p>
+
+<p>dbus中的消息由一个消息头（标识是哪一种消息）和消息数据组成，比socket的流式数据更方便一些。bus daemon 就像是一个路由器，与各个应用程序进行连接，分派这些消息。bus daemon 在一台机器上有多个实例，第一个实例是全局的实例，类似于sendmail和或者apache，这个实例有很严格的安全限制，只接受一些特定的系统消息，用于系统通信。其他bus daemon是一些会话，用于用户登录之后，在当前会话(session)中进行的通讯。系统的bus daemon 和会话的bus daemon 是分开的，彼此不会互相影响，会话bus daemon 不会去调用系统的bus daemon 。</p>
+
+<p>Native Objects and Object Paths
+在不同的编程语言中，都定义了一些“对象”，如java中的java.lang.Object，GLIB中的GObject，QT中的QObject等等。D-BUS的底层接口，和libdbus API相关，是没有这些对象的概念的，它提供的是一种叫对象路径（object path），用于让高层接口绑定到各个对象中去，允许远端应用程序指向它们。object path就像是一个文件路径，可以叫做/org/kde/kspread/sheets/3/cells/4/5等。</p>
+
+<p>Methods and Signals
+每个对象都有一些成员，两种成员:方法(methods)和信号(signals)，在对象中，方法可以被调用。信号会被广播，感兴趣的对象可以处理这个信号，同时信号中也可以带有相关的数据。每一个方法或者信号都可以用一个名字来命名，如”Frobate” 或者 “OnClicked”。</p>
+
+<p>Interfaces
+每个对象都有一个或者多个接口，一个接口就是多个方法和信号的集合。dbus使用简单的命名空间字符串来表示接口，如org.freedesktop.Introspectable。可以说dbus接口相当于C++中的纯虚类。</p>
+
+<p>Proxies
+代理对象用于模拟在另外的进程中的远端对象，代理对象像是一个正常的普通对象。d-bus的底层接口必须手动创建方法调用的消息，然后发送，同时必须手动接受和处理返回的消息。高层接口可以使用代理来替换这些，当调用代理对象的方法时，代理内部会转换成dbus的方法调用，等待消息返回，对返回结果解包，返回给相应的方法。可以看看下面的例子，使用dbus底层接口编写的代码：
+Message message = new Message(“/remote/object/path”, “MethodName”, arg1, arg2);
+Connection connection = getBusConnection();
+connection.send(message);
+Message reply = connection.waitForReply(message);
+if (reply.isError()) {</p>
+
+<p>} else {
+Object returnValue = reply.getReturnValue();
+}
+使用代理对象编写的代码：
+Proxy proxy = new Proxy(getBusConnection(), “/remote/object/path”);
+Object returnValue = proxy.MethodName(arg1, arg2);
+客户端代码减少很多。</p>
+
+<p>Bus Names
+当一个应用程序连接上bus daemon时，daemon会分配一个唯一的名字给它。以冒号（:）开始，这些名字在daemon的生命周期中是不会改变的，可以认为这些名字就是一个IP地址。当这个名字映射到应用程序的连接上时，应用程序可以说拥有这个名字。同时应用可以声明额外的容易理解的名字，比如可以取一个名字com.mycompany.TextEditor，可以认为这些名字就是一个域名。其他应用程序可以往这个名字发送消息，执行各种方法。</p>
+
+<p>名字还有第二个重要的用途，可以用于跟踪应用程序的生命周期。当应用退出（或者崩溃）时，与bus的连接将被OS内核关掉，bus将会发送通知，告诉剩余的应用程序，该程序已经丢失了它的名字。名字还可以检测应用是否已经启动，这往往用于只能启动一个实例的应用。</p>
+
+<p>Addresses
+使用d-bus的应用程序既可以是server也可以是client，server监听到来的连接，client连接到server，一旦连接建立，消息就可以流转。如果使用dbus daemon，所有的应用程序都是client，daemon监听所有的连接，应用程序初始化连接到daemon。</p>
+
+<p>dbus地址指明server将要监听的地方，client将要连接的地方，例如，地址：unix:path=/tmp/abcdef表明server将在/tmp/abcdef路径下监听unix域的socket，client也将连接到这个socket。一个地址也可以指明是TCP/IP的socket，或者是其他的。</p>
+
+<p>当使用bus daemon时，libdbus会从环境变量中（DBUS_SESSION_BUS_ADDRESS）自动认识“会话daemon”的地址。如果是系统daemon，它会检查指定的socket路径获得地址，也可以使用环境变量（DBUS_SESSION_BUS_ADDRESS）进行设定。</p>
+
+<p>当dbus中不使用daemon时，需要定义哪一个应用是server，哪一个应用是client，同时要指明server的地址，这不是很通常的做法。</p>
+
+<p>Big Conceptual Picture
+要在指定的对象中调用指定的方法，需要知道的参数如下：
+Address -&gt; [Bus Name] -&gt; Path -&gt; Interface -&gt; Method
+bus name是可选的，除非是希望把消息送到特定的应用中才需要。interface也是可选的，有一些历史原因，DCOP不需要指定接口，因为DCOP在同一个对象中禁止同名的方法。</p>
+
+<p>Messages - Behind the Scenes
+如果使用dbus的高层接口，就可以不用直接操作这些消息。DBUS有四种类型的消息：
+1.方法调用（method call） 在对象上执行一个方法
+2.方法返回（method return）返回方法执行的结果
+3.错误（error）调用方法产生的异常
+4.信号（signal）通知指定的信号发生了，可以想象成“事件”。</p>
+
+<p>要执行 D-BUS 对象的方法，需要向对象发送一个方法调用消息。它将完成一些处理并返回一个方法返回消息或者错误消息。信号的不同之处在于它们不返回任何内容：既没有“信号返回”消息，也没有任何类型的错误消息。</p>
+
+<p>每个消息都有一个消息头，包含多个字段，有一个消息体，包含多个参数。可以认为消息头是消息的路由信息，消息体作为一个载体。消息头里面的字段包含发送的bus name，目标bus name，方法或者信号名字等，同时消息头里面定义的字段类型规定了消息体里面的数据格式。例如：字符“i”代表了”32-bit integer”，“ii”就代表了消息体里面有两个”32-bit integer”。</p>
+
+<p>Calling a Method - Behind the Scenes
+在dbus中调用一个方法包含了两条消息，进程A向进程B发送方法调用消息，进程B向进程A发送应答消息。所有的消息都由daemon进行分派，每个调用的消息都有一个不同的序列号，返回消息包含这个序列号，以方便调用者匹配调用消息与应答消息。调用消息包含一些参数，应答消息可能包含错误标识，或者包含方法的返回数据。</p>
+
+<p>方法调用的一般流程：
+1.使用不同语言绑定的dbus高层接口，都提供了一些代理对象，调用其他进程里面的远端对象就像是在本地进程中的调用一样。应用调用代理上的方法，代理将构造一个方法调用消息给远端的进程。
+2.在DBUS的底层接口中，应用需要自己构造方法调用消息（method call message），而不能使用代理。
+3.方法调用消息里面的内容有：目的进程的bus name，方法的名字，方法的参数，目的进程的对象路径，以及可选的接口名称。
+4.方法调用消息是发送到bus daemon中的。
+5.bus daemon查找目标的bus name，如果找到，就把这个方法发送到该进程中，否则，daemon会产生错误消息，作为应答消息给发送进程。
+6.目标进程解开消息，在dbus底层接口中，会立即调用方法，然后发送方法的应答消息给daemon。在dbus高层接口中，会先检测对象路径，接口，方法名称，然后把它转换成对应的对象（如GObject，QT中的QObject等）的方法，然后再将应答结果转换成应答消息发给daemon。
+7.bus daemon接受到应答消息，将把应答消息直接发给发出调用消息的进程。
+8.应答消息中可以包容很多返回值，也可以标识一个错误发生，当使用绑定时，应答消息将转换为代理对象的返回值，或者进入异常。</p>
+
+<p>bus daemon不对消息重新排序，如果发送了两条消息到同一个进程，他们将按照发送顺序接受到。接受进程并需要按照顺序发出应答消息，例如在多线程中处理这些消息，应答消息的发出是没有顺序的。消息都有一个序列号可以与应答消息进行配对。</p>
+
+<p>Emitting a Signal - Behind the Scenes
+在dbus中一个信号包含一条信号消息，一个进程发给多个进程。也就是说，信号是单向的广播。信号可以包含一些参数，但是作为广播，它是没有返回值的。</p>
+
+<p>信号触发者是不了解信号接受者的，接受者向daemon注册感兴趣的信号，注册规则是”match rules”，记录触发者名字和信号名字。daemon只向注册了这个信号的进程发送信号。</p>
+
+<p>信号的一般流程如下：
+1.当使用dbus底层接口时，信号需要应用自己创建和发送到daemon，使用dbus高层接口时，可以使用相关对象进行发送，如Glib里面提供的信号触发机制。
+2.信号包含的内容有：信号的接口名称，信号名称，发送进程的bus name，以及其他参数。
+3.任何进程都可以依据”match rules”注册相关的信号，daemon有一张注册的列表。
+4.daemon检测信号，决定哪些进程对这个信号感兴趣，然后把信号发送给这些进程。
+5.每个进程收到信号后，如果是使用了dbus高层接口，可以选择触发代理对象上的信号。如果是dbus底层接口，需要检查发送者名称和信号名称，然后决定怎么做。</p>
+
+<p>Glib绑定接口在”dbus/dbus-glib.h”头文件中定义。
+dbus和glib的数据类型映射如下：</p>
+
+<p>D-Bus basic type	GType	Free function	Notes
+BYTE	G_TYPE_UCHAR	 	 
+BOOLEAN	G_TYPE_BOOLEAN	 	 
+INT16	G_TYPE_INT	 	Will be changed to a G_TYPE_INT16 once
+GLib has it
+UINT16	G_TYPE_UINT	 	Will be changed to a G_TYPE_UINT16 once
+GLib has it
+INT32	G_TYPE_INT	 	Will be changed to a G_TYPE_INT32 once
+GLib has it
+UINT32	G_TYPE_UINT	 	Will be changed to a G_TYPE_UINT32 once
+GLib has it
+INT64	G_TYPE_GINT64	 	 
+UINT64	G_TYPE_GUINT64	 	 
+DOUBLE	G_TYPE_DOUBLE	 	 
+STRING	G_TYPE_STRING	g_free	 
+OBJECT_PATH	DBUS_TYPE_G_PROXY	g_object_unref	The returned proxy does not have an interface set; use
+dbus_g_proxy_set_interface to invoke methods
+Container type mappings
+dbus数据也有包容器类型，像DBUS_TYPE_ARRAY 和 DBUS_TYPE_STRUCT，dbus的数据类型可以是嵌套的，如有一个数组，内容是字符串的数组集合。</p>
+
+<p>但是，并不是所有的类型都有普通的使用，DBUS_TYPE_STRUCT应该可以包容非基本类型的数据类型。glib绑定尝试使用比较明显的方式进行声明。</p>
+
+<p>D-Bus type signature	Description	GType	C typedef	Free function	Notes
+as	Array of strings	G_TYPE_STRV	char **	g_strfreev	 
+v	Generic value container	G_TYPE_VALUE	GValue *	g_value_unset	The calling conventions for values expect that method callers have
+allocated return values; see below.
+同时定义了新的数组类型集合。</p>
+
+<p>D-Bus type signature	Description	GType	C typedef	Free function	Notes
+ay	Array of bytes	DBUS_TYPE_G_BYTE_ARRAY	GArray *	g_array_free	 
+au	Array of uint	DBUS_TYPE_G_UINT_ARRAY	GArray *	g_array_free	 
+ai	Array of int	DBUS_TYPE_G_INT_ARRAY	GArray *	g_array_free	 
+ax	Array of int64	DBUS_TYPE_G_INT64_ARRAY	GArray *	g_array_free	 
+at	Array of uint64	DBUS_TYPE_G_UINT64_ARRAY	GArray *	g_array_free	 
+ad	Array of double	DBUS_TYPE_G_DOUBLE_ARRAY	GArray *	g_array_free	 
+ab	Array of boolean	DBUS_TYPE_G_BOOLEAN_ARRAY	GArray *	g_array_free	 
+定义了字典类型</p>
+
+<p>D-Bus type signature	Description	GType	C typedef	Free function	Notes
+a{ss}	Dictionary mapping strings to strings	DBUS_TYPE_G_STRING_STRING_HASHTABLE	GHashTable *	g_hash_table_destroy	 
+client端编写</p>
+
+<p>我们的程序在使用dbus的时候，首先需要连接上dbus，使用dbus_g_bus_get获得dbus连接。然后可以创建代理对象。</p>
+
+<p>需要调用方法的时候，可以有两种方式：1.同步调用，使用dbus_g_proxy_call发送方法请求到远端对象，dbus会阻塞等待远端对象的回应，输出参数里将会带有相应的回应数据,以G_TYPE_INVALID作为终止符。2.异步调用，使用dbus_g_proxy_begin_call，它将返回一个DBusGPendingCall对象，可以使用dbus_g_pending_call_set_notify连接到自己的处理函授中。</p>
+
+<p>可以使用dbus_g_proxy_add_signal 和 dbus_g_proxy_connect_signal来连接信号，dbus_g_proxy_add_signal用来声明信号处理函数，属于必须被调用的接口，dbus_g_proxy_connect_signal可以调用多次。</p>
+
+<p>Generated Bindings
+使用内置的xml文件，可以很方便地自动创建出易于使用的dbus代理对象。如下的一个xml文件描述了了一个方法：</p>
+
+<p>“in”标识输入参数，“out”标识输出参数。
+使用dbus-binding-tool工具来生成头文件，如dbus-binding-tool –mode=glib-client my-object.xml &gt; my-object-bindings.h，会产生如下的内联函数原型：</p>
+
+<p>gboolean
+com_example_MyObject_many_args (DBusGProxy <em>proxy, const guint IN_x,
+const char * IN_str, const gdouble IN_trouble,
+gdouble</em> OUT_d_ret, char ** OUT_str_ret,
+GError **error);</p>
+
+<p>DBusGProxyCall*
+com_example_MyObject_many_args_async (DBusGProxy *proxy, const guint IN_x,
+const char * IN_str, const gdouble IN_trouble,
+com_example_MyObject_many_args_reply callback,
+gpointer userdata);</p>
+
+<p>typedef void
+(*com_example_MyObject_many_args_reply)
+(DBusGProxy *proxy, gdouble OUT_d_ret, char * OUT_str_ret,
+GError *error, gpointer userdata);</p>
+
+<p>所有函数的第一个参数都是DBusGProxy对象，一般是使用dbus_g_proxy_new_*函数创建出来的。客户端发送方法请求可以增加标记，目前只有org.freedesktop.DBus.GLib.NoReply标记，dbus可以不要回应消息，没有“out”参数，这样运算速度会快一点。</p>
+
+<p>server端的编写</p>
+
+<p>在GLib中，通过dbus表现出GObject，必须写XML文件描述这个对象的方法等属性。像上一篇文章中提到的例子：</p>
+
+<p>一旦写完XML，运行dbus-binding-tool工具，如 dbus-binding-tool –mode=glib-server my-object.xml &gt; my-object-glue.h.</p>
+
+<p>然后在本地代码中include产生的头文件，调用dbus_g_object_class_install_info进行类的初始化，传递对象和对象信息进去，如 dbus_g_object_type_install_info (COM_FOO_TYPE_MY_OBJECT, &amp;com_foo_my_object_info);每个对象类都需要这样做。</p>
+
+<p>为了执行方法，需要定义一个C函数，如my_object_many_args，需要遵守的规则如下：
+1.函数返回gboolean，true表示成功，false标识失败。
+2.第一个参数必须是对象实例的指针。
+3.跟在实例指针后面的参数是方法的输入参数。
+4.输入参数后面是输出参数。
+5.最后一个参数必须是GError **，如果函数返回失败，必须使用g_set_error填充该错误参数。
+如下的xml文件</p>
+
+<p>对应的函数定义为：
+gboolean
+my_object_increment (MyObject *obj, gint32 x, gint32 *ret, GError **error);</p>
+
+<p>最后可以使用dbus_g_connection_register_g_object输出一个对象，如
+dbus_g_connection_register_g_object (connection,”/com/foo/MyObject”, obj);</p>
+
+<p>server端的声明（Annotations）：
+org.freedesktop.DBus.GLib.CSymbol
+org.freedesktop.DBus.GLib.Async
+org.freedesktop.DBus.GLib.Const
+org.freedesktop.DBus.GLib.ReturnVal</p>
+
+<p>dbus启动问题</p>
+
+<p>首先需要启动守护进程
+dbus-daemon –system –print-pid –print-address
+结果提示 Failed to start message bus: Could not get UID and GID for username “messagebus”
+dbus需要有一个messagebus用户，创建该用户即可，useradd messagebus，问题解决。</p>
+
+<p>执行一个dbus测试程序，提示：D-Bus library appears to be incorrectly set up; failed to read machine uuid: Failed to open “/usr/var/lib/dbus/machine-id”: No such file or directory
+没有machine-id文件，查了一下，需要给它定义一个id，使用dbus-uuidgen &gt;/usr/var/lib/dbus/machine-id
+产生这个文件，该问题解决。</p>
+
+<p>再次执行测试程序，又有问题：Couldn’t connect to session bus: Failed to execute dbus-launch to autolaunch D-Bus session,看了帮助http://dbus.freedesktop.org/doc/dbus-launch.1.html
+AUTOMATIC LAUNCHING一节，需要设置DBUS_SESSION_BUS_ADDRESS环境变量的值，先执行dbus-launch,获得了DBUS_SESSION_BUS_ADDRESS值，再export一下，最后执行测试程序，OK了</p>
+
+<p>在dbus帮助中有一篇关于dbus-launch的文章，可以在脚本中启动dbus-launch，同时自动设置DBUS_SESSION_BUS_ADDRESS环境变量，脚本文件rundbus如下：</p>
+
+<p>if test -z “$DBUS_SESSION_BUS_ADDRESS” ; then</p>
+<h2 id="if-not-found-launch-a-new-one">if not found, launch a new one</h2>
+<p>eval <code class="language-plaintext highlighter-rouge">dbus-launch --sh-syntax --exit-with-session</code>
+echo “D-Bus per-session daemon address is: $DBUS_SESSION_BUS_ADDRESS”
+fi</p>
+
+<p>执行. rundbus即可。</p>
+
+<p>基于DBus的应用程序可以是使用DBus Daemon的总线型结构，每个DBus的请求通过DBus Daemon转发；或者是点对点的星型结构，Client与Server之间是直接的Peer2Peer的连接。这俩种结构各有优缺点：总线型的结构比较清晰，Server需要维护的连接较少，实际上只有一个与DBus Daemon相连的连接，广播消息可以很容易的发送到各个Client；P2P形式的DBus通信中间因为少了DBus Daemon的中转，因此性能更好，大约提升30%。</p>
+
+<p>基于GLib提供的GBus实现基于以上俩种形态的DBus应用还是非常简单的：</p>
+
+<ol>
+  <li>准备工作</li>
+</ol>
+
+<p>1.1 提供一个用于代码生成的XML文件</p>
+
+<p>这份XML数据在GDBus中称为introspection data，用来描述提供服务的GObject的接口名与参数。用于gdbus-codegen可以使用这份XML文件生成在Client与Server侧使用的代码。对于总线型DBus应用和P2P型DBus应用，这份代码是通用的。</p>
+
+<p>1.2 编译生成的代码</p>
+
+<p>生成的代码需要分别链接到俩个进程中：带有Skeleton字样的代码，运行在Server侧；带有Proxy字样的代码，运行在Client侧。</p>
+
+<p>gdbus-codegen 自动生成的代码的规则可参考：http://people.freedesktop.org/~david/gio-gdbus-codegen-20110412/gdbus-codegen.html</p>
+
+<ol>
+  <li>总线型</li>
+</ol>
+
+<p>2.1 Server</p>
+
+<p>2.1.1 提供一个基于Default Context的GLib Mainloop</p>
+
+<p>2.1.2 调用g_bus_own_name在总线上注册这个Server</p>
+
+<p>2.1.3 提供on_name_acquried的回调函数，在回调函数中，创建一个skeleton对象，并调用g_dbus_interface_skeleton_export输出到总线上</p>
+
+<p>2.2 Client</p>
+
+<p>2.2.1 提供一个基于Default Context的GLib Mainloop</p>
+
+<p>2.2.2 调用dbus_proxy_new_sync获取与Server的Skeleton对象相对应的Proxy对象，作为后续DBus方法调用的参数</p>
+
+<p>A.Consider the following D-Bus Introspection XML.</p>
+
+<p>复制代码
+复制代码</p>
+<interface name="net.Corp.MyApp.Frobber">
+  <method name="HelloWorld">
+    <arg name="greeting" direction="in" type="s" />
+    <arg name="response" direction="out" type="s" />
+  </method>
+
+  <signal name="Notification">
+    <arg name="icon_blob" type="ay" />
+    <arg name="height" type="i" />
+    <arg name="messages" type="as" />
+  </signal>
+
+  <property name="Verbose" type="b" access="readwrite" />
+</interface>
+<p>复制代码
+复制代码</p>
+
+<p>B.在server端</p>
+
+<p>复制代码
+复制代码
+static gboolean
+on_handle_hello_world (MyAppFrobber           *interface,
+                       GDBusMethodInvocation  *invocation,
+                       const gchar            *greeting,
+                       gpointer                user_data)
+{
+  if (g_strcmp0 (greeting, “Boo”) != 0)
+    {
+      gchar *response;
+      response = g_strdup_printf (“Word! You said `%s’.”, greeting);
+      my_app_complete_hello_world (interface, invocation, response);
+      g_free (response);
+    }
+  else
+    {
+      g_dbus_method_invocation_return_error (MY_APP_ERROR,
+                 MY_APP_ERROR_NO_WHINING,
+                 “Hey, %s, there will be no whining!”,
+                 g_dbus_method_invocation_get_sender (invocation));
+    }
+  return TRUE;
+}</p>
+
+<p>[…]</p>
+
+<p>interface = my_app_frobber_skeleton_new ();
+  my_app_frobber_set_verbose (interface, TRUE);</p>
+
+<p>g_signal_connect (interface,
+                    “handle-hello-world”,
+                    G_CALLBACK (on_handle_hello_world),
+                    some_user_data);</p>
+
+<p>[…]</p>
+
+<p>error = NULL;
+  if (!g_dbus_interface_skeleton_export (G_DBUS_INTERFACE_SKELETON (interface),
+                                         connection,
+                                         “/path/of/dbus_object”,
+                                         &amp;error))
+    {
+      /* handle error */
+    }
+复制代码
+复制代码
+C.client 端</p>
+
+<p>1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+MyAppFrobber *proxy;
+GError *error;</p>
+
+<p>error = NULL;
+proxy = my_app_frobber_proxy_new_for_bus_sync (
+            G_BUS_TYPE_SESSION,
+            G_DBUS_PROXY_FLAGS_NONE,
+            “net.Corp.MyApp”,              /* bus name <em>/
+            “/net/Corp/MyApp/SomeFrobber”, /</em> object <em>/
+            NULL,                          /</em> GCancellable* <em>/
+            &amp;error);
+/</em> do stuff with proxy */
+g_object_unref (proxy);</p>
+
+<ol>
+  <li>P2P型</li>
+</ol>
+
+<p>3.1 Server</p>
+
+<p>3.1.1 提供一个基于Default Context的GLib Mainloop</p>
+
+<p>3.1.2 调用g_dbus_server_start启动一个Server</p>
+
+<p>3.1.3 调用g_signal_connect，关联callback到Server对象的”new-connection”信号上</p>
+
+<p>3.1.4 提供callback，在callback中创建一个skeleton对象，并调用g_dbus_interface_skeleton_export输出到这个新建立的连接上</p>
+
+<p>3.2 Client</p>
+
+<p>3.2.1 提供一个基于Default Context的GLib Mainloop</p>
+
+<p>3.2.2 调用g_dbus_connection_new_for_address_sync建立一个到Server的连接</p>
+
+<p>3.2.3 调用dbus_proxy_new_sync创建一个与Server侧skeleton对象对应的Proxy对象，作为后续DBus方法调用的参数</p>
+:ET

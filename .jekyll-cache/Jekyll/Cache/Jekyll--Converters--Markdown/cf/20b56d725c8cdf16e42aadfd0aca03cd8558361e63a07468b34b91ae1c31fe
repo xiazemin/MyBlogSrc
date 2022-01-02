@@ -1,0 +1,744 @@
+I"��<ol>
+  <li>accept 只是从全连接队列拿出一个已经建立好的socket，如果队列为空，则阻塞。</li>
+</ol>
+
+<p>　　　　2. connect 过程为三次握手过程，是由内核完成的，connect只是通知内核：我要发起连接了。所以下图中的connect指向的是服务器的listen函数和accept函数之间</p>
+
+<p>　　　　3. listen 函数不阻塞，仅仅告知内核，将socket变成被动连接的监听套接字，并在listen之前可以进行一些socket选项参数的设置，例如是否重用等。</p>
+
+<p>　　　　4. backlog参数表示连接队列的长度, 在Linux 2.2版本 以后，该参数仅表示已完成队列的大小，不包含未完成连接的大小，由系统参数 net/ipv4/tcp_max_syn_backlog限制该队列长度的最大值，因此方案是：通过系统参数设置半连接队列大小，通过应用参数设置全连接大小。 不同系统，该参数的含义不同，可参考http://veithen.github.io/2014/01/01/how-tcp-backlog-works-in-linux.html的说明</p>
+
+<p>　　　　5. 半连接队列长度是指服务器处于SYN_RCVD状态的套接字个数，半连接到全连接的通过设置重传次数来判断是否超时（tcp_synack_retries，客户端的超时对应为tcp_syn_retries ，重传时间间隔一般为3s,6s,12s,…）</p>
+
+<p>　　　　6. 全连接队列长度是指处于ESTABLISHED状态的套接字个数，即上面第4点说明的backlog的长度（特指Linux 2.2版本后）， 这个设置是个参考值, 不是精确值. 如果大于/proc/sys/net/core/somaxconn, 则取somaxconn的值, 该值表示已连接队列最大值
+<!-- more -->
+已完成队列满后
+　　通常未完成队列的长度大于已完成队列.
+　　已完成队列满后, 当服务器收到来自客户端的ACK包时
+　　如果 /proc/sys/net/ipv4/tcp_abort_on_overflow 设为 1, 直接回RST包,结束连接.
+　　否则忽视ACK包.
+　　内核有定时器管理未完成队列,对于由于网络原因没收到ACK包或是收到ACK包后被忽视的SYN_RCVD连接重发SYN+ACK包, 最多重发次数由/proc/sys/net/ipv4/tcp_synack_retries 设定.</p>
+
+<p>　　backlog 即上述已完成队列的大小, 这个设置是个参考值,不是精确值. 内核会做些调整, 大于/proc/sys/net/core/somaxconn, 则取somaxconn的值</p>
+
+<p>未完成队列满后
+　　如果启用syncookies (net.ipv4.tcp_syncookies = 1),新的连接不进入未完成队列,不受影响.
+　　否则,服务器不在接受新的连接.</p>
+
+<p>SYN 洪水攻击(syn flood attack)
+　　通过伪造IP向服务器发送SYN包,塞满服务器的未完成队列,服务器发送SYN+ACK包 没回复,反复SYN+ACK包,使服务器不可用.</p>
+
+<p>　　启用syncookies 是简单有效的抵御措施.
+　　启用syncookies,仅未完成队列满后才生效.
+　　
+connect()函数
+对于客户端的 connect() 函数，该函数的功能为客户端主动连接服务器，建立连接是通过三次握手，而这个连接的过程是由内核完成，不是这个函数完成的，这个函数的作用仅仅是通知 Linux 内核，让 Linux 内核自动完成 TCP 三次握手连接（三次握手详情，请看《浅谈 TCP 三次握手》），最后把连接的结果返回给这个函数的返回值（成功连接为0， 失败为-1）。</p>
+
+<p>通常的情况，客户端的 connect() 函数默认会一直阻塞，直到三次握手成功或超时失败才返回（正常的情况，这个过程很快完成）。</p>
+
+<p>listen()函数
+对于服务器，它是被动连接的。举一个生活中的例子，通常的情况下，移动的客服（相当于服务器）是等待着客户（相当于客户端）电话的到来。而这个过程，需要调用listen()函数。</p>
+
+<p>#include&lt;sys/socket.h&gt;<br />
+int listen(int sockfd, int backlog);<br />
+listen() 函数的主要作用就是将套接字( sockfd )变成被动的连接监听套接字（被动等待客户端的连接），至于参数 backlog 的作用是设置内核中连接队列的长度（这个长度有什么用，后面做详细的解释），TCP 三次握手也不是由这个函数完成，listen()的作用仅仅告诉内核一些信息。</p>
+
+<p>这里需要注意的是，listen()函数不会阻塞，它主要做的事情为，将该套接字和套接字对应的连接队列长度告诉 Linux 内核，然后，listen()函数就结束。</p>
+
+<p>这样的话，当有一个客户端主动连接（connect()），Linux 内核就自动完成TCP 三次握手，将建立好的链接自动存储到队列中，如此重复。</p>
+
+<p>所以，只要 TCP 服务器调用了 listen()，客户端就可以通过 connect() 和服务器建立连接，而这个连接的过程是由内核完成。</p>
+
+<p>下面为测试的服务器和客户端代码，运行程序时，要先运行服务器，再运行客户端：</p>
+
+<p>服务器</p>
+
+<p>#include <stdio.h>  
+#include <stdlib.h>  
+#include <string.h>                         
+#include <unistd.h>  
+#include &lt;sys/socket.h&gt;  
+#include &lt;netinet/in.h&gt;  
+#include &lt;arpa/inet.h&gt;                  
+int main(int argc, char *argv[])  
+{  
+    unsigned short port = 8000;</unistd.h></string.h></stdlib.h></stdio.h></p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>int sockfd;  
+sockfd = socket(AF_INET, SOCK_STREAM, 0);// 创建通信端点：套接字  
+if(sockfd &lt; 0)  
+{  
+    perror("socket");  
+    exit(-1);  
+}  
+  
+struct sockaddr_in my_addr;  
+bzero(&amp;my_addr, sizeof(my_addr));          
+my_addr.sin_family = AF_INET;  
+my_addr.sin_port   = htons(port);  
+my_addr.sin_addr.s_addr = htonl(INADDR_ANY);  
+  
+int err_log = bind(sockfd, (struct sockaddr*)&amp;my_addr, sizeof(my_addr));  
+if( err_log != 0)  
+{  
+    perror("binding");  
+    close(sockfd);        
+    exit(-1);  
+}  
+  
+err_log = listen(sockfd, 10);  
+if(err_log != 0)  
+{  
+    perror("listen");  
+    close(sockfd);        
+    exit(-1);  
+}     
+  
+printf("listen client @port=%d...\n",port);  
+  
+sleep(10);  // 延时10s  
+  
+system("netstat -an | grep 8000");  // 查看连接状态  
+  
+return 0;   }
+</code></pre></div></div>
+
+<p>客户端：
+#include <stdio.h>  
+#include <unistd.h>  
+#include <string.h>  
+#include <stdlib.h>  
+#include &lt;arpa/inet.h&gt;  
+#include &lt;sys/socket.h&gt;  
+#include &lt;netinet/in.h&gt;  
+int main(int argc, char *argv[])  
+{  
+    unsigned short port = 8000;             // 服务器的端口号  
+    char *server_ip = "10.221.20.12";       // 服务器ip地址</stdlib.h></string.h></unistd.h></stdio.h></p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>int sockfd;  
+sockfd = socket(AF_INET, SOCK_STREAM, 0);// 创建通信端点：套接字  
+if(sockfd &lt; 0)  
+{  
+    perror("socket");  
+    exit(-1);  
+}  
+  
+struct sockaddr_in server_addr;  
+bzero(&amp;server_addr,sizeof(server_addr)); // 初始化服务器地址  
+server_addr.sin_family = AF_INET;  
+server_addr.sin_port = htons(port);  
+inet_pton(AF_INET, server_ip, &amp;server_addr.sin_addr);  
+  
+int err_log = connect(sockfd, (struct sockaddr*)&amp;server_addr, sizeof(server_addr));      // 主动连接服务器  
+if(err_log != 0)  
+{  
+    perror("connect");  
+    close(sockfd);  
+    exit(-1);  
+}  
+  
+system("netstat -an | grep 8000");  // 查看连接状态  
+  
+while(1);  
+  
+return 0;   }
+</code></pre></div></div>
+
+<p>运行程序时，要先运行服务器，再运行客户端，运行结果如下
+三次握手的连接队列
+这里详细的介绍一下 listen() 函数的第二个参数（ backlog）的作用：告诉内核连接队列的长度。</p>
+
+<p>为了更好的理解 backlog 参数，我们必须认识到内核为任何一个给定的监听套接口维护两个队列：</p>
+
+<p>1、未完成连接队列（incomplete connection queue），每个这样的 SYN 分节对应其中一项：已由某个客户发出并到达服务器，而服务器正在等待完成相应的 TCP 三次握手过程。这些套接口处于 SYN_RCVD 状态。</p>
+
+<p>2、已完成连接队列（completed connection queue），每个已完成 TCP 三次握手过程的客户对应其中一项。这些套接口处于 ESTABLISHED 状态。</p>
+
+<p>当来自客户的 SYN 到达时，TCP 在未完成连接队列中创建一个新项，然后响应以三次握手的第二个分节：服务器的 SYN 响应，其中稍带对客户 SYN 的 ACK（即SYN+ACK），这一项一直保留在未完成连接队列中，直到三次握手的第三个分节（客户对服务器 SYN 的 ACK ）到达或者该项超时为止（曾经源自Berkeley的实现为这些未完成连接的项设置的超时值为75秒）。</p>
+
+<p>如果三次握手正常完成，该项就从未完成连接队列移到已完成连接队列的队尾。</p>
+
+<p>backlog 参数历史上被定义为上面两个队列的大小之和，大多数实现默认值为 5，当服务器把这个完成连接队列的某个连接取走后，这个队列的位置又空出一个，这样来回实现动态平衡，但在高并发 web 服务器中此值显然不够。</p>
+
+<p>accept()函数
+accept()函数功能是，从处于 established 状态的连接队列头部取出一个已经完成的连接，如果这个队列没有已经完成的连接，accept()函数就会阻塞，直到取出队列中已完成的用户连接为止。</p>
+
+<p>如果，服务器不能及时调用 accept() 取走队列中已完成的连接，队列满掉后会怎样呢？UNP（《unix网络编程》）告诉我们，服务器的连接队列满掉后，服务器不会对再对建立新连接的syn进行应答，所以客户端的 connect 就会返回 ETIMEDOUT。但实际上Linux的并不是这样的！</p>
+
+<p>下面为测试代码，服务器 listen() 函数只指定队列长度为 2，客户端有 6 个不同的套接字主动连接服务器，同时，保证客户端的 6 个 connect()函数都先调用完毕，服务器的 accpet() 才开始调用。</p>
+
+<p>服务器：
+#include <stdio.h>  
+#include <stdlib.h>  
+#include <string.h>                         
+#include <unistd.h>  
+#include &lt;sys/socket.h&gt;  
+#include &lt;netinet/in.h&gt;  
+#include &lt;arpa/inet.h&gt;</unistd.h></string.h></stdlib.h></stdio.h></p>
+
+<p>int main(int argc, char *argv[])<br />
+{<br />
+    unsigned short port = 8000;</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>int sockfd = socket(AF_INET, SOCK_STREAM, 0);     
+if(sockfd &lt; 0)  
+{  
+    perror("socket");  
+    exit(-1);  
+}  
+  
+struct sockaddr_in my_addr;  
+bzero(&amp;my_addr, sizeof(my_addr));          
+my_addr.sin_family = AF_INET;  
+my_addr.sin_port   = htons(port);  
+my_addr.sin_addr.s_addr = htonl(INADDR_ANY);  
+  
+int err_log = bind(sockfd, (struct sockaddr*)&amp;my_addr, sizeof(my_addr));  
+if( err_log != 0)  
+{  
+    perror("binding");  
+    close(sockfd);        
+    exit(-1);  
+}  
+  
+err_log = listen(sockfd, 2);    // 等待队列为2  
+if(err_log != 0)  
+{  
+    perror("listen");  
+    close(sockfd);        
+    exit(-1);  
+}     
+printf("after listen\n");  
+  
+sleep(20);  //延时 20秒  
+  
+printf("listen client @port=%d...\n",port);  
+  
+int i = 0;  
+  
+while(1)  
+{     
+  
+    struct sockaddr_in client_addr;          
+    char cli_ip[INET_ADDRSTRLEN] = "";       
+    socklen_t cliaddr_len = sizeof(client_addr);      
+      
+    int connfd;  
+    connfd = accept(sockfd, (struct sockaddr*)&amp;client_addr, &amp;cliaddr_len);         
+    if(connfd &lt; 0)  
+    {  
+        perror("accept");  
+        continue;  
+    }  
+  
+    inet_ntop(AF_INET, &amp;client_addr.sin_addr, cli_ip, INET_ADDRSTRLEN);  
+    printf("-----------%d------\n", ++i);  
+    printf("client ip=%s,port=%d\n", cli_ip,ntohs(client_addr.sin_port));  
+      
+    char recv_buf[512] = {0};  
+    while( recv(connfd, recv_buf, sizeof(recv_buf), 0) &gt; 0 )  
+    {  
+        printf("recv data ==%s\n",recv_buf);  
+        break;  
+    }  
+      
+    close(connfd);     //关闭已连接套接字  
+    //printf("client closed!\n");  
+}  
+close(sockfd);         //关闭监听套接字  
+return 0;   }
+</code></pre></div></div>
+
+<p>客户端：
+#include <stdio.h>  
+#include <unistd.h>  
+#include <string.h>  
+#include <stdlib.h>  
+#include &lt;arpa/inet.h&gt;  
+#include &lt;sys/socket.h&gt;  
+#include &lt;netinet/in.h&gt;</stdlib.h></string.h></unistd.h></stdio.h></p>
+
+<p>void test_connect()<br />
+{<br />
+    unsigned short port = 8000;             // 服务器的端口号<br />
+    char *server_ip = “10.221.20.12”;       // 服务器ip地址</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>int sockfd;  
+sockfd = socket(AF_INET, SOCK_STREAM, 0);// 创建通信端点：套接字  
+if(sockfd &lt; 0)  
+{  
+    perror("socket");  
+    exit(-1);  
+}  
+  
+struct sockaddr_in server_addr;  
+bzero(&amp;server_addr,sizeof(server_addr)); // 初始化服务器地址  
+server_addr.sin_family = AF_INET;  
+server_addr.sin_port = htons(port);  
+inet_pton(AF_INET, server_ip, &amp;server_addr.sin_addr);  
+  
+int err_log = connect(sockfd, (struct sockaddr*)&amp;server_addr, sizeof(server_addr));      // 主动连接服务器  
+if(err_log != 0)  
+{  
+    perror("connect");  
+    close(sockfd);  
+    exit(-1);  
+}  
+  
+printf("err_log ========= %d\n", err_log);  
+  
+char send_buf[100]="this is for test";  
+send(sockfd, send_buf, strlen(send_buf), 0);   // 向服务器发送信息  
+  
+system("netstat -an | grep 8000");  // 查看连接状态  
+  
+//close(sockfd);   }  
+</code></pre></div></div>
+
+<p>int main(int argc, char *argv[])<br />
+{<br />
+    pid_t pid;<br />
+    pid = fork();</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>if(0 == pid){  
+  
+    test_connect();     // 1  
+      
+    pid_t pid = fork();  
+    if(0 == pid){  
+        test_connect(); // 2  
+      
+    }else if(pid &gt; 0){  
+        test_connect(); // 3  
+    }  
+      
+}else if(pid &gt; 0){  
+      
+    test_connect(); // 4  
+      
+    pid_t pid = fork();  
+    if(0 == pid){  
+        test_connect(); // 5  
+      
+    }else if(pid &gt; 0){  
+        test_connect(); // 6  
+    }  
+  
+}  
+  
+while(1);  
+  
+return 0;   }
+</code></pre></div></div>
+
+<p>同样是先运行服务器，在运行客户端，服务器 accept()函数前延时了 20 秒， 保证了客户端的 connect() 全部调用完毕后再调用 accept(),运行结果如下：</p>
+
+<p>服务器运行效果图：</p>
+
+<p>按照 UNP 的说法，连接队列满后（这里设置长度为 2，发了 6 个连接），以后再调用 connect() 应该统统超时失败，但实际上测试结果是：有的 connect()立刻成功返回了，有的经过明显延迟后成功返回了。对于服务器 accpet() 函数也是这样的结果：有的立马成功返回，有的延迟后成功返回。</p>
+
+<p>对于上面服务器的代码，我们把lisen()的第二个参数改为 0 的数，重新运行程序，发现：</p>
+
+<p>客户端 connect() 全部返回连接成功（有些会延时）：</p>
+
+<p>对于上面服务器的代码，我们把lisen()的第二个参数改为大于 6 的数(如 10)，重新运行程序，发现，客户端 connect() 立马返回连接成功， 服务器 accpet() 函数也立马返回成功。</p>
+
+<p>TCP 的连接队列满后，Linux 不会如书中所说的拒绝连接，只是有些会延时连接，而且accept()未必能把已经建立好的连接全部取出来（如：当队列的长度指定为 0 ），写程序时服务器的 listen() 的第二个参数最好还是根据需要填写，写太大不好（具体可以看cat /proc/sys/net/core/somaxconn，默认最大值限制是 128），浪费资源，写太小也不好，延时建立连接。</p>
+
+<p>tcp三次握手的过程
+第一次：客户端发送SYN(Synchronize Sequence Numbers)报文，标志位SYN=1,序列号seq=j。
+第二次：服务端收到SYN报文后，回应ACK(Acknowledgement)，标志位ACK=1,确认号ack为j+1， 同时自己也发送一个SYN报文，SYN=1,序列号seq假设为k， 即一个ACK+SYN包
+第三次：客户端收到报文后，发送一个ACK报文，标志位ACK=1，确认号ack=(k+1) 到服务器，客户端和服务器进入ESTABLISHED状态，TCP链接成功。
+SYN是同步报文标志位，建立连接时为1，连接建立后置为0，ACK时确认标志位一般为1
+tcp四次挥手过程，为什么是4次呢？
+假如客户端主动发起关闭操作
+第一次： 客户端发送FIN报文，假设为序列号seq=i给服务器。
+第二次： 服务发送ACK报文，ack=(i+1)给客户端，可能数据还没有接收完毕，所以服务端socket状态由ESTABLISHED -&gt; CLOSE_WAIT状态。
+第三次： 服务端端处理完毕，发送FIN报文，序列号为j。
+第四次： 客户端收到报文后，发送ACK报文，ack=j+1, 并进入TIME_WAIT状态。等待2MSL后自动关闭
+为什么客户端不发完ack就释放呢，因为服务器可能没收到ack，服务器会重新发送FIN请求关闭连接，客户端重新发送ack，所以一个来回就是2
+个报文周期。当连接处于2MSL等待阶段时任何迟到的报文段都将被丢弃。
+借用一张图表示一下
+aa</p>
+
+<p>如果已经建立了连接，但是客户端突然出现故障了怎么办？
+TCP还设有一个保活计时器，显然，客户端如果出现故障，服务器不能一直等下去，白白浪费资源。服务器每收到一次客户端的请求后都会重新复位这个计时器，时间通常是设置为2小时，若两小时还没有收到客户端的任何数据，服务器就会发送一个探测报文段，以后每隔75分钟发送一次。若一连发送10个探测报文仍然没反应，服务器就认为客户端出了故障，接着就关闭连接。</p>
+
+<p>查看网络链接的命令
+查看不同状态的链接数
+netstat -an | awk ‘/^tcp/ {++y[$NF]} END {for(w in y) print w, y[w]}’
+半连接状态队列sync_queue和全连接队列accept_queue
+第一种实现：
+BSD实现和在linux2.2之前，listen系统调用backlog参数表示半链接+全链接队列数之和
+当队列满了以后，服务端再收到SYN时，将不会返回SYN/ACK。比较优雅的处理方法就是不处理这条连接，不返回RST，让客户端重试.
+accept系统调用只是简单地从完成队列中取出连接.
+第二种实现：
+linux内核2.2以上的版本，SYN_RCVD队列的大小由proc/sys/net/ipv4/tcp_max_syn_backlog系统参数指定，ESTABLISHED队列由backlog和/proc/sys/net/core/somaxconn中较小的指定
+如果全连接队列满了怎么办？
+服务器不予处理，这样客户端会任务数据丢失，重新发送ack确认，如果服务器有空间，会重新加入到ESTABLISHED队列。
+如果client端没收到服务器发来的FIN，那么client会一直是FIN_WAIT_2吗？
+设置系统变量
+sysctl -w net.ipv4.tcp_fin_timeout=5
+直接ctrl+c杀死客户端，发现FIN_WAIT_2的状态的链接，一会就消失了，并不会进入TIMEWAIT状态。
+怎么查看链接状态呢？
+1
+2
+3
+netstat -natp | grep 8888</p>
+
+<p>8888是服务端监听的端口，因为tcp链接总是有一端是8888端口的。
+查看每个ip和服务器的连接数</p>
+
+<p>1
+netstat -nat|awk ‘{print$5}’|awk -F : ‘{print$1}’|sort|uniq -c|sort -rn
+什么是MSL呢？</p>
+
+<p>linux上的定义，就是60s
+1
+2
+#define TCP_TIMEWAIT_LEN (60*HZ) 
+                  * state, about 60 seconds */
+全连接队列满了怎么办呢？
+服务器根据 /proc/sys/net/ipv4/tcp_abort_on_overflow的值处理
+0 表示丢弃ack，让客户端重新发ack
+1 表示表示发送一个RST给客户端，直接废弃掉这个握手过程，客户端会出现connection reset by peer的错误</p>
+
+<p>socket上定义了几个IO事件：状态改变事件、有数据可读事件、有发送缓存可写事件、有IO错误事件。</p>
+
+<p>对于这些事件，socket中分别定义了相应的事件处理函数，也称回调函数。</p>
+
+<p>Socket I/O事件的处理过程中，要使用到sock上的两个队列：等待队列和异步通知队列，这两个队列中</p>
+
+<p>都保存着等待该Socket I/O事件的进程。</p>
+
+<p>Q：为什么要使用两个队列，等待队列和异步通知队列有什么区别呢？</p>
+
+<p>A：等待队列上的进程会睡眠，直到Socket I/O事件的发生，然后在事件处理函数中被唤醒。</p>
+
+<p>异步通知队列上的进程则不需要睡眠，Socket I/O事件发时，事件处理函数会给它们发送到信号，</p>
+
+<p>这些进程事先注册的信号处理函数就能够被执行。</p>
+
+<p>等待队列
+Socket层使用等待队列来进行阻塞等待，在等待期间，阻塞在此socket上的进程会睡眠。</p>
+
+<p>struct sock {
+    …
+    struct socket_wq __rcu <em>sk_wq; /</em> socket的等待队列和异步通知队列 */
+    …
+}</p>
+
+<p>struct socket_wq {
+    /* Note: wait MUST be first field of socket_wq <em>/
+    wait_queue_head_t wait; /</em> 等待队列头 <em>/
+    struct fasync_struct *fasync_list; /</em> 异步通知队列 */
+    struct rcu_head *rcu;
+};
+(1)  socket的等待队列头</p>
+
+<p>struct __wait_queue_head {
+    spinlock_t lock;
+    struct list_head task_list;
+};
+typedef struct __wait_queue_head wait_queue_head_t;
+(2) 进程的等待任务</p>
+
+<p>struct __wait_queue {
+    unsigned int flags;
+#define WQ_FLAG_EXCLUSIVE 0x01
+    void <em>private; /</em> 指向当前的进程控制块 <em>/
+    wait_queue_func_t func; /</em> 唤醒函数 <em>/
+    struct list_head task_list; /</em> 用于链接入等待队列 <em>/
+};
+typedef struct __wait_queue wait_queue_t;
+typedef int (</em>wait_queue_func_t) (wait_queue_t *wait, unsigned mode, int flags, void *key);
+int default_wake_function(wait_queue_t *wait, unsigned mode, int flags, void *key);
+(3) 初始化等待任务</p>
+
+<p>#define DEFINE_WAIT(name) DEFINE_WAIT_FUNC(name, autoremove_wake_function)</p>
+
+<p>#define DEFINE_WAIT_FUNC(name, function)    <br />
+    wait_queue_t name = {    <br />
+        .private = current,    <br />
+        .func = function,    <br />
+        .task_list = LIST_HEAD_INIT((name).task_list),    <br />
+    }</p>
+
+<p>int autoremove_wake_function(wait_queue_t <em>wait, unsigned mode, int sync, void *key)
+{
+    int ret = default_wake_function(wait, mode, sync, key); /</em> 默认的唤醒函数 */</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>if (ret)
+    list_del_init(&amp;wait-&gt;task_list); /* 从等待队列中删除 */
+ 
+return ret; }
+</code></pre></div></div>
+
+<p>int default_wake_function(wait_queue_t *curr, unsigned mode, int wake_flags, void *key)
+{
+    return try_to_wake_up(curr-&gt;private, mode, wake_flags);
+}
+try_to_wake_up()通过把进程的状态设置为TASK_RUNNING，并把进程插入CPU运行队列，来唤醒睡眠的进程。</p>
+
+<p>(4) 把等待任务插入到等待队列中</p>
+
+<p>获取sock的等待队列。</p>
+
+<p>static inline wait_queue_head_t *sk_sleep(struct sock *sk)
+{
+    BUILD_BUG_ON(offsetof(struct socket_wq, wait) != 0);
+    return &amp;rcu_dereference_raw(sk-&gt;sk_wq)-&gt;wait;
+}
+把等待任务加入到等待队列中，同时设置当前进程的状态，TASK_INTERRUPTIBLE或TASK_UNINTERRUPTIBLE。</p>
+
+<p>void prepare_to_wait(wait_queue_head_t <em>q, wait_queue_t *wait, int state)
+{
+    unsigned long flags;
+    wait-&gt;flags &amp;= ~WQ_FLAG_EXCLUSIVE; /</em> 可以同时唤醒多个等待进程 */</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>spin_lock_irqsave(&amp;q-&gt;lock, flags);
+ 
+if (list_empty(&amp;wait-&gt;task_list))
+    __add_wait_queue(q, wait); /* 把等待任务加入到等待队列的头部，会最先被唤醒 */
+ 
+set_current_state(state); /* 设置进程的状态 */
+ 
+spin_unlock_irqrestore(&amp;q-&gt;lock, flags); } prepare_to_wait()和prepare_to_wait_exclusive()都是用来把等待任务加入到等待队列中，不同之处在于
+</code></pre></div></div>
+
+<p>使用prepare_to_wait_exclusive()时，会在等待任务中添加WQ_FLAG_EXCLUSIVE标志，表示一次只能</p>
+
+<p>唤醒一个等待任务，目的是为了避免惊群现象。</p>
+
+<p>void prepare_to_wait_exclusive(wait_queue_head_t *q, wait_queue_t *wait, int state)
+{
+    unsigned long flags;</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>/* 这个标志表示一次只唤醒一个等待任务，避免惊群现象 */
+wait-&gt;flags |= WQ_FLAG_EXCLUSIVE;
+ 
+spin_lock_irqsave(&amp;q-&gt;lock, flags);
+ 
+if (list_empty(&amp;wait-&gt;task_list))
+    __add_wait_queue_tail(q, wait); /* 把此等待任务加入到等待队列尾部 */
+ 
+set_current_state(state); /* 设置当前进程的状态 */
+ 
+spin_unlock_irqrestore(&amp;q-&gt;lock, flags); }
+</code></pre></div></div>
+
+<p>static inline void __add_wait_queue_tail(wait_queue_head_t *head, wait_queue_t *new)
+{
+    list_add_tail(&amp;new-&gt;task_list, &amp;head-&gt;task_list);
+}</p>
+
+<p>#define set_current_state(state_value)    <br />
+    set_mb(current-&gt;state, (state_value))
+(5) 删除等待任务</p>
+
+<p>从等待队列中删除等待任务，同时把等待进程的状态置为可运行状态，即TASK_RUNNING。</p>
+
+<p>/**</p>
+<ul>
+  <li>finish_wait - clean up after waiting in a queue</li>
+  <li>@q: waitqueue waited on，等待队列头</li>
+  <li>@wait: wait descriptor，等待任务
+ *</li>
+  <li>Sets current thread back to running state and removes the wait</li>
+  <li>
+    <p>descriptor from the given waitqueue if still queued.
+ */
+void finish_wait(wait_queue_head_t *q, wait_queue_t *wait)
+{
+ unsigned long flags;
+ __set_current_state(TASK_RUNNING);</p>
+
+    <p>if (! list_empty_careful(&amp;wait-&gt;task_list)) {
+     spin_lock_irqsave(&amp;q-&gt;lock, flags);</p>
+
+    <div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code> list_del_init(&amp;wait-&gt;task_list); /* 从等待队列中删除 */
+ 
+ spin_unlock_irqrestore(&amp;q-&gt;lock, flags);  } } connect等待 (1) 睡眠
+</code></pre></div>    </div>
+  </li>
+</ul>
+
+<p>connect()的超时时间为sk-&gt;sk_sndtimeo，在sock_init_data()中初始化为MAX_SCHEDULE_TIMEOUT，</p>
+
+<p>表示无限等待，可以通过SO_SNDTIMEO选项来修改。</p>
+
+<p>static long inet_wait_for_connect(struct sock <em>sk, long timeo, int writebias)
+{
+    DEFINE_WAIT(wait);  /</em> 初始化等待任务 */</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>/* 把等待任务加入到socket的等待队列头部，把进程的状态设为TASK_INTERRUPTIBLE */
+prepare_to_wait(sk_sleep(sk), &amp;wait, TASK_INTERRUPTIBLE);
+sk-&gt;sk_write_pending += writebias;
+ 
+/* Basic assumption: if someone sets sk-&gt;sk_err, he _must_ change state of the socket
+ * from TCP_SYN_*. Connect() does not allow to get error notifications without closing
+ * the socket.
+ */
+ 
+/* 完成三次握手后，状态就会变为TCP_ESTABLISHED，从而退出循环 */
+while ((1 &lt;&lt; sk-&gt;sk_state) &amp; (TCPF_SYN_SENT | TCPF_SYN_RECV)) {
+    release_sock(sk); /* 等下要睡觉了，先释放锁 */
+ 
+    /* 进入睡眠，直到超时或收到信号，或者被I/O事件处理函数唤醒。
+     * 1. 如果是收到信号退出的，timeo为剩余的jiffies。
+     * 2. 如果使用了SO_SNDTIMEO选项，超时退出后，timeo为0。
+     * 3. 如果没有使用SO_SNDTIMEO选项，timeo为无穷大，即MAX_SCHEDULE_TIMEOUT，
+     *      那么返回值也是这个，而超时时间不定。为了无限阻塞，需要上面的while循环。
+     */
+    timeo = schedule_timeout(timeo); 
+ 
+    lock_sock(sk); /* 被唤醒后重新上锁 */
+ 
+    /* 如果进程有待处理的信号，或者睡眠超时了，退出循环，之后会返回错误码 */
+    if (signal_pending(current) || !timeo)
+        break;
+ 
+    /* 继续睡眠吧 */
+    prepare_to_wait(sk_sleep(sk), &amp;wait, TASK_INTERRUPTIBLE);
+}
+ 
+/* 等待结束时，把等待进程从等待队列中删除，把当前进程的状态设为TASK_RUNNING */
+finish_wait(sk_sleep(sk), &amp;wait);
+sk-&gt;sk_write_pending -= writebias;
+return timeo; }  (2) 唤醒
+</code></pre></div></div>
+
+<p>三次握手中，当客户端收到SYNACK、发出ACK后，连接就成功建立了。</p>
+
+<p>此时连接的状态从TCP_SYN_SENT或TCP_SYN_RECV变为TCP_ESTABLISHED，sock的状态发生变化，</p>
+
+<p>会调用sock_def_wakeup()来处理连接状态变化事件，唤醒进程，connect()就能成功返回了。</p>
+
+<p>sock_def_wakeup()的函数调用路径如下：</p>
+
+<p>tcp_v4_rcv</p>
+
+<p>tcp_v4_do_rcv</p>
+
+<p>tcp_rcv_state_process</p>
+
+<p>tcp_rcv_synsent_state_process</p>
+
+<p>tcp_finish_connect</p>
+
+<p>sock_def_wakeup</p>
+
+<p>wake_up_interruptible_all</p>
+
+<p>__wake_up</p>
+
+<p>__wake_up_common</p>
+
+<p>void tcp_finish_connect(struct sock <em>sk, struct sk_buff *skb)
+{
+    …
+    tcp_set_state(sk, TCP_ESTABLISHED); /</em> 在这里设置为连接已建立的状态 <em>/
+    …
+    if (! sock_flag(sk, SOCK_DEAD)) {
+        sk-&gt;sk_state_change(sk); /</em> 指向sock_def_wakeup，会唤醒调用connect()的进程，完成连接的建立 <em>/
+        sk_wake_async(sk, SOCK_WAKE_IO, POLL_OUT); /</em> 如果使用了异步通知，则发送SIGIO通知进程可写 */
+    }
+}
+accept等待
+(1) 睡眠</p>
+
+<p>accept()超时时间为sk-&gt;sk_rcvtimeo，在sock_init_data()中初始化为MAX_SCHEDULE_TIMEOUT，表示无限等待。</p>
+
+<p>/* Wait for an incoming connection, avoid race conditions.</p>
+<ul>
+  <li>
+    <p>This must be called with the socket locked.
+ <em>/
+static int inet_csk_wait_for_connect(struct sock *sk, long timeo)
+{
+ struct inet_connection_sock *icsk = inet_csk(sk);
+ DEFINE_WAIT(wait); /</em> 初始化等待任务 */
+ int err;</p>
+
+    <p>for (; ;) {
+     /* 把等待任务加入到socket的等待队列中，把进程状态设置为TASK_INTERRUPTIBLE */
+     prepare_to_wait_exclusive(sk_sleep(sk), &amp;wait, TASK_INTERRUPTIBLE);</p>
+
+    <div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code> release_sock(sk); /* 等下可能要睡觉了，先释放 */
+ 
+ if (reqsk_queue_empty(&amp;icsk-&gt;icsk_accept_queue)) /* 如果全连接队列为空 */
+     timeo = schedule_timeout(timeo); /* 进入睡眠直到超时或收到信号，或被IO事件处理函数唤醒 */
+ 
+ lock_sock(sk); /* 醒来后重新上锁 */
+ err = 0;
+ /* 全连接队列不为空时，说明有新的连接建立了，成功返回 */
+ if (! reqsk_queue_empty(&amp;icsk-&gt;icsk_accept_queue))
+     break;
+ 
+ err = -EINVAL;
+ if (sk-&gt;sk_state != TCP_LISTEN) /* 如果sock不处于监听状态了，退出，返回错误码 */
+     break;
+ 
+ err = sock_intr_errno(timeo);
+ 
+ /* 如果进程有待处理的信号，退出，返回错误码。
+  * 因为timeo默认为MAX_SCHEDULE_TIMEOUT，所以err默认为-ERESTARTSYS。
+  * 接下来会重新调用此函数，所以accept()依然阻塞。
+  */
+ if (signal_pending(current))
+     break; 
+ 
+ err = -EAGAIN;
+ if (! timeo) /* 如果等待超时，即超过用户设置的sk-&gt;sk_rcvtimeo，退出 */
+     break;  }
+</code></pre></div>    </div>
+
+    <p>/* 从等待队列中删除等待任务，把等待进程的状态设为TASK_RUNNING */
+ finish_wait(sk_sleep(sk), &amp;wait);
+ return err;
+}
+(2) 唤醒</p>
+  </li>
+</ul>
+
+<p>三次握手中，当服务器端接收到ACK完成连接建立的时候，会把新的连接链入全连接队列中，</p>
+
+<p>然后唤醒监听socket上的等待进程，accept()就能成功返回了。</p>
+
+<p>三次握手时，当收到客户端的ACK后，经过如下调用：</p>
+
+<p>tcp_v4_rcv</p>
+
+<p>tcp_v4_do_rcv</p>
+
+<p>tcp_child_process</p>
+
+<p>sock_def_readable</p>
+
+<p>wake_up_interruptible_sync_poll</p>
+
+<p>__wake_up_sync_key</p>
+
+<p>__wake_up_common</p>
+
+<p>最终调用我们给等待任务注册的唤醒函数。</p>
+
+<p>我们来看下accept()是如何避免惊群现象的。</p>
+
+<p>static void __wake_up_common(wait_queue_head_t *q, unsigned int mode, int nr_exclusive,
+                             int wake_flags, void *key)
+{
+    wait_queue_t *curr, *next;</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>list_for_each_entry_safe(curr, next, &amp;q-&gt;task_list, task_list) {
+    unsigned flags = curr-&gt;flags;
+ 
+    if (curr-&gt;func(curr, mode, wake_flags, key) &amp;&amp; (flags &amp; WQ_FLAG_EXCLUSIVE)
+        !--nr_exclusive)
+        break;
+} } 初始化等待任务时，flags |= WQ_FLAG_EXCLUSIVE。传入的nr_exclusive为1，表示只允许唤醒一个等待任务。
+</code></pre></div></div>
+
+<p>所以这里只会唤醒一个等待的进程，不会导致惊群现象</p>
+:ET

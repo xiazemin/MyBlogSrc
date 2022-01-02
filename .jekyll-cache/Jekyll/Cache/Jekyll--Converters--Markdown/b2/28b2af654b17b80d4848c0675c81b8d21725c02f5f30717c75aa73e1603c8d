@@ -1,0 +1,64 @@
+I"	<p>https://www.cnblogs.com/bianxj/articles/9605067.html
+<!-- more -->
+ 如果大批量的操作能够通过一系列的select 语句产生，那么理论上就能对这些结果批量处理。</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>      但是mysql并没有提供eval这样的对结果集进行分析操作的功能。索引只能将select结果保存到临时文件中，然后再执行临时文件中的指令。
+</code></pre></div></div>
+
+<p>具体过程如下</p>
+
+<p>1、通过information_schema.processlist表中的连接信息生成需要处理掉的MySQL连接的语句临时文件，然后执行临时文件中生成的指令</p>
+
+<p>复制代码
+mysql&gt; select concat(‘KILL ‘,id,’;’) from information_schema.processlist where user=’root’;
++————————+
+| concat(‘KILL ‘,id,’;’) 
++————————+
+| KILL 3101;           <br />
+| KILL 2946;           <br />
++————————+
+2 rows in set (0.00 sec)</p>
+
+<p>mysql&gt;select concat(‘KILL ‘,id,’;’) from information_schema.processlist where user=’root’ into outfile ‘/tmp/a.txt’;
+Query OK, 2 rows affected (0.00 sec)</p>
+
+<p>mysql&gt;source /tmp/a.txt;
+Query OK, 0 rows affected (0.00 sec)
+复制代码</p>
+
+<p>2、杀掉当前所有的MySQL连接</p>
+
+<table>
+  <tbody>
+    <tr>
+      <td>mysqladmin -uroot -p processlist</td>
+      <td>awk -F “</td>
+      <td>” ‘{print $2}’</td>
+      <td>xargs -n 1 mysqladmin -uroot -p kill</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>  杀掉指定用户运行的连接，这里为sa
+</code></pre></div></div>
+
+<table>
+  <tbody>
+    <tr>
+      <td>mysqladmin -uroot -p processlist</td>
+      <td>awk -F “</td>
+      <td>” ‘{if($3 == “sa”)print $2}’</td>
+      <td>xargs -n 1 mysqladmin -uroot -p kill</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>3、通过shell脚本实现
+</code></pre></div></div>
+
+<p>#杀掉锁定的MySQL连接
+for id in <code class="language-plaintext highlighter-rouge">mysqladmin processlist|grep -i locked|awk '{print $1}'</code>
+do
+   mysqladmin kill ${id}
+done</p>
+:ET

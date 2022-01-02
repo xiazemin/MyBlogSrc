@@ -1,0 +1,67 @@
+I"O<p>Tekton 是一个功能强大且灵活的 Kubernetes 原生框架，用于创建 CI/CD 系统。通过抽象出底层实现细节，允许开发者跨多云环境或本地系统进行构建、测试与部署。</p>
+
+<p>特性包括：</p>
+
+<p>工件管理：存储、管理和保护工件，同时 Tetkon 管道可以很好地与其它第三方工具相配合。
+部署管道：部署管道旨在支持复杂的工作流程，包括跨多个环境的部署以及金丝雀部署和蓝/绿部署。
+结果：作为内置结果存储 API 的一部分，通过日志可以深入了解测试与构建结果。
+<!-- more -->
+https://www.oschina.net/p/tekton?hmsr=aladdin1e1
+https://cloud.google.com/Tekton/</p>
+
+<p>ekton是一个谷歌开源的kubernetes原生CI/CD系统，功能强大且灵活，开源社区也正在快速的迭代和发展壮大。google cloud已经推出了基于Tekton的服务（https://cloud.google.com/Tekton/）。</p>
+
+<p>其实Tekton的前身是Knative的build-pipeline项目，从名字可以看出这个项目是为了给build模块增加pipeline的功能，但是大家发现随着不同的功能加入到Knative build模块中，build模块越来越变得像一个通用的CI/CD系统，这已经脱离了Knative build设计的初衷，于是，索性将build-pipeline剥离出Knative，摇身一变成为Tekton，而Tekton也从此致力于提供全功能、标准化的原生kubernetesCI/CD解决方案。</p>
+
+<p>Tekton虽然还是一个挺新的项目，但是已经成为 Continuous Delivery Foundation (CDF) 的四个初始项目之一，另外三个则是大名鼎鼎的Jenkins、Jenkins X、Spinnaker，实际上Tekton还可以作为插件集成到JenkinsX中。所以，如果你觉得Jenkins太重，没必要用Spinnaker这种专注于多云平台的CD，为了避免和Gitlab耦合不想用gitlab-ci，那么Tekton值得一试。</p>
+
+<p>Tekton的特点是kubernetes原生，什么是kubernetes原生呢？简单的理解，就是all in kubernetes，所以用容器化的方式构建容器镜像是必然，另外，基于kubernetes CRD定义的pipeline流水线也是Tekton最重要的特征。
+那Tekton都提供了哪些CRD呢？</p>
+
+<p>Task：顾名思义，task表示一个构建任务，task里可以定义一系列的steps，例如编译代码、构建镜像、推送镜像等，每个step实际由一个Pod执行。
+TaskRun：task只是定义了一个模版，taskRun才真正代表了一次实际的运行，当然你也可以自己手动创建一个taskRun，taskRun创建出来之后，就会自动触发task描述的构建任务。
+Pipeline：一个或多个task、PipelineResource以及各种定义参数的集合。
+PipelineRun：类似task和taskRun的关系，pipelineRun也表示某一次实际运行的pipeline，下发一个pipelineRun CRD实例到kubernetes后，同样也会触发一次pipeline的构建。
+PipelineResource：表示pipeline input资源，比如github上的源码，或者pipeline output资源，例如一个容器镜像或者构建生成的jar包等。</p>
+
+<p>https://segmentfault.com/a/1190000020182215</p>
+
+<p>实现原理
+高度抽象的结构化设计使得Tekton具有非常灵活的特性。那么Tekton是如何实现workflow的流转的呢。
+Tekton利用Kubernetes的List-Watch机制，在启动时初始化了2个Controller， PipelineRunController和TaskRunController。</p>
+
+<p>PipelineRunController监听PipelineRun对象的变化。在它的reconcile逻辑中，将pipeline中所有的Task构建为一张有向无环图(DAG)，通过遍历DAG找到当前可被调度的Task节点创建对应的TaskRun对象。</p>
+
+<p>TaskRunController监听TaskRun对象的变化。在它的reconcile逻辑中将TaskRun和对应Task转化为可执行的Pod，由kubernetes调度执行。利用Kubernetes的OwnerReference机制，pipelinerun own taskrun, taskrun own pod。pod状态变更时触发taskrun的reconcile逻辑，taskrun状态变更时触发pipelinerun的reconcile逻辑。</p>
+
+<p>DAG支持</p>
+
+<p>Tekton对DAG的支持相对比较简单。在Tekton中一个Pipeline就是一张DAG，Pipeline中的多个Task可是DAG中的节点。Task默认并发执行，可以通过 RunAfter 和 From 关键字控制执行顺序。</p>
+
+<p>https://zhuanlan.zhihu.com/p/142079943
+https://www.infoq.cn/article/tZ6E1_lhsWeh26C9xUJf</p>
+
+<p>https://github.com/tektoncd
+https://github.com/tektoncd/pipeline
+https://www.imooc.com/article/303506
+Kubernetes群集版本1.15或更高版本建议使用Tekton Pipeline v0.11.0或更高版本
+对于Kubernetes群集版本低于1.15,建议进行升级,否则Tekton存在兼容性问题且官方也不太容易进行维护处理
+在群集中启用基于角色的访问控制(RBAC)
+授予当前用户群集管理员权限。
+注: 如果您使用的是Google Kubernetes Engine(GKE)，请参阅Kubernetes Engine QuickStart获取设置Kubernetes集群的说明默认情况下，GKE群集启用了RBAC，并且默认支持持久卷(PV),需要授予当前用户所需的权限，请运行以下命令,其他K8S环境则参考其安装手册：
+kubectl create clusterrolebinding cluster-admin-binding <br />
+–clusterrole=cluster-admin <br />
+–user=$(gcloud config get-value core/account)
+安装：
+Tekton Pipelines是Tekton的核心组件，仅需在k8s集群中执行以下命令，即可完成安装
+kubectl apply –filename https://storage.googleapis.com/tekton-releases/pipeline/latest/release.yaml
+安装需要一些时间，为保障服务正常使用，请确保tekton-pipelines相关组件均处于running状态，可使用如下命令查询组件状态
+kubectl get pods –namespace tekton-pipelines
+持久卷(Persistent volumes)
+运行CI/CD pinelines，需要为Tekton提供永久卷存储。默认情况下，Tekton需要5G的存储空间。需要注意的是, Tekton的性能会受的存储类影响</p>
+
+<p>https://www.imooc.com/article/303506</p>
+
+<p>https://tekton.dev/try/
+https://blog.csdn.net/yunqiinsight/article/details/89917382</p>
+:ET

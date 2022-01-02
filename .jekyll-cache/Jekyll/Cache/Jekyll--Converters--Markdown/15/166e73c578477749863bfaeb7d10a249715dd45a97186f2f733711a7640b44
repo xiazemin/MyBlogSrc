@@ -1,0 +1,150 @@
+I"�.<p>tcmalloc是google开发的一个专门为高并发场景优化的内存分配器，全称为”thread cache malloc”。按照官网的介绍，tcmalloc相比于glibc2.3的malloc(底层实现为ptmalloc2)主要有以下优点：</p>
+
+<p>快速：一台2.8GHz的P4机器上，执行一次malloc及free大约需要300纳秒;而tcmalloc的版本同样的操作大约只需要50纳秒。
+空间占用小：相比ptmalloc2，tcmalloc对小对象占用空间进行了优化。例如：分配N个8字节对象只需要占用8N<em>1.01字节的空间。即，只需要多使用1%的空间。而ptmalloc2中每个对象都需要使用一个4字节的头信息，最后占用的字节可能达到8N</em>8。
+不容易出现内存暴涨
+<!-- more -->
+使用方法
+通过以下两种方法可以将默认的malloc-allocation替换为tcmalloc。</p>
+
+<p>通过指定-ltcmalloc链接器标示将tcmalloc接入应用中
+通过LD_PRELOAD指定：LD_PRELOAD=”/usr/lib/libtcmalloc.so”
+替换原理
+glibc中的memory-allocation方法均被为声明为弱符号，只需要在tcmalloc中将其重新定义即可。 具体的重新定义代码在src/libc_override*.h中(不同平台实现不同)，下面是Linux平台下部分memory-allocation函数的重新定义实现：</p>
+
+<p>void* operator new(size_t size)                  { return tc_new(size);       }
+void operator delete(void* p) __THROW            { tc_delete(p);              }
+void* operator new<a href="size_t size"></a>                { return tc_newarray(size);  }
+void operator delete<a href="void* p"></a> __THROW          { tc_deletearray(p);         }
+extern “C” {
+  void* malloc(size_t s) __THROW                 { return tc_malloc(s);       }
+  void  free(void* p) __THROW                    { tc_free(p);                }
+  void* realloc(void* p, size_t s) __THROW       { return tc_realloc(p, s);   }
+  void* calloc(size_t n, size_t s) __THROW       { return tc_calloc(n, s);    }
+  void  cfree(void* p) __THROW                   { tc_cfree(p);               }
+}  // extern “C”
+整体结构
+<img src="https://xiazemin.github.io/MyBlog/img/total_overview.png" /></p>
+
+<p>上图展示了tcmalloc的整体结构, tcmalloc主要由三个组件组成：ThreadCache、CentralFreeList及PageHeap。 其中：</p>
+
+<p>ThreadCache: 线程缓存，它是一个TSL(线程本地存储)对象，尺寸小于256K的小内存申请均由ThreadCache进行分配；通过ThreadCache分配过程中不需要任何锁，可以极大的提高分配速度
+PageHeap: 中央堆分配器，被所有线程共享(分配时需要全局锁定)，负责与操作系统的直接交互(申请及释放内存)，并且大尺寸的内存申请直接通过PageHeap进行分配
+CentralFreeList：作为PageHeap与ThreadCache的中间人，负责
+将PageHeap中的内存切分为小块，在恰当时机分配给ThreadCache。
+获取从ThreadCache中回收的内存并在恰当的时机将部分内存归还给PageHeap
+下面详细剖析下内部结构。</p>
+
+<p>核心思想：Segregated Free List(离散式空闲列表)
+tcmalloc的动态内存分配核心思想为离散式空闲列表算法，即如下图所示：</p>
+
+<p>tcmalloc定义了86个size class，每个size class都维护了一个可分配的的空闲列表(空闲列表中的每一项称为一个object，同一个class的空闲列表中每个object大小相同)。在申请小内存时(小于256K)，tcmalloc会根据申请大小映射到某个class中。比如，申请0到8个字节的大小时，会被映射到class1中，分配8个字节大小；申请9到16字节大小时，会被映射到class2中，分配16个字节大小….以此类推。 tcmalloc通过SizeMap类维护了具体的映射关系，部分映射关系如下：结构图说明：</p>
+
+<p>num_objects_to_move用来定义ThreadCache在内存不足时从CentralFreeList一次获取多少个object
+class_to_pages用来定义CentralFreeList在内存不足时每次从PageHeap获取多少个页
+当申请的内存大小大于256K时，不再通过SizeMap预定义分配内存，而是通过PageHeap直接分配大内存。
+小内存分配：ThreadCache
+tcmalloc实现中，每个thread独立维护了各自的离散式空闲列表，它的核心结构如下：</p>
+
+<p>class FreeList {
+private:
+ void*    list_;
+ uint32<em>t length</em>;
+ uint32<em>t lowater</em>;
+ uint32<em>t max_length</em>;
+};</p>
+
+<p>class ThreadCache {
+private:
+     FreeList      list_[kNumClasses];  <br />
+};
+ThreadCache中定义的list_变量即为size class的实现。这里啰嗦下，在实现free list时tcmalloc并没有使用next指针指向下一个位置。而是直接使用了void* list_。这里运用了一种技巧：将每个object的前8个字节存储下一个object地址，这样可以模拟链表实现(object分配给应用程序后前8个字节可以被应用程序覆盖)。</p>
+
+<p>当通过ThreadCache分配小内存时：</p>
+
+<p>通过SizeMap查找要分配的内存对应的size class及object size大小。
+查看当前ThreadCache的free list是否为空，如果free list不为空，直接从列表中移除第一个object并返回，由于这个过程中需要获取任何锁，所以速度极快。
+如果free list为空，从CentralFreeList中获取若干个object(具体object个数由慢启动算法决定，防止空间浪费)到ThreadCache对应的size class列表中，并取出其中一个object返回。
+如果CentralFreeList中object也不够用，则CentralFreeList会向PageHeap申请一连串页面(由Span表示，每次申请class_to_pages个)，并将申请的页面切割成一系列的object，之后再将部分object转移给ThreadCache。
+Span是什么呢？object又是如何组织的呢？从PageHeap及CentralFreeList中找下答案吧。</p>
+
+<p>大内存分配：PageHeap
+前面讲过，PageHeap的职能之一是向操作系统申请内存，与大多数现代分配器一样，tcmalloc使用基于页的分配方式，即每次至少像系统申请1页空间。tcmalloc中定义的页大小为8K个字节(多数linux系统中一页大小为4K字节，也就是说tcmalloc中的一页对应linux中两页)。 虽然PageHeap是按页申请内存，但是它管理内存的基本单位为Span(跨度)，Span对象代表了表示连续的页面。 如下图所示，分别有a，b，c，d四个Span；a占据了2个页面，b占据了1个页面，c占据了4个页面，d占据了3个页面</p>
+
+<p>下面是Span的定义</p>
+
+<p>struct Span {
+  PageID        start;          // Span描述的内存的起始地址
+  Length        length;         // Span页面数量
+  Span*         next;           // Span由双向链表组成，PageHeap和CentralFreeList中都用的到
+  Span*         prev;           //
+  void*         objects;        // Span会在CentralFreeList中拆分成由object组成的free list
+  unsigned int  refcount : 16;  // Span的object被引用次数，当refcount=0时，表示此Span没有被使用
+  unsigned int  sizeclass : 8;  // Span属于的size class
+  unsigned int  location : 2;   // Span在的位置IN_USE？normal？returned？
+  unsigned int  sample : 1;     // Sampled object?
+  // What freelist the span is on: IN_USE if on none, or normal or returned
+  enum { IN_USE, ON_NORMAL_FREELIST, ON_RETURNED_FREELIST };
+};
+PS: 上述定义中的objects、refcount、sizeclass属于CentralFreeList中管理的内容，可以先不关注。</p>
+
+<p>以上是Span的概念，那么，PageHeap是如何组织Span的呢？</p>
+
+<p>来看下PageHeap的主要结构及示意图：</p>
+
+<p>PageMap pagemap_; // page id 到 Span的映射</p>
+
+<p>struct SpanList {
+   Span        normal;
+   Span        returned;
+};</p>
+
+<p>SpanList large_;</p>
+
+<p>SpanList free_[kMaxPages]; // kMaxPages = 128</p>
+
+<p>从PageHeap的主要结构中看到：</p>
+
+<p>PageHeap通过free_数组保存了每个页大小对应的空闲Span双向链表。
+大于kMaxPages页面，统一保存在large_中，不再按照页面数目区分。
+Span列表又分为了normal和returned两个部分，其中:
+normal部分包含的Span，是页面明确映射到进程地址空间的Span。
+returned部分包含的Span，是tcmalloc已经通过madvise归还给操作系统空间，调用madvise相当于取消了虚拟内存与物理内存的映射。 tcmalloc之所以还保留returned列表，是因为虽然通过madvise归还给了操作系统，但是操作系统有可能还没有收回这部分内存空间，可以直接利用，如果在操作系统回收前tcmalloc重新使用了这些页面，那么系统就不会再进行回收。并且，即使操作系统已经回收了这部分内存，重新使用这部分空间时内核会引发page fault并将其映射到一块全零的内存空间，不影响使用（代价是会影响性能）。
+当调用Span* New(Length n) 申请内存时（n代表的是申请分配的页面数目）：</p>
+
+<p>free_[kMaxPages]中大于等于n的free list会被遍历一遍，查找是否有合适大小的Span；如果有，则将此Span从free list中移除；如果Span大小比n大，tcmalloc则会将其Carve，将剩余的Span重新放到free_list中。比如，n = 3, 但是系统遍历时发现free_[3]对应的索引已经没有空闲Span了，但是在free_[4]中找到了空闲Span，这时候此Span会被切分成两份：一份对应3个页面，返回给调用方；一份对应1个页面，挂接到free_[1]中，供下次使用。
+如果free_中的normal和returned链表中都找不到合适的Span，则从large_链表中查找大小最合适的Span，这时候需要遍历整个large_的normal和returned列表，时间复杂度为O(n)
+如果large_中也没有可用Span，则通过tcmalloc_SystemAlloc()向操作系统申请，并返回指定大小Span。(每次都会尝试申请至少128页(kMinSystemAlloc)，以便下次使用)
+当调用Delete(Span* span)时：</p>
+
+<p>将Span重新放入PageHeap的free list中(如果Span的左右邻居也是空闲的，则将它们从free list中去除，然后合并为同一个Span再挂接到free list)
+检查是否需要释放内存给操作系统，如果需要，则释放。
+另外PageHeap还定义了PageMap pagemap_，PageMap是一个radix tree数据结构，保存的是PageID到Span对象的映射，free内存时会用到此映射。</p>
+
+<p>中间人：CentralFreeList
+tcmalloc为每个size class设置设置了一个CentralFreeList(中央自由列表)，ThreadCache之间共享这些CentralFreeList</p>
+
+<p>static CentralFreeListPadded central_cache_[kNumClasses];
+  class CentralFreeList {
+  private:
+      SpinLock lock_;
+      size_t size_class_;
+      Span empty_;     <br />
+      Span nonempty_;
+  };</p>
+
+<p>作为中间人，CentralFreeList的功能之一就是从PageHeap中取出部分Span并按照预定大小(SizeMap中定义)将其拆分成大小固定的object供ThreadCache共享； CentralFreeList从PageHeap拿到一个Span后：</p>
+
+<p>通过调用PageHeap::RegisterSizeClass(）将Span中的location填充为”IN_USE”，并将sizeclass填充为指定的值
+通过SizeMap获取size class对应的object大小，然后将Span切分，通过 void* objects保存为object的free list。
+将Span挂接到nonempty_链表中。
+每当ThreadCache从CentralFreeList获取object时：</p>
+
+<p>从nonempty_链表中获取第一个Span，并从此Span种的objects链表中获取可用object返回，每分配一个object，Span的refcount + 1。
+当Span无可用object时，将此Span从nonempty_链表摘除，挂接到empty_链表(object重新归还给此Span时会从新将其挂载到nonempty_链表)
+当ThreadCache归还object给CentralFreeList时：</p>
+
+<p>找到此object对应的Span，挂接到objects链表表头，如果Span在empty_链表，则重新挂接到nonempty_链表
+Span的refcount–。如果refcount变成了0，表示此Span所有的object都已经归还，将此Span从CentralFreeList的链表中摘掉，并将其退还给PageHeap。(pageheap-&gt;Delete(Span))
+至此，tcmalloc的核心结构分析完成。</p>
+:ET

@@ -1,0 +1,1239 @@
+I"�/<!-- more -->
+<p>一、概念：</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>  分片（sharding）是指将数据库拆分，将其分散在不同的机器上的过程。将数据分散到不同的机器上，不需要功能强大的服务器就可以存储更多的数据和处理更大的负载。基本思想就是将集合切成小块，这些块分散到若干片里，每个片只负责总数据的一部分，最后通过一个均衡器来对各个分片进行均衡（数据迁移）。通过一个名为mongos的路由进程进行操作，mongos知道数据和片的对应关系（通过配置服务器）。大部分使用场景都是解决磁盘空间的问题，对于写入有可能会变差（+++里面的说明+++），查询则尽量避免跨分片查询。使用分片的时机：
+</code></pre></div></div>
+
+<p>1，机器的磁盘不够用了。使用分片解决磁盘空间的问题。
+2，单个mongod已经不能满足写数据的性能要求。通过分片让写压力分散到各个分片上面，使用分片服务器自身的资源。
+3，想把大量数据放到内存里提高性能。和上面一样，通过分片使用分片服务器自身的资源。
+二、部署安装： 前提是安装了mongodb（本文用3.0测试）</p>
+
+<p>在搭建分片之前，先了解下分片中各个角色的作用。</p>
+
+<p>① 配置服务器。是一个独立的mongod进程，保存集群和分片的元数据，即各分片包含了哪些数据的信息。最先开始建立，启用日志功能。像启动普通的mongod一样启动配置服务器，指定configsvr选项。不需要太多的空间和资源，配置服务器的1KB空间相当于真是数据的200MB。保存的只是数据的分布表。当服务不可用，则变成只读，无法分块、迁移数据。
+② 路由服务器。即mongos，起到一个路由的功能，供程序连接。本身不保存数据，在启动时从配置服务器加载集群信息，开启mongos进程需要知道配置服务器的地址，指定configdb选项。
+③ 分片服务器。是一个独立普通的mongod进程，保存数据信息。可以是一个副本集也可以是单独的一台服务器。
+部署环境：3台机子</p>
+
+<p>A：配置(3)、路由1、分片1；</p>
+
+<p>B：分片2，路由2；</p>
+
+<p>C：分片3</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>  在部署之前先明白片键的意义，一个好的片键对分片至关重要。片键必须是一个索引，数据根据这个片键进行拆分分散。通过sh.shardCollection加会自动创建索引。一个自增的片键对写入和数据均匀分布就不是很好，因为自增的片键总会在一个分片上写入，后续达到某个阀值可能会写到别的分片。但是按照片键查询会非常高效。随机片键对数据的均匀分布效果很好。注意尽量避免在多个分片上进行查询。在所有分片上查询，mongos会对结果进行归并排序。
+</code></pre></div></div>
+
+<p>启动上面这些服务，因为在后台运行，所以用配置文件启动，配置文件说明。</p>
+
+<p>1）配置服务器的启动。(A上开启3个，Port：20000、21000、22000)</p>
+
+<p>配置服务器是一个普通的mongod进程，所以只需要新开一个实例即可。配置服务器必须开启1个或则3个，开启2个则会报错：</p>
+
+<p>BadValue need either 1 or 3 configdbs
+因为要放到后台用用配置文件启动，需要修改配置文件：</p>
+
+<p>/etc/mongod_20000.conf</p>
+
+<p>复制代码
+#数据目录
+dbpath=/usr/local/config/
+#日志文件
+logpath=/var/log/mongodb/mongodb_config.log
+#日志追加
+logappend=true
+#端口
+port = 20000
+#最大连接数
+maxConns = 50
+pidfilepath = /var/run/mongo_20000.pid
+#日志,redo log
+journal = true
+#刷写提交机制
+journalCommitInterval = 200
+#守护进程模式
+fork = true
+#刷写数据到日志的频率
+syncdelay = 60
+#storageEngine = wiredTiger
+#操作日志,单位M
+oplogSize = 1000
+#命名空间的文件大小,默认16M，最大2G。
+nssize = 16
+noauth = true
+unixSocketPrefix = /tmp
+configsvr = true
+复制代码
+/etc/mongod_21000.conf</p>
+
+<p>复制代码
+数据目录
+dbpath=/usr/local/config1/
+#日志文件
+logpath=/var/log/mongodb/mongodb_config1.log
+#日志追加
+logappend=true
+#端口
+port = 21000
+#最大连接数
+maxConns = 50
+pidfilepath = /var/run/mongo_21000.pid
+#日志,redo log
+journal = true
+#刷写提交机制
+journalCommitInterval = 200
+#守护进程模式
+fork = true
+#刷写数据到日志的频率
+syncdelay = 60
+#storageEngine = wiredTiger
+#操作日志,单位M
+oplogSize = 1000
+#命名空间的文件大小,默认16M，最大2G。
+nssize = 16
+noauth = true
+unixSocketPrefix = /tmp
+configsvr = true
+复制代码
+开启配置服务器：</p>
+
+<p>复制代码
+root@mongo1:~# mongod -f /etc/mongod_20000.conf 
+about to fork child process, waiting until server is ready for connections.
+forked process: 8545
+child process started successfully, parent exiting</p>
+
+<p>root@mongo1:~# mongod -f /etc/mongod_21000.conf 
+about to fork child process, waiting until server is ready for connections.
+forked process: 8595
+child process started successfully, parent exiting
+复制代码
+同理再起一个22000端口的配置服务器。</p>
+
+<p>View Code
+2）路由服务器的启动。(A、B上各开启1个，Port：30000)</p>
+
+<p>路由服务器不保存数据，把日志记录一下即可。</p>
+
+<p>复制代码</p>
+<h1 id="mongos">mongos</h1>
+
+<p>#日志文件
+logpath=/var/log/mongodb/mongodb_route.log
+#日志追加
+logappend=true
+#端口
+port = 30000
+#最大连接数
+maxConns = 100
+#绑定地址
+#bind_ip=192.168.200.*,…,</p>
+
+<p>pidfilepath = /var/run/mongo_30000.pid</p>
+
+<p>configdb=192.168.200.A:20000,192.168.200.A:21000,192.168.200.A:22000  #必须是1个或则3个配置 。
+#configdb=127.0.0.1:20000  #报错
+#守护进程模式 fork = true
+复制代码
+其中最重要的参数是configdb，不能在其后面带的配置服务器的地址写成localhost或则127.0.0.1，需要设置成其他分片也能访问的地址，即192.168.200.A:20000/21000/22000。否则在addshard的时候会报错：</p>
+
+<p>{
+“ok” : 0,
+“errmsg” : “can’t use localhost as a shard since all shards need to communicate. either use all shards and configdbs in localhost or all in actual IPs  host: 172.16.5.104:20000 isLocalHost:0”
+}
+开启mongos：</p>
+
+<p>root@mongo1:~# mongos -f /etc/mongod_30000.conf 
+2015-07-10T14:42:58.741+0800 W SHARDING running with 1 config server should be done only for testing purposes and is not recommended for production
+about to fork child process, waiting until server is ready for connections.
+forked process: 8965
+child process started successfully, parent exiting
+3）分片服务器的启动：</p>
+
+<p>就是一个普通的mongod进程：</p>
+
+<p>root@mongo1:~# mongod -f /etc/mongod_40000.conf 
+note: noprealloc may hurt performance in many applications
+about to fork child process, waiting until server is ready for connections.
+forked process: 9020
+child process started successfully, parent exiting
+A服务器上面的服务开启完毕</p>
+
+<p>root@mongo1:~# ps -ef | grep mongo
+root      9020     1  0 14:47 ?        00:00:06 mongod -f /etc/mongod_40000.conf
+root      9990     1  0 15:14 ?        00:00:02 mongod -f /etc/mongod_20000.conf
+root     10004     1  0 15:14 ?        00:00:01 mongod -f /etc/mongod_21000.conf
+root     10076     1  0 15:20 ?        00:00:00 mongod -f /etc/mongod_22000.conf
+root     10096     1  0 15:20 ?        00:00:00 mongos -f /etc/mongod_30000.conf
+按照上面的方法再到B上开启分片服务和路由服务(配置文件一样)，以及在C上开启分片服务。到此分片的配置服务器、路由服务器、分片服务器都已经部署完成。</p>
+
+<p>三、配置分片：下面的操作都是在mongodb的命令行里执行</p>
+
+<p>1）添加分片：sh.addShard(“IP:Port”)</p>
+
+<p>登陆路由服务器mongos 操作：</p>
+
+<p>root@mongo1:~# mongo –port=30000
+MongoDB shell version: 3.0.4
+connecting to: 127.0.0.1:30000/test
+mongos&gt; 
+添加分片：</p>
+
+<p>复制代码
+mongos&gt; sh.status()    #查看集群的信息
+— Sharding Status — 
+  sharding version: {
+    “_id” : 1,
+    “minCompatibleVersion” : 5,
+    “currentVersion” : 6,
+    “clusterId” : ObjectId(“559f72470f93270ba60b26c6”)
+}
+  shards:
+  balancer:
+    Currently enabled:  yes
+    Currently running:  no
+    Failed balancer rounds in last 5 attempts:  0
+    Migration Results for the last 24 hours: 
+        No recent migrations
+  databases:
+    {  “_id” : “admin”,  “partitioned” : false,  “primary” : “config” }</p>
+
+<p>mongos&gt; sh.addShard(“192.168.200.A:40000”) #添加分片
+{ “shardAdded” : “shard0000”, “ok” : 1 }
+mongos&gt; sh.addShard(“192.168.200.B:40000”) #添加分片
+{ “shardAdded” : “shard0001”, “ok” : 1 }
+mongos&gt; sh.addShard(“192.168.200.C:40000”) #添加分片
+{ “shardAdded” : “shard0002”, “ok” : 1 }</p>
+
+<p>mongos&gt; sh.status()    #查看集群信息
+— Sharding Status — 
+  sharding version: {
+    “_id” : 1,
+    “minCompatibleVersion” : 5,
+    “currentVersion” : 6,
+    “clusterId” : ObjectId(“559f72470f93270ba60b26c6”)
+}
+  shards:  #分片信息
+    {  “_id” : “shard0000”,  “host” : “192.168.200.A:40000” }
+    {  “_id” : “shard0001”,  “host” : “192.168.200.B:40000” }
+    {  “_id” : “shard0002”,  “host” : “192.168.200.C:40000” }
+  balancer:
+    Currently enabled:  yes
+    Currently running:  no
+    Failed balancer rounds in last 5 attempts:  0
+    Migration Results for the last 24 hours: 
+        No recent migrations
+  databases:
+    {  “_id” : “admin”,  “partitioned” : false,  “primary” : “config” }
+复制代码
+2）开启分片功能：sh.enableSharding(“库名”)、sh.shardCollection(“库名.集合名”,{“key”:1})</p>
+
+<p>复制代码
+mongos&gt; sh.enableSharding(“dba”)  #首先对数据库启用分片
+{ “ok” : 1 }
+mongos&gt; sh.status()               #查看分片信息
+— Sharding Status —…
+…
+  databases:
+    {  “_id” : “admin”,  “partitioned” : false,  “primary” : “config” }
+    {  “_id” : “test”,  “partitioned” : false,  “primary” : “shard0000” }
+    {  “_id” : “dba”,  “partitioned” : true,  “primary” : “shard0000” }</p>
+
+<p>mongos&gt; sh.shardCollection(“dba.account”,{“name”:1})    #再对集合进行分片，name字段是片键。片键的选择：利于分块、分散写请求、查询数据。
+{ “collectionsharded” : “dba.account”, “ok” : 1 }
+mongos&gt; sh.status()
+— Sharding Status —…
+  shards:
+    {  “_id” : “shard0000”,  “host” : “192.168.200.51:40000” }
+    {  “_id” : “shard0001”,  “host” : “192.168.200.52:40000” }
+    {  “_id” : “shard0002”,  “host” : “192.168.200.53:40000” }
+…
+  databases:
+    {  “_id” : “admin”,  “partitioned” : false,  “primary” : “config” }
+    {  “_id” : “test”,  “partitioned” : false,  “primary” : “shard0000” }
+    {  “_id” : “dba”,  “partitioned” : true,  “primary” : “shard0000” }  #库
+        dba.account
+            shard key: { “name” : 1 }                                    #集合
+            chunks:
+                shard0000    1
+            { “name” : { “$minKey” : 1 } } –» { “name” : { “$maxKey” : 1 } } on : shard0000 Timestamp(1, 0) 
+复制代码
+上面加粗部分表示分片信息已经配置完成。要是出现：</p>
+
+<p>too many chunks to print, use verbose if you want to force print
+想要看到详细的信息则需要执行：</p>
+
+<p>mongos&gt; sh.status({“verbose”:1})
+或则
+mongos&gt; db.printShardingStatus(“vvvv”)
+或则
+mongos&gt; printShardingStatus(db.getSisterDB(“config”),1)
+四、测试 ：对dba库的account集合进行测试，随机写入，查看是否分散到3个分片中。</p>
+
+<p>判断是否为shard：db.runCommand({isdbgrid:1})</p>
+
+<p>mongos&gt; db.runCommand({isdbgrid:1})
+{ “isdbgrid” : 1, “hostname” : “mongo3c”, “ok” : 1 }
+通过一个python脚本进行随机写入：分别向A、B 2个mongos各写入10万条记录。</p>
+
+<p>View Code
+查看是否分片：db.collection.stats()</p>
+
+<p>复制代码
+mongos&gt; db.account.stats() #查看集合的分布情况
+…
+…
+    “shards” : {
+        “shard0000” : {
+            “ns” : “dba.account”,
+            “count” : 89710,
+            “size” : 10047520,
+…
+…
+        “shard0001” : {
+            “ns” : “dba.account”,
+            “count” : 19273,
+            “size” : 2158576,
+…
+…
+        “shard0002” : {
+            “ns” : “dba.account”,
+            “count” : 91017,
+            “size” : 10193904,
+…
+…
+复制代码
+上面加粗部分为集合的基本信息，可以看到分片成功，各个分片都有数据(count)。到此MongoDB分片集群搭建成功。</p>
+
+<p>++++++++++++++++++++++++++++++++++++++++++++++++</p>
+
+<p>感兴趣的同学可以看下面这个比较有趣的现象：</p>
+
+<p>复制代码
+#在写之前分片的基本信息：
+mongos&gt; sh.status()
+— Sharding Status — 
+…
+…
+  databases:
+    {  “_id” : “admin”,  “partitioned” : false,  “primary” : “config” }
+    {  “_id” : “test”,  “partitioned” : false,  “primary” : “shard0000” }
+    {  “_id” : “dba”,  “partitioned” : true,  “primary” : “shard0000” }
+        dba.account
+            shard key: { “name” : 1 }
+            chunks:
+                shard0000    1
+            { “name” : { “$minKey” : 1 } } –» { “name” : { “$maxKey” : 1 } } on : shard0000 Timestamp(1, 0)   #可以看到这里片键的写入，都是写在shard0000里面的。</p>
+
+<p>#在写期间的分片基本信息：
+mongos&gt; sh.status()
+— Sharding Status — 
+…
+…
+  databases:
+    {  “_id” : “admin”,  “partitioned” : false,  “primary” : “config” }
+    {  “_id” : “test”,  “partitioned” : false,  “primary” : “shard0000” }
+    {  “_id” : “dba”,  “partitioned” : true,  “primary” : “shard0000” }
+        dba.account
+            shard key: { “name” : 1 }
+            chunks:          #数据块分布
+                shard0000    1
+                shard0001    1
+                shard0002    1
+            { “name” : { “$minKey” : 1 } } –» { “name” : “5yyfY8mmR5HyhGJ” } on : shard0001 Timestamp(2, 0) 
+            { “name” : “5yyfY8mmR5HyhGJ” } –» { “name” : “woQAv99Pq1FVoMX” } on : shard0002 Timestamp(3, 0) 
+            { “name” : “woQAv99Pq1FVoMX” } –» { “name” : { “$maxKey” : 1 } } on : shard0000 Timestamp(3, 1)   #可以看到片键写入的基本分布</p>
+
+<p>#在写完成后的基本信息：
+mongos&gt; sh.status()
+— Sharding Status — 
+…
+…
+  databases:
+    {  “_id” : “admin”,  “partitioned” : false,  “primary” : “config” }
+    {  “_id” : “test”,  “partitioned” : false,  “primary” : “shard0000” }
+    {  “_id” : “dba”,  “partitioned” : true,  “primary” : “shard0000” }
+        dba.account
+            shard key: { “name” : 1 }
+            chunks:          #数据块分布
+                shard0000    2
+                shard0001    1
+                shard0002    2
+            { “name” : { “$minKey” : 1 } } –» { “name” : “5yyfY8mmR5HyhGJ” } on : shard0001 Timestamp(2, 0) 
+            { “name” : “5yyfY8mmR5HyhGJ” } –» { “name” : “UavMbMlfszZOFrz” } on : shard0000 Timestamp(4, 0) 
+            { “name” : “UavMbMlfszZOFrz” } –» { “name” : “t9LyVSNXDmf6esP” } on : shard0002 Timestamp(4, 1) 
+            { “name” : “t9LyVSNXDmf6esP” } –» { “name” : “woQAv99Pq1FVoMX” } on : shard0002 Timestamp(3, 4) 
+            { “name” : “woQAv99Pq1FVoMX” } –» { “name” : { “$maxKey” : 1 } } on : shard0000 Timestamp(3, 1)  #最后片键写入的分布
+复制代码
+上面加粗的信息对比上看到，本来在每个分片上都只有一个块，最后在shard0000、shard0002上有2个块，被拆分了。shard0001不变。这是因为mongos在收到写请求的时候，会检查当前块的拆分阀值点。到达该阀值的时候，会向分片发起一个拆分的请求。例子中shard0000和shard0002里的块被拆分了。分片内的数据进行了迁移（有一定的消耗），最后通过一个均衡器来对数据进行转移分配。所以在写入途中要是看到一个分片中集合的数量变小也是正常的。</p>
+
+<p>balancer:  #均衡器
+    Currently enabled:  yes
+    Currently running:  yes   #正在转移
+        Balancer lock taken at Fri Jul 10 2015 22:57:27 GMT+0800 (CST) by mongo2:30000:1436540125:1804289383:Balancer:846930886
+均衡器：均衡器负责数据迁移，周期性的检查分片是否存在不均衡，如果不存在则会开始块的迁移，config.locks集合里的state表示均衡器是否找正在运行，0表示非活动状态，2表示正在均衡。均衡迁移数据的过程会增加系统的负载：目标分片必须查询源分片的所有文档，将文档插入目标分片中，再清除源分片的数据。可以关闭均衡器（不建议）：关闭会导致各分片数据分布不均衡，磁盘空间得不到有效的利用。</p>
+
+<p>mongos&gt; sh.setBalancerState(false)  #关闭自动均衡器，手动均衡，打开：sh.setBalancerState(true)
+mongos&gt; db.settings.find()          #查看均衡器状态
+{ “_id” : “balancer”, “stopped” : true }
+可以为均衡器设置一个均衡时间窗口：activeWindow</p>
+
+<p>mongos&gt; db.settings.update({“_id”:”balancer”},{“$set”:{“activeWindow”:{“start”:”08:00”,”stop”:”02:00”}}},true)
+WriteResult({ “nMatched” : 1, “nUpserted” : 0, “nModified” : 1 })
+mongos&gt; db.settings.find({“_id”:”balancer”})
+{ “_id” : “balancer”, “stopped” : false, “activeWindow” : { “start” : “08:00”, “stop” : “02:00” } }
+上面说明：均衡只会在早上8点到凌晨2点进行均衡操作。均衡器是以块的数量作为迁移指标，而非数据大小，块的大小默认是64M，可以修改:(config.settings)</p>
+
+<p>mongos&gt; db.settings.find()
+{ “_id” : “chunksize”, “value” : 64 }
+mongos&gt; db.settings.save({“_id”:”chunksize”,”value”:32})
+WriteResult({ “nMatched” : 1, “nUpserted” : 0, “nModified” : 1 })
+mongos&gt; db.settings.find()
+{ “_id” : “chunksize”, “value” : 32 }
+上面把块的默认大小改成了32M，除了通过均衡器自动迁移外，还可以手动迁移数据：sh.moveChunk(“db.collection”,{块地址},”新片名称”)</p>
+
+<p>复制代码
+mongos&gt; db.chunks.find({“<em>id” : “abc.account-name</em>"wPeFnJEvendSTbH"”}).pretty() #先到config.chunks上任意找一个块
+{
+    “<em>id” : “abc.account-name</em>"wPeFnJEvendSTbH"”,
+    “lastmod” : Timestamp(3, 1),
+    “lastmodEpoch” : ObjectId(“55a52ff1fdd9a605a0371327”),
+    “ns” : “abc.account”,
+    “min” : {
+        “name” : “wPeFnJEvendSTbH”              #被移动的块
+    },
+    “max” : {
+        “name” : { “$maxKey” : 1 }
+    },
+    “shard” : “shard0000”                       #原先所在的分片
+}
+mongos&gt; sh.moveChunk(“abc.account”,{“name” : “wPeFnJEvendSTbH”},”mablevi”)  #把abc.account集合中包含name(片键)为”“的快迁移到mablevi分片中
+{ “millis” : 6800, “ok” : 1 }
+mongos&gt; db.chunks.find({“<em>id” : “abc.account-name</em>"wPeFnJEvendSTbH"”}).pretty()<br />
+{
+    “<em>id” : “abc.account-name</em>"wPeFnJEvendSTbH"”,
+    “lastmod” : Timestamp(5, 0),
+    “lastmodEpoch” : ObjectId(“55a52ff1fdd9a605a0371327”),
+    “ns” : “abc.account”,
+    “min” : {
+        “name” : “wPeFnJEvendSTbH”
+    },
+    “max” : {
+        “name” : { “$maxKey” : 1 }
+    },
+    “shard” : “mablevi”                        #已被迁移到新片
+}
+复制代码
+上面是手动移动数据的操作，数据被移动。 要是块超出了64M限制【原因是片键没选好(日期、状态值等)，导致一个块无限增大】，则无法进行自动均衡，无法分块。有2个办法：1是加大块的大小(setting)，2是拆分sh.splitAt()（推荐）。</p>
+
+<p>所以要是遇到分片写入比单点写入慢就是因为分片路由服务（mongos）需要维护元数据、数据迁移、路由开销等。</p>
+
+<p>++++++++++++++++++++++++++++++++++++++++++++++++</p>
+
+<p>五、高可用：Sharding+Replset</p>
+
+<p>上面的分片都是单点的，要是一个分片坏了，则数据会丢失，利用之前减少的副本集，能否把副本集加入到分片中？下面就来说明下。</p>
+
+<p>1）添加副本集分片服务器（mmm副本集名称）：这里测试就只对一个分片加副本集，要实现完全的高可用就需要对所有分片加副本集，避免单点故障</p>
+
+<p>一个普通的副本集：</p>
+
+<p>View Code
+现在需要把这个副本集加入到分片中：</p>
+
+<p>复制代码
+mongos&gt; sh.addShard(“mmm/192.168.200.25:27017,192.168.200.245:27017,192.168.200.245:37017”) #加入副本集分片
+{ “shardAdded” : “mmm”, “ok” : 1 }</p>
+
+<p>mongos&gt; sh.status()
+— Sharding Status — 
+…
+…
+shards:
+    {  “_id” : “mmm”,  “host” : “mmm/192.168.200.245:27017,192.168.200.245:37017,192.168.200.25:27017” }
+    {  “_id” : “shard0000”,  “host” : “192.168.200.51:40000” }
+    {  “_id” : “shard0001”,  “host” : “192.168.200.52:40000” }
+    {  “_id” : “shard0002”,  “host” : “192.168.200.53:40000” }
+  balancer:
+    Currently enabled:  yes
+    Currently running:  no
+    Failed balancer rounds in last 5 attempts:  0
+    Migration Results for the last 24 hours: 
+        4 : Success
+  databases:
+    {  “_id” : “admin”,  “partitioned” : false,  “primary” : “config” }
+    {  “_id” : “test”,  “partitioned” : false,  “primary” : “shard0000” }
+    {  “_id” : “dba”,  “partitioned” : true,  “primary” : “shard0000” }
+        dba.account
+            shard key: { “name” : 1 }
+            chunks:
+                mmm    1
+                shard0000    1
+                shard0001    1
+                shard0002    2
+            { “name” : { “$minKey” : 1 } } –» { “name” : “5yyfY8mmR5HyhGJ” } on : shard0001 Timestamp(2, 0) 
+            { “name” : “5yyfY8mmR5HyhGJ” } –» { “name” : “UavMbMlfszZOFrz” } on : mmm Timestamp(5, 0) 
+            { “name” : “UavMbMlfszZOFrz” } –» { “name” : “t9LyVSNXDmf6esP” } on : shard0002 Timestamp(4, 1) 
+            { “name” : “t9LyVSNXDmf6esP” } –» { “name” : “woQAv99Pq1FVoMX” } on : shard0002 Timestamp(3, 4) 
+            { “name” : “woQAv99Pq1FVoMX” } –» { “name” : { “$maxKey” : 1 } } on : shard0000 Timestamp(5, 1) 
+    {  “_id” : “abc”,  “partitioned” : false,  “primary” : “shard0000” }   #未设置分片
+复制代码
+上面加粗部分表示副本集分片已经成功加入，并且新加入的分片会分到已有的分片数据。</p>
+
+<p>复制代码
+mongos&gt; db.account.stats()
+…
+…
+    “shards” : {
+        “mmm” : {
+            “ns” : “dba.account”,
+            “count” : 7723,        #后加入的分片得到了数据
+            “size” : 741408,
+            “avgObjSize” : 96,
+            “storageSize” : 2793472,
+            “numExtents” : 5,
+            “nindexes” : 2,
+            “lastExtentSize” : 2097152,
+            “paddingFactor” : 1,
+            “systemFlags” : 1,
+            “userFlags” : 0,
+            “totalIndexSize” : 719488,
+            “indexSizes” : {
+                “<em>id</em>” : 343392,
+                “name_1” : 376096
+            },
+            “ok” : 1
+        },
+…
+…
+复制代码
+2）继续用python脚本写数据，填充到副本集中</p>
+
+<p>由于之前的副本集是比较老的版本（2.4），所以在写入副本集分片的时候报错：</p>
+
+<p>复制代码
+mongos&gt; db.account.insert({“name”:”UavMbMlfsz1OFrz”})
+WriteResult({
+    “nInserted” : 0,
+    “writeError” : {
+        “code” : 83,
+        “errmsg” : “write results unavailable from 192.168.200.25:27017 :: caused by :: Location28563 cannot send batch write operation to server 192.168.200.25:27017 (192.168.200.25)”
+    }
+})
+复制代码
+太混蛋了，错误提示不太人性化，搞了半天。所以说版本一致性还是很重要的。现在重新开了一个副本集：</p>
+
+<p>View Code
+把之前的副本集分片删除了，如何删除见下面3）。</p>
+
+<p>新的副本集加入分片中：</p>
+
+<p>复制代码
+mongos&gt; sh.addShard(“mablevi/192.168.200.53:50000,192.168.200.53:50001,192.168.200.53:50002”)
+{ “shardAdded” : “mablevi”, “ok” : 1 }</p>
+
+<p>mongos&gt; sh.status()
+— Sharding Status — 
+…
+…
+  shards:
+    {  “_id” : “mablevi”,  “host” : “mablevi/192.168.200.53:50000,192.168.200.53:50001,192.168.200.53:50002” }
+    {  “_id” : “shard0000”,  “host” : “192.168.200.51:40000” }
+    {  “_id” : “shard0001”,  “host” : “192.168.200.52:40000” }
+    {  “_id” : “shard0002”,  “host” : “192.168.200.53:40000” }
+…
+…
+        dba.account
+            shard key: { “name” : 1 }
+            chunks:
+                mablevi    1
+                shard0000    1
+                shard0001    1
+                shard0002    2
+            { “name” : { “$minKey” : 1 } } –» { “name” : “5yyfY8mmR5HyhGJ” } on : shard0001 Timestamp(2, 0) 
+            { “name” : “5yyfY8mmR5HyhGJ” } –» { “name” : “UavMbMlfszZOFrz” } on : mablevi Timestamp(9, 0) #新加入的分片得到数据
+            { “name” : “UavMbMlfszZOFrz” } –» { “name” : “t9LyVSNXDmf6esP” } on : shard0002 Timestamp(4, 1) 
+            { “name” : “t9LyVSNXDmf6esP” } –» { “name” : “woQAv99Pq1FVoMX” } on : shard0002 Timestamp(3, 4) 
+            { “name” : “woQAv99Pq1FVoMX” } –» { “name” : { “$maxKey” : 1 } } on : shard0000 Timestamp(9, 1) 
+    {  “_id” : “abc”,  “partitioned” : false,  “primary” : “shard0000” }
+    {  “_id” : “mablevi”,  “partitioned” : false,  “primary” : “shard0001” }
+复制代码
+继续用python写入操作：</p>
+
+<p>复制代码
+mongos&gt; db.account.stats()
+{
+…
+…
+    “shards” : {
+        “mablevi” : {
+            “ns” : “dba.account”,
+            “count” : 47240,
+            “size” : 5290880,
+…
+…
+复制代码
+副本集的分片被写入了47240条记录。此时把副本集分片的Primary shutdown掉，再查看：</p>
+
+<p>复制代码
+mongos&gt; db.account.stats()
+{
+    “sharded” : true,
+    “code” : 13639,
+    “ok” : 0,
+    “errmsg” : “exception: can’t connect to new replica set master [192.168.200.53:50000], err: couldn’t connect to server 192.168.200.53:50000 (192.168.200.53), connection attempt failed”  #由于副本集的Primary被shutdown之后，选举新主还是要几秒的时间，期间数据不能访问，导致分片数据也不能访问
+}
+mongos&gt; db.account.stats()
+…
+…
+    “shards” : {
+        “mablevi” : {
+            “ns” : “dba.account”,
+            “count” : 47240,       #副本集新主选举完毕之后，分片数据访问正常。数据没有丢失，高可用得到了实现。
+            “size” : 5290880,
+…
+…
+复制代码
+要是让副本集分片只剩下一台（Secondary），则分片会报错：</p>
+
+<p>复制代码
+mongos&gt; db.account.stats()
+{
+    “sharded” : true,
+    “code” : 10009,
+    “ok” : 0,
+    “errmsg” : “exception: ReplicaSetMonitor no master found for set: mablevi” #数据不能访问
+}
+复制代码
+3）删除分片： db.runCommand({“removeshard”:”mmm”})</p>
+
+<p>要是觉得分片太多了，想删除，则：</p>
+
+<p>复制代码
+mongos&gt; use admin   #需要到admin下面删除
+switched to db admin
+mongos&gt; db.runCommand({“removeshard”:”mmm”})
+{
+    “msg” : “draining started successfully”,
+    “state” : “started”,   #开始删除，数据正在转移
+    “shard” : “mmm”,
+    “ok” : 1
+}
+mongos&gt; sh.status()
+— Sharding Status —…
+…
+  shards:
+    {  “_id” : “mmm”,  “host” : “mmm/192.168.200.245:27017,192.168.200.245:37017,192.168.200.25:27017”,  “draining” : true }  #删除的分片数据移动到其他分片
+    {  “_id” : “shard0000”,  “host” : “192.168.200.51:40000” }
+    {  “_id” : “shard0001”,  “host” : “192.168.200.52:40000” }
+    {  “_id” : “shard0002”,  “host” : “192.168.200.53:40000” }
+…
+…
+  databases:
+    {  “_id” : “admin”,  “partitioned” : false,  “primary” : “config” }
+    {  “_id” : “test”,  “partitioned” : false,  “primary” : “shard0000” }
+    {  “_id” : “dba”,  “partitioned” : true,  “primary” : “shard0000” }
+        dba.account
+            shard key: { “name” : 1 }
+            chunks:
+                shard0000    2
+                shard0001    1
+                shard0002    2
+            { “name” : { “$minKey” : 1 } } –» { “name” : “5yyfY8mmR5HyhGJ” } on : shard0001 Timestamp(2, 0) 
+            { “name” : “5yyfY8mmR5HyhGJ” } –» { “name” : “UavMbMlfszZOFrz” } on : shard0000 Timestamp(8, 0) 
+            { “name” : “UavMbMlfszZOFrz” } –» { “name” : “t9LyVSNXDmf6esP” } on : shard0002 Timestamp(4, 1) #这里已经没有了被删除分片信息
+            { “name” : “t9LyVSNXDmf6esP” } –» { “name” : “woQAv99Pq1FVoMX” } on : shard0002 Timestamp(3, 4) 
+            { “name” : “woQAv99Pq1FVoMX” } –» { “name” : { “$maxKey” : 1 } } on : shard0000 Timestamp(7, 1) 
+    {  “_id” : “abc”,  “partitioned” : false,  “primary” : “shard0000” }
+    {  “_id” : “mablevi”,  “partitioned” : false,  “primary” : “shard0001” }</p>
+
+<p>mongos&gt; db.runCommand({“removeshard”:”mmm”})   #再次执行，直到执行成功，要是原来分片的数据比较大，这里比较费时，要是一个主分片则需要执行movePrimary
+{
+    “msg” : “removeshard completed successfully”,
+    “state” : “completed”,  #完成删除
+    “shard” : “mmm”,
+    “ok” : 1
+}
+mongos&gt; sh.status()
+— Sharding Status —…
+  shards:   #分片消失
+    {  “_id” : “shard0000”,  “host” : “192.168.200.51:40000” }
+    {  “_id” : “shard0001”,  “host” : “192.168.200.52:40000” }
+    {  “_id” : “shard0002”,  “host” : “192.168.200.53:40000” }
+…
+…
+            { “name” : { “$minKey” : 1 } } –» { “name” : “5yyfY8mmR5HyhGJ” } on : shard0001 Timestamp(2, 0) 
+            { “name” : “5yyfY8mmR5HyhGJ” } –» { “name” : “UavMbMlfszZOFrz” } on : shard0000 Timestamp(8, 0) 
+            { “name” : “UavMbMlfszZOFrz” } –» { “name” : “t9LyVSNXDmf6esP” } on : shard0002 Timestamp(4, 1) #已经没有了被删除分片的信息
+            { “name” : “t9LyVSNXDmf6esP” } –» { “name” : “woQAv99Pq1FVoMX” } on : shard0002 Timestamp(3, 4) 
+            { “name” : “woQAv99Pq1FVoMX” } –» { “name” : { “$maxKey” : 1 } } on : shard0000 Timestamp(7, 1) 
+    {  “_id” : “abc”,  “partitioned” : false,  “primary” : “shard0000” }
+    {  “_id” : “mablevi”,  “partitioned” : false,  “primary” : “shard0001” }
+复制代码
+分片被删除之后，数据被移到其他分片中，不会丢失。要是想让主分片进行转移则(movePrimary):</p>
+
+<p>mongos&gt; db.adminCommand({“movePrimary”:”test”,”to”:”shard0001”}) #把test的主分片从shard0000迁移到shard0001 
+刷新下配置服务器：db.adminCommand({“flushRouterConfig”:1})</p>
+
+<p>db.adminCommand({“flushRouterConfig”:1})
+最后来查看下分片成员：db.runCommand({ listshards : 1 })</p>
+
+<p>复制代码
+mongos&gt; use admin  #需要进入admin才能执行
+switched to db admin
+mongos&gt; db.runCommand({ listshards : 1 })
+{
+    “shards” : [
+        {
+            “_id” : “shard0000”,
+            “host” : “192.168.200.51:40000”
+        },
+        {
+            “_id” : “shard0001”,
+            “host” : “192.168.200.52:40000”
+        },
+        {
+            “_id” : “shard0002”,
+            “host” : “192.168.200.53:40000”
+        },
+        {
+            “_id” : “mablevi”,
+            “host” : “mablevi/192.168.200.53:50000,192.168.200.53:50001,192.168.200.53:50002”
+        }
+    ],
+    “ok” : 1
+}
+复制代码
+到此已经把MongoDB分片原理、搭建、应用大致已经介绍完。</p>
+
+<p>六、认证分配</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>  上面的所有操作都是在无账号密码下进行的，这样是不安全的，那如何使用账号密码呢？和副本级一样，需要添加KeyFile参数，但是针对上面的三个角色（config、mongos、mongod）账号密码怎么添加呢？官网上已经做了说明：http://docs.mongodb.org/manual/tutorial/enable-authentication-in-sharded-cluster/。下面就对有账号密码认证分片进行相关设置说明。
+</code></pre></div></div>
+
+<p>首先要创建账号(Root角色)和生成一个KeyFile文件，其中mongos 不需要创建账号。</p>
+
+<p>openssl rand -base64 741 &gt; mongodb-keyfile
+chmod 600 mongodb-keyfile
+其实这个文件也可以直接用明文，只要保证各个地方指定的文件是同一个就可以了。</p>
+
+<p>1）mongd： 首先在mongod角色的分片成员上生成key file文件，特别注意的是有副本级的分片，再把这个文件分别复制到其他角色的服务器上。再添加参数：</p>
+
+<p>auth = true
+keyFile = /usr/local/mongodb-keyfile
+2）Config上添加参数：</p>
+
+<p>auth = true
+keyFile = /usr/local/mongodb-keyfile
+3）mongos上添加参数，因为mongos本来就是从config里加载数据的，所以只需要添加keyfile文件即可，不需要找上面createUser。</p>
+
+<p>keyFile = /usr/local/mongodb-keyfile
+最后重启各个服务，再进入mongos里查看：</p>
+
+<p>复制代码
+root@mongo1:/usr/local# mongo –port=30000
+MongoDB shell version: 3.0.4
+connecting to: 127.0.0.1:30000/test
+mongos&gt; sh.status()      #没有认证，没有权限报错。
+2015-07-14T23:42:11.800+0800 E QUERY    Error: error: { “$err” : “not authorized for query on config.version”, “code” : 13 }
+    at Error (<anonymous>)
+    at DBQuery.next (src/mongo/shell/query.js:259:15)
+    at DBCollection.findOne (src/mongo/shell/collection.js:189:22)
+    at printShardingStatus (src/mongo/shell/shardingtest.js:659:55)
+    at Function.sh.status (src/mongo/shell/utils_sh.js:60:5)
+    at (shell):1:4 at src/mongo/shell/query.js:259
+mongos&gt; use admin
+switched to db admin
+mongos&gt; db.auth('dba','dba')   #认证
+1
+mongos&gt; sh.status()            #有权限
+--- Sharding Status --- 
+  sharding version: {
+    "_id" : 1,
+    "minCompatibleVersion" : 5,
+    "currentVersion" : 6,
+    "clusterId" : ObjectId("55a51ef18bd517d4acec5ef9")
+}
+  shards:
+    {  "_id" : "mablevi",  "host" : "mablevi/192.168.200.53:50000,192.168.200.53:50001,192.168.200.53:50002" }
+    {  "_id" : "shard0000",  "host" : "192.168.200.51:40000" }
+    {  "_id" : "shard0001",  "host" : "192.168.200.52:40000" }
+    {  "_id" : "shard0002",  "host" : "192.168.200.53:40000" }
+  balancer:
+  ...
+  ...
+  databases:
+    {  "_id" : "admin",  "partitioned" : false,  "primary" : "config" }
+    {  "_id" : "test",  "partitioned" : false,  "primary" : "shard0000" }
+    {  "_id" : "dba",  "partitioned" : true,  "primary" : "shard0000" }
+        dba.account
+            shard key: { "name" : 1 }
+            chunks:
+                mablevi    1
+                shard0000    1
+                shard0001    2
+                shard0002    1
+            { "name" : { "$minKey" : 1 } } --&gt;&gt; { "name" : "9XXqCaBhfhPIXLq" } on : mablevi Timestamp(2, 0) 
+            { "name" : "9XXqCaBhfhPIXLq" } --&gt;&gt; { "name" : "RWINvgjYYQmbZds" } on : shard0002 Timestamp(4, 0) 
+            { "name" : "RWINvgjYYQmbZds" } --&gt;&gt; { "name" : "jSPRBNH8rvnzblG" } on : shard0001 Timestamp(4, 1) 
+            { "name" : "jSPRBNH8rvnzblG" } --&gt;&gt; { "name" : "okmjUUZuuKgftDC" } on : shard0001 Timestamp(3, 4) 
+            { "name" : "okmjUUZuuKgftDC" } --&gt;&gt; { "name" : { "$maxKey" : 1 } } on : shard0000 Timestamp(3, 1) 
+复制代码
+七、分片备份、还原</anonymous></p>
+
+<p>因为分片机制里面会有平衡器来迁移数据，所以各个分片里的数据很可能会移动，所以在备份分片时需要做：</p>
+
+<p>①：先停止平衡器的工作，并检查没有chunk move动作，保证dump的时候没有进行数据迁移。</p>
+
+<p>mongos&gt; sh.stopBalancer()
+②：锁定数据库，保证数据没有写入：在各个分片上和配置服务器上执行。</p>
+
+<blockquote>
+  <p>db.fsyncLock()
+{
+    “info” : “now locked against writes, use db.fsyncUnlock() to unlock”,
+    “seeAlso” : “http://dochub.mongodb.org/core/fsynccommand”,
+    “ok” : 1
+}
+③：执行备份操作，备份各个分片服务器和配置服务器。</p>
+</blockquote>
+
+<p>mongodump -udba -p12345 -d dba_test –authenticationDatabase admin -o backup/
+④：解锁数据库，备份完成之后在分片和配置服务器上解锁数据库，允许修改。</p>
+
+<blockquote>
+  <p>db.fsyncUnlock()
+{ “ok” : 1, “info” : “unlock completed” }
+当数据库出现问题，需要还原的时候，需要还原各个分片和配置服务器，并且重启MongoDB实例。还原数据库需要做：</p>
+</blockquote>
+
+<p>①：还原各个分片和配置服务器。</p>
+
+<p>mongorestore –host=127.0.0.1 –port=27017 -udba -p12345 -d dba_test –authenticationDatabase admin –drop backup/dba_test
+②：重启各个实例</p>
+
+<p>为什么需要索引？
+当你抱怨MongoDB集合查询效率低的时候，可能你就需要考虑使用索引了，为了方便后续介绍，先科普下MongoDB里的索引机制（同样适用于其他的数据库比如mysql）。</p>
+
+<p>mongo-9552:PRIMARY&gt; db.person.find()
+{ “_id” : ObjectId(“571b5da31b0d530a03b3ce82”), “name” : “jack”, “age” : 19 }
+{ “_id” : ObjectId(“571b5dae1b0d530a03b3ce83”), “name” : “rose”, “age” : 20 }
+{ “_id” : ObjectId(“571b5db81b0d530a03b3ce84”), “name” : “jack”, “age” : 18 }
+{ “_id” : ObjectId(“571b5dc21b0d530a03b3ce85”), “name” : “tony”, “age” : 21 }
+{ “_id” : ObjectId(“571b5dc21b0d530a03b3ce86”), “name” : “adam”, “age” : 18 }
+当你往某各个集合插入多个文档后，每个文档在经过底层的存储引擎持久化后，会有一个位置信息，通过这个位置信息，就能从存储引擎里读出该文档。比如mmapv1引擎里，位置信息是『文件id + 文件内offset 』， 在wiredtiger存储引擎（一个KV存储引擎）里，位置信息是wiredtiger在存储文档时生成的一个key，通过这个key能访问到对应的文档；为方便介绍，统一用pos(position的缩写)来代表位置信息。</p>
+
+<p>比如上面的例子里，person集合里包含插入了4个文档，假设其存储后位置信息如下(为方便描述，文档省去_id字段)</p>
+
+<p>位置信息	文档
+pos1	{“name” : “jack”, “age” : 19 }
+pos2	{“name” : “rose”, “age” : 20 }
+pos3	{“name” : “jack”, “age” : 18 }
+pos4	{“name” : “tony”, “age” : 21}
+pos5	{“name” : “adam”, “age” : 18}
+假设现在有个查询 db.person.find( {age: 18} ), 查询所有年龄为18岁的人，这时需要遍历所有的文档（『全表扫描』），根据位置信息读出文档，对比age字段是否为18。当然如果只有4个文档，全表扫描的开销并不大，但如果集合文档数量到百万、甚至千万上亿的时候，对集合进行全表扫描开销是非常大的，一个查询耗费数十秒甚至几分钟都有可能。</p>
+
+<p>如果想加速 db.person.find( {age: 18} ），就可以考虑对person表的age字段建立索引。</p>
+
+<p>db.person.createIndex( {age: 1} )  // 按age字段创建升序索引
+建立索引后，MongoDB会额外存储一份按age字段升序排序的索引数据，索引结构类似如下，索引通常采用类似btree的结构持久化存储，以保证从索引里快速（O(logN)的时间复杂度）找出某个age值对应的位置信息，然后根据位置信息就能读取出对应的文档。</p>
+
+<p>AGE	位置信息
+18	pos3
+18	pos5
+19	pos1
+20	pos2
+21	pos4
+简单的说，索引就是将文档按照某个（或某些）字段顺序组织起来，以便能根据该字段高效的查询。有了索引，至少能优化如下场景的效率：</p>
+
+<p>查询，比如查询年龄为18的所有人
+更新/删除，将年龄为18的所有人的信息更新或删除，因为更新或删除时，需要根据条件先查询出所有符合条件的文档，所以本质上还是在优化查询
+排序，将所有人的信息按年龄排序，如果没有索引，需要全表扫描文档，然后再对扫描的结果进行排序
+众所周知，MongoDB默认会为插入的文档生成_id字段（如果应用本身没有指定该字段），_id是文档唯一的标识，为了保证能根据文档id快递查询文档，MongoDB默认会为集合创建_id字段的索引。</p>
+
+<p>mongo-9552:PRIMARY&gt; db.person.getIndexes() // 查询集合的索引信息
+[
+    {
+        “ns” : “test.person”,  // 集合名
+        “v” : 1,               // 索引版本
+        “key” : {              // 索引的字段及排序方向
+            “<em>id” : 1           // 根据_id字段升序索引
+        },
+        “name” : “_id</em>”        // 索引的名称
+    }
+]
+MongoDB索引类型
+MongoDB支持多种类型的索引，包括单字段索引、复合索引、多key索引、文本索引等，每种类型的索引有不同的使用场合。</p>
+
+<p>单字段索引 （Single Field Index）
+    db.person.createIndex( {age: 1} ) 
+上述语句针对age创建了单字段索引，其能加速对age字段的各种查询请求，是最常见的索引形式，MongoDB默认创建的id索引也是这种类型。</p>
+
+<p>{age: 1} 代表升序索引，也可以通过{age: -1}来指定降序索引，对于单字段索引，升序/降序效果是一样的。</p>
+
+<p>复合索引 (Compound Index)
+复合索引是Single Field Index的升级版本，它针对多个字段联合创建索引，先按第一个字段排序，第一个字段相同的文档按第二个字段排序，依次类推，如下针对age, name这2个字段创建一个复合索引。</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>db.person.createIndex( {age: 1, name: 1} )  上述索引对应的数据组织类似下表，与{age: 1}索引不同的时，当age字段相同时，在根据name字段进行排序，所以pos5对应的文档排在pos3之前。
+</code></pre></div></div>
+
+<p>AGE,NAME	位置信息
+18,adam	pos5
+18,jack	pos3
+19,jack	pos1
+20,rose	pos2
+21,tony	pos4
+复合索引能满足的查询场景比单字段索引更丰富，不光能满足多个字段组合起来的查询，比如db.person.find( {age： 18， name: “jack”} )，也能满足所以能匹配符合索引前缀的查询，这里{age: 1}即为{age: 1, name: 1}的前缀，所以类似db.person.find( {age： 18} )的查询也能通过该索引来加速；但db.person.find( {name: “jack”} )则无法使用该复合索引。如果经常需要根据『name字段』以及『name和age字段组合』来查询，则应该创建如下的复合索引</p>
+
+<p>db.person.createIndex( {name: 1, age: 1} ) 
+除了查询的需求能够影响索引的顺序，字段的值分布也是一个重要的考量因素，即使person集合所有的查询都是『name和age字段组合』（指定特定的name和age），字段的顺序也是有影响的。</p>
+
+<p>age字段的取值很有限，即拥有相同age字段的文档会有很多；而name字段的取值则丰富很多，拥有相同name字段的文档很少；显然先按name字段查找，再在相同name的文档里查找age字段更为高效。</p>
+
+<p>多key索引 （Multikey Index）
+当索引的字段为数组时，创建出的索引称为多key索引，多key索引会为数组的每个元素建立一条索引，比如person表加入一个habbit字段（数组）用于描述兴趣爱好，需要查询有相同兴趣爱好的人就可以利用habbit字段的多key索引。</p>
+
+<p>{“name” : “jack”, “age” : 19, habbit: [“football, runnning”]}
+db.person.createIndex( {habbit: 1} )  // 自动创建多key索引
+db.person.find( {habbit: “football”} )
+其他类型索引
+哈希索引（Hashed Index）是指按照某个字段的hash值来建立索引，目前主要用于MongoDB Sharded Cluster的Hash分片，hash索引只能满足字段完全匹配的查询，不能满足范围查询等。</p>
+
+<p>地理位置索引（Geospatial Index）能很好的解决O2O的应用场景，比如『查找附近的美食』、『查找某个区域内的车站』等。</p>
+
+<p>文本索引（Text Index）能解决快速文本查找的需求，比如有一个博客文章集合，需要根据博客的内容来快速查找，则可以针对博客内容建立文本索引。</p>
+
+<p>索引额外属性
+MongoDB除了支持多种不同类型的索引，还能对索引定制一些特殊的属性。</p>
+
+<p>唯一索引 (unique index)：保证索引对应的字段不会出现相同的值，比如_id索引就是唯一索引
+TTL索引：可以针对某个时间字段，指定文档的过期时间（经过指定时间后过期 或 在某个时间点过期）
+部分索引 (partial index): 只针对符合某个特定条件的文档建立索引，3.2版本才支持该特性
+稀疏索引(sparse index): 只针对存在索引字段的文档建立索引，可看做是部分索引的一种特殊情况
+索引优化
+db profiling
+MongoDB支持对DB的请求进行profiling，目前支持3种级别的profiling。</p>
+
+<p>0： 不开启profiling
+1： 将处理时间超过某个阈值(默认100ms)的请求都记录到DB下的system.profile集合 （类似于mysql、redis的slowlog）
+2： 将所有的请求都记录到DB下的system.profile集合（生产环境慎用）
+通常，生产环境建议使用1级别的profiling，并根据自身需求配置合理的阈值，用于监测慢请求的情况，并及时的做索引优化。</p>
+
+<p>如果能在集合创建的时候就能『根据业务查询需求决定应该创建哪些索引』，当然是最佳的选择；但由于业务需求多变，要根据实际情况不断的进行优化。索引并不是越多越好，集合的索引太多，会影响写入、更新的性能，每次写入都需要更新所有索引的数据；所以你system.profile里的慢请求可能是索引建立的不够导致，也可能是索引过多导致。</p>
+
+<p>查询计划
+索引已经建立了，但查询还是很慢怎么破？这时就得深入的分析下索引的使用情况了，可通过查看下详细的查询计划来决定如何优化。通过执行计划可以看出如下问题</p>
+
+<p>根据某个/些字段查询，但没有建立索引
+根据某个/些字段查询，但建立了多个索引，执行查询时没有使用预期的索引。
+建立索引前，db.person.find( {age： 18} )必须执行COLLSCAN，即全表扫描。</p>
+
+<p>mongo-9552:PRIMARY&gt; db.person.find({age: 18}).explain()
+{
+    “queryPlanner” : {
+        “plannerVersion” : 1,
+        “namespace” : “test.person”,
+        “indexFilterSet” : false,
+        “parsedQuery” : {
+            “age” : {
+                “$eq” : 18
+            }
+        },
+        “winningPlan” : {
+            “stage” : “COLLSCAN”,
+            “filter” : {
+                “age” : {
+                    “$eq” : 18
+                }
+            },
+            “direction” : “forward”
+        },
+        “rejectedPlans” : [ ]
+    },
+    “serverInfo” : {
+        “host” : “localhost”,
+        “port” : 9552,
+        “version” : “3.2.3”,
+        “gitVersion” : “b326ba837cf6f49d65c2f85e1b70f6f31ece7937”
+    },
+    “ok” : 1
+}
+建立索引后，通过查询计划可以看出，先进行[IXSCAN]((https://docs.mongodb.org/manual/reference/explain-results/#queryplanner)(从索引中查找)，然后FETCH，读取出满足条件的文档。</p>
+
+<p>mongo-9552:PRIMARY&gt; db.person.find({age: 18}).explain()
+{
+    “queryPlanner” : {
+        “plannerVersion” : 1,
+        “namespace” : “test.person”,
+        “indexFilterSet” : false,
+        “parsedQuery” : {
+            “age” : {
+                “$eq” : 18
+            }
+        },
+        “winningPlan” : {
+            “stage” : “FETCH”,
+            “inputStage” : {
+                “stage” : “IXSCAN”,
+                “keyPattern” : {
+                    “age” : 1
+                },
+                “indexName” : “age_1”,
+                “isMultiKey” : false,
+                “isUnique” : false,
+                “isSparse” : false,
+                “isPartial” : false,
+                “indexVersion” : 1,
+                “direction” : “forward”,
+                “indexBounds” : {
+                    “age” : [
+                        “[18.0, 18.0]”
+                    ]
+                }
+            }
+        },
+        “rejectedPlans” : [ ]
+    },
+    “serverInfo” : {
+        “host” : “localhost”,
+        “port” : 9552,
+        “version” : “3.2.3”,
+        “gitVersion” : “b326ba837cf6f49d65c2f85e1b70f6f31ece7937”
+    },
+    “ok” : 1
+}</p>
+
+<p>一、存储引擎（Storage）</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>mongodb 3.0默认存储引擎为MMAPV1，还有一个新引擎wiredTiger可选，或许可以提高一定的性能。
+
+mongodb中有多个databases，每个database可以创建多个collections，collection是底层数据分区（partition）的单位，每个collection都有多个底层的数据文件组成。（参见下文data files存储原理）
+
+ 
+
+wiredTiger引擎：3.0新增引擎，官方宣称在read、insert和复杂的update下具有更高的性能。所以后续版本，我们建议使用wiredTiger。所有的write请求都基于“文档级别”的lock，因此多个客户端可以同时更新一个colleciton中的不同文档，这种更细颗粒度的lock，可以支撑更高的读写负载和并发量。因为对于production环境，更多的CPU可以有效提升wireTiger的性能，因为它是的IO是多线程的。wiredTiger不像MMAPV1引擎那样尽可能的耗尽内存，它可以通过在配置文件中指定“cacheSizeGB”参数设定引擎使用的内存量，此内存用于缓存工作集数据（索引、namespace，未提交的write，query缓冲等）。
+
+journal就是一个预写事务日志，来确保数据的持久性，wiredTiger每隔60秒（默认）或者待写入的数据达到2G时，mongodb将对journal文件提交一个checkpoint（检测点，将内存中的数据变更flush到磁盘中的数据文件中，并做一个标记点，表示此前的数据表示已经持久存储在了数据文件中，此后的数据变更存在于内存和journal日志）。对于write操作，首先被持久写入journal，然后在内存中保存变更数据，条件满足后提交一个新的检测点，即检测点之前的数据只是在journal中持久存储，但并没有在mongodb的数据文件中持久化，延迟持久化可以提升磁盘效率，如果在提交checkpoint之前，mongodb异常退出，此后再次启动可以根据journal日志恢复数据。journal日志默认每个100毫秒同步磁盘一次，每100M数据生成一个新的journal文件，journal默认使用了snappy压缩，检测点创建后，此前的journal日志即可清除。mongod可以禁用journal，这在一定程度上可以降低它带来的开支；对于单点mongod，关闭journal可能会在异常关闭时丢失checkpoint之间的数据（那些尚未提交到磁盘数据文件的数据）；对于replica set架构，持久性的保证稍高，但仍然不能保证绝对的安全（比如replica set中所有节点几乎同时退出时）。
+
+
+
+ 
+
+MMAPv1引擎：mongodb原生的存储引擎，比较简单，直接使用系统级的内存映射文件机制（memory mapped files），一直是mongodb的默认存储引擎，对于insert、read和in-place update（update不导致文档的size变大）性能较高；不过MMAPV1在lock的并发级别上，支持到collection级别，所以对于同一个collection同时只能有一个write操作执行，这一点相对于wiredTiger而言，在write并发性上就稍弱一些。对于production环境而言，较大的内存可以使此引擎更加高效，有效减少“page fault”频率，但是因为其并发级别的限制，多核CPU并不能使其受益。此引擎将不会使用到swap空间，但是对于wiredTiger而言需要一定的swap空间。（核心：对于大文件MAP操作，比较忌讳的就是在文件的中间修改数据，而且导致文件长度增长，这会涉及到索引引用的大面积调整）
+
+ 
+
+为了确保数据的安全性，mongodb将所有的变更操作写入journal并间歇性的持久到磁盘上，对于实际数据文件将延迟写入，和wiredTiger一样journal也是用于数据恢复。所有的记录在磁盘上连续存储，当一个document尺寸变大时，mongodb需要重新分配一个新的记录（旧的record标记删除，新的记record在文件尾部重新分配空间），这意味着mongodb同时还需要更新此文档的索引（指向新的record的offset），与in-place update相比，将消耗更多的时间和存储开支。由此可见，如果你的mongodb的使用场景中有大量的这种update，那么或许MMAPv1引擎并不太适合，同时也反映出如果document没有索引，是无法保证document在read中的顺序（即自然顺序）。3.0之后，mongodb默认采用“Power of 2 Sized Allocations”，所以每个document对应的record将有实际数据和一些padding组成，这padding可以允许document的尺寸在update时适度的增长，以最小化重新分配record的可能性。此外重新分配空间，也会导致磁盘碎片（旧的record空间）。
+
+ 
+
+Power of 2 Sized Allocations：默认情况下，MMAPv1中空间分配使用此策略，每个document的size是2的次幂，比如32、64、128、256...2MB，如果文档尺寸大于2MB，则空间为2MB的倍数（2M,4M,6M等）。这种策略有2种优势，首先那些删除或者update变大而产生的磁盘碎片空间（尺寸变大，意味着开辟新空间存储此document，旧的空间被mark为deleted）可以被其他insert重用，再者padding可以允许文档尺寸有限度的增长，而无需每次update变大都重新分配空间。此外，mongodb还提供了一个可选的“No padding Allocation”策略（即按照实际数据尺寸分配空间），如果你确信数据绝大多数情况下都是insert、in-place update，极少的delete，此策略将可以有效的节约磁盘空间，看起来数据更加紧凑，磁盘利用率也更高。
+
+ 
+
+备注：mongodb 3.2+之后，默认的存储引擎为“wiredTiger”，大量优化了存储性能，建议升级到3.2+版本。
+</code></pre></div></div>
+
+<p>二、Capped Collections：一种特殊的collection，其尺寸大小是固定值，类似于一个可循环使用的buffer，如果空间被填满之后，新的插入将会覆盖最旧的文档，我们通常不会对Capped进行删除或者update操作，所以这种类型的collection能够支撑较高的write和read，通常情况下我们不需要对这种collection构建索引，因为insert是append（insert的数据保存是严格有序的）、read是iterator方式，几乎没有随机读；在replica set模式下，其oplog就是使用这种colleciton实现的。    Capped Collection的设计目的就是用来保存“最近的”一定尺寸的document。</p>
+
+<p>Java代码  收藏代码
+db.createCollection(“capped_collections”,new CreateCollectionOptions()<br />
+                .capped(true)<br />
+                .maxDocuments(6552350)<br />
+                .usePowerOf2Sizes(false).autoIndex(true));//不会涉及到更新，所以可以不用power of 2</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>Capped Collection在语义上，类似于“FIFO”队列，而且是有界队列。适用于数据缓存，消息类型的存储。Capped支持update，但是我们通常不建议，如果更新导致document的尺寸变大，操作将会失败，只能使用in-place update，而且还需要建立合适的索引。在capped中使用remove操作是允许的。autoIndex属性表示默认对_id字段建立索引，我们推荐这么做。在上文中我们提到了Tailable Cursor，就是为Capped而设计的，效果类似于“tail -f ”。
+</code></pre></div></div>
+
+<p>三、数据模型（Data Model）</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>上文已经描述过，mongodb是一个模式自由的NOSQL，不像其他RDBMS一样需要预先定义Schema而且所有的数据都“整齐划一”，mongodb的document是BSON格式，松散的，原则上说任何一个Colleciton都可以保存任意结构的document，甚至它们的格式千差万别，不过从应用角度考虑，包括业务数据分类和查询优化机制等，我们仍然建议每个colleciton中的document数据结构应该比较接近。
+
+对于有些update，比如对array新增元素等，会导致document尺寸的增加，无论任何存储系统包括MYSQL、Hbase等，对于这种情况都需要额外的考虑，这归结于磁盘空间的分配是连续的（连续意味着读取性能将更高，存储文件空间通常是预分配固定尺寸，我们需要尽可能的利用磁盘IO的这种优势）。对于MMAPV1引擎，如果文档尺寸超过了原分配的空间（上文提到Power of 2 Allocate），mongodb将会重新分配新的空间来保存整个文档（旧文档空间回收，可以被后续的insert重用）。
+
+ 
+
+document模型的设计与存储，需要兼顾应用的实际需要，否则可能会影响性能。mongodb支持内嵌document，即document中一个字段的值也是一个document，可以形成类似于RDBMS中的“one-to-one”、“one-to-many”，只需要对reference作为一个内嵌文档保存即可。这种情况就需要考虑mongodb存储引擎的机制了，如果你的内嵌文档（即reference文档）尺寸是动态的，比如一个user可以有多个card，因为card数量无法预估，这就会导致document的尺寸可能不断增加以至于超过“Power of 2 Allocate”，从而触发空间重新分配，带来性能开销，这种情况下，我们需要将内嵌文档单独保存到一个额外的collection中，作为一个或者多个document存储，比如把card列表保存在card collection中。“one-to-one”的情况也需要个别考虑，如果reference文档尺寸较小，可以内嵌，如果尺寸较大，建议单独存储。此外内嵌文档还有个优点就是write的原子性，如果使用reference的话，就无法保证了。
+
+ 
+
+索引：提高查询性能，默认情况下_id字段会被创建唯一索引；因为索引不仅需要占用大量内存而且也会占用磁盘，所以我们需要建立有限个索引，而且最好不要建立重复索引；每个索引需要8KB的空间，同时update、insert操作会导致索引的调整，会稍微影响write的性能，索引只能使read操作收益，所以读写比高的应用可以考虑建立索引。
+
+ 
+
+大集合拆分：比如一个用于存储log的collection，log分为有两种“dev”、“debug”，结果大致为{"log":"dev","content":"...."},{"log":"debug","content":"....."}。这两种日志的document个数比较接近，对于查询时，即使给log字段建立索引，这个索引也不是高效的，所以可以考虑将它们分别放在2个Collection中，比如：log_dev和log_debug。
+
+ 
+
+数据生命周期管理：mongodb提供了expire机制，即可以指定文档保存的时长，过期后自动删除，即TTL特性，这个特性在很多场合将是非常有用的，比如“验证码保留15分钟有效期”、“消息保存7天”等等，mongodb会启动一个后台线程来删除那些过期的document。需要对一个日期字段创建“TTL索引”，比如插入一个文档：{"check_code":"101010",$currentDate:{"created":true}}}，其中created字段默认值为系统时间Date；然后我们对created字段建立TTL索引：
+</code></pre></div></div>
+
+<p>Java代码  收藏代码
+collection.createIndex(new Document(“created”,1),new IndexOptions().expireAfter(15L,TimeUnit.MILLISECONDS));//15分钟<br />
+    我们向collection中insert文档时，created的时间为系统当前时间，其中在creatd字段上建立了“TTL”索引，索引TTL为15分钟，mongodb后台线程将会扫描并检测每条document的（created时间 + 15分钟）与当前时间比较，如果发现过期，则删除索引条目（连带删除document）。</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>某些情况下，我们可能需要实现“在某个指定的时刻过期”，我们只需要将上述文档和索引变通改造即可，即created指定为“目标时间”，expiredAfter指定为0。 
+</code></pre></div></div>
+
+<p>四、架构模式</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>Replica set：复制集，mongodb的架构方式之一 ，通常是三个对等的节点构成一个“复制集”集群，有“primary”和secondary等多中角色（稍后详细介绍），其中primary负责读写请求，secondary可以负责读请求，这有配置决定，其中secondary紧跟primary并应用write操作；如果primay失效，则集群进行“多数派”选举，选举出新的primary，即failover机制，即HA架构。复制集解决了单点故障问题，也是mongodb垂直扩展的最小部署单位，当然sharding cluster中每个shard节点也可以使用Replica set提高数据可用性。
+
+ 
+
+Sharding cluster：分片集群，数据水平扩展的手段之一；replica set这种架构的缺点就是“集群数据容量”受限于单个节点的磁盘大小，如果数据量不断增加，对它进行扩容将时非常苦难的事情，所以我们需要采用Sharding模式来解决这个问题。将整个collection的数据将根据sharding key被sharding到多个mongod节点上，即每个节点持有collection的一部分数据，这个集群持有全部数据，原则上sharding可以支撑数TB的数据。
+
+ 
+
+系统配置：1）建议mongodb部署在linux系统上，较高版本，选择合适的底层文件系统（ext4），开启合适的swap空间  2）无论是MMAPV1或者wiredTiger引擎，较大的内存总能带来直接收益。3）对数据存储文件关闭“atime”（文件每次access都会更改这个时间值，表示文件最近被访问的时间），可以提升文件访问效率。 4）ulimit参数调整，这个在基于网络IO或者磁盘IO操作的应用中，通常都会调整，上调系统允许打开的文件个数（ulimit -n 65535）。
+</code></pre></div></div>
+
+<p>五、数据文件存储原理（Data Files storage，MMAPV1引擎）</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>1、Data Files
+
+mongodb的数据将会保存在底层文件系统中，比如我们dbpath设定为“/data/db”目录，我们创建一个database为“test”，collection为“sample”，然后在此collection中插入数条documents。我们查看dbpath下生成的文件列表：
+</code></pre></div></div>
+
+<p>Java代码  收藏代码</p>
+<blockquote>
+  <p>ls -lh<br />
+-rw——-  1 mongo  mongo    16M 11  6 17:24 test.0<br />
+-rw——-  1 mongo  mongo    32M 11  6 17:24 test.1<br />
+-rw——-  1 mongo  mongo    64M 11  6 17:24 test.2<br />
+-rw——-  1 mongo  mongo   128M 11  6 17:24 test.3<br />
+-rw——-  1 mongo  mongo   256M 11  6 17:24 test.4<br />
+-rw——-  1 mongo  mongo   512M 11  6 17:24 test.5<br />
+-rw——-  1 mongo  mongo   512M 11  6 17:24 test.6<br />
+-rw——-  1 mongo  mongo    16M 11  6 17:24 test.ns</p>
+</blockquote>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>可以看到test这个数据库目前已经有6个数据文件（data files），每个文件以“database”的名字 + 序列数字组成，序列号从0开始，逐个递增，数据文件从16M开始，每次扩张一倍（16M、32M、64M、128M...），在默认情况下单个data file的最大尺寸为2G，如果设置了smallFiles属性（配置文件中）则最大限定为512M；mongodb中每个database最多支持16000个数据文件，即约32T，如果设置了smallFiles则单个database的最大数据量为8T。如果你的database中的数据文件很多，可以使用directoryPerDB配置项将每个db的数据文件放置在各自的目录中。当最后一个data file有数据写入后，mongodb将会立即预分配下一个data file，可以通过“--nopreallocate”启动命令参数来关闭此选项。
+
+ 
+
+一个database中所有的collections以及索引信息会分散存储在多个数据文件中，即mongodb并没有像SQL数据库那样，每个表的数据、索引分别存储；数据分块的单位为extent（范围，区域），即一个data file中有多个extents组成，extent中可以保存collection数据或者indexes数据，一个extent只能保存同一个collection数据，不同的collections数据分布在不同的extents中，indexes数据也保存在各自的extents中；最终，一个collection有一个或者多个extents构成，最小size为8K，最大可以为2G，依次增大；它们分散在多个data files中。对于一个data file而言，可能包含多个collection的数据，即有多个不同collections的extents、index extents混合构成。每个extent包含多条documents（或者index entries），每个extent的大小可能不相等，但一个extent不会跨越2个data files。
+
+ 
+
+
+
+ 
+
+有人肯定疑问：一个collection中有哪些extents，这种信息mongodb存在哪里？在每个database的namespace文件中，比如test.ns文件中，每个collection只保存了第一个extent的位置信息，并不保存所有的extents列表，但每个extent都维护者一个链表关系，即每个extent都在其header信息中记录了此extent的上一个、下一个extent的位置信息，这样当对此collection进行scan操作时（比如全表扫描），可以提供很大的便利性。
+
+ 
+
+我们可以通过db.stats()指令查看当前database中extents的信息：
+</code></pre></div></div>
+
+<p>Java代码  收藏代码</p>
+<blockquote>
+  <p>use test<br />
+switched to db test<br />
+db.stats();<br />
+{<br />
+    “db” : “test”,<br />
+    “collections” : 3,  ##collection的个数<br />
+    “objects” : 1000006, ##documents总条数<br />
+    “avgObjSize” : 495.9974400153599, ##record的平均大小，单位byte<br />
+    “dataSize” : 496000416, ##document所占空间的总量<br />
+    “storageSize” : 629649408, ##<br />
+    “numExtents” : 18,  ##extents个数<br />
+    “indexes” : 2,<br />
+    “indexSize” : 108282944,<br />
+    “fileSize” : 1006632960,<br />
+    “nsSizeMB” : 16, ##namespace文件大小<br />
+    “extentFreeList” : {   ##尚未使用（已分配尚未使用、已删除但尚未被重用）的extent列表<br />
+        “num” : 0,<br />
+        “totalSize” : 0<br />
+    },<br />
+    “dataFileVersion” : {<br />
+        “major” : 4,<br />
+        “minor” : 22<br />
+    },<br />
+    “ok” : 1<br />
+}<br />
+    列表信息中有几个字段简单介绍一下：</p>
+</blockquote>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>1） dataSize：documents所占的空间总量，mongodb将会为每个document分配一定空间用于保存数据，每个document所占空间包括“文档实际大小” + “padding”，对于MMAPV1引擎，mongodb默认采用了“Power of 2 Sized Allocations”策略，这也意味着通常会有padding，不过如果你的document不会被update（或者update为in-place方式，不会导致文档尺寸变大），可以在在createCollection是指定noPadding属性为true，这样dataSize的大小就是documents实际大小；当documents被删除后，将导致dataSize减小；不过如果在原有document的空间内（包括其padding空间）update（或者replace），则不会导致dataSize的变大，因为mongodb并没有分配任何新的document空间。
+
+2）storageSize：所有collection的documents占用总空间，包括那些已经删除的documents所占的空间，为存储documents的extents所占空间总和。文档的删除或者收缩不会导致storageSize变小。
+
+3）indexSize：所用collection的索引数据的大小，为存储indexes的extents所占空间的总和。
+
+4）fileSize：为底层所有data files的大小总和，但不包括namespace文件。为storageSize、indexSize、以及一些尚未使用的空间等等。当删除database、collections时会导致此值变小。
+
+ 
+
+此外，如果你想查看一个collection中extents的分配情况，可以使用db.&lt;collection名称&gt;.stats()，结构与上述类似；如果你希望更细致的了解collection中extents的全部信息，则可以使用db.&lt;collection名称&gt;.validate()，此方法接收一个boolean值，表示是否查看明细，这个指令会scan全部的data files，因此比较耗时：
+</code></pre></div></div>
+
+<p>Java代码  收藏代码</p>
+<blockquote>
+  <p>db.sample.validate(true);<br />
+{<br />
+    “ns” : “test.sample”,<br />
+    “datasize” : 496000000,<br />
+    “nrecords” : 1000000,<br />
+    “lastExtentSize” : 168742912,<br />
+    “firstExtent” : “0:5000 ns:test.sample”,<br />
+    “lastExtent” : “3:a05f000 ns:test.sample”,<br />
+    “extentCount” : 16,<br />
+    “extents” : [<br />
+        {<br />
+            “loc” : “0:5000”,<br />
+            “xnext” : “0:49000”,<br />
+            “xprev” : “null”,<br />
+            “nsdiag” : “test.sample”,<br />
+            “size” : 8192,<br />
+            “firstRecord” : “0:50b0”,<br />
+            “lastRecord” : “0:6cb0”<br />
+        },<br />
+        …<br />
+        ]<br />
+        …<br />
+}<br />
+    可以看到extents在逻辑上是链表形式，以及每个extent的数据量、以及所在data file的offset位置。具体参见【validate方法】</p>
+</blockquote>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>从上文中我们已经得知，删除document会导致磁盘碎片，有些update也会导致磁盘碎片，比如update导致文档尺寸变大，进而超过原来分配的空间；当有新的insert操作时，mongodb会检测现有的extents中是否合适的碎片空间可以被重用，如果有，则重用这些fragment，否则分配新的存储空间。磁盘碎片，对write操作有一定的性能影响，而且会导致磁盘空间浪费；如果你需要删除某个collection中大部分数据，则可以考虑将有效数据先转存到新的collection，然后直接drop()原有的collection。或者使用db.runCommand({compact: '&lt;collection&gt;'})。
+
+如果你的database已经运行一段时间，数据已经有很大的磁盘碎片（storageSize与dataSize比较），可以通过mongodump将指定database的所有数据导出，然后将原有的db删除，再通过mongorestore指令将数据重新导入。（同compact，这种操作需要停机维护）
+
+ 
+
+mongod中还有2个默认的database，系统级的，“admin”和“local”；它们的存储原理同上，其中“admin”用于存储“用户授权信息”，比如每个database中用户的role、权限等；“local”即为本地数据库，我们常说的oplog（replication架构中使用，类似与binlog）即保存在此数据库中。
+
+ 
+
+2、Namespace文件
+
+对于namespace文件，比如“test.ns”文件，默认大小为16M，此文件中主要用于保存“collection”、index的命名信息，比如collection的“属性”信息、每个索引的属性类型等，如果你的database中需要存储大量的collection（比如每一小时生成一个collection，在数据分析应用中），那么我们可以通过配置文件“nsSize”选项来指定。参见【mongodb配置文件】
+
+ 
+
+3、journal文件
+
+journal日志为mongodb提供了数据保障能力，它本质上与mysql binlog没有太大区别，用于当mongodb异常crash后，重启时进行数据恢复；这归结于mongodb的数据持久写入磁盘是滞后的。默认情况下，“journal”特性是开启的，特别在production环境中，我们没有理由来关闭它。（除非，数据丢失对应用而言，是无关紧要的）
+
+ 
+
+一个mongodb实例中所有的databases共享journal文件。
+
+ 
+
+对于write操作而言，首先写入journal日志，然后将数据在内存中修改（mmap），此后后台线程间歇性的将内存中变更的数据flush到底层的data files中，时间间隔为60秒（参见配置项“syncPeriodSecs”）；write操作在journal文件中是有序的，为了提升性能，write将会首先写入journal日志的内存buffer中，当buffer数据达到100M或者每隔100毫秒，buffer中的数据将会flush到磁盘中的journal文件中；如果mongodb异常退出，将可能导致最多100M数据或者最近100ms内的数据丢失，flush磁盘的时间间隔有配置项“commitIntervalMs”决定，默认为100毫秒。mongodb之所以不能对每个write都将journal同步磁盘，这也是对性能的考虑，mysql的binlog也采用了类似的权衡方式。开启journal日志功能，将会导致write性能有所降低，可能降低5~30%，因为它直接加剧了磁盘的写入负载，我们可以将journal日志单独放置在其他磁盘驱动器中来提高写入并发能力（与data files分别使用不同的磁盘驱动器）。
+
+ 
+
+如果你希望数据尽可能的不丢失，可以考虑：1）减小commitIntervalMs的值 2）每个write指定“write concern”中指定“j”参数为true  3）最佳手段就是采用“replica set”架构模式，通过数据备份方式解决，同时还需要在“write concern”中指定“w”选项，且保障级别不低于“majority”。【参见mongodb复制集】最终我们需要在“写入性能”和“数据一致性”两个方面权衡，即CAP理论。
+
+ 
+
+根据write并发量，journal日志文件为1G，如果指定了smallFiles配置项，则最大为128M，和data files一样journal文件也采用了“preallocated”方式，journal日志保存在dbpath下“journal”子目录中，一般会有三个journal文件，每个journal文件格式类似于“j._&lt;序列数字&gt;”。并不是每次buffer flush都生成一个新的journal日志，而是当前journal文件即将满时会预创建一个新的文件，journal文件中保存了write操作的记录，每条记录中包含write操作内容之外，还包含一个“lsn”（last sequence number），表示此记录的ID；此外我们会发现在journal目录下，还有一个“lsn”文件，这个文件非常小，只保存了一个数字，当write变更的数据被flush到磁盘中的data files后，也意味着这些数据已经持久化了，那么它们在“异常恢复”时也不需要了，那么其对应的journal日志将可以删除，“lsn”文件中记录的就是write持久化的最后一个journal记录的ID，此ID之前的write操作已经被持久写入data files，此ID之前的journal在“异常恢复”时则不需要关注；如果某个journal文件中最大 ID小于“lsn”，则此journal可以被删除或者重用。
+</code></pre></div></div>
+
+:ET

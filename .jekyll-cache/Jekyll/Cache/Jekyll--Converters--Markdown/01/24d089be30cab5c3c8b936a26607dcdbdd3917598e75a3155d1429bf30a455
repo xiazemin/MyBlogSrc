@@ -1,0 +1,186 @@
+I"I<p>https://www.pixelstech.net/article/1584241521-Understand-unsafe-in-GoLang
+before going to understand unsafe package in GoLang, the first thing needs to talk about is the pointer in GoLang. If you have a background of C language, you must know what pointer means and its usage. With pointer, you are free to operate any data at memory level which means you have great power, but this means that you have great responsibility as well. That’s why it might be considered unsafe in lots of cases.
+<!-- more -->
+ake a look at a simple example of doubling an integer.</p>
+
+<p>package main</p>
+
+<p>import “fmt”</p>
+
+<p>func double(x int) {
+    x += x
+}</p>
+
+<p>func main() {
+    var a = 3
+    double(a)
+    fmt.Println(a) // 3
+}
+The above code will not achieve the goal of doubling variable a.  The reason is that GoLang function passes parameter by value, when a is passed to double(), only a copy of its value is passed, the address of a is not passed. Hence when doubling it, it doubles its copy instead of a itself. But the value can be doubled as expected if now a pointer is passed.</p>
+
+<p>package main</p>
+
+<p>import “fmt”</p>
+
+<p>func double(x *int) {
+    *x += *x
+    x = nil
+}</p>
+
+<p>func main() {
+    var a = 3
+    double(&amp;a)
+    fmt.Println(a) // 6</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>p := &amp;a
+double(p)
+fmt.Println(a, p == nil) // 12 false } Compared to pointer in C, pointer in GoLang comes with more restrictions. They cannot be used freely as C pointer but can still provide necessary flexibilities for most developers to use. The major restrictions of pointer in GoLang are:
+</code></pre></div></div>
+
+<p>No mathematic operations can be performed on pointer
+It means that a pointer cannot have operations like addition/subtraction as in C.</p>
+
+<p>a := 5
+p := &amp;a</p>
+
+<p>p++
+p = &amp;a + 3
+The above code cannot be compiled as it will throw invalid operation error on p++.</p>
+
+<p>Cannot convert between different types of pointer
+Two different types of pointer cannot be converted between each other. i.e, cannot convert an *int to a *float64 pointer.</p>
+
+<p>func main() {
+    a := int(100)
+    var f *float64</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>f = &amp;a } Above code will throw compilation error:
+</code></pre></div></div>
+
+<p>cannot use &amp;a (type *int) as type *float64 in assignment
+Different types of pointer cannot be compared with == or !=
+Two pointers can be compared only when the two pointers have the same type or can be converted to each other. Otherwise they cannot be compared with == or !=.</p>
+
+<p>Cannot assign one type of pointer to another type of pointer
+Similar to reason in above restriction.</p>
+
+<p>Now we have talked about pointer a bit. Let’s move on to GoLang unsafe. The pointer talked about above is considered as type safe pointer. There is also type unsafe pointer, it is unsafe.Pointer residing in unsafe package.</p>
+
+<p>unsafe package is normally used during code compilation. As its name suggests, it is not safe, hence it’s not recommended to use by GoLang creators. But it does provide some capability which can help improve code efficiency a lot though it brings more danger.  It can be used to operate on memory directly and at the same time it can bypass type system check which was designed to safe guard the type safety in GoLang but also bring inefficiency.</p>
+
+<p>In unsafe package, there is a Pointer defined.</p>
+
+<p>type ArbitraryType int
+type Pointer <em>ArbitraryType
+This is similar to void</em> in C. Also three additional functions are defined.</p>
+
+<p>func Sizeof(x ArbitraryType) uintptr
+func Offsetof(x ArbitraryType) uintptr
+func Alignof(x ArbitraryType) uintptr
+Sizeof returned the number of bytes x takes, it doesn’t count the actual number of bytes its content takes. 
+Offsetof returns the position where one member of a struct within the struct away from the beginning position of the struct
+Alignof returns m which means the number of bytes which can be divided when align the memory in the struct.
+All return type of above functions are uintptr, it can be converted to unsafe.Pointer and vice versa.</p>
+
+<p>unsafe package provide two important features:</p>
+
+<p>Any pointer can be converted to unsafe.Pointer and vice versa
+uintptr can be converted to unsafe.Pointer and vice versa</p>
+
+<p>No mathematic operation can be performed on pointer directly, however mathematic operation can be performed on uintptr. Hence if want to perform mathematic operation on pointer, can first convert it to uintptr and perform mathematic operation and convert it back to pointer.</p>
+
+<p>After knowing this, we would show some use cases of unsafe.</p>
+
+<p>Get or update value of unexported property in struct
+With Offsetof(), the position of each member in a struct can be found out and their memory can be accessed and updated accordingly.</p>
+
+<p>package main</p>
+
+<p>import (
+    “fmt”
+    “unsafe”
+)</p>
+
+<p>type Programmer struct {
+    name string
+    language string
+}</p>
+
+<p>func main() {
+    p := Programmer{“stefno”, “go”}
+    fmt.Println(p)</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>name := (*string)(unsafe.Pointer(&amp;p))
+*name = "qcrao"
+
+lang := (*string)(unsafe.Pointer(uintptr(unsafe.Pointer(&amp;p)) + unsafe.Offsetof(p.language)))
+*lang = "Golang"
+
+fmt.Println(p) } The output will be:
+</code></pre></div></div>
+
+<p>{stefno go}
+{qcrao Golang}
+Now if the struct is referenced in another package, unsafe.Pointer can be used to access its unexported values using Sizeof() to get the member size.</p>
+
+<p>For example, if the struct Programmer is defined in package a:</p>
+
+<p>package a</p>
+
+<p>type Programmer struct {
+    name string
+    age int
+    language string
+}
+And all three members are unexported and in another package can access and update its members using unsafe.</p>
+
+<p>func main() {
+    p := a.Programmer{“stefno”, 18, “go”}
+    fmt.Println(p)</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>lang := (*string)(unsafe.Pointer(uintptr(unsafe.Pointer(&amp;p)) + unsafe.Sizeof(int(0)) + unsafe.Sizeof(string(""))))
+*lang = "Golang"
+
+fmt.Println(p) } Output
+</code></pre></div></div>
+
+<p>{stefno 18 go}
+{stefno 18 Golang}
+Convert string to slice
+A typical example is to convert string to bytes slice, but the requirement is zero-copy which means there shouldn’t be a new copy of original data created. To do this, let’s look at the underlying data structure of string and slice.</p>
+
+<p>type StringHeader struct {
+    Data uintptr
+    Len  int
+}</p>
+
+<p>type SliceHeader struct {
+    Data uintptr
+    Len  int
+    Cap  int
+}
+Here the Data is both an uintptr, basically what needs to be done is to just let both data type share the same underlying []byte array.</p>
+
+<p>func string2bytes(s string) []byte {
+    stringHeader := (*reflect.StringHeader)(unsafe.Pointer(&amp;s))</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>bh := reflect.SliceHeader{
+    Data: stringHeader.Data,
+    Len:  stringHeader.Len,
+    Cap:  stringHeader.Len,
+}
+
+return *(*[]byte)(unsafe.Pointer(&amp;bh)) }
+</code></pre></div></div>
+
+<p>func bytes2string(b []byte) string{
+    sliceHeader := (*reflect.SliceHeader)(unsafe.Pointer(&amp;b))</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>sh := reflect.StringHeader{
+    Data: sliceHeader.Data,
+    Len:  sliceHeader.Len,
+}
+
+return *(*string)(unsafe.Pointer(&amp;sh)) }
+</code></pre></div></div>
+:ET

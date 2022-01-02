@@ -1,0 +1,91 @@
+I"�<p>exit命令用于退出当前shell，在shell脚本中可以终止当前脚本执行。</p>
+
+<p>常用参数
+格式：exit n</p>
+
+<p>退出。设置退出码为n。（Cause the shell to exit with a status of n.）</p>
+
+<p>格式：exit</p>
+
+<p>退出。退出码不变，即为最后一个命令的退出码。（If n is omitted, the exit status is that of the  last  command executed. ）</p>
+
+<p>格式：$?</p>
+
+<p>上一个命令的退出码。</p>
+
+<p>格式：trap “commands” EXIT</p>
+
+<p>退出时执行commands指定的命令。（ A trap on EXIT is executed before the shell terminates.）</p>
+
+<p>退出码（exit status，或exit code）的约定：</p>
+
+<p>0表示成功（Zero - Success）</p>
+
+<p>非0表示失败（Non-Zero  - Failure）</p>
+
+<p>2表示用法不当（Incorrect Usage）</p>
+
+<p>127表示命令没有找到（Command Not Found）</p>
+
+<p>126表示不是可执行的（Not an executable）</p>
+
+<blockquote>
+  <p>=128 信号产生</p>
+</blockquote>
+
+<p>man 3 exit 写道
+The C standard specifies two constants, EXIT_SUCCESS and EXIT_FAILURE, that may be passed to exit() to indicate
+successful or unsuccessful termination, respectively.</p>
+
+<p>以下摘自/usr/include/stdlib.h</p>
+
+<p>C代码  收藏代码
+#define EXIT_FAILURE    1       /* Failing exit status.  <em>/<br />
+#define EXIT_SUCCESS    0       /</em> Successful exit status.  */</p>
+
+<p>BSD试图对退出码标准化。</p>
+
+<p>man 3 exit 写道
+BSD has attempted to standardize exit codes; see the file <sysexits.h>.</sysexits.h></p>
+
+<p>以下摘自/usr/include/sysexits.h</p>
+
+<p>C代码  收藏代码
+#define EX_OK           0       /* successful termination */</p>
+
+<p>#define EX__BASE        64      /* base value for error messages */</p>
+
+<p>#define EX_USAGE        64      /* command line usage error <em>/<br />
+#define EX_DATAERR      65      /</em> data format error <em>/<br />
+#define EX_NOINPUT      66      /</em> cannot open input <em>/<br />
+#define EX_NOUSER       67      /</em> addressee unknown <em>/<br />
+#define EX_NOHOST       68      /</em> host name unknown <em>/<br />
+#define EX_UNAVAILABLE  69      /</em> service unavailable <em>/<br />
+#define EX_SOFTWARE     70      /</em> internal software error <em>/<br />
+#define EX_OSERR        71      /</em> system error (e.g., can’t fork) <em>/<br />
+#define EX_OSFILE       72      /</em> critical OS file missing <em>/<br />
+#define EX_CANTCREAT    73      /</em> can’t create (user) output file <em>/<br />
+#define EX_IOERR        74      /</em> input/output error <em>/<br />
+#define EX_TEMPFAIL     75      /</em> temp failure; user is invited to retry <em>/<br />
+#define EX_PROTOCOL     76      /</em> remote error in protocol <em>/<br />
+#define EX_NOPERM       77      /</em> permission denied <em>/<br />
+#define EX_CONFIG       78      /</em> configuration error */</p>
+
+<p>#define EX__MAX 78      /* maximum listed value */</p>
+
+<!-- more -->
+<p>退出码的值	含义	例子	注释
+1	通用错误	let “var1 = 1/0”	各种各样的错误都可能使用这个退出码, 比如”除0错误”
+2	shell内建命令使用错误(Bash文档上有说明)	 	很少看到, 通常情况下退出码都为1
+126	命令调用不能执行	 	程序或命令的权限是不可执行的
+127	“command not found”	 	估计是$PATH不对, 或者是拼写错误
+128	exit 的参数错误	exit 3.14159	exit只能以整数作为参数, 范围是0 - 255(见脚注)
+128+n	信号”n”的致命错误	kill -9 脚本的$PPID	$? 返回137(128 + 9)
+130	用Control-C来结束脚本	 	Control-C是信号2的致命错误, (130 = 128 + 2, 见上边)
+255*	超出范围的退出状态	exit -1	exit命令只能够接受范围是0 - 255的整数作为参数
+通过上面的表, 我们了解到, 退出码1 - 2, 126 - 165, 和255 [1] 都具有特殊的含义, 因此应该避免使用用户指定的退出参数. 如果脚本使用exit 127作为退出语句, 那么可能就会在故障诊断的时候产生混淆(如何判断这是由”command not found”引起的, 还是由用户定义引起的?). 然而, 许多脚本使用exit 1作为通用的返回错误值. 因为退出码1能够表示的错误太多了, 不过这么做, 对于调试来说, 也起不到任何帮助的作用.</p>
+
+<p>其实早就有人对退出状态值进行了系统的分类(请参考/usr/include/sysexits.h), 不过这个文件是为C/C++程序员准备的. 其实shell脚本也需要这样一个类似的标准. 所以本文作者呼吁限制使用用户定义的退出码, 尤其是范围64 - 113(还有0, 表示成功), 这么做, 就可以和C/C++标准保持一致. 这样我们就有了50个可用的退出码, 而且非常便于故障诊断.
+只有在Bash或sh提示符下, 当shell脚本退出后, 在命令行上使用$?才会得到与上表相一致的结果. 在某些情况下, 运行C-shell或者tcsh可能会给出不同的值.
+超出范围的退出值可能会产生意想不到的退出码. 如果退出值比255大, 那么退出码将会取256的模. 举个例子, exit 3809的退出码将是225(3809 % 256 = 225).</p>
+:ET

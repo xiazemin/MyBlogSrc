@@ -1,0 +1,114 @@
+I"�<p>Go环境搭建
+root账户
+下载Golang
+[root@infra2-test-k8s /]# cd /usr/local/</p>
+
+<p>[root@infra2-test-k8s local]# wget https://dl.google.com/go/go1.14.4.linux-amd64.tar.gz</p>
+
+<p>[root@infra2-test-k8s local]# tar -xzvf go1.14.4.linux-amd64.tar.gz 
+创建Go目录
+[root@infra2-test-k8s local]# cd /</p>
+
+<p>[root@infra2-test-k8s /]# mkdir go
+配置环境变量并设置代理
+[root@infra2-test-k8s /]# vim /etc/profile</p>
+
+<h1 id="添加以下内容">添加以下内容：</h1>
+<p>export GOROOT=/usr/local/go
+export PATH=$PATH:$GOROOT/bin
+export GOPATH=/go
+export GO111MODULE=auto
+export GOPROXY=https://goproxy.cn,direct</p>
+
+<h1 id="使配置文件生效">使配置文件生效</h1>
+<p>[root@infra2-test-k8s /]# source /etc/profile</p>
+
+<h1 id="校验">校验</h1>
+<p>[root@infra2-test-k8s /]# go version
+go version go1.14.4 linux/amd64
+[root@infra2-test-k8s /]# go env
+<!-- more -->
+Jenkins配置Golang环境
+下载Go插件
+在插件管理的可选插件中搜索Go然后点击直接安装，安装完毕之后需要重启jenkins。
+file</p>
+
+<p>配置Go环境
+系统管理&gt;全局工具配置&gt;Go&gt;Go安装
+去掉自动安装的勾选，然后别名：go1.14.4，安装目录：/usr/local/go
+file
+如果出现以下问题：</p>
+
+<p>go: command not found
+解决办法：</p>
+
+<p>[root@infra2-test-k8s bin]# ln -s /usr/local/go/bin/go /usr/bin/
+还不行的话则尝试将环境变量配置到jenkins中：</p>
+
+<p>GOROOT=/usr/local/go
+PATH=/sbin:/usr/sbin:/bin:/usr/bin:/usr/local/sbin:/usr/local/jdk1.8.0_231/bin:/opt/apache-maven-3.6.3/bin:/usr/local/go/bin
+GOPATH=/go
+GO111MODULE=on
+GOPROXY=https://goproxy.cn</p>
+
+<p>路径：系统管理&gt;系统配置&gt;环境变量
+file</p>
+
+<p>Dockerfile
+Dockerfile</p>
+
+<p>FROM docker.io/centos:7</p>
+
+<p>ENV PROJECT_DIR=/opt/docker
+ENV TZ=Asia/Shanghai
+WORKDIR $PROJECT_DIR</p>
+
+<p>COPY src/dataservice/dataservice $PROJECT_DIR/goapp
+COPY src/dataservice/ipipfree.ipdb $PROJECT_DIR/ipipfree.ipdb
+COPY src/dataservice/ds.cnf $PROJECT_DIR/ds.cnf
+COPY src/dataservice/start.sh $PROJECT_DIR/start.sh</p>
+
+<p>RUN mkdir /opt/logs</p>
+
+<p>RUN chown -R daemon:daemon $PROJECT_DIR
+RUN chown -R daemon:daemon /opt/logs</p>
+
+<p>EXPOSE 8080
+USER daemon</p>
+
+<p>ENTRYPOINT [“sh”, “/opt/docker/start.sh”, “test”]
+start.sh：</p>
+
+<p>#!/bin/bash</p>
+
+<p>if [[ $1 == ‘prod’ ]]
+then
+   sed -i “s/env=.<em>/env=DS_ONLINE/” ds.cnf
+else
+   sed -i “s/env=.</em>/env=DS_DEV/” ds.cnf
+fi</p>
+
+<p>echo “启动应用”</p>
+
+<p>./goapp &gt; ./nohup.out
+build.sh</p>
+
+<p>#!/bin/sh
+cd src/dataservice/
+pwd
+CGO_ENABLED=0  GOOS=linux  GOARCH=amd64 go build -a dataservice.go
+因为项目结构是：</p>
+
+<p>dataservice
+├── pkg
+├── build.sh
+└── src
+    ├── dataservice
+    │   └── dataservice.go
+    │   └── start.sh
+    │   └── ds.cnf
+    └── go.mod
+并且使用了go modle，如果直接build src/dataservice/dataservice.go文件的话会报错，提示找不到依赖的包，jenkins pipeline又不支持cd命令，进不了src/dataservice/目录，只能想了个折中的办法，使用build.sh脚本执行打包命令。</p>
+
+<p>https://www.lifengdi.com/archives/article/1966</p>
+:ET

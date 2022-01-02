@@ -1,0 +1,124 @@
+I"d"<p>Thrift定义一套IDL（Interface Definition Language）用于描述接口，通常后缀名为.thrift，通过thrift程序把.thrift文件导出成各种不一样的代码的协议定义。除此之外，Thrift自定了一套C/S交互的框架，帮助开发者免去人工解包/打包协议的工作。下面会按文件从里到外仔仔细细地分析Thrift整个框架体系。</p>
+
+<p>　　Thrift定义的数据没有构造函数，导致有些情况下不方便。无法定义list成员变量，有些情况下也很不方便。C++ coder的硬伤。
+<!-- more -->
+[Common]</p>
+
+<p>　　　公共文件放置于根目录下，下面一一介绍。</p>
+
+<p>　　1、config.h：此文件是thrift的configure脚本检测出的你的操作系统环境头文件。此文件为configure脚本生成。是一堆宏命令，例如可能有个宏，如果有某个头文件则定义为1，否则为0，以此来提供代码中感知开发者操作系统环境的能力。</p>
+
+<p>　　2、Thrift.h、Thrift.cpp：此文件提供2个类，TOutput、TException。TOutput用于输出，默认输出到stderr，提供了print，()，perror()三个函数用于输出，有一个全局变量GlobalOutput，其它地方的输出都通过此变量控制。TException继承于std::exception，提供what方法。</p>
+
+<p>　　3、TProcessor.h：此文件为特定功能类，只因此类功能只有1个文件，所以放在在根目录下。此类提供process函数接口，一个虚函数是用于开发者继承，另一个提供一个入口。构造函数为protected，所以显示不能生成此类的的实例，只能生成此类子类的实例。Auto-Gen的processor会把调用dispatch到相应的service接口。</p>
+
+<p>　　4、TLogging.h：此文件提供各种log宏，大至分3类，debug、log、erro，但是与TOutput无关。</p>
+
+<p>　　5、TApplicationException.h/.cpp：此文件类为继承于TException。提供了type字段，type用于分类错误类型。此类提供了对protocol的write和read的支持，即提供了RPC能力。</p>
+
+<p>　  6、TReflectionLocal.h：暂未知，后续补充。</p>
+
+<p>【protocol】</p>
+
+<p>　　1、TProtocol.h：定义到协议类TProtocol和TProtocolFactory基类，这2个类本身无作用，是个基类，提供操作协议的统一接口。</p>
+
+<p>　　2、TProtocolException.h：和TApplicationException类似，继承于TException。提供了TProtocolExceptionType字段，以分类protocol错误类型。</p>
+
+<p>　　3、TOneWayProtocol.h：内含TWriteOnlyProtocol、TReadOnlyProtocol，均继承于TProtocol。TWriteOnlyProtocl把所有的read方法都抛出异常，TReadOnlyProtocl同理。</p>
+
+<p>　　4、TProtocolTap.h：内含TProtocolTap类，此类实现监听功能，即若B对象需要监听A对象，则生成TProtocolTap对象，以A、B为参数，以后要读A的时候，通过TProtocolTap对象读取，TProtocolTap会把读取请求传递给A，拿到结果后把结果写入到B。即完成B对A的监听。</p>
+
+<p>　　5、TBase64Utils.h/.cpp：内含base64方法。</p>
+
+<p>　　6、TBinaryProtocol.h/.cpp：把数据类型的内存二进制直接写入到transport里面。</p>
+
+<p>　　7、TJSONProtocol.h/.cpp：把数据以JSON的形式写入到transport，例如一个字符串会加上”“。</p>
+
+<p>　　8、TCompactProtocol.h/.cpp：把根据thrift-110，实现数据的紧缩协议。</p>
+
+<p>　　9、TDebugProtocol、TDenseProtocol：thrift0.5版本中这2个类正在实验中，推荐不用。</p>
+
+<p>　　So，开发者直接使用的高频protol内容为：TBinaryProtocol、TJSONProtocol、TProtocolTap、TBase64Utils。</p>
+
+<p>【transport】</p>
+
+<p>　　1、TTransport.h：Transport基类，提供的接口大致可按如下分类：open/close、read/write、peek。transport的目的只有2个，一个是read指定长度数据，一个是write指定长度数据。</p>
+
+<p>　　2、TServerTransport.h：服务端transport基类，主要是为监听的socket提供功能（Client总不需要listen、accept吧）。接口分类：listen（）、accept（）、interrupt（）。</p>
+
+<p>　　3、TShortReadTransport.h：测试用，对读取采用随机长度读取，开发者不应该使用。</p>
+
+<p>　　4、TSocket.h/.cpp：客户端的socket transport实现。通过指定host、port，通过TTransport中的方法即可实现数据的发送。</p>
+
+<p>　　5、TSocketPool.h/.cpp：继承于TSocket，此类提供管理多个server的能力，server的host&amp;port聚合为TSocketPoolServer对象，存储在TSocketPool中。</p>
+
+<p>　　6、TTransportException.h/.cpp：与TProtocolException类似，提供transport的错误类型。</p>
+
+<p>　　7、TServerSocket.h/.cpp：实现了TServerTransport，accept后会返回一个TSocket。常用方法为listen()、accept（）、interrupt（）。</p>
+
+<p>　　8、TBufferTransports.h/.cpp：</p>
+
+<p>　　　　1）TBufferBase类提供对buffer的抽象操作，四个指针：rBase_、rBound_、wBase_、wBound_。</p>
+
+<p>　　　　2）TUnderlyingTransport提供buffer的生成，四个变量：rBuf_、rBufSize_、wBuf_、wBufSize_，以及集成了一个trans_。</p>
+
+<p>　　　　3）TBufferedTransport完成从transport读取数据到buf的操作，buffer长度固定。</p>
+
+<p>　　　　4）TBufferedTransportFactory工厂类。</p>
+
+<p>　　　　5）TFramedTransport，与TBufferedTransport相比，buf会变，不调用flush的数据就不会发到transport。</p>
+
+<p>　　　　6）TFramedTransportFactory工厂类。</p>
+
+<p>　　　　7）TMemoryBuffer类继承于TBufferBase，数据存储在内存，没有也不会通过trans_发送。</p>
+
+<p>　　　　黑体加粗部分为对开发者暴露类。</p>
+
+<p>　　9、TFDTransport.h/.cpp：直接从文件中read/write，FD就是file description的缩写。</p>
+
+<p>　　10、TSimpleFileTransport.h/.cpp：继承于TFDTransport，添加根据文件名打开FD的功能。</p>
+
+<p>　　11、……</p>
+
+<p>【processor】</p>
+
+<p>　　１、StatsProcessor.h：用于输出ＲＰＣ调用ＬＯＧ，此类用于调试。</p>
+
+<p>　　２、PeekProcessor.h/.cpp：</p>
+
+<p>【concurrency】</p>
+
+<p>　　1、Thread.h：提供Runnable，用于开发者实现一个可供Thread调用的任务。Thread绑定一个Runnable，通过start方法开启线程调用Runnable。ThreadFactory根据Runnable产生Thread。</p>
+
+<p>　　2、Monitor.h：提供条件变量功能。</p>
+
+<p>　　3、Exception.h：提供一些继承于TException的子类，用于标记异常。</p>
+
+<p>　　4、Mutex.h/.cpp：提供一般锁／读写锁，以及相应的Guard。</p>
+
+<p>　　5、ThreadManager.h/.cpp：工作线程（Worker）和任务管理器（Task）。类似于Cocoa中的GCD，可设置N个执行线程，M个Task。另外还有许多可配置项。</p>
+
+<p>　　6、PosixThreadFactory.h/.cpp：一个线程工厂。</p>
+
+<p>　　7、Util.h/.cpp：提供些有用的辅助方法。</p>
+
+<p>　　8、FunctionRunner.h：提供把函数包装成Runnable的功能。</p>
+
+<p>　　9、TimerManager.h/.cpp：类似于ThreadManager。Dispatcher为唯一的工作线程，当有task时，从task_list中取出到时间的task以执行。单线程。</p>
+
+<p>【server】</p>
+
+<p>　　 1、TServer.h：</p>
+
+<p>　　　　１）TEventHanlder是服务端实现功能的地方，实现preServe，clientBegin，clientEnd方法。preServe()在listen成功后只调用一次。每接受一个新Client，clientBegin和clientEnd就调用一次。</p>
+
+<p>　　　　２）TServer是一个虚基类，绑定一个TProcessor，用于处理数据，个TServerTransport用于处理数据发送与连接，一个eventHanlder用于将数据dispatch到服务端自己的逻辑代码中。提供serve（）=0方法，是开启服务的入口。此类只是一个基类。实现了Runnable接口，可以被线程TThread唤起。</p>
+
+<p>　　２、TSimpleServer.h：是TServer的一个子类，实现单线程阻塞的服务器。循环调用process处理数据。</p>
+
+<p>　　 3、TThreadedServer.h：继承于TServer（提供serve入口）。每新到一个請求，则新建一个Task对象（Runnable），TThreadFactory根据Task对象生成一个线程，然后运行。所以此类与TSimpleServer的单线程阻塞式不一样，此类对每一个請求开启一个新线程处理。</p>
+
+<p>　　 4、TThreadedPoolServer.h/.cpp：内部使用ThreadManager来管理线程和任务，TThreadedPoolServer只是实现了TServer的相关内容，核心都在ThreadManager中。</p>
+
+<p>　　 5、TNonblockingServer.h/.cpp：使用了libevent的异步模型。非阻塞服务器。libevent性能有待研究。内部也可以使用ThreadManager，如果使用ThreadManager则上TThreadedMangePoolServer一样了。</p>
+:ET

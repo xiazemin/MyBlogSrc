@@ -1,0 +1,182 @@
+I"�<p>1 PHP_MINIT 宏
+首先是宏展开
+PHP_MINIT(moule) 等价于 zm_startup_moule
+具体的宏替换如下</p>
+
+<p>#define PHP_MINIT       ZEND_MODULE_STARTUP_N</p>
+
+<p>#define ZEND_MODULE_STARTUP_N(module)       zm_startup_##module
+2 ## 操作符
+可以参考以下两个链接</p>
+
+<p>https://gcc.gnu.org/onlinedocs/cpp/Variadic-Macros.html#Variadic-Macros</p>
+
+<p>https://www.cprogramming.com/reference/preprocessor/token-pasting-operator.html</p>
+
+<p>在上面可以看到 zm_startup_##module，其中## 是一个连接符号
+例子</p>
+
+<p>#define type i##nt
+type a; // same as int a; since i##nt pastes together to “int”
+<!-- more --></p>
+
+<p>3 php main函数
+main 函数</p>
+
+<p>php可以有多个运行环境，我们现在以php-fpm 作为例子，他位于
+/sapi/fpm/fpm/fpm_main.c</p>
+
+<p>其中main函数位于 1600 行左右</p>
+
+<p>扩展加载步骤</p>
+
+<p>1 main 函数（c 语言都是以main 函数为开头）
+2 调用 cgi_sapi_module的 startup 即 php_cgi_startup
+    if (cgi_sapi_module.startup(&amp;cgi_sapi_module)   == FAILURE) {`
+其中 cgi_sapi_moule 是 一个静态变量</p>
+
+<p>//  /sapi/fpm/fpm/fpm_main.c   870 行
+static sapi_module_struct cgi_sapi_module = {
+    “fpm-fcgi”,         /* name <em>/
+    php_cgi_startup,    /</em> startup <em>/
+    …
+};
+3 然后 php_cgi_startup 调用 php_cgi_startup
+static int php_cgi_startup(sapi_module_struct *sapi_module) /</em> {{{ */
+{
+    if (php_module_startup(sapi_module, &amp;cgi_module_entry, 1) == FAILURE) {
+        return FAILURE;
+    }
+    return SUCCESS;
+}
+其中 php_module_startup 在 /main/main.c 中</p>
+
+<p>调用 zend_startup_modules
+int php_module_startup(sapi_module_struct <em>sf, zend_module_entry *additional_modules, uint num_additional_modules)
+{
+    …
+    /</em> load and startup extensions compiled as shared objects (aka DLLs)
+       as requested by php.ini entries
+       these are loaded after initialization of internal extensions
+       as extensions <em>might</em> rely on things from ext/standard
+       which is always an internal extension and to be initialized
+       ahead of all other internals
+     */
+    php_ini_register_extensions();
+    zend_startup_modules();
+    …
+其中 zend_startup_modules</p>
+
+<p>ZEND_API int zend_startup_modules(void) /* {{{ */
+{
+    zend_hash_sort_ex(&amp;module_registry, zend_sort_modules, NULL, 0);  // 对扩展进行排序
+    zend_hash_apply(&amp;module_registry, zend_startup_module_zval);      // 调用minit开始函数
+    return SUCCESS;
+}
+然后看 zend_hash_apply</p>
+
+<p>/* This is used to recurse elements and selectively delete certain entries</p>
+<ul>
+  <li>from a hashtable. apply_func() receives the data and decides if the entry</li>
+  <li>should be deleted or recursion should be stopped. The following three</li>
+  <li>return codes are possible:</li>
+  <li>ZEND_HASH_APPLY_KEEP   - continue</li>
+  <li>ZEND_HASH_APPLY_STOP   - stop iteration</li>
+  <li>ZEND_HASH_APPLY_REMOVE - delete the element, combineable with the former
+ */</li>
+</ul>
+
+<p>ZEND_API void ZEND_FASTCALL zend_hash_apply(HashTable *ht, apply_func_t apply_func)
+{
+    uint32_t idx;
+    Bucket *p;
+    int result;</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>IS_CONSISTENT(ht);
+
+HASH_PROTECT_RECURSION(ht);
+for (idx = 0; idx &lt; ht-&gt;nNumUsed; idx++) {
+    p = ht-&gt;arData + idx;
+    if (UNEXPECTED(Z_TYPE(p-&gt;val) == IS_UNDEF)) continue;
+    result = apply_func(&amp;p-&gt;val);
+
+    if (result &amp; ZEND_HASH_APPLY_REMOVE) {
+        HT_ASSERT(GC_REFCOUNT(ht) == 1);
+        _zend_hash_del_el(ht, HT_IDX_TO_HASH(idx), p);
+    }
+    if (result &amp; ZEND_HASH_APPLY_STOP) {
+        break;
+    }
+}
+HASH_UNPROTECT_RECURSION(ht); } 函数 zend_hash_apply(HashTable *ht, apply_func_t apply_func) 的第二个参数类型是 apply_func_t 是一个函数指针
+</code></pre></div></div>
+
+<p>//    /Zend/zend_hash.h
+typedef int (<em>apply_func_t)(zval *pDest);
+回到 刚才的 zend_startup_modules ,
+在 zend_startup_modules 中调用了 zend_hash_apply
+这个函数会遍历hashtable 里面的值并调用其中的初始化函数也就是调用PHP_MINIT(modules)，zend_hash_apply 第二个参数是 一个函数指针 ，这个函数是 zend_startup_module_zval
+ZEND_API int zend_startup_modules(void) /</em> {{{ */
+{
+    zend_hash_sort_ex(&amp;module_registry, zend_sort_modules, NULL, 0);  // 对扩展进行排序
+    zend_hash_apply(&amp;module_registry, zend_startup_module_zval);      // 调用minit开始函数
+    return SUCCESS;
+}
+核心函数 zend_startup_module_zval</p>
+
+<p>//  /Zend/zend_API.c
+static int zend_startup_module_zval(zval <em>zv) /</em> {{{ */
+{
+    zend_module_entry *module = Z_PTR_P(zv);  // 获得模块实例</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>return (zend_startup_module_ex(module) == SUCCESS) ? ZEND_HASH_APPLY_KEEP : ZEND_HASH_APPLY_REMOVE;    // 调用init 函数 } /* }}} */ 之后是 zend_startup_module_ex,其中重要的函数是 module_startup_func
+</code></pre></div></div>
+
+<p>//////////////////   加载扩展
+ZEND_API int zend_startup_module_ex(zend_module_entry <em>module) /</em> {{{ */
+{
+…</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>if (module-&gt;module_startup_func) {
+    EG(current_module) = module;   // execute_group 
+    if (module-&gt;module_startup_func(module-&gt;type, module-&gt;module_number)==FAILURE) {  // 注册失败则打印
+        zend_error_noreturn(E_CORE_ERROR,"Unable to start %s module", module-&gt;name);  
+        EG(current_module) = NULL;  // 清空
+        return FAILURE;
+    }
+    EG(current_module) = NULL;
+}
+return SUCCESS; } /* }}} */ 然后我们先看一下变量module 的类型zend_module_entry
+</code></pre></div></div>
+
+<p>typedef struct _zend_module_entry zend_module_entry;
+然后 结构 _zend_module_entry 包含了扩展的所有的回调，这里我们主要是要看
+int (*module_startup_func)(INIT_FUNC_ARGS);</p>
+
+<p>struct _zend_module_entry {
+    …
+    const struct _zend_function_entry <em>functions;
+    int (</em>module_startup_func)(INIT_FUNC_ARGS);
+    int (<em>module_shutdown_func)(SHUTDOWN_FUNC_ARGS);
+    int (</em>request_startup_func)(INIT_FUNC_ARGS);
+    int (<em>request_shutdown_func)(SHUTDOWN_FUNC_ARGS);
+    void (</em>info_func)(ZEND_MODULE_INFO_FUNC_ARGS);
+    …
+};
+而当你写扩展的时候会注册一个 zend_module_entry,例如bz2 扩展的
+PHP_MINIT(bz2),</p>
+
+<p>zend_module_entry bz2_module_entry = {
+    STANDARD_MODULE_HEADER,
+    “bz2”,
+    bz2_functions,
+    PHP_MINIT(bz2),
+    PHP_MSHUTDOWN(bz2),
+    NULL,
+    NULL,
+    PHP_MINFO(bz2),
+    PHP_BZ2_VERSION,
+    STANDARD_MODULE_PROPERTIES
+};</p>
+
+:ET

@@ -1,0 +1,1206 @@
+I"�<p>https://www.cnblogs.com/driftcloudy/p/3296525.html
+https://www.cnblogs.com/driftcloudy/p/5400994.html</p>
+
+<p>只探讨纯粹的函数，并不包含方法。对于方法，会放到类、对象中一起研究。</p>
+
+<p>想讲清楚在zend vm中，函数如何被正确的编译成op指令、如何发生参数传递、如何模拟调用栈、如何切换作用域等等，的确是一个很大范畴的话题。但为了弄明白php的原理，必须要攻克它。</p>
+
+<p>对函数的研究，大致可以分成两块。第一块是函数体的编译，主要涉及到如何将函数转化成zend_op指令。第二块是研究函数的调用，涉及到函数调用语句的编译，以及函数如何被执行等topic。这里先来看看函数如何被编译，我们下一篇再讲函数的调用。
+<!-- more -->
+函数的编译
+对函数进行编译，最终目的是为了生成一份对应的zend op指令集，除了zend op指令集，编译函数还会产生其他一些相关的数据，比如说函数名称、参数列表信息、compiled variables，甚至函数所在文件、起始行数等等。这些信息作为编译的产出，都需要保存起来。</p>
+
+<p>保存这些编译产出的数据结构，正是上一节中所描述的zend_op_array。在这个系列的文章中，均会以op_array作为简称。</p>
+
+<p>下面列出了一个简单的例子：</p>
+
+<p>&lt;?php
+function foo($arg1)
+{
+    print($arg1);
+}</p>
+
+<p>$bar = ‘hello php’;
+foo($bar);
+这段代码包含了一个最简单的函数示例。</p>
+
+<p>在这样一份php脚本中，最终其实会产生两个op_array。一个是由函数foo编译而来，另一个则是由除去函数foo之外代码编译生成的。同理可以推出，假如一份php脚本其中包含有2个函数和若干语句，则最终会产生3个op_array。也就是说，每个函数最终都会被编译成一个对应的op_array。</p>
+
+<p>刚才提到，op_array中有一些字段是和函数息息相关的。比如function_name代表着函数的名称，比如num_args代表了函数的参数个数，比如required_num_args代表了必须的参数个数，比如arg_info代表着函数的参数信息…etc。</p>
+
+<p>下面会继续结合这段代码，来研究foo函数详细的编译过程。</p>
+
+<p>1、语法定义
+从zend_language_parser.y文件中可以看出，函数的语法分析大致涉及如下几个推导式：</p>
+
+<p>top_statement:
+        statement                          { zend_verify_namespace(TSRMLS_C); }
+    |    function_declaration_statement    { zend_verify_namespace(TSRMLS_C); zend_do_early_binding(TSRMLS_C); }
+    |    class_declaration_statement       { zend_verify_namespace(TSRMLS_C); zend_do_early_binding(TSRMLS_C); }
+    …</p>
+
+<p>function_declaration_statement:
+	unticked_function_declaration_statement	{ DO_TICKS(); }
+;</p>
+
+<p>unticked_function_declaration_statement:
+	function is_reference T_STRING { zend_do_begin_function_declaration(&amp;$1, &amp;$3, 0, $2.op_type, NULL TSRMLS_CC); }
+	‘(‘ parameter_list ‘)’ ‘{‘ inner_statement_list ‘}’ { zend_do_end_function_declaration(&amp;$1 TSRMLS_CC); }
+;</p>
+
+<p>is_reference:
+        /* empty */    { \(.op_type = ZEND_RETURN_VAL; }
+    |    '&amp;'            {\).op_type = ZEND_RETURN_REF; }
+;</p>
+
+<p>parameter_list:
+        non_empty_parameter_list
+    |    /* empty */
+;</p>
+
+<p>non_empty_parameter_list:
+		optional_class_type T_VARIABLE				{ znode tmp;  fetch_simple_variable(&amp;tmp, &amp;$2, 0 TSRMLS_CC); \(.op_type = IS_CONST; Z_LVAL(\).u.constant)=1; Z_TYPE(\(.u.constant)=IS_LONG; INIT_PZVAL(&amp;\).u.constant); zend_do_receive_arg(ZEND_RECV, &amp;tmp, &amp;\(, NULL, &amp;$1, &amp;$2, 0 TSRMLS_CC); }
+	|	optional_class_type '&amp;' T_VARIABLE			{ znode tmp;  fetch_simple_variable(&amp;tmp, &amp;$3, 0 TSRMLS_CC);\).op_type = IS_CONST; Z_LVAL(\(.u.constant)=1; Z_TYPE(\).u.constant)=IS_LONG; INIT_PZVAL(&amp;\(.u.constant); zend_do_receive_arg(ZEND_RECV, &amp;tmp, &amp;\), NULL, &amp;$1, &amp;$3, 1 TSRMLS_CC); }
+	|	optional_class_type ‘&amp;’ T_VARIABLE ‘=’ static_scalar	{ znode tmp;  fetch_simple_variable(&amp;tmp, &amp;$3, 0 TSRMLS_CC); \(.op_type = IS_CONST; Z_LVAL(\).u.constant)=1; Z_TYPE(\(.u.constant)=IS_LONG; INIT_PZVAL(&amp;\).u.constant); zend_do_receive_arg(ZEND_RECV_INIT, &amp;tmp, &amp;\(, &amp;$5, &amp;$1, &amp;$3, 1 TSRMLS_CC); }
+	|	optional_class_type T_VARIABLE '=' static_scalar	{ znode tmp;  fetch_simple_variable(&amp;tmp, &amp;$2, 0 TSRMLS_CC);\).op_type = IS_CONST; Z_LVAL(\(.u.constant)=1; Z_TYPE(\).u.constant)=IS_LONG; INIT_PZVAL(&amp;\(.u.constant); zend_do_receive_arg(ZEND_RECV_INIT, &amp;tmp, &amp;\), &amp;$4, &amp;$1, &amp;$2, 0 TSRMLS_CC); }
+	|	non_empty_parameter_list ‘,’ optional_class_type T_VARIABLE　　　　　　　　　　　　　　{ znode tmp;  fetch_simple_variable(&amp;tmp, &amp;$4, 0 TSRMLS_CC); \(=$1; Z_LVAL(\).u.constant)++; zend_do_receive_arg(ZEND_RECV, &amp;tmp, &amp;\(, NULL, &amp;$3, &amp;$4, 0 TSRMLS_CC); }
+	|	non_empty_parameter_list ',' optional_class_type '&amp;' T_VARIABLE　　　　　　　　　　　　{ znode tmp;  fetch_simple_variable(&amp;tmp, &amp;$5, 0 TSRMLS_CC);\)=$1; Z_LVAL(\(.u.constant)++; zend_do_receive_arg(ZEND_RECV, &amp;tmp, &amp;\), NULL, &amp;$3, &amp;$5, 1 TSRMLS_CC); }
+	|	non_empty_parameter_list ‘,’ optional_class_type ‘&amp;’ T_VARIABLE	 ‘=’ static_scalar　{ znode tmp;  fetch_simple_variable(&amp;tmp, &amp;$5, 0 TSRMLS_CC); \(=$1; Z_LVAL(\).u.constant)++; zend_do_receive_arg(ZEND_RECV_INIT, &amp;tmp, &amp;\(, &amp;$7, &amp;$3, &amp;$5, 1 TSRMLS_CC); }
+	|	non_empty_parameter_list ',' optional_class_type T_VARIABLE '=' static_scalar　　　　{ znode tmp;  fetch_simple_variable(&amp;tmp, &amp;$4, 0 TSRMLS_CC);\)=$1; Z_LVAL(\(.u.constant)++; zend_do_receive_arg(ZEND_RECV_INIT, &amp;tmp, &amp;\), &amp;$6, &amp;$3, &amp;$4, 0 TSRMLS_CC); }
+;
+这里并没有截取完整，主要是缺少函数体内语句的语法分析，但已经足够我们弄清楚编译过程中的一些细节。</p>
+
+<p>函数体内的语句，其对应的语法为inner_statement_list。inner_statement_list和函数体之外一般的语句并无二致，可以简单当成普通的语句来编译。</p>
+
+<p>最重要的是看下unticked_function_declaration_statement，它定义了函数语法的骨架，同时还可以看出，函数编译中会执行zend_do_begin_function_declaration以及zend_do_end_function_declaration。这两步分别对应着下文提到的开始编译和结束编译。我们先来看zend_do_begin_function_declaration。</p>
+
+<p>2、开始编译
+当zend vm的语法分析器遇到一段函数声明时，会尝试开始编译函数，这是通过执行zend_do_begin_function_declaration来完成的。</p>
+
+<p>有两点：</p>
+
+<p>1，函数是否返回引用，通过is_reference判断。可以看到在对is_reference进行语法分析时，可能会将op_type赋予ZEND_RETURN_VAL或ZEND_RETURN_REF。根据我们文章开始给出的php代码示例，函数foo并不返回引用，因此这里$2.op_type为ZEND_RETURN_VAL。</p>
+
+<p>话说由 function &amp; func_name() { … } 这种形式来决定是否返回引用，已经很古老了，还是在CI框架中见过，现在很少这么写。但是php做了兼容，所以即使采用这种很陈旧的语法，也能够被正确识别。</p>
+
+<p>2，zend_do_begin_function_declaration接受的第一个参数，是对function字面进行词法分析生成的znode。这个znode被使用得非常巧妙，因为在编译函数时，zend vm必须将CG(active_op_array)切换成函数自己的op_array，以便于存储函数的编译结果，当函数编译完成之后，zend vm又需要将将CG(active_op_array)恢复成函数体外层的op_array。利用该znode保存函数体外的op_array，可以很方便的在函数编译结束时进行CG(active_op_array)恢复，具体后面会讲到。</p>
+
+<p>研究下zend_do_begin_function_declaration的实现，比较长，我们分段来看：</p>
+
+<p>// 声明函数会变编译成的op_array
+zend_op_array op_array;</p>
+
+<p>// 函数名、长度、起始行数
+char *name = function_name-&gt;u.constant.value.str.val;
+int name_len = function_name-&gt;u.constant.value.str.len;
+int function_begin_line = function_token-&gt;u.opline_num;
+zend_uint fn_flags;
+char *lcname;
+zend_bool orig_interactive;
+ALLOCA_FLAG(use_heap)</p>
+
+<p>if (is_method) {
+    …
+} else {
+    fn_flags = 0;
+}</p>
+
+<p>// 对函数来说，fn_flags没用，对方法来说，fn_flags指定了方法的修饰符
+if ((fn_flags &amp; ZEND_ACC_STATIC) &amp;&amp; (fn_flags &amp; ZEND_ACC_ABSTRACT) &amp;&amp; !(CG(active_class_entry)-&gt;ce_flags &amp; ZEND_ACC_INTERFACE)) {
+    zend_error(E_STRICT, “Static function %s%s%s() should not be abstract”, is_method ? CG(active_class_entry)-&gt;name : “”, is_method ? “::” : “”, Z_STRVAL(function_name-&gt;u.constant));
+}
+这段代码一开始就印证了我们先前的说法，每个函数都有一份自己的op_array。所以会在开头先声明一个op_array变量。</p>
+
+<p>// 第一个znode参数的妙处，它记录了当前的CG(active_op_array)
+function_token-&gt;u.op_array = CG(active_op_array);
+lcname = zend_str_tolower_dup(name, name_len);</p>
+
+<p>// 对op_array进行初始化，强制op_array.fn_flags会被初始化为0
+orig_interactive = CG(interactive);
+CG(interactive) = 0;
+init_op_array(&amp;op_array, ZEND_USER_FUNCTION, INITIAL_OP_ARRAY_SIZE TSRMLS_CC);
+CG(interactive) = orig_interactive;</p>
+
+<p>// 对op_array的一些设置
+op_array.function_name = name;
+op_array.return_reference = return_reference;
+op_array.fn_flags |= fn_flags;
+op_array.pass_rest_by_reference = 0;
+op_array.scope = is_method ? CG(active_class_entry):NULL;
+op_array.prototype = NULL;
+op_array.line_start = zend_get_compiled_lineno(TSRMLS_C);
+function_token便是对function字面进行词法分析而生成的znode。这段代码一开始，就让它保存当前的CG(active_op_array)，即函数体之外的op_array。保存好CG(active_op_array)之后，便会开始对函数自己的op_array进行初始化。</p>
+
+<table>
+  <tbody>
+    <tr>
+      <td>op_array.fn_flags是个多功能字段，还记得上一篇中提到的交互式么，如果php以交互式打开，则op_array.fn_flags会被初始化为ZEND_ACC_INTERACTIVE，否则会被初始化为0。这里在init_op_array之前设置CG(interactive) = 0，便是确保op_array.fn_flags初始化为0。随后会进一步执行op_array.fn_flags</td>
+      <td>= fn_flags，如果是在方法中，则op_array.fn_flags含义为static、abstract、final等修饰符，对函数来讲，op_array.fn_flags依然是0。</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>zend_op *opline = get_next_op(CG(active_op_array) TSRMLS_CC);</p>
+
+<p>// 如果处于命名空间，则函数名还需要加上命名空间
+if (CG(current_namespace)) {
+    /* Prefix function name with current namespace name */
+    znode tmp;</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>tmp.u.constant = *CG(current_namespace);
+zval_copy_ctor(&amp;tmp.u.constant);
+zend_do_build_namespace_name(&amp;tmp, &amp;tmp, function_name TSRMLS_CC);
+op_array.function_name = Z_STRVAL(tmp.u.constant);
+efree(lcname);
+name_len = Z_STRLEN(tmp.u.constant);
+lcname = zend_str_tolower_dup(Z_STRVAL(tmp.u.constant), name_len); }
+</code></pre></div></div>
+
+<p>// 设置opline
+opline-&gt;opcode = ZEND_DECLARE_FUNCTION;
+// 第一个操作数
+opline-&gt;op1.op_type = IS_CONST;
+build_runtime_defined_function_key(&amp;opline-&gt;op1.u.constant, lcname, name_len TSRMLS_CC);
+// 第二个操作数
+opline-&gt;op2.op_type = IS_CONST;
+opline-&gt;op2.u.constant.type = IS_STRING;
+opline-&gt;op2.u.constant.value.str.val = lcname;
+opline-&gt;op2.u.constant.value.str.len = name_len;
+Z_SET_REFCOUNT(opline-&gt;op2.u.constant, 1);
+opline-&gt;extended_value = ZEND_DECLARE_FUNCTION;</p>
+
+<p>// 切换CG(active_op_array)成函数自己的op_array
+zend_hash_update(CG(function_table), opline-&gt;op1.u.constant.value.str.val, opline-&gt;op1.u.constant.value.str.len, &amp;op_array, sizeof(zend_op_array), (void **) &amp;CG(active_op_array));
+上面这段代码很关键。有几点要说明的：</p>
+
+<p>1，如果函数是处于命名空间中，则其名称会被扩展成命名空间\函数名。比如：</p>
+
+<p>&lt;?php
+namespace MyProject;</p>
+
+<p>function foo($arg1, $arg2 = 100)
+{
+    print($arg1);
+}
+则会将函数名改为MyProject\foo。扩展工作由zend_do_build_namespace_name来完成。</p>
+
+<p>2，build_runtime_defined_function_key会生成一个“key”。除了用到函数名称之外，还用到了函数所在文件路径、代码在内存中的地址等等。具体的实现可以自行阅读。将函数放进CG(function_table)时，用的键便是这个“key”。</p>
+
+<p>以我的机器为例，上述函数foo生成的key为：</p>
+
+<p>00foo/home/work/foo.php00ABEBBF
+从这个key中能直观的看出函数名，所在文件路径这两个信息。</p>
+
+<p>3，代码中的op_line获取时，尚未发生CG(active_op_array)的切换。也就是说，op_line依然是外层op_array的一条指令。该指令具体为ZEND_DECLARE_FUNCTION，有两个操作数，第一个操作数保存了第二点中提到的“key”，第二个操作数则保存了形如”myproject\foo”这样的函数名（小写）。</p>
+
+<p>4，这段代码的最后，将函数自身对应的op_array存放进了CG(function_table)，同时，完成了CG(active_op_array)的切换。从这条语句开始，CG(active_op_array)便开始指向函数自己的op_array，而不再是函数体外层的op_array了。</p>
+
+<p>继续来看zend_do_begin_function_declaration的最后一段：</p>
+
+<p>// 需要debuginfo，则函数体内的第一条zend_op，为ZEND_EXT_NOP
+if (CG(compiler_options) &amp; ZEND_COMPILE_EXTENDED_INFO) {
+    zend_op *opline = get_next_op(CG(active_op_array) TSRMLS_CC);</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>opline-&gt;opcode = ZEND_EXT_NOP;
+opline-&gt;lineno = function_begin_line;
+SET_UNUSED(opline-&gt;op1);
+SET_UNUSED(opline-&gt;op2); }
+</code></pre></div></div>
+
+<p>// 控制switch和foreach内声明的函数
+{
+    /* Push a seperator to the switch and foreach stacks */
+    zend_switch_entry switch_entry;</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>switch_entry.cond.op_type = IS_UNUSED;
+switch_entry.default_case = 0;
+switch_entry.control_var = 0;
+
+zend_stack_push(&amp;CG(switch_cond_stack), (void *) &amp;switch_entry, sizeof(switch_entry));
+
+{
+    /* Foreach stack separator */
+    zend_op dummy_opline;
+
+    dummy_opline.result.op_type = IS_UNUSED;
+    dummy_opline.op1.op_type = IS_UNUSED;
+
+    zend_stack_push(&amp;, (void *) &amp;dummy_opline, sizeof(zend_op));
+} }
+</code></pre></div></div>
+
+<p>// 保存函数的注释语句
+if (CG(doc_comment)) {
+    CG(active_op_array)-&gt;doc_comment = CG(doc_comment);
+    CG(active_op_array)-&gt;doc_comment_len = CG(doc_comment_len);
+    CG(doc_comment) = NULL;
+    CG(doc_comment_len) = 0;
+}</p>
+
+<p>// 作用和上面switch，foreach是一样的，函数体内的语句并不属于函数体外的label
+zend_stack_push(&amp;CG(labels_stack), (void <em>) &amp;CG(labels), sizeof(HashTable</em>));
+CG(labels) = NULL;
+可能初学者会对CG(switch_cond_stack)，CG(foreach_copy_stack)，CG(labels_stack)等字段有疑惑。其实也很好理解。以CG(labels_stack)为例，由于进入函数体内之后，op_array发生了切换，外层的CG(active_op_array)被保存到function znode的u.op_array中（如果记不清楚了回头看上文:-)）。因此函数外层已经被parse出的一些label也需要被保存下来，用的正是CG(labels_stack)来保存。当函数体完成编译之后，zend vm可以从CG(labels_stack)中恢复出原先的label。举例来说，</p>
+
+<p>&lt;?php
+label1:
+function foo($arg1)
+{
+    print($arg1);
+    goto label2;</p>
+
+<p>label2:
+    exit;
+}</p>
+
+<p>$bar = ‘hello php’;
+foo($bar);
+解释器在进入zend_do_begin_function_declaration时，CG(labels)中保存的是“label1”。当解释器开始编译函数foo，则需要将“label1”保存到CG(labels_stack)中，同时清空CG(labels)。因为在编译foo的过程中，CG(labels)会保存“labe2”。当foo编译完成，会利用CG(labels_stack)来恢复CG(labels)，则CG(labels)再次变成“label1”。</p>
+
+<p>至此，整个zend_do_begin_function_declaration过程已经全部分析完成。最重要的是，一旦完成zend_do_begin_function_declaration，CG(active_op_array)就指向了函数自身对应的op_array。同时，也利用生成的“key”在CG(function_table)中替函数占了一个位。</p>
+
+<p>3、编译参数列表
+函数可以定义为不接受任何参数，对于参数列表为空的情况，其实不做任何处理。我们前文的例子foo函数，接受了一个参数$arg1，我们下面还是分析有参数的情况。</p>
+
+<p>根据语法推导式non_empty_parameter_list的定义，参数列表一共有8种，前4种对应的是一个参数，后4种对应多个参数。我们只关心前4种，后4种编译的过程，仅仅是重复前4种的步骤而已。</p>
+
+<p>optional_class_type T_VARIABLE				{ znode tmp;  fetch_simple_variable(&amp;tmp, &amp;$2, 0 TSRMLS_CC); \(.op_type = IS_CONST; Z_LVAL(\).u.constant)=1; Z_TYPE(\(.u.constant)=IS_LONG; INIT_PZVAL(&amp;\).u.constant); zend_do_receive_arg(ZEND_RECV, &amp;tmp, &amp;\(, NULL, &amp;$1, &amp;$2, 0 TSRMLS_CC); }
+optional_class_type '&amp;' T_VARIABLE			{ znode tmp;  fetch_simple_variable(&amp;tmp, &amp;$3, 0 TSRMLS_CC);\).op_type = IS_CONST; Z_LVAL(\(.u.constant)=1; Z_TYPE(\).u.constant)=IS_LONG; INIT_PZVAL(&amp;\(.u.constant); zend_do_receive_arg(ZEND_RECV, &amp;tmp, &amp;\), NULL, &amp;$1, &amp;$3, 1 TSRMLS_CC); }
+optional_class_type ‘&amp;’ T_VARIABLE ‘=’ static_scalar	{ znode tmp;  fetch_simple_variable(&amp;tmp, &amp;$3, 0 TSRMLS_CC); \(.op_type = IS_CONST; Z_LVAL(\).u.constant)=1; Z_TYPE(\(.u.constant)=IS_LONG; INIT_PZVAL(&amp;\).u.constant); zend_do_receive_arg(ZEND_RECV_INIT, &amp;tmp, &amp;\(, &amp;$5, &amp;$1, &amp;$3, 1 TSRMLS_CC); }
+optional_class_type T_VARIABLE '=' static_scalar	{ znode tmp;  fetch_simple_variable(&amp;tmp, &amp;$2, 0 TSRMLS_CC);\).op_type = IS_CONST; Z_LVAL(\(.u.constant)=1; Z_TYPE(\).u.constant)=IS_LONG; INIT_PZVAL(&amp;\(.u.constant); zend_do_receive_arg(ZEND_RECV_INIT, &amp;tmp, &amp;\), &amp;$4, &amp;$1, &amp;$2, 0 TSRMLS_CC); }
+前4种情况，具体又可以分为2类，1类没有默认值，区别只在于参数的传递是否采用引用，而另1类，都有默认值“static_scalar”。</p>
+
+<p>实际上区别并不大，它们的语法分析的处理过程也几乎一致。都是先调用fetch_simple_variable，再执行zend_do_receive_arg。有没有默认值，区别也仅仅在于zend_do_receive_arg的参数，会不会将默认值传递进去。先来看fetch_simple_variable。</p>
+
+<p>3.1 fetch_simple_variable
+fetch_simple_variable是用来获取compiled variables索引的。compiled variables被视作php的性能提升手段之一，因为它利用数组存储了变量，而并非内核中普遍使用的HashTable。这里可以看出，函数的任何一个参数，均会被编译为compiled variables，compiled variables被保存在函数体op_array-&gt;vars数组中。虽然根据变量名称去HashTable查询，效率并不低。但显然根据索引去op_array-&gt;vars数组中获取变量，会更加高效。</p>
+
+<p>void fetch_simple_variable_ex(znode <em>result, znode *varname, int bp, zend_uchar op TSRMLS_DC) /</em> {{{ */
+{
+    zend_op opline;
+    …</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>if (varname-&gt;op_type == IS_CONST) {
+    if (Z_TYPE(varname-&gt;u.constant) != IS_STRING) {
+        convert_to_string(&amp;varname-&gt;u.constant);
+    }
+    if (!zend_is_auto_global(varname-&gt;u.constant.value.str.val, varname-&gt;u.constant.value.str.len TSRMLS_CC) &amp;&amp;
+        !(varname-&gt;u.constant.value.str.len == (sizeof("this")-1) &amp;&amp; !memcmp(varname-&gt;u.constant.value.str.val, "this", sizeof("this"))) &amp;&amp;
+        (CG(active_op_array)-&gt;last == 0 || CG(active_op_array)-&gt;opcodes[CG(active_op_array)-&gt;last-1].opcode != ZEND_BEGIN_SILENCE)) {
+        
+        // 节点的类型为IS_CV，表明是compiled variables
+        result-&gt;op_type = IS_CV;
+        
+        // 用u.var来记录compiled variables在CG(active_op_array)-&gt;vars中的索引
+        result-&gt;u.var = lookup_cv(CG(active_op_array), varname-&gt;u.constant.value.str.val, varname-&gt;u.constant.value.str.len);
+        result-&gt;u.EA.type = 0;
+        varname-&gt;u.constant.value.str.val = CG(active_op_array)-&gt;vars[result-&gt;u.var].name;
+        return;
+    }
+}
+... } 这里不做详细的分析了。当fetch_simple_variable获取索引之后，znode中就不必再保存变量的名称，取而代之的是变量在vars数组中的索引，即znode-&gt;u.var，其类型为int。fetch_simple_variable完成，会进入zend_do_receive_arg。
+</code></pre></div></div>
+
+<p>3.2 zend_do_receive_arg
+zend_do_receive_arg目的是生成一条zend op指令，可以称作RECV。</p>
+
+<p>一般而言，除非函数不存在参数，否则RECV是函数的第一条指令（这里表述不准，有extend info时也不是第一条）。该指令的opcode可能为ZEND_RECV或者ZEND_RECV_INIT，取决于是否有默认值。如果参数没有默认值，指令等于ZEND_RECV，有默认值，则为ZEND_RECV_INIT。zend_do_receive_arg的第二个参数，就是上面提到的compiled variables节点。</p>
+
+<p>分析下zend_do_receive_arg的源码，也是分几段来看：</p>
+
+<p>zend_op *opline;
+zend_arg_info *cur_arg_info;</p>
+
+<p>// class_type主要用于限制函数参数的类型
+if (class_type-&gt;op_type == IS_CONST &amp;&amp; Z_TYPE(class_type-&gt;u.constant) == IS_STRING &amp;&amp; Z_STRLEN(class_type-&gt;u.constant) == 0) {
+    /* Usage of namespace as class name not in namespace */
+    zval_dtor(&amp;class_type-&gt;u.constant);
+    zend_error(E_COMPILE_ERROR, “Cannot use ‘namespace’ as a class name”);
+    return;
+}</p>
+
+<p>// 对静态方法来说，参数不能为this
+if (var-&gt;op_type == IS_CV &amp;&amp; var-&gt;u.var == CG(active_op_array)-&gt;this_var &amp;&amp; (CG(active_op_array)-&gt;fn_flags &amp; ZEND_ACC_STATIC) == 0) {
+    zend_error(E_COMPILE_ERROR, “Cannot re-assign $this”);
+} else if (var-&gt;op_type == IS_VAR &amp;&amp; CG(active_op_array)-&gt;scope &amp;&amp; ((CG(active_op_array)-&gt;fn_flags &amp; ZEND_ACC_STATIC) == 0) &amp;&amp; (Z_TYPE(varname-&gt;u.constant) == IS_STRING) &amp;&amp; (Z_STRLEN(varname-&gt;u.constant) == sizeof(“this”)-1) &amp;&amp; (memcmp(Z_STRVAL(varname-&gt;u.constant), “this”, sizeof(“this”)) == 0)) {
+    zend_error(E_COMPILE_ERROR, “Cannot re-assign $this”);
+}</p>
+
+<p>// CG(active_op_array)此时已经是函数体的op_array了，这里拿一条指令
+opline = get_next_op(CG(active_op_array) TSRMLS_CC);
+CG(active_op_array)-&gt;num_args++;
+opline-&gt;opcode = op;
+opline-&gt;result = *var;</p>
+
+<p>// op1节点表明是第几个参数
+opline-&gt;op1 = *offset;</p>
+
+<p>// op2节点可能为初始值，也可能为UNUSED
+if (op == ZEND_RECV_INIT) {
+    opline-&gt;op2 = *initialization;
+} else {
+    CG(active_op_array)-&gt;required_num_args = CG(active_op_array)-&gt;num_args;
+    SET_UNUSED(opline-&gt;op2);
+}
+上面这段代码，首先通过get_next_op(CG(active_op_array) TSRMLS_CC)一句获取了opline，opline是未被使用的一条zend_op指令。紧接着，会对opline的各个字段进行设置。opline-&gt;op1表明这是第几个参数，opline-&gt;op2可能为初始值，也可能被设置为UNUSED。</p>
+
+<p>如果一个参数有默认值，那么在调用函数时，其实是可以不用传递该参数的。所以，required_num_args不会将这类非必须的参数算进去的。可以看到，在op == ZEND_RECV_INIT这段逻辑分支中，并没有处理required_num_args。</p>
+
+<p>继续来看：</p>
+
+<p>// 这里采用erealloc进行分配，因为期望最终会形成一个参数信息的数组
+CG(active_op_array)-&gt;arg_info = erealloc(CG(active_op_array)-&gt;arg_info, sizeof(zend_arg_info)*(CG(active_op_array)-&gt;num_args));</p>
+
+<p>// 设置当前的zend_arg_info
+cur_arg_info = &amp;CG(active_op_array)-&gt;arg_info[CG(active_op_array)-&gt;num_args-1];
+cur_arg_info-&gt;name = estrndup(varname-&gt;u.constant.value.str.val, varname-&gt;u.constant.value.str.len);
+cur_arg_info-&gt;name_len = varname-&gt;u.constant.value.str.len;
+cur_arg_info-&gt;array_type_hint = 0;
+cur_arg_info-&gt;allow_null = 1;
+cur_arg_info-&gt;pass_by_reference = pass_by_reference;
+cur_arg_info-&gt;class_name = NULL;
+cur_arg_info-&gt;class_name_len = 0;</p>
+
+<p>// 如果需要对参数做类型限定
+if (class_type-&gt;op_type != IS_UNUSED) {
+    cur_arg_info-&gt;allow_null = 0;</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>// 限定为类
+if (class_type-&gt;u.constant.type == IS_STRING) {
+    if (ZEND_FETCH_CLASS_DEFAULT == zend_get_class_fetch_type(Z_STRVAL(class_type-&gt;u.constant), Z_STRLEN(class_type-&gt;u.constant))) {
+        zend_resolve_class_name(class_type, &amp;opline-&gt;extended_value, 1 TSRMLS_CC);
+    }
+    cur_arg_info-&gt;class_name = class_type-&gt;u.constant.value.str.val;
+    cur_arg_info-&gt;class_name_len = class_type-&gt;u.constant.value.str.len;
+    
+    // 如果限定为类，则参数的默认值只能为NULL
+    if (op == ZEND_RECV_INIT) {
+        if (Z_TYPE(initialization-&gt;u.constant) == IS_NULL || (Z_TYPE(initialization-&gt;u.constant) == IS_CONSTANT &amp;&amp; !strcasecmp(Z_STRVAL(initialization-&gt;u.constant), "NULL"))) {
+            cur_arg_info-&gt;allow_null = 1;
+        } else {
+            zend_error(E_COMPILE_ERROR, "Default value for parameters with a class type hint can only be NULL");
+        }
+    }
+}
+// 限定为数组
+else {
+    // 将array_type_hint设置为1
+    cur_arg_info-&gt;array_type_hint = 1;
+    cur_arg_info-&gt;class_name = NULL;
+    cur_arg_info-&gt;class_name_len = 0;
+    
+    // 如果限定为数组，则参数的默认值只能为数组或NULL
+    if (op == ZEND_RECV_INIT) {
+        if (Z_TYPE(initialization-&gt;u.constant) == IS_NULL || (Z_TYPE(initialization-&gt;u.constant) == IS_CONSTANT &amp;&amp; !strcasecmp(Z_STRVAL(initialization-&gt;u.constant), "NULL"))) {
+            cur_arg_info-&gt;allow_null = 1;
+        } else if (Z_TYPE(initialization-&gt;u.constant) != IS_ARRAY &amp;&amp; Z_TYPE(initialization-&gt;u.constant) != IS_CONSTANT_ARRAY) {
+            zend_error(E_COMPILE_ERROR, "Default value for parameters with array type hint can only be an array or NULL");
+        }
+    }
+} } opline-&gt;result.u.EA.type |= EXT_TYPE_UNUSED; 这部分代码写的很清晰。注意，对于限定为数组的情况，class_type的op_type会被设置为IS_CONST，而u.constant.type会被设置为IS_NULL：
+</code></pre></div></div>
+
+<p>optional_class_type:
+		/* empty */			{ \(.op_type = IS_UNUSED; }
+	|	fully_qualified_class_name	{\) = $1; }
+	|	T_ARRAY				{ \(.op_type = IS_CONST; Z_TYPE(\).u.constant)=IS_NULL;}
+因此，zend_do_receive_arg中区分限定为类还是数组，是利用class_type-&gt;u.constant.type == IS_STRING来判断的。如果类型限定为数组，则cur_arg_info-&gt;array_type_hint会被设置为1。</p>
+
+<p>还有另一个地方需要了解，zend_resolve_class_name函数会修正类名。举例来说：</p>
+
+<p>&lt;?php
+namespace A;
+class B { }
+function foo(B $arg1, $arg2 = 100)
+{
+    print($arg1);
+}
+我们期望参数arg1的类型为B，class_type中也保存了B。但是因为位于命名空间A下，所以，zend_resolve_class_name会将class_type中保存的类名B，修正为A\B。</p>
+
+<p>OK，到这里，zend_do_receive_arg已经全部分析完。zend vm在分析函数参数时，每遇见一个参数，便会调用一次zend_do_receive_arg，生成一条RECV指令。因此，函数有几个参数，就会编译出几条RECV指令。</p>
+
+<p>4、编译函数体
+当编译完参数列表，zend vm便会进入函数内部了。函数体的编译其实和正常语句的编译一样。zend vm只需要将函数体内部的php语句，按照正常的statment，进行词法分析、语法分析来处理，最终形成一条条zend_op指令。</p>
+
+<p>来看下语法文件：</p>
+
+<p>unticked_function_declaration_statement:
+	function is_reference T_STRING { zend_do_begin_function_declaration(&amp;$1, &amp;$3, 0, $2.op_type, NULL TSRMLS_CC); }
+	‘(‘ parameter_list ‘)’ ‘{‘ inner_statement_list ‘}’ { zend_do_end_function_declaration(&amp;$1 TSRMLS_CC); }
+;
+函数体内部的语句，表示为inner_statement_list。</p>
+
+<p>inner_statement_list:
+		inner_statement_list  { zend_do_extended_info(TSRMLS_C); } inner_statement { HANDLE_INTERACTIVE(); }
+	|	/* empty */
+;
+而inner_statment正是由语句、函数声明、类声明组成的。</p>
+
+<p>inner_statement:
+		statement
+	|	function_declaration_statement
+	|	class_declaration_statement
+	|	T_HALT_COMPILER ‘(‘ ‘)’ ‘;’   { zend_error(E_COMPILE_ERROR, “__HALT_COMPILER() can only be used from the outermost scope”); }
+;
+inner_statement并非专门用于函数，其他譬如foreach，while循环等有block语句块中，都会被识别为inner_statement。从这里其实还能看到一些有意思的语法，比如说我们可以在函数里声明一个类。inner_statement就不展开叙述了，否则相当于将整个php的语法捋一遍，情况太多了。</p>
+
+<p>5、结束编译
+我们最后来看下结束编译的过程。结束函数编译是通过zend_do_end_function_declaration来完成的。</p>
+
+<p>zend_do_end_function_declaration接收的参数function_token，其实就是前面提到过的function字面对应的znode。根据我们在“开始编译”一节所述，function_token中保留了函数体之外的op_array。</p>
+
+<p>char lcname[16];
+int name_len;</p>
+
+<p>zend_do_extended_info(TSRMLS_C);</p>
+
+<p>// 返回NULL
+zend_do_return(NULL, 0 TSRMLS_CC);</p>
+
+<p>// 通过op指令设置对应的handler函数
+pass_two(CG(active_op_array) TSRMLS_CC);</p>
+
+<p>// 释放当前函数的CG(labels)，并从CG(labels_stack)中还原之前的CG(labels)
+zend_release_labels(TSRMLS_C);</p>
+
+<p>if (CG(active_class_entry)) {
+    // 检查魔术方法的参数是否合法
+    zend_check_magic_method_implementation(CG(active_class_entry), (zend_function<em>)CG(active_op_array), E_COMPILE_ERROR TSRMLS_CC);
+} else {
+    /</em> we don’t care if the function name is longer, in fact lowercasing only 
+     * the beginning of the name speeds up the check process <em>/
+    name_len = strlen(CG(active_op_array)-&gt;function_name);
+    zend_str_tolower_copy(lcname, CG(active_op_array)-&gt;function_name, MIN(name_len, sizeof(lcname)-1));
+    lcname[sizeof(lcname)-1] = ‘\0’; /</em> zend_str_tolower_copy won’t necessarily set the zero byte */</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>// 检查__autoload函数的参数是否合法
+if (name_len == sizeof(ZEND_AUTOLOAD_FUNC_NAME) - 1 &amp;&amp; !memcmp(lcname, ZEND_AUTOLOAD_FUNC_NAME, sizeof(ZEND_AUTOLOAD_FUNC_NAME)) &amp;&amp; CG(active_op_array)-&gt;num_args != 1) {
+    zend_error(E_COMPILE_ERROR, "%s() must take exactly 1 argument", ZEND_AUTOLOAD_FUNC_NAME);
+}         }
+</code></pre></div></div>
+
+<p>CG(active_op_array)-&gt;line_end = zend_get_compiled_lineno(TSRMLS_C);</p>
+
+<p>// 很关键！将CG(active_op_array)还原成函数外层的op_array
+CG(active_op_array) = function_token-&gt;u.op_array;</p>
+
+<p>/* Pop the switch and foreach seperators */
+zend_stack_del_top(&amp;CG(switch_cond_stack));
+zend_stack_del_top(&amp;CG(foreach_copy_stack));
+有3处值得注意：</p>
+
+<p>1，zend_do_end_function_declaration中会对CG(active_op_array)进行还原。用的正是function_token-&gt;u.op_array。一旦zend_do_end_function_declaration完成，函数的整个编译过程就已经结束了。zend vm会继续看接下来函数之外的代码，所以需要将CG(active_op_array)切换成原先的。</p>
+
+<p>2，zend_do_return负责在函数最后添加上一条RETURN指令，因为我们传进去的是NULL，所以这条RETURN指令的操作数被强制设置为UNUSED。注意，不管函数本身是否有return语句，最后这条RETURN指令是必然存在的。假如函数有return语句，return语句也会产生一条RETURN指令，所以会导致可能出现多条RETURN指令。举例来说：</p>
+
+<p>function foo()
+{
+    return true;
+}
+编译出来的OP指令最后两条如下：</p>
+
+<p>RETURN        true
+ RETURN        null
+我们可以很明显在最后看到两条RETURN。一条是通过return true编译出来的。另一条，就是在zend_do_end_function_declaration阶段，强制插入的RETURN。</p>
+
+<p>3，我们刚才讲解的所有步骤中，都只是设置了每条指令的opcode，而并没有设置这条指令具体的handle函数。pass_two会负责遍历每条zend_op指令，根据opcode，以及操作数op1和op2，去查找并且设置对应的handle函数。这项工作，是通过ZEND_VM_SET_OPCODE_HANDLER(opline)宏来完成的。</p>
+
+<p>#define ZEND_VM_SET_OPCODE_HANDLER(opline) zend_vm_set_opcode_handler(opline)
+zend_vm_set_opcode_handler的实现很简单：</p>
+
+<p>void zend_init_opcodes_handlers(void)
+{
+    // 超大的数组，里面存放了所有的handler
+    static const opcode_handler_t labels[] = {
+        ZEND_NOP_SPEC_HANDLER,
+        ZEND_NOP_SPEC_HANDLER,
+        ZEND_NOP_SPEC_HANDLER,
+        ZEND_NOP_SPEC_HANDLER,
+        ZEND_NOP_SPEC_HANDLER,
+        ZEND_NOP_SPEC_HANDLER,
+        …
+    };
+    zend_opcode_handlers = (opcode_handler_t*)labels;
+}</p>
+
+<p>static opcode_handler_t zend_vm_get_opcode_handler(zend_uchar opcode, zend_op* op)
+{
+        static const int zend_vm_decode[] = {
+            _UNUSED_CODE, /* 0              <em>/
+            _CONST_CODE,  /</em> 1 = IS_CONST   <em>/
+            _TMP_CODE,    /</em> 2 = IS_TMP_VAR <em>/
+            _UNUSED_CODE, /</em> 3              <em>/
+            _VAR_CODE,    /</em> 4 = IS_VAR     <em>/
+            _UNUSED_CODE, /</em> 5              <em>/
+            _UNUSED_CODE, /</em> 6              <em>/
+            _UNUSED_CODE, /</em> 7              <em>/
+            _UNUSED_CODE, /</em> 8 = IS_UNUSED  <em>/
+            _UNUSED_CODE, /</em> 9              <em>/
+            _UNUSED_CODE, /</em> 10             <em>/
+            _UNUSED_CODE, /</em> 11             <em>/
+            _UNUSED_CODE, /</em> 12             <em>/
+            _UNUSED_CODE, /</em> 13             <em>/
+            _UNUSED_CODE, /</em> 14             <em>/
+            _UNUSED_CODE, /</em> 15             <em>/
+            _CV_CODE      /</em> 16 = IS_CV     */
+        };</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    // 去handler数组里找到对应的处理函数
+    return zend_opcode_handlers[opcode * 25 + zend_vm_decode[op-&gt;op1.op_type] * 5 + zend_vm_decode[op-&gt;op2.op_type]]; }
+</code></pre></div></div>
+
+<p>ZEND_API void zend_vm_set_opcode_handler(zend_op* op)
+{
+    // 给zend op设置对应的handler函数
+    op-&gt;handler = zend_vm_get_opcode_handler(zend_user_opcodes[op-&gt;opcode], op);
+}
+所有的opcode都定义在zend_vm_opcodes.h里，从php5.3-php5.6，大概从150增长到170个opcode。上面可以看到通过opcode查找handler的准确算法：</p>
+
+<p>zend_opcode_handlers[opcode * 25 + zend_vm_decode[op-&gt;op1.op_type] * 5 + zend_vm_decode[op-&gt;op2.op_type]
+不过zend_opcode_handlers数组太大了…找起来很麻烦。</p>
+
+<p>下面回到文章开始的那段php代码，我们将函数foo进行编译，最终得到的指令如下：</p>
+
+<p>可以看出，因为foo指接受一个参数，所以这里只有一条RECV指令。</p>
+
+<p>print语句的参数为!0，!0是一个compiled variables，其实就是参数中的arg1。0代表着索引，回忆一下，函数的op_array有一个数组专门用于保存compiled variables，0表明arg1位于该数组的开端。</p>
+
+<p>print语句有返回值，所以会存在一个临时变量保存其返回值，即~0。由于我们在函数中并未使用~0，所以随即便会有一条FREE指令对其进行释放。</p>
+
+<p>在函数的最后，是一条RETURN指令。</p>
+
+<p>6、绑定
+函数编译完成之后，还需要进行的一步是绑定。zend vm通过zend_do_early_binding来实现绑定。这个名字容易让人产生疑惑，其实只有在涉及到类和方法的时候，才会有早期绑定，与之相对的是延迟绑定，或者叫后期绑定。纯粹函数谈不上这种概念，不过zend_do_early_binding是多功能的，并非仅仅为绑定方法而实现。</p>
+
+<p>来看下zend_do_early_binding：</p>
+
+<p>// 拿到的是最近一条zend op，对于函数来说，就是ZEND_DECLARE_FUNCTION
+zend_op *opline = &amp;CG(active_op_array)-&gt;opcodes[CG(active_op_array)-&gt;last-1];
+HashTable *table;</p>
+
+<p>while (opline-&gt;opcode == ZEND_TICKS &amp;&amp; opline &gt; CG(active_op_array)-&gt;opcodes) {
+    opline–;
+}</p>
+
+<p>switch (opline-&gt;opcode) {
+    case ZEND_DECLARE_FUNCTION:
+        // 真正绑定函数
+        if (do_bind_function(opline, CG(function_table), 1) == FAILURE) {
+            return;
+        }
+        table = CG(function_table);
+        break;
+    case ZEND_DECLARE_CLASS:
+        …
+    case ZEND_DECLARE_INHERITED_CLASS:
+        …
+}</p>
+
+<p>// op1中保存的是函数的key，这里其从将CG(function_table)中删除
+zend_hash_del(table, opline-&gt;op1.u.constant.value.str.val, opline-&gt;op1.u.constant.value.str.len);
+zval_dtor(&amp;opline-&gt;op1.u.constant);
+zval_dtor(&amp;opline-&gt;op2.u.constant);</p>
+
+<p>// opline置为NOP
+MAKE_NOP(opline);
+这个函数实现也很简单，主要就是调用了do_bind_function。</p>
+
+<p>ZEND_API int do_bind_function(zend_op <em>opline, HashTable *function_table, zend_bool compile_time) /</em> {{{ */
+{
+    zend_function *function;</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>// 找出函数
+zend_hash_find(function_table, opline-&gt;op1.u.constant.value.str.val, opline-&gt;op1.u.constant.value.str.len, (void *) &amp;function);
+
+// 以函数名称作为key，重新加入function_table
+if (zend_hash_add(function_table, opline-&gt;op2.u.constant.value.str.val, opline-&gt;op2.u.constant.value.str.len+1, function, sizeof(zend_function), NULL)==FAILURE) {
+    int error_level = compile_time ? E_COMPILE_ERROR : E_ERROR;
+    zend_function *old_function;
+
+    // 加入失败，可能发生重复定义了
+    if (zend_hash_find(function_table, opline-&gt;op2.u.constant.value.str.val, opline-&gt;op2.u.constant.value.str.len+1, (void *) &amp;old_function)==SUCCESS
+        &amp;&amp; old_function-&gt;type == ZEND_USER_FUNCTION
+        &amp;&amp; old_function-&gt;op_array.last &gt; 0) {
+        zend_error(error_level, "Cannot redeclare %s() (previously declared in %s:%d)",
+                    function-&gt;common.function_name, old_function-&gt;op_array.filename, old_function-&gt;op_array.opcodes[0].lineno);
+    } else {
+        zend_error(error_level, "Cannot redeclare %s()", function-&gt;common.function_name);
+    }
+    return FAILURE;
+} else {
+    (*function-&gt;op_array.refcount)++;
+    function-&gt;op_array.static_variables = NULL; /* NULL out the unbound function */
+    return SUCCESS;
+} } 在进入do_bind_function之前，其实CG(function_table)中已经有了函数的op_array。不过用的键并非函数名，而是build_runtime_defined_function_key生成的“key”，这点在前面“开始编译”一节中有过介绍。do_bind_function所做的事情，正是利用这个“key”，将函数查找出来，并且以真正的函数名为键，重新插入到CG(function_table)中。
+</code></pre></div></div>
+
+<p>因此当do_bind_function完成时，function_table中有2个键可以查询到该函数。一个是“key”为索引的，另一个是以函数名为索引的。在zend_do_early_binding的最后，会通过zend_hash_del来删除“key”，从而保证function_table中，该函数只能够以函数名为键值查询到。</p>
+
+<p>7、总结
+这篇其实主要是为了弄清楚，函数如何被编译成op_array。一些关键的步骤如下图：
+<img src="https://xiazemin.github.io/MyBlog/img/func_opcode.png" />
+们前面的章节弄明白了函数体会被编译生成哪些zend_op指令，本章会研究函数调用语句会生成哪些zend_op指，等后面的章节再根据这些op指令，来剖析php运行时的细节。</p>
+
+<p>源码依然取自php5.3.29。</p>
+
+<p>函数调用
+回顾之前用的php代码示例：</p>
+
+<p>&lt;?php
+function foo($arg1)
+{
+    print($arg1);
+}</p>
+
+<p>$bar = ‘hello php’;
+foo($bar);
+在函数编译一章里已经分析过，函数foo最终会编译生成对应的zend_function，存放于函数表(CG(function_table))中。</p>
+
+<p>现在开始看 foo($bar); 一句，这应该是最简单的函数调用语句了。其他还有一些形式更为复杂的函数调用，例如以可变变量作为函数名，例如导入的函数以别名进行调用（涉及到命名空间），再例如以引用作为参数，以表达式作为参数，以函数调用本身作为参数等等。</p>
+
+<p>我们从简单的来入手，弄清楚调用语句的编译过程及产出，对于复杂的一些调用，下文也争取都能谈到一些。</p>
+
+<p>1、语法推导
+就 foo($bar); 而言，其主要部分语法树为
+<img src="https://xiazemin.github.io/MyBlog/img/func_call_opcode.png" />
+绿色的节点表示最后对应到php代码中的字面。红色的部分是语法推导过程中最重要的几步，特别是function_call。</p>
+
+<p>我们从语法分析文件zend_language_parser.y中挑出相关的：</p>
+
+<p>function_call:
+		namespace_name ‘(‘ { $2.u.opline_num = zend_do_begin_function_call(&amp;$1, 1 TSRMLS_CC); }
+				function_call_parameter_list
+				‘)’ { zend_do_end_function_call(&amp;$1, &amp;\(, &amp;$4, 0, $2.u.opline_num TSRMLS_CC); zend_do_extended_fcall_end(TSRMLS_C); }
+	|	T_NAMESPACE T_NS_SEPARATOR namespace_name '(' { $1.op_type = IS_CONST; ZVAL_EMPTY_STRING(&amp;$1.u.constant);  zend_do_build_namespace_name(&amp;$1, &amp;$1, &amp;$3 TSRMLS_CC); $4.u.opline_num = zend_do_begin_function_call(&amp;$1, 0 TSRMLS_CC); }
+				function_call_parameter_list
+				')' { zend_do_end_function_call(&amp;$1, &amp;\), &amp;$6, 0, $4.u.opline_num TSRMLS_CC); zend_do_extended_fcall_end(TSRMLS_C); }
+	|	T_NS_SEPARATOR namespace_name ‘(‘ { $3.u.opline_num = zend_do_begin_function_call(&amp;$2, 0 TSRMLS_CC); }
+				function_call_parameter_list
+				‘)’ { zend_do_end_function_call(&amp;$2, &amp;\(, &amp;$5, 0, $3.u.opline_num TSRMLS_CC); zend_do_extended_fcall_end(TSRMLS_C); }
+	|	class_name T_PAAMAYIM_NEKUDOTAYIM T_STRING '(' { $4.u.opline_num = zend_do_begin_class_member_function_call(&amp;$1, &amp;$3 TSRMLS_CC); }
+			function_call_parameter_list
+			')' { zend_do_end_function_call($4.u.opline_num?NULL:&amp;$3, &amp;\), &amp;$6, $4.u.opline_num, $4.u.opline_num TSRMLS_CC); zend_do_extended_fcall_end(TSRMLS_C);}
+	|	class_name T_PAAMAYIM_NEKUDOTAYIM variable_without_objects ‘(‘ { zend_do_end_variable_parse(&amp;$3, BP_VAR_R, 0 TSRMLS_CC); zend_do_begin_class_member_function_call(&amp;$1, &amp;$3 TSRMLS_CC); }
+			function_call_parameter_list
+			‘)’ { zend_do_end_function_call(NULL, &amp;\(, &amp;$6, 1, 1 TSRMLS_CC); zend_do_extended_fcall_end(TSRMLS_C);}
+	|	variable_class_name T_PAAMAYIM_NEKUDOTAYIM T_STRING '(' { zend_do_begin_class_member_function_call(&amp;$1, &amp;$3 TSRMLS_CC); }
+			function_call_parameter_list
+			')' { zend_do_end_function_call(NULL, &amp;\), &amp;$6, 1, 1 TSRMLS_CC); zend_do_extended_fcall_end(TSRMLS_C);}
+	|	variable_class_name T_PAAMAYIM_NEKUDOTAYIM variable_without_objects ‘(‘ { zend_do_end_variable_parse(&amp;$3, BP_VAR_R, 0 TSRMLS_CC); zend_do_begin_class_member_function_call(&amp;$1, &amp;$3 TSRMLS_CC); }
+			function_call_parameter_list
+			‘)’ { zend_do_end_function_call(NULL, &amp;\(, &amp;$6, 1, 1 TSRMLS_CC); zend_do_extended_fcall_end(TSRMLS_C);}
+	|	variable_without_objects  '(' { zend_do_end_variable_parse(&amp;$1, BP_VAR_R, 0 TSRMLS_CC); zend_do_begin_dynamic_function_call(&amp;$1, 0 TSRMLS_CC); }
+			function_call_parameter_list ')'
+			{ zend_do_end_function_call(&amp;$1, &amp;\), &amp;$4, 0, 1 TSRMLS_CC); zend_do_extended_fcall_end(TSRMLS_C);}
+;</p>
+
+<p>function_call_parameter_list:
+        non_empty_function_call_parameter_list    { \(= $1; }
+    |    /* empty */                　　　　　　　　{ Z_LVAL(\).u.constant) = 0; }
+;</p>
+
+<p>non_empty_function_call_parameter_list:
+        expr_without_variable    { Z_LVAL(\(.u.constant) = 1;  zend_do_pass_param(&amp;$1, ZEND_SEND_VAL, Z_LVAL(\).u.constant) TSRMLS_CC); }
+    |    variable                { Z_LVAL(\(.u.constant) = 1;  zend_do_pass_param(&amp;$1, ZEND_SEND_VAR, Z_LVAL(\).u.constant) TSRMLS_CC); }
+    |    ‘&amp;’ w_variable          { Z_LVAL(\(.u.constant) = 1;  zend_do_pass_param(&amp;$2, ZEND_SEND_REF, Z_LVAL(\).u.constant) TSRMLS_CC); }
+    |    non_empty_function_call_parameter_list ‘,’ expr_without_variable    { Z_LVAL(\(.u.constant)=Z_LVAL($1.u.constant)+1;  zend_do_pass_param(&amp;$3, ZEND_SEND_VAL, Z_LVAL(\).u.constant) TSRMLS_CC); }
+    |    non_empty_function_call_parameter_list ‘,’ variable                 { Z_LVAL(\(.u.constant)=Z_LVAL($1.u.constant)+1;  zend_do_pass_param(&amp;$3, ZEND_SEND_VAR, Z_LVAL(\).u.constant) TSRMLS_CC); }
+    |    non_empty_function_call_parameter_list ‘,’ ‘&amp;’ w_variable           { Z_LVAL(\(.u.constant)=Z_LVAL($1.u.constant)+1;  zend_do_pass_param(&amp;$4, ZEND_SEND_REF, Z_LVAL(\).u.constant) TSRMLS_CC); }
+;
+其结构并不复杂：</p>
+
+<p>1）function_call这条推导，代表了一个完整的函数调用。</p>
+
+<p>2）namespace_name是指经过命名空间修饰过之后的函数名，由于我们的例子中，函数foo并没有处于任何一个命名空间里，所以namespace_name其实就是foo。如果我们的函数定义在命名空间中，则namespace_name是一个类似“全路径”的fullname。</p>
+
+<p>namespace MyProject
+{
+function foo($arg1)
+{
+    print($arg1);
+}
+}</p>
+
+<p>namespace
+{
+$bar = ‘hello php’;
+MyProject\foo($bar);// 以类似“全路径”的fullname来调用函数，则namespace_name为MyProject\foo 
+}
+3）function_call_parameter_list是函数的参数列表，而non_empty_function_call_parameter_list则代表了非空参数列表。</p>
+
+<p>4）从这些推导产生式里，我们还能看出编译时的所运用的一些关键处理：</p>
+
+<p>zend_do_begin_function_call–&gt;zend_do_pass_param–&gt;zend_do_end_function_call</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    开始                        解析参数                     结束 和编译function语句块时的几步（zend_do_begin_function_declaration-&gt;zend_do_receive_arg-&gt;zend_do_end_function_declaration等）顺序上比较类似。
+</code></pre></div></div>
+
+<p>上面提到语法树我们仅仅画了一部分，准确讲，没有将namespace以及function_call_parameter_list以下的推导过程进一步画出来。原因一是namespace的推导比较简单。第二，由于function_call_parameter_list–&gt;variable这步会回到variable上，而variable经过若干步一直到产生变量$bar的推导比较复杂，也不是本文的重点，所以这里就不一进步探究了。</p>
+
+<p>2、开始编译
+看下function_call的推导式，一开始，zend vm会执行zend_do_begin_function_call做一些函数调用的准备。</p>
+
+<p>2.1、 zend_do_begin_function_call
+代码注解如下：</p>
+
+<p>zend_function *function;
+char *lcname;
+char *is_compound = memchr(Z_STRVAL(function_name-&gt;u.constant), ‘\’, Z_STRLEN(function_name-&gt;u.constant));</p>
+
+<p>// 将函数名进行修正，例如带上命名空间作为前缀等
+zend_resolve_non_class_name(function_name, check_namespace TSRMLS_CC);</p>
+
+<p>// 能进入该分支，说明在一个命名空间下以shortname调用函数，会生成一条DO_FCALL_BY_NAME指令
+if (check_namespace &amp;&amp; CG(current_namespace) &amp;&amp; !is_compound) {
+        /* We assume we call function from the current namespace
+        if it is not prefixed. */</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    /* In run-time PHP will check for function with full name and
+    internal function with short name */
+    zend_do_begin_dynamic_function_call(function_name, 1 TSRMLS_CC);
+    return 1; } 
+</code></pre></div></div>
+
+<p>// 转成小写，因为CG(function_table)中的函数名都是小写
+lcname = zend_str_tolower_dup(function_name-&gt;u.constant.value.str.val, function_name-&gt;u.constant.value.str.len);</p>
+
+<p>// 如果function_table中找不到该函数，则也尝试生成DO_FCALL_BY_NAME指令
+if ((zend_hash_find(CG(function_table), lcname, function_name-&gt;u.constant.value.str.len+1, (void <em>*) &amp;function) == FAILURE) ||
+    ((CG(compiler_options) &amp; ZEND_COMPILE_IGNORE_INTERNAL_FUNCTIONS) &amp;&amp; (function-&gt;type == ZEND_INTERNAL_FUNCTION))) {
+        zend_do_begin_dynamic_function_call(function_name, 0 TSRMLS_CC);
+        efree(lcname);
+        return 1; /</em> Dynamic */
+} 
+efree(function_name-&gt;u.constant.value.str.val);
+function_name-&gt;u.constant.value.str.val = lcname;</p>
+
+<p>// 压入CG(function_call_stack)
+zend_stack_push(&amp;CG(function_call_stack), (void *) &amp;function, sizeof(zend_function *));
+zend_do_extended_fcall_begin(TSRMLS_C);
+return 0;
+有几点需要理解的：</p>
+
+<p>1，zend_resolve_non_class_name。由于php支持命名空间、也支持别名/导入等特性，因此首先要做的是将函数名称进行修正，否则在CG(function_table)中找不到。例如，函数处于一个命名空间中，则可能需要将函数名添加上命名空间作为前缀，最终形成完整的函数名，也就是我们前文提到的以一种类似“全路径”的fullname作为函数名。再例如，函数名只是一个设置的别名，它实际指向了另一个命名空间中的某个函数，则需要将其改写成真正被调用函数的名称。这些工作，均由zend_resolve_non_class_name完成。命名空间添加了不少复杂度，下面是一些简单的例子：</p>
+
+<p>&lt;?php
+namespace MyProject;</p>
+
+<p>function foo($arg1)
+{
+    print($arg1);
+}</p>
+
+<p>$bar = ‘hello php’;</p>
+
+<p>foo($bar);                 // zend_resolve_non_class_name会将foo处理成MyProject\foo
+namespace\foo($bar);       // 在进入zend_do_begin_function_call之前，函数名已经被扩展成\MyProject\foo，再经过zend_resolve_non_class_name，将\MyProject\foo处理成MyProject\foo
+\MyProject\foo($bar);      // zend_resolve_non_class_name会将\MyProject\foo处理成MyProject\foo
+总之，zend_resolve_non_class_name是力图生成一个最精确、最完整的函数名。</p>
+
+<p>2，CG(current_namespace)存储了当前的命名空间。check_namespace和!is_compound一起说明被调用函数在当前命名空间下的，并且以shortname名称被调用。所谓shortname，是和上述的fullname相对，shorname的函数名，不存在”"。</p>
+
+<p>就像上面的例子中，我们在MyProject命名空间下，以foo为函数名来调用。这种情况下，check_namespace=1，is_compound = NULL，CG(current_namespace) = MyProject。因此，会走到zend_do_begin_dynamic_function_call里进一步处理。zend_do_begin_dynamic_function_call我们下面再具体描述。</p>
+
+<p>&lt;?php
+namespace MyProject\sub;</p>
+
+<p>function foo($arg1)
+{
+    print($arg1);
+}</p>
+
+<p>namespace MyProject;
+$bar = ‘hello php’;
+sub\foo($bar);      // 以sub\foo调用函数，并不算shortname，因为存在<br />
+注意上述例子，我们以sub\foo来调用函数。zend_resolve_non_class_name会将函数名处理成MyProject\sub\foo。不过is_compound是在zend_resolve_non_class_name之前算的，由于sub\foo存在”"，所以is_compound为”\foo”，!is_compound是false，因而不能进入zend_do_begin_dynamic_function_call。</p>
+
+<p>3，同样，如果CG(function_table)中找不到函数，也会进入zend_do_begin_dynamic_function_call进一步处理。为什么在函数表中找不到函数，因为php允许我们先调用，再去定义函数。例如：</p>
+
+<p>&lt;?php
+$bar = ‘hello php’;</p>
+
+<p>// 先调用
+foo($bar);</p>
+
+<p>// 后定义
+function foo($arg1)
+{
+    print($arg1);
+}
+4，在zend_do_begin_function_call的最后，我们将函数压入CG(function_call_stack)。这是一个栈，因为在后续对传参的编译，我们仍然需要用到函数，所以这里将其压亚入栈中，方便后面获取使用。之所以用栈，是因为调用函数传递的参数，可能是另一次函数调用。为了确保参数总是能找到对应的函数，所以用栈。</p>
+
+<p>&lt;?php
+function foo($arg1)
+{
+    print($arg1);
+}</p>
+
+<p>$bar = ‘hello php’;
+foo(strlen($bar));   // 首先foo入栈，然后分析参数strlen($bar)，发现依然是个函数，于是strlen入栈，再分析参数$bar，此时弹出对应的函数正好为strlen。
+2.2、 zend_do_begin_dynamic_function_call
+前面提到，正常的调用，会先执行zend_do_begin_function_call，在zend_do_begin_function_call中有两种情况会进一步调用zend_do_begin_dynamic_function_call来处理。</p>
+
+<p>一是，在命名空间中，以shortname调用函数；</p>
+
+<p>二是，在调用函数时，尚未定义函数。</p>
+
+<p>其实还有第三种情况会走到zend_do_begin_dynamic_function_call，就是当我们调用函数的时候，函数名并非直接写成字面，而是通过变量等形式来间接确定。这种情况下，zend vm会直接执行zend_do_begin_dynamic_function_call。</p>
+
+<p>举例1：</p>
+
+<p>&lt;?php
+function foo($arg1)
+{
+    print($arg1);
+}</p>
+
+<p>$bar = ‘hello php’;
+$func = ‘foo’;
+$func($bar);          // 我们以变量$func作为函数名，试图调用函数foo，$func类型是IS_CV
+此时， $func($bar) 对应function_call语法推导式的最后一条：</p>
+
+<p>function_call:
+        …
+	|	variable_without_objects  ‘(‘ { zend_do_end_variable_parse(&amp;$1, BP_VAR_R, 0 TSRMLS_CC); zend_do_begin_dynamic_function_call(&amp;$1, 0 TSRMLS_CC); }
+			function_call_parameter_list ‘)’
+			{ zend_do_end_function_call(&amp;$1, &amp;$$, &amp;$4, 0, 1 TSRMLS_CC); zend_do_extended_fcall_end(TSRMLS_C);}
+推导式中的variable_without_objects对应的就是变量 $func 。$func其实是一个compiled_variable，并且在op_array-&gt;vars数组中索引为1，索引为0的是在它之前定义的变量 $bar 。</p>
+
+<p>举例2：</p>
+
+<p>function foo($arg1)
+{
+    print($arg1);
+}</p>
+
+<p>$bar = ‘hello php’;
+$func = ‘foo’;
+$ref_func = ‘func’;
+\(ref_func($bar); // 以可变变量的形式来调用函数，\)ref_func类型是IS_VAR
+该例是以可变变量来调用函数，和例1一样， \(ref_func($bar)也是对应function_call语法推导式的最后一条，所以不会走进zend_do_begin_function_call，而是直接进入zend_do_begin_dynamic_function_call。不同的点在于\)ref_func 节点类型不再是compiled_variable，而是普通的variable，标识为IS_VAR。</p>
+
+<p>下面的图画出了5种case，第1种不经过zend_do_begin_dynamic_function_call，而后4种会调用zend_do_begin_dynamic_function_call处理，注意最后2种不经过zend_do_begin_function_call：
+<img src="https://xiazemin.github.io/MyBlog/img/begin_func_opcode.png" /></p>
+
+<p>具体看下zend_do_begin_dynamic_function_call的代码：</p>
+
+<p>void zend_do_begin_dynamic_function_call(znode <em>function_name, int ns_call TSRMLS_DC) /</em> {{{ */
+{
+    unsigned char *ptr = NULL;
+    zend_op *opline, *opline2;</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>// 拿一条zend_op
+opline = get_next_op(CG(active_op_array) TSRMLS_CC);
+
+// 参数ns_call表名是否以shortname在命名空间中调用函数
+if (ns_call) {
+    char *slash;
+    int prefix_len, name_len;
+    /* In run-time PHP will check for function with full name and
+       internal function with short name */
+    
+    // 第一条指令是ZEND_INIT_NS_FCALL_BY_NAME
+    opline-&gt;opcode = ZEND_INIT_NS_FCALL_BY_NAME;
+    opline-&gt;op2 = *function_name;
+    opline-&gt;extended_value = 0;
+    opline-&gt;op1.op_type = IS_CONST;
+    Z_TYPE(opline-&gt;op1.u.constant) = IS_STRING;
+    Z_STRVAL(opline-&gt;op1.u.constant) = zend_str_tolower_dup(Z_STRVAL(opline-&gt;op2.u.constant), Z_STRLEN(opline-&gt;op2.u.constant));
+    Z_STRLEN(opline-&gt;op1.u.constant) = Z_STRLEN(opline-&gt;op2.u.constant);
+    opline-&gt;extended_value = zend_hash_func(Z_STRVAL(opline-&gt;op1.u.constant), Z_STRLEN(opline-&gt;op1.u.constant) + 1);
+    
+    // 再拿一条zend_op，指令为ZEND_OP_DATA
+    slash = zend_memrchr(Z_STRVAL(opline-&gt;op1.u.constant), '\\', Z_STRLEN(opline-&gt;op1.u.constant));
+    prefix_len = slash-Z_STRVAL(opline-&gt;op1.u.constant)+1;
+    name_len = Z_STRLEN(opline-&gt;op1.u.constant)-prefix_len;
+    opline2 = get_next_op(CG(active_op_array) TSRMLS_CC);
+    opline2-&gt;opcode = ZEND_OP_DATA;
+    opline2-&gt;op1.op_type = IS_CONST;
+    Z_TYPE(opline2-&gt;op1.u.constant) = IS_LONG;
+    if(!slash) {
+        zend_error(E_CORE_ERROR, "Namespaced name %s should contain slash", Z_STRVAL(opline-&gt;op1.u.constant));
+    }
+    /* this is the length of namespace prefix */
+    Z_LVAL(opline2-&gt;op1.u.constant) = prefix_len;
+    /* this is the hash of the non-prefixed part, lowercased */
+    opline2-&gt;extended_value = zend_hash_func(slash+1, name_len+1);
+    SET_UNUSED(opline2-&gt;op2);
+} else {
+    // 第一条指令是ZEND_INIT_FCALL_BY_NAME
+    opline-&gt;opcode = ZEND_INIT_FCALL_BY_NAME;
+    opline-&gt;op2 = *function_name;
+    
+    // 先调用，再定义
+    if (opline-&gt;op2.op_type == IS_CONST) {
+        opline-&gt;op1.op_type = IS_CONST;
+        Z_TYPE(opline-&gt;op1.u.constant) = IS_STRING;
+        Z_STRVAL(opline-&gt;op1.u.constant) = zend_str_tolower_dup(Z_STRVAL(opline-&gt;op2.u.constant), Z_STRLEN(opline-&gt;op2.u.constant));
+        Z_STRLEN(opline-&gt;op1.u.constant) = Z_STRLEN(opline-&gt;op2.u.constant);
+        opline-&gt;extended_value = zend_hash_func(Z_STRVAL(opline-&gt;op1.u.constant), Z_STRLEN(opline-&gt;op1.u.constant) + 1);
+    }
+    // 以变量当函数名来调用
+    else {
+        opline-&gt;extended_value = 0;
+        SET_UNUSED(opline-&gt;op1);
+    }
+}
+
+// 将NULL压入CG(function_call_stack)
+zend_stack_push(&amp;CG(function_call_stack), (void *) &amp;ptr, sizeof(zend_function *));
+zend_do_extended_fcall_begin(TSRMLS_C); } ns_call参数取值为0或者1。如果在命名空间中，以shortname调用函数，则ns_call = 1，并且会生成2条指令。如果是先调用再定义，或者以变量作函数名，则ns_call = 0，并且只会生成1条指令。
+</code></pre></div></div>
+
+<p>以ns_call = 1为例：</p>
+
+<p>&lt;?php
+namespace MyProject;</p>
+
+<p>function foo($arg1)
+{
+    print($arg1);
+}</p>
+
+<p>$bar = ‘hello php’;
+foo($bar);
+ 生成的op指令如下所示：
+<img src="https://xiazemin.github.io/MyBlog/img/begin_func_opcode_1.png" />
+以ns_call = 0，先调用再定义为例：</p>
+
+<p>&lt;?php
+$bar = ‘hello php’;
+foo($bar);</p>
+
+<p>function foo($arg1)
+{
+    print($arg1);
+}
+生成的op指令如下所示：</p>
+
+<p>以ns_call = 0，变量作为函数名为例：</p>
+
+<p>&lt;?php
+function foo($arg1)
+{
+    print($arg1);
+}</p>
+
+<p>$bar = ‘hello php’;
+$func = ‘foo’;
+$func($bar);
+生成的op指令如下所示：</p>
+
+<p>上面一共新出现了3条op指令：ZEND_INIT_NS_FCALL_BY_NAME、ZEND_OP_DATA以及ZEND_INIT_FCALL_BY_NAME。</p>
+
+<p>其中，ZEND_INIT_NS_FCALL_BY_NAME和ZEND_INIT_FCALL_BY_NAME都是在运行时从函数表中取出真正被调用的函数。ZEND_OP_DATA在本case中并不起作用，第5章中会具体分析ZEND_OP_DATA。</p>
+
+<p>回到zend_do_begin_dynamic_function_call，在代码的最后向CG(function_call_stack)压入了一个NULL。CG(function_call_stack)在随后的zend_do_pass_param中会有作用，这里压入NULL，意味着随后zend_do_pass_param中会取出NULL，表明无法从函数定义中判断其参数的属性(是否为引用传递等)。</p>
+
+<p>3、编译传参
+从前面语法推导式里可以看出，调用函数时的传参，最终由zend_do_pass_param来完成。具体参数该怎么传，实际情况是很复杂的。php语法比较松散，可以传递正常的变量，也可以传递表达式，可以传递引用，甚至可以传递另一个函数调用。</p>
+
+<p>但无论是哪种情况，最终传参逻辑都会编译成类似SEND_VAR，SEND_VAL，SEND_REF，ZEND_SEND_VAR_NO_REF等指令，这些指令和函数中的RECV指令是对应的。具体来说，zend vm进入执行期之后，一般都是会通过SEND_XXX等指令发送参数，然后执行DO_FCALL/DO_FCALL_BY_NAME等指令开始调用函数。进入函数体内之后，再执行RECV完成参数的接收。第2章中我们具体讲解了RECV指令，除非函数不接受参数，否则RECV必定是函数体内的第一条指令。</p>
+
+<p>如下图所示：
+ <img src="https://xiazemin.github.io/MyBlog/img/begin_func_opcode_2.png" />
+ 们给出的示例是一种最简单的情况，也就是传递一个正常的变量。</p>
+
+<p>来看下zend_do_pass_param的实现：</p>
+
+<p>void zend_do_pass_param(znode <em>param, zend_uchar op, int offset TSRMLS_DC) /</em> {{{ */
+{
+    zend_op *opline;
+    int original_op = op;
+    zend_function **function_ptr_ptr, *function_ptr;
+    int send_by_reference;
+    int send_function = 0;</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>// 从CG(function_call_stack)获取当前函数，注意可能拿出的是NULL
+zend_stack_top(&amp;CG(function_call_stack), (void **) &amp;function_ptr_ptr);
+function_ptr = *function_ptr_ptr;
+
+// 调用的地方以引用传参，但是php.ini中配置不允许这样，则抛错
+if (original_op == ZEND_SEND_REF &amp;&amp; !CG(allow_call_time_pass_reference)) {
+    if (function_ptr &amp;&amp;
+            function_ptr-&gt;common.function_name &amp;&amp;
+            function_ptr-&gt;common.type == ZEND_USER_FUNCTION &amp;&amp;
+            !ARG_SHOULD_BE_SENT_BY_REF(function_ptr, (zend_uint) offset)) {
+        zend_error(E_DEPRECATED,
+                    "Call-time pass-by-reference has been deprecated; "
+                    "If you would like to pass it by reference, modify the declaration of %s().  "
+                    "If you would like to enable call-time pass-by-reference, you can set "
+                    "allow_call_time_pass_reference to true in your INI file", function_ptr-&gt;common.function_name);
+    } else {
+        zend_error(E_DEPRECATED, "Call-time pass-by-reference has been deprecated");
+    }
+} 1，首先是从CG(function_call_stack)中获取当前参数对应的函数。注意，可能拿到的只是一个NULL。因为php的语法允许我们先函数调用，再接着对函数进行定义。如前文所述，这种情况下zend_do_begin_function_call中会向CG(function_call_stack)中压入NULL，同时会产生DO_FCALL_BY_NAME指令。
+</code></pre></div></div>
+
+<p>2，在传参的语法推导式中，op可能会有3种，分别是ZEND_SEND_VAL、ZEND_SEND_VAR、ZEND_SEND_REF。</p>
+
+<p>expr_without_variable    { Z_LVAL(\(.u.constant) = 1;  zend_do_pass_param(&amp;$1, ZEND_SEND_VAL, Z_LVAL(\).u.constant) TSRMLS_CC); }
+variable                 { Z_LVAL(\(.u.constant) = 1;  zend_do_pass_param(&amp;$1, ZEND_SEND_VAR, Z_LVAL(\).u.constant) TSRMLS_CC); }
+‘&amp;’ w_variable           { Z_LVAL(\(.u.constant) = 1;  zend_do_pass_param(&amp;$2, ZEND_SEND_REF, Z_LVAL(\).u.constant) TSRMLS_CC); }
+这三种op分别对应的语法是expr_without_variable、variable、’&amp;’w_variable，简单来说就是“不含变量的表达式”、“变量”、“引用”。</p>
+
+<p>zend_do_pass_param会判断，如果用户传递的是引用，但同时在php.INI中配置了形如 allow_call_time_pass_reference = Off ，则需要产生一条E_DEPRECATED错误信息，告知用户传递的时候不建议强制写成引用。</p>
+
+<p>其实，还有第4种传参的opcode，即ZEND_SEND_VAR_NO_REF。我们接下来会提到。</p>
+
+<p>// 函数已定义，则根据函数的定义，来决定send_by_reference是否传引用
+if (function_ptr) {
+    if (ARG_MAY_BE_SENT_BY_REF(function_ptr, (zend_uint) offset)) {
+        …
+    } else {
+        // 要么为0，要么为ZEND_ARG_SEND_BY_REF
+        send_by_reference = ARG_SHOULD_BE_SENT_BY_REF(function_ptr, (zend_uint) offset) ? ZEND_ARG_SEND_BY_REF : 0;
+    }
+}
+// 函数为定义，先统一将send_by_reference置为0
+else {
+    send_by_reference = 0;
+}</p>
+
+<p>// 如果用户传递的参数，本身就是一次函数调用，则将op改成ZEND_SEND_VAR_NO_REF
+if (op == ZEND_SEND_VAR &amp;&amp; zend_is_function_or_method_call(param)) {
+    /* Method call */
+    op = ZEND_SEND_VAR_NO_REF;
+    send_function = ZEND_ARG_SEND_FUNCTION;
+}
+// 如果用户传递的参数，是一个表达式，并且结果会产生中间变量，则也将op改成ZEND_SEND_VAR_NO_REF
+else if (op == ZEND_SEND_VAL &amp;&amp; (param-&gt;op_type &amp; (IS_VAR|IS_CV))) {
+    op = ZEND_SEND_VAR_NO_REF;
+}
+1，send_by_reference表示根据函数的定义，参数是不是引用。ARG_MAY_BE_SENT_BY_REF和ARG_SHOULD_BE_SENT_BY_REF两个宏这里就不具体叙述了，感兴趣的朋友可以自己阅读代码。</p>
+
+<p>2，op == ZEND_SEND_VAR对应的是variable，假如参数是一个函数调用，也可能会被编译成variable，但是函数调用并不存在显式定义的变量，所以不能直接编译成SEND_VAR指令，因此这里就涉及到了上文提到的第4种opcode，即ZEND_SEND_VAR_NO_REF。例如：</p>
+
+<p>3，op == ZEND_SEND_VAL对应的是一个表达式，如果该表达式产生了一个变量作为结果，则也需要将op改成ZEND_SEND_VAR_NO_REF。例如：</p>
+
+<p>继续来看zend_do_pass_param：</p>
+
+<p>// 如果根据函数定义需要传递引用，且实际传递的参数是变量，则将op改成ZEND_SEND_REF
+if (op!=ZEND_SEND_VAR_NO_REF &amp;&amp; send_by_reference==ZEND_ARG_SEND_BY_REF) {
+    /* change to passing by reference */
+    switch (param-&gt;op_type) {
+        case IS_VAR:
+        case IS_CV:
+            op = ZEND_SEND_REF;
+            break;
+        default:
+            zend_error(E_COMPILE_ERROR, “Only variables can be passed by reference”);
+            break;
+    }
+}</p>
+
+<p>// 如果实际传递的参数是变量，调用zend_do_end_variable_parse处理链式调用
+if (original_op == ZEND_SEND_VAR) {
+    switch (op) {
+        case ZEND_SEND_VAR_NO_REF:
+            zend_do_end_variable_parse(param, BP_VAR_R, 0 TSRMLS_CC);
+            break;
+        case ZEND_SEND_VAR:
+            if (function_ptr) {
+                zend_do_end_variable_parse(param, BP_VAR_R, 0 TSRMLS_CC);
+            } else {
+                zend_do_end_variable_parse(param, BP_VAR_FUNC_ARG, offset TSRMLS_CC);
+            }
+            break;
+        case ZEND_SEND_REF:
+            zend_do_end_variable_parse(param, BP_VAR_W, 0 TSRMLS_CC);
+            break;
+    }
+}
+这里注意param-&gt;op_type是传递的参数经过编译得到znode的op_type，如果不属于变量（IS_VAR、IS_CV），就直接报错了。举例来说：</p>
+
+<p>function foo(&amp;$a)
+{
+    print($a);
+}</p>
+
+<p>foo($bar == 1);  // 抛错 “Only variables can be passed by reference”
+上面 $bar == 1 表达式的编译结果，op_type为IS_TMP_VAR，可以看做一种临时的中间结果，并非IS_VAR，IS_CV，因此无法编译成功。看着逻辑有点绕，其实很好理解。因为我们传递引用，实际目的是希望能够在函数中，对这个参数的值进行修改，需要参数是可写的。然而 $bar == 1 产生的中间结果，我们无法做出修改，是只读的。</p>
+
+<p>来看zend_do_pass_param的最后一段：</p>
+
+<p>// 获取下一条zend op指令
+opline = get_next_op(CG(active_op_array) TSRMLS_CC);</p>
+
+<p>// extended_value加上不同的附加信息
+if (op == ZEND_SEND_VAR_NO_REF) {
+    if (function_ptr) {
+        opline-&gt;extended_value = ZEND_ARG_COMPILE_TIME_BOUND | send_by_reference | send_function;
+    } else {
+        opline-&gt;extended_value = send_function;
+    }
+} else {
+    if (function_ptr) {
+        opline-&gt;extended_value = ZEND_DO_FCALL;
+    } else {
+        opline-&gt;extended_value = ZEND_DO_FCALL_BY_NAME;
+    }
+}</p>
+
+<p>// 设置opcode、op1、op2等
+opline-&gt;opcode = op;
+opline-&gt;op1 = *param;
+opline-&gt;op2.u.opline_num = offset;
+SET_UNUSED(opline-&gt;op2);
+上面这段代码生成了一条SEND指令。如果我们调用函数时候传递了多个参数，则会调用多次zend_do_pass_param，最终会生成多条SEND指令。</p>
+
+<p>至于指令具体是SEND_VAR，SEND_VAL，还是SEND_RE，亦或是ZEND_SEND_VAR_NO_REF，则依靠zend_do_pass_param中的判断。zend_do_pass_param中的逻辑分支比较多，一下子不能弄明白所有分支也没关系，最重要的是知道它会根据函数的定义以及实际传递的参数，产生最合适的SEND指令。</p>
+
+<p>还是回到我们开始的例子，对于 foo($bar) ，则经过zend_do_pass_param之后，产生的SEND指令细节如下：</p>
+
+<p>4、结束编译
+结束函数调用是通过zend_do_end_function_call来完成的。根据前文所述，zend_do_begin_function_call并不产生一条实际的调用指令，但它确定了最终函数调用走的是DO_FCALL还是DO_FCALL_BY_NAME，并且据此来生成ZEND_INIT_NS_FCALL_BY_NAME或ZEND_INIT_FCALL_BY_NAME指令。</p>
+
+<p>实际的调用指令是放在zend_do_end_function_call中来生成的。</p>
+
+<p>具体分析下zend_do_end_function_call：</p>
+
+<p>zend_op *opline;</p>
+
+<p>// 这段逻辑分支现在已经走不到了
+if (is_method &amp;&amp; function_name &amp;&amp; function_name-&gt;op_type == IS_UNUSED) {
+    /* clone */
+    if (Z_LVAL(argument_list-&gt;u.constant) != 0) {
+        zend_error(E_WARNING, “Clone method does not require arguments”);
+    }
+    opline = &amp;CG(active_op_array)-&gt;opcodes[Z_LVAL(function_name-&gt;u.constant)];
+} else {
+    opline = get_next_op(CG(active_op_array) TSRMLS_CC);</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>// 函数，名称确定，非dynamic_fcall，函数则生成ZEND_DO_FCALL指令
+if (!is_method &amp;&amp; !is_dynamic_fcall &amp;&amp; function_name-&gt;op_type==IS_CONST) {
+    opline-&gt;opcode = ZEND_DO_FCALL;
+    opline-&gt;op1 = *function_name;
+    ZVAL_LONG(&amp;opline-&gt;op2.u.constant, zend_hash_func(Z_STRVAL(function_name-&gt;u.constant), Z_STRLEN(function_name-&gt;u.constant) + 1));
+}
+// 否则生成ZEND_DO_FCALL_BY_NAME指令
+else {
+    opline-&gt;opcode = ZEND_DO_FCALL_BY_NAME;
+    SET_UNUSED(opline-&gt;op1);
+} }
+</code></pre></div></div>
+
+<p>// 生成临时变量索引，函数的调用，返回的znode必然是IS_VAR
+opline-&gt;result.u.var = get_temporary_variable(CG(active_op_array));
+opline-&gt;result.op_type = IS_VAR;
+*result = opline-&gt;result;
+SET_UNUSED(opline-&gt;op2);</p>
+
+<p>// 从CG(function_call_stack)弹出当前被调用的函数
+zend_stack_del_top(&amp;CG(function_call_stack));</p>
+
+<p>// 传参个数
+opline-&gt;extended_value = Z_LVAL(argument_list-&gt;u.constant);
+其中有一段if逻辑分支已经走不到了，可以忽略。</p>
+
+<p>具体考据：这段逻辑在462eff3中被添加，主要用于当调用__clone魔术方法时传参进行抛错，但在8e30d96中，已经不允许直接调用__clone方法了，在进入zend_do_end_function_call之前便会终止编译，所以实际上已经再也走不到该分支了。</p>
+
+<p>直接看else部分，else生成了一条zend op指令。如果函数名确定，函数已被定义，并且不属于动态调用等，则生成的op指令为ZEND_DO_FCALL，否则生成ZEND_DO_FCALL_BY_NAME。对于ZEND_DO_FCALL指令，其操作数比较明确，为函数名，但是对于ZEND_DO_FCALL_BY_NAME来说，由于被调的函数尚未明确，所以将操作数置为UNUSED。</p>
+
+<p>5、总结
+用一张图总结一下函数调用大致的编译流程：
+<img src="https://xiazemin.github.io/MyBlog/img/begin_func_opcode_3.png" /></p>
+:ET

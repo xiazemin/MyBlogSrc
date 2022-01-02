@@ -1,0 +1,246 @@
+I"�$<p>https://github.com/GoAdminGroup/go-admin
+https://demo.go-admin.cn/admin
+GoAdmin介绍
+GoAdmin是一个基于golang的数据可视化后台搭建框架，内置了管理后台的rbac权限系统，登录以及一个crud逻辑与视图生成的插件。支持不同主题更换，支持添加插件形式添加不同应用进行功能扩展。</p>
+
+<p>官网：https://www.go-admin.cn
+github地址：https://github.com/GoAdminGroup
+在线demo：https://demo.go-admin.cn
+文档地址：https://book.go-admin.cn/zh</p>
+
+<p>上手
+这里直接实战介绍如何上手，最小化的实现一个真实应用的数据管理后台。我从github搜索到了这样一个golang的web例子：eddycjy/go-gin-example，我们以这个简单例子为例来搭建这个应用的管理后台。
+<!-- more -->
+准备工作
+第一步
+首先，把这个应用的sql导入进数据库：</p>
+
+<p>截屏2020-03-31下午2.43.16.png</p>
+
+<p>第二步
+接着我们安装一下GoAdmin的命令行工具：</p>
+
+<p>GO111MODULE=on GOPROXY=https://goproxy.cn go install github.com/GoAdminGroup/go-admin/adm
+注意：这里使用了go module的方式加载依赖，不了解go module的话先百度一下。同时设置了代理，加快依赖的下载。</p>
+
+<p>安装完后，你应该可以在mac或linux的终端或windows的cmd成功执行以下命令：</p>
+
+<blockquote>
+  <p>adm -V
+GoAdmin CLI v1.2.7
+注意：如果不成功，检查一下你是否有将$GOPATH/bin这个路径加入到你的环境变量路径中，如果你不知道什么是环境变量路径可以百度一下先，再进行后面步骤</p>
+</blockquote>
+
+<p>第三步
+导入GoAdmin所需的sql文件进数据库中。</p>
+
+<p>截屏2020-03-31下午4.03.12.png</p>
+
+<p>到这里准备工作完毕，开始写代码。</p>
+
+<p>生成数据模型文件
+我们在任意位置创建我们的项目文件夹，比如叫：go-gin-example-admin，然后进入文件夹中，执行以下命令：</p>
+
+<blockquote>
+  <p>adm generate
+接着会出现几个菜单，首先让你选择数据库驱动，我们用的是mysql，因此选择mysql，按回车进行选择。</p>
+</blockquote>
+
+<p>? choose a driver  [Use arrows to move, type to filter, enter to select]</p>
+<blockquote>
+  <p>mysql
+  postgresql
+  sqlite
+  mssql
+然后我们填写好对应的数据信息：</p>
+</blockquote>
+
+<p>? choose a driver mysql
+? sql address 127.0.0.1
+? sql port 3306
+? sql username root
+? sql password <em>**</em>
+? sql database name gin-example-blogs
+接着选择要管理的表格，我们按空格选择全部，然后回车：</p>
+
+<p>? choose table to generate  [Use arrows to move, space to select, type to filter]</p>
+<blockquote>
+  <p>[x]  [select all]
+  [ ]  blog_article
+  [ ]  blog_auth
+  [ ]  blog_tag
+接着设置好文件的包名，数据模型文件的对应数据库连接名（默认是default）按回车即可，以及输出路径，我们都直接回车使用默认值。</p>
+</blockquote>
+
+<p>? set package name main
+? set connection name default
+? set file output path ./
+然后就可以看到在文件夹下生成了几个文件：</p>
+
+<p>.
+├── tables.go
+├── blog_article.go
+├── blog_auth.go
+└── blog_tag.go
+编写main.go
+生成完数据模型文件后，我们在文件夹下创建main.go，内容如下：</p>
+
+<p>package main</p>
+
+<p>import (
+    _ “github.com/GoAdminGroup/go-admin/adapter/gin”               // 适配器
+    _ “github.com/GoAdminGroup/go-admin/modules/db/drivers/mysql” // sql 驱动
+    _ “github.com/GoAdminGroup/themes/adminlte”                    // ui主题</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>"github.com/GoAdminGroup/go-admin/engine"
+"github.com/GoAdminGroup/go-admin/examples/datamodel"
+"github.com/GoAdminGroup/go-admin/modules/config"
+"github.com/GoAdminGroup/go-admin/modules/db"
+"github.com/GoAdminGroup/go-admin/modules/language"
+"github.com/GoAdminGroup/go-admin/template"
+"github.com/GoAdminGroup/go-admin/template/chartjs"
+"github.com/gin-gonic/gin"
+"io/ioutil" )
+</code></pre></div></div>
+
+<p>func main() {
+    r := gin.Default()</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>gin.SetMode(gin.ReleaseMode)
+gin.DefaultWriter = ioutil.Discard
+
+eng := engine.Default()
+
+template.AddComp(chartjs.NewChart())
+
+if err := eng.AddConfig(config.Config{
+    Databases: config.DatabaseList{
+        "default": {
+            Host:       "127.0.0.1",
+            Port:       "3306",
+            User:       "root",
+            Pwd:        "root",
+            Name:       "gin-example-blogs",
+            MaxIdleCon: 50,
+            MaxOpenCon: 150,
+            Driver:     db.DriverMysql,
+        },
+    },
+    UrlPrefix: "admin",
+    IndexUrl:  "/",
+    Debug:     true,
+    Language:  language.CN,
+}).
+    AddGenerators(Generators).
+    Use(r); err != nil {
+    panic(err)
+}
+
+r.Static("/uploads", "./uploads")
+
+eng.HTML("GET", "/admin", datamodel.GetContent)
+
+_ = r.Run(":9033") } 这里简单的解释一下：我们实例化了一个GoAdmin引擎对象eng，然后调用AddConfig方法传入配置，然后使用AddGenerators方法传入数据模型文件，接着调用Use挂载到gin框架上面。
+</code></pre></div></div>
+
+<p>现在我们尝试运行一下：</p>
+
+<blockquote>
+  <p>go run .</p>
+</blockquote>
+
+<p>[GIN-debug] [WARNING] Creating an Engine instance with the Logger and Recovery middleware already attached.</p>
+
+<p>[GIN-debug] [WARNING] Running in “debug” mode. Switch to “release” mode in production.</p>
+<ul>
+  <li>using env:   export GIN_MODE=release</li>
+  <li>using code:  gin.SetMode(gin.ReleaseMode)</li>
+</ul>
+
+<p>GoAdmin is now running.
+Running in “debug” mode. Switch to “release” mode in production.
+看到GoAdmin is now running意味着运行成功了，接着我们访问一下：http://localhost:9033/admin/login</p>
+
+<p>可以看到已经运行起来：</p>
+
+<p>截屏2020-03-31下午3.36.02.png</p>
+
+<p>默认账号密码都是：admin</p>
+
+<p>设置菜单与介绍数据模型文件
+登录进去后，访问菜单设置页，我们需要设置一下菜单，才能从菜单进入我们的表格管理页面。这时我们需要看一下我们文件夹下的tables.go文件。</p>
+
+<p>package main</p>
+
+<p>import “github.com/GoAdminGroup/go-admin/plugins/admin/modules/table”</p>
+
+<p>// The key of Generators is the prefix of table info url.
+// The corresponding value is the Form and Table data.
+//
+// http://://info/
+//
+// example:
+//
+// “blog_article” =&gt; http://localhost:9033/admin/info/blog_article
+// “blog_auth” =&gt; http://localhost:9033/admin/info/blog_auth
+// “blog_tag” =&gt; http://localhost:9033/admin/info/blog_tag
+//
+// example end
+//
+var Generators = map[string]table.Generator{
+    “blog_article”: GetBlogArticleTable,
+    “blog_auth”:    GetBlogAuthTable,
+    “blog_tag”:     GetBlogTagTable,</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>// generators end } 这个文件声明了一个map变量，这个变量的key是我们数据表管理路由的前缀，对应的值就是我们的数据模型生成函数。所以我们明白了，我们菜单需要设置的地址：
+</code></pre></div></div>
+
+<p>截屏2020-03-31下午3.56.14.png</p>
+
+<p>新建完成对应的几个菜单后，我们强制刷新一下页面，就可以看到左边已经出现了对应的菜单：</p>
+
+<p>截屏2020-03-31下午3.42.39.png</p>
+
+<p>我们点博客用户的菜单，进入用户的管理页面。</p>
+
+<p>截屏2020-03-31下午3.49.02.png</p>
+
+<p>我们想要对这个页面进行一些设置，比方说页面的标题Blog_auth，页面表格的表头字段名。这时我们需要改生成的数据模型文件，点开文件夹下的文件blog_auth.go，我们将其如下改动：</p>
+
+<p>package main</p>
+
+<p>import (
+    “github.com/GoAdminGroup/go-admin/context”
+    “github.com/GoAdminGroup/go-admin/modules/db”
+    “github.com/GoAdminGroup/go-admin/plugins/admin/modules/table”
+    “github.com/GoAdminGroup/go-admin/template/types/form”
+)</p>
+
+<p>func GetBlogAuthTable(ctx *context.Context) table.Table {</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>blogAuthTable := table.NewDefaultTable(table.DefaultConfigWithDriver("mysql"))
+
+info := blogAuthTable.GetInfo()
+
+info.AddField("ID", "id", db.Int).FieldFilterable()
+info.AddField("用户名", "username", db.Varchar)
+info.AddField("密码", "password", db.Varchar)
+
+info.SetTable("blog_auth").SetTitle("博客用户").SetDescription("博客用户")
+
+formList := blogAuthTable.GetForm()
+
+formList.AddField("ID", "id", db.Int, form.Default).FieldNotAllowAdd()
+formList.AddField("用户名", "username", db.Varchar, form.Text)
+formList.AddField("密码", "password", db.Varchar, form.Password)
+
+formList.SetTable("blog_auth").SetTitle("博客用户").SetDescription("博客用户")
+
+return blogAuthTable } 然后重新运行程序，再访问一下博客用户的管理页面，可以看到标题等内容已经被改变：
+</code></pre></div></div>
+
+<p>截屏2020-03-31下午3.53.36.png</p>
+
+<p>是不是很简单~这样就完成了数据表最基础的管理后台的搭建。
+https://segmentfault.com/a/1190000022215579</p>
+:ET

@@ -1,0 +1,202 @@
+I"E<p>mysql可以实现，同一个数据库中，不同的表应用不同的存储引擎，
+mysql主从数据库里同一张表，数据引擎也可以不一样
+<!-- more -->
+1、先看看mysql当前默认存储引擎</p>
+
+<p>mysql&gt; show variables like ‘%storage_engine%’;
++———————————-+———–+
+| Variable_name                    | Value     |
++———————————-+———–+
+| default_storage_engine           | InnoDB    |
+| default_tmp_storage_engine       | InnoDB    |
+| disabled_storage_engines         |           |
+| internal_tmp_disk_storage_engine | InnoDB    |
+| internal_tmp_mem_storage_engine  | TempTable |
++———————————-+———–+
+5 rows in set (0.11 sec)
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+2、查看mysql有哪些引擎</p>
+
+<p>mysql&gt; show engines;
++——————–+———+—————————————————————-+————–+——+————+
+| Engine             | Support | Comment                                                        | Transactions | XA   | Savepoints |
++——————–+———+—————————————————————-+————–+——+————+
+| FEDERATED          | NO      | Federated MySQL storage engine                                 | NULL         | NULL | NULL       |
+| MEMORY             | YES     | Hash based, stored in memory, useful for temporary tables      | NO           | NO   | NO         |
+| InnoDB             | DEFAULT | Supports transactions, row-level locking, and foreign keys     | YES          | YES  | YES        |
+| PERFORMANCE_SCHEMA | YES     | Performance Schema                                             | NO           | NO   | NO         |
+| MyISAM             | YES     | MyISAM storage engine                                          | NO           | NO   | NO         |
+| MRG_MYISAM         | YES     | Collection of identical MyISAM tables                          | NO           | NO   | NO         |
+| BLACKHOLE          | YES     | /dev/null storage engine (anything you write to it disappears) | NO           | NO   | NO         |
+| CSV                | YES     | CSV storage engine                                             | NO           | NO   | NO         |
+| ARCHIVE            | YES     | Archive storage engine                                         | NO           | NO   | NO         |
++——————–+———+—————————————————————-+————–+——+————+
+9 rows in set (0.00 sec)
+mysql支持存储引擎有好几种，咱们这里主要讨论一下常用的几种存储引擎。Innodb，myisam</p>
+
+<p>索引是 MySQL数据库很重要的一部分，它对数据表查询性能的好坏起着决定性的作用，尤其是对大表作用更加明显。 作为索引中最为常见的一种类型，B-Tree索引大都采用的是 B+Tree数据结构来存储数据（NDB集群存储引擎内部实际上采用 T-Tree结构存储这种索引）。B-Tree通常也意味着所有的值都是按顺序存储的。 大多数的 MySQL引擎都支持这种索引，而不同的存储引擎以不同的方式来实现 B-Tree索引，性能方面各有优劣。</p>
+
+<p>INNODB
+INNODB索引实现
+与 MyISAM相同的一点是，InnoDB 也采用 B+Tree这种数据结构来实现 B-Tree索引。而很大的区别在于，InnoDB 存储引擎采用“聚集索引”的数据存储方式实现B-Tree索引，所谓“聚集”，就是指数据行和相邻的键值紧凑地存储在一起，注意 InnoDB 只能聚集一个叶子页（16K）的记录（即聚集索引满足一定的范围的记录），因此包含相邻键值的记录可能会相距甚远。</p>
+
+<p>在 InnoDB 中，表被称为 索引组织表（index organized table），InnoDB 按照主键构造一颗 B+Tree （如果没有主键，则会选择一个唯一的并且非空索引替代，如果没有这样的索引，InnoDB则会隐式地定义一个主键来作为聚集索引），同时叶子页中存放整张表的行记录数据，也可以将聚集索引的叶子节点称为数据页，非叶子页可以看做是叶子页的稀疏索引。</p>
+
+<p>下图说明了 InnoDB聚集索引的实现方式，同时也体现了一张 innoDB表的结构，可以看到，InnoDB 中，主键索引和数据是一体的，没有分开。：
+<img src="https://xiazemin.github.io/MyBlog/img/innodb_mysql.png" /></p>
+
+<p>这种实现方式，给予了 InnoDB 按主键检索的超高性能。可以有目的性地选择聚集索引，比如一个邮件表，可以选择用户ID来聚集数据，这样只需要从磁盘读取较少并且连续的数据页就能获得某个id的用户全部的邮件，避免了读取分散页时所耗费的随机I/O。</p>
+
+<p>InnoDB 则是 I/O 操作，Innodb读写采用MVCC来支持高并发。</p>
+
+<p>全表扫描：
+当InnoDB做全表扫描时并不高效，因为 InnoDB 实际上并没有顺序读取,在大多情况下是在随机读取。做全表扫描时,InnoDB 会按主键顺序扫描页面和行。这应用于所有的InnoDB 表，包括碎片化的表。如果主键页表没有碎片（存储主键和行的页表),全表扫描是相当快，因为读取顺序接近物理存储顺序。但是当主键页有碎片时，该扫描就会变得十分缓慢</p>
+
+<p>行级锁
+提供行锁(locking on row level)，提供与 Oracle 类型一致的不加锁读取(non-locking read in SELECTs)，另外，InnoDB表的行锁也不是绝对的，如果在执行一个SQL语句时MySQL不能确定要扫描的范围，InnoDB表同样会锁全表，例如update table set num=1 where name like “%aaa%”</p>
+
+<p>MYISAM
+MyISAM索引的实现
+每个MyISAM在磁盘上存储成三个文件。第一个文件的名字以表的名字开始，扩展名指出文件类型。MyISAM索引文件【.MYI (MYIndex)】和数据文件【.MYD (MYData)】是分离的，索引文件仅保存记录所在页的指针（物理位置），通过这些地址来读取页，进而读取被索引的行。先来看看结构图
+<img src="https://xiazemin.github.io/MyBlog/img/myisam_mysql.png" />
+上图很好地说明了树中叶子保存的是对应行的物理位置。通过该值，存储引擎能顺利地进行回表查询，得到一行完整记录。同时，每个叶子页也保存了指向下一个叶子页的指针。从而方便叶子节点的范围遍历。 而对于二级索引，在 MyISAM存储引擎中以与上图同样的方式实现，这也说明了 MyISAM的索引方式是“非聚集的”，与 Innodb的“聚集索引”形成了对比</p>
+
+<p>MyISAM 默认会把索引读入内存，直接在内存中操作；</p>
+
+<p>表级锁
+小结：Innodb强调多功能性，支持的拓展功能比较多，myisam主要侧重于性能</p>
+
+<p>区别
+InnoDB支持事务，MyISAM不支持，对于InnoDB每一条SQL语言都默认封装成事务，自动提交，这样会影响速度，所以最好把多条SQL语言放在begin和commit之间，组成一个事务；
+InnoDB是聚集索引，数据文件是和索引绑在一起的，必须要有主键，通过主键索引效率很高。但是辅助索引需要两次查询，先查询到主键，然后再通过主键查询到数据。因此，主键不应该过大，因为主键太大，其他索引也都会很大。而MyISAM是非聚集索引，数据文件是分离的，索引保存的是数据文件的指针。主键索引和辅助索引是独立的。
+InnoDB不保存表的具体行数，执行select count(*) from table时需要全表扫描。而MyISAM用一个变量保存了整个表的行数，执行上述语句时只需要读出该变量即可，速度很快；
+Innodb不支持全文索引，而MyISAM支持全文索引，查询效率上MyISAM要高；
+如何选择
+是否要支持事务，如果要请选择innodb，如果不需要可以考虑MyISAM；
+如果表中绝大多数都只是读查询，可以考虑MyISAM，如果既有读写也挺频繁，请使用InnoDB。
+系统奔溃后，MyISAM恢复起来更困难，能否接受；
+MySQL5.5版本开始Innodb已经成为Mysql的默认引擎(之前是MyISAM)，说明其优势是有目共睹的，如果你不知道用什么，那就用InnoDB，至少不会差。</p>
+
+<p>存储引擎就是指表的类型以及表在计算机上的存储方式。</p>
+
+<p>存储引擎的概念是MySQL的特点，Oracle中没有专门的存储引擎的概念，Oracle有OLTP和OLAP模式的区分。不同的存储引擎决定了MySQL数据库中的表可以用不同的方式来存储。我们可以根据数据的特点来选择不同的存储引擎。</p>
+
+<p>通过show engines;查看SQL下的引擎</p>
+
+<p>1.InnoDB</p>
+
+<p>InnoDB给MySQL的表提供了事务处理、回滚、崩溃修复能力和多版本并发控制的事务安全。在MySQL从3.23.34a开始包含InnnoDB。它是MySQL上第一个提供外键约束的表引擎。而且InnoDB对事务处理的能力，也是其他存储引擎不能比拟的。靠后版本的MySQL的默认存储引擎就是InnoDB支持id自增，还支持外键</p>
+
+<p>innoDB的优势在于提供了良好的事务处理、崩溃修复能力和并发控制。缺点是读写效率较差，占用的数据空间相对较大(连表查询)。</p>
+
+<p>2.MyISAM</p>
+
+<p>MyISAM的表存储成3个文件。文件的名字与表名相同。拓展名为frm、MYD、MYI。其实，frm文件存储表的结构；MYD文件存储数据，是MYData的缩写；MYI文件存储索引，是MYIndex的缩写。</p>
+
+<p>基于MyISAM存储引擎的表支持3种不同的存储格式。包括静态型、动态型和压缩型。</p>
+
+<p>其中，静态型是MyISAM的默认存储格式，它的字段是固定长度的,该表具有极高的访问速度,即使在操作相当的数据表也是如此,但其最大的缺点就是占用空间较大;</p>
+
+<p>动态型包含变长字段，记录的长度不是固定的,其优点是它存数据时,采用的是数据的实际长度,能节省不少空间,但也是由于这点,当数据要做更新时,长度发生变更时,
+就不会存在原来的位置,而存在别的位置,造成原来的位置形成一空洞,并且关联的数据并不是存放在相邻的块中,而且产生大量的碎片,要定期进行碎片整理;</p>
+
+<p>压缩型需要用到myisampack工具，空间占用相当小,只有原大小的一半,而且读取数据时,还会对数据进行加压缩,并且注意该类型的表是只读表,不能进行修改.</p>
+
+<p>3.MEMORY</p>
+
+<p>数据全部放在内存中,</p>
+
+<p>每个基于MEMORY存储引擎的表实际对应一个磁盘文件。该文件的文件名与表名相同，类型为frm类型。该文件中只存储表的结构。而其数据文件，都是存储在内存中，这样有利于数据的快速处理，提高整个表的效率。值得注意的是，服务器需要有足够的内存来维持MEMORY存储引擎的表的使用。如果不需要了，可以释放内存，甚至删除不需要的表。</p>
+
+<p>MEMORY默认使用哈希索引。速度比使用B型树索引快。当然如果你想用B型树索引，可以在创建索引时指定。</p>
+
+<p>注意，MEMORY用到的很少，因为它是把数据存到内存中，如果内存出现异常就会影响数据。如果重启或者关机，所有数据都会消失。因此，基于MEMORY的表的生命周期很短，一般是一次性的。</p>
+
+<p>MyISAM是MySQL的默认数据库引擎（5.5版之前，新版本是InnoDB），由早期的ISAM（Indexed Sequential Access Method：有索引的顺序访问方法）所改良。虽然性能极佳，但却有一个缺点：不支持事务处理（transaction）。不过，在这几年的发展下，MySQL也导入了InnoDB（另一种数据库引擎），以强化参考完整性与并发违规处理机制，后来就逐渐取代MyISAM。</p>
+
+<p>InnoDB，是MySQL的数据库引擎之一，为MySQL AB发布binary的标准之一。InnoDB由Innobase Oy公司所开发，2006年五月时由甲骨文公司并购。与传统的ISAM与MyISAM相比，InnoDB的最大特色就是支持了ACID兼容的事务（Transaction）功能，类似于PostgreSQL。目前InnoDB采用双轨制授权，一是GPL授权，另一是专有软件授权。</p>
+
+<p>MyISAM与InnoDB的区别是什么？</p>
+
+<p>1、 存储结构</p>
+
+<p>MyISAM：每个MyISAM在磁盘上存储成三个文件。第一个文件的名字以表的名字开始，扩展名指出文件类型。.frm文件存储表定义。数据文件的扩展名为.MYD (MYData)。索引文件的扩展名是.MYI (MYIndex)。
+InnoDB：所有的表都保存在同一个数据文件中（也可能是多个文件，或者是独立的表空间文件），InnoDB表的大小只受限于操作系统文件的大小，一般为2GB。</p>
+
+<p>2、 存储空间</p>
+
+<p>MyISAM：可被压缩，存储空间较小。支持三种不同的存储格式：静态表(默认，但是注意数据末尾不能有空格，会被去掉)、动态表、压缩表。
+InnoDB：需要更多的内存和存储，它会在主内存中建立其专用的缓冲池用于高速缓冲数据和索引。</p>
+
+<p>3、 可移植性、备份及恢复</p>
+
+<p>MyISAM：数据是以文件的形式存储，所以在跨平台的数据转移中会很方便。在备份和恢复时可单独针对某个表进行操作。
+InnoDB：免费的方案可以是拷贝数据文件、备份 binlog，或者用 mysqldump，在数据量达到几十G的时候就相对痛苦了。</p>
+
+<p>4、 事务支持</p>
+
+<p>MyISAM：强调的是性能，每次查询具有原子性,其执行数度比InnoDB类型更快，但是不提供事务支持。
+InnoDB：提供事务支持事务，外部键等高级数据库功能。 具有事务(commit)、回滚(rollback)和崩溃修复能力(crash recovery capabilities)的事务安全(transaction-safe (ACID compliant))型表。</p>
+
+<p>5、 AUTO_INCREMENT</p>
+
+<p>MyISAM：可以和其他字段一起建立联合索引。引擎的自动增长列必须是索引，如果是组合索引，自动增长可以不是第一列，他可以根据前面几列进行排序后递增。
+InnoDB：InnoDB中必须包含只有该字段的索引。引擎的自动增长列必须是索引，如果是组合索引也必须是组合索引的第一列。</p>
+
+<p>6、 表锁差异</p>
+
+<p>MyISAM：只支持表级锁，用户在操作myisam表时，select，update，delete，insert语句都会给表自动加锁，如果加锁以后的表满足insert并发的情况下，可以在表的尾部插入新的数据。
+InnoDB：支持事务和行级锁，是innodb的最大特色。行锁大幅度提高了多用户并发操作的新能。但是InnoDB的行锁，只是在WHERE的主键是有效的，非主键的WHERE都会锁全表的。</p>
+
+<p>7、 全文索引</p>
+
+<p>MyISAM：支持 FULLTEXT类型的全文索引
+InnoDB：不支持FULLTEXT类型的全文索引，但是innodb可以使用sphinx插件支持全文索引，并且效果更好。</p>
+
+<p>8、 表主键</p>
+
+<p>MyISAM：允许没有任何索引和主键的表存在，索引都是保存行的地址。
+InnoDB：如果没有设定主键或者非空唯一索引，就会自动生成一个6字节的主键(用户不可见)，数据是主索引的一部分，附加索引保存的是主索引的值。</p>
+
+<p>9、 表的具体行数</p>
+
+<p>MyISAM：保存有表的总行数，如果select count(<em>) from table;会直接取出出该值。
+InnoDB：没有保存表的总行数，如果使用select count(</em>) from table；就会遍历整个表，消耗相当大，但是在加了wehre条件后，myisam和innodb处理的方式都一样。</p>
+
+<p>10、 CURD操作</p>
+
+<p>MyISAM：如果执行大量的SELECT，MyISAM是更好的选择。
+InnoDB：如果你的数据执行大量的INSERT或UPDATE，出于性能方面的考虑，应该使用InnoDB表。DELETE 从性能上InnoDB更优，但DELETE FROM table时，InnoDB不会重新建立表，而是一行一行的删除，在innodb上如果要清空保存有大量数据的表，最好使用truncate table这个命令。</p>
+
+<p>11、 外键</p>
+
+<p>MyISAM：不支持
+InnoDB：支持
+通过上述的分析，基本上可以考虑使用InnoDB来替代MyISAM引擎了，原因是InnoDB自身很多良好的特点，比如事务支持、存储 过程、视图、行级锁定等等，在并发很多的情况下，相信InnoDB的表现肯定要比MyISAM强很多。另外，任何一种表都不是万能的，只用恰当的针对业务类型来选择合适的表类型，才能最大的发挥MySQL的性能优势。如果不是很复杂的Web应用，非关键应用，还是可以继续考虑MyISAM的，这个具体情况可以自己斟酌。</p>
+
+<p>1.经常提交你的事务，小事务更少的倾向于冲突</p>
+
+<p>2.以固定的顺序访问你的表和行，这样事务就会形成良好的查询并且没有思索</p>
+
+<p>3.讲精心选定的索引添加到你的表中，这样你的查询就只需要扫描更少的索引记录，并且因此可以设置更好的锁定</p>
+
+<p>4.不要把无关紧要的操作放到事务里面</p>
+
+<p>5.尽量按照主键索引去查找记录，范围查找增加了锁冲突的可能性，也不要利用数据库去做一些额外的计算操作，比如</p>
+
+<p>select  …. where…. order by RAND(); 这样的语句用不到索引，因此将导致整个表中的数据都被锁住</p>
+
+<p>6.优化SQL和表设计，减少同时占用太多资源的情况，减少连接的表，将复杂的sql分解为多个简单的sql</p>
+
+<p>7.在并发比较高的系统中，不要显示的加锁，特别在事务里显示的加锁，如 select 。。。 for update 语句</p>
+:ET

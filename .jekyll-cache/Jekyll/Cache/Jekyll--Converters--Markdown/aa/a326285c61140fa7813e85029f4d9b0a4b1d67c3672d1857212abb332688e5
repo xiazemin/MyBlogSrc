@@ -1,0 +1,109 @@
+I"�<p>需要使用Go ID的场景， 比如在多goroutine长时间运行任务的时候，我们通过日志来跟踪任务的执行情况，可以通过go id来大致地跟踪程序并发执行的时候的状况。</p>
+
+<p>方法有三种：
+通过Stack信息解析出ID   goid.ExtractGID(buf[:runtime.Stack(buf[:], false)])
+通过汇编获取runtime·getg方法的调用结果
+直接修改运行时的代码，export一个可以外部调用的GoID()方法
+<!-- more -->
+ #1比较慢， #2因为是hack的方式(Go team并不想暴露go id的信息), 针对不同的Go版本中需要特殊的hack手段， #3需要定制Go运行时，不通用。当时的petermattis/goid提供了 #2 的方法， 但是只能在 go 1.3中才起作用，所以只能选择#1的方式获取go id。</p>
+
+<p>依照Go代码中的文档HACKING, go运行时中实现了一个getg()方法，可以获取当前的goroutine：</p>
+
+<p>getg() alone returns the current g</p>
+
+<p>当然这个方法是内部方法，不是exported,不能被外部的调用，而且返回的数据结构也是未exported的。如果有办法暴露出这个方法，问题就解决了。</p>
+
+<p>petermattis/goid 模仿runtime.getg暴露出一个getg的方法
+// +build amd64 amd64p32
+// +build go1.5
+#include “textflag.h”
+// func getg() uintptr
+TEXT ·getg(SB),NOSPLIT,$0-8
+	MOVQ (TLS), BX
+	MOVQ BX, ret+0(FP)
+	RET
+上面的代码实际是将当前的goroutine的结构体的指针(TLS)返回。
+TLS 其实是线程本地存储 （Thread Local Storage ）的缩写。这个技术在很多编程语言中都有用到
+在 Go 语言中，TLS 存储了一个 G 结构体的指针。这个指针所指向的结构体包括 Go 例程的内部细节</p>
+
+<p>因此，当在不同的例程中访问该变量时，实际访问的是该例程相应的变量所指向的结构体。链接器知道这个变量所在的位置，前面的指令中移动到 CX 寄存器的就是这个变量。对于 AMD64，TLS 是用 FS 寄存器来实现的， 所在我们前面看到的命令实际上可以翻译为 MOVQ FS, CX。</p>
+
+<p>不同的Go版本获取的数据结构可能是不同的，所以petermattis/goid针对1.5、1.6、1.9有变动的版本定制了不同的数据结构，因为我们只需要得到goroutine的ID,所以只需实现：
+func Get() int64 {
+	gg := (*g)(unsafe.Pointer(getg()))
+	return gg.goid
+}</p>
+
+<p>比如我们可以扩展一下，得到当前哪个m正在运行，甚至可以得到当前的线程的信息：
+func GetM() int32 {
+	gg := (<em>g)(unsafe.Pointer(getg()))
+	m := (</em>m)(unsafe.Pointer(gg.m))
+	return m.id
+}
+sigset在不同的平台的大小是不一样的，可以参考os_*.go中各平台的定义。上面是得到m的ID, 更全的m的结构定义海包括thread等信息。</p>
+
+<p>避免开发者滥用goroutine id实现goroutine local storage (类似java的”thread-local” storage)， 因为goroutine local storage很难进行垃圾回收。因此尽管以前暴露出了相应的方法，现在已经把它隐藏了。</p>
+
+<p>func GoID() int {
+	var buf [64]byte
+	n := runtime.Stack(buf[:], false)
+	idField := strings.Fields(strings.TrimPrefix(string(buf[:n]), “goroutine “))[0]
+	id, err := strconv.Atoi(idField)
+	if err != nil {
+		panic(fmt.Sprintf(“cannot get goroutine id: %v”, err))
+	}
+	return id
+}</p>
+
+<p>它利用runtime.Stack的堆栈信息。runtime.Stack(buf []byte, all bool) int会将当前的堆栈信息写入到一个slice中，堆栈的第一行为goroutine #### […,其中####就是当前的gororutine id,通过这个花招就实现GoID方法了。</p>
+
+<p>但是需要注意的是，获取堆栈信息会影响性能，所以建议你在debug的时候才用它。</p>
+
+<p>不应该暴露goid（faq: document why there is no way to get a goroutine ID），主要有以下几点理由：</p>
+
+<p>goroutine设计理念是轻量，鼓励开发者使用多goroutine进行开发，不希望开发者通过goid做goroutine local storage或thread local storage（TLS）的事情；
+Golang开发者Brad认为TLS在C/C++实践中也问题多多，比如一些使用TLS的库，thread状态非常容易被非期望线程修改，导致crash.
+goroutine并不等价于thread, 开发者可以通过syscall获取thread id，因此根本不需要暴露goid.</p>
+
+<p>通过stack信息获取goroutine id.
+通过修改源代码获取goroutine id.
+通过CGo获取goroutine id.
+通过汇编获取goroutine id.
+通过汇编获取伪goroutine id.</p>
+
+<p>通过CGo获取goroutine id
+那么有没有性能好，同时不影响移植性，且维护成本低的方法呢？那就是来自Dave Cheney的CGo方式：</p>
+
+<p>文件id.c：
+#include “runtime.h”
+int64 ·Id(void) {
+    return g-&gt;goid;
+}</p>
+
+<p>文件id.go
+package id
+func Id() int64</p>
+
+<p>runtime.getg()
+这个函数用于获取当前正在执行的 goroutine 的信息（/usr/local/go/src/runtime/stubs.go#21）。
+// getg returns the pointer to the current g.
+// The compiler rewrites calls to this function into instructions
+// that fetch the g directly (from TLS or from the dedicated register).
+func getg() *g</p>
+
+<p>从注释里可以看到，这个函数并不是在 runtime 里实现的，而是由编译器负责写入函数体。而且写明了是来自于 TLS（Thread-local Storage）或者指定的寄存器的。</p>
+
+<p>然后在编译器中搜索 getg 相关的内容，可以在 ssa.go 中发现与之相关的说明（cmd/compile/internal/amd64/ssa.go#712）：
+case ssa.OpAMD64LoweredGetG:
+    r := v.Reg()
+    // See the comments in cmd/internal/obj/x86/obj6.go
+    // near CanUse1InsnTLS for a detailed explanation of these instructions.
+    if x86.CanUse1InsnTLS(gc.Ctxt) {
+        // MOVQ (TLS), r
+        …
+    } else {
+        // MOVQ TLS, r
+        // MOVQ (r)(TLS*1), r
+        …
+    }</p>
+:ET

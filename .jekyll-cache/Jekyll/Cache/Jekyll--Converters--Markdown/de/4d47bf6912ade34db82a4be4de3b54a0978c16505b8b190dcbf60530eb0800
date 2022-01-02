@@ -1,0 +1,440 @@
+I"Kf<p>https://github.com/dabeaz/ply
+https://www.dabeaz.com/compiler.html
+https://github.com/wickman/ptsd
+https://pypi.org/project/ply/3.11/
+http://www.dabeaz.com/ply/index.html
+http://www.dalkescientific.com/writings/NBN/parsing_with_ply.html
+http://www.dabeaz.com/ply/</p>
+
+<p>https://pypi.org/project/thriftpy/
+https://github.com/Thriftpy/thriftpy
+https://github.com/Thriftpy/thriftpy2/tree/master/thriftpy2
+https://thriftpy.readthedocs.io/en/latest/</p>
+
+<p>https://github.com/LiuRoy/proto_parser
+https://www.cnpython.com/pypi/upfluence-thrift
+https://www.cnblogs.com/lrysjtu/p/6252435.html
+http://thrift.apache.org/tutorial/py
+<!-- more -->
+https://blog.csdn.net/chosen0ne/article/details/8077880?utm_source=blogxgwz9</p>
+
+<p>newlexer = lexer.clone()
+当lexer被克隆后，复制品能够精确的保留输入串和内部状态，不过，新的lexer可以接受一个不同的输出字串，并独立运作起来。这在几种情况下也许有用：当你在编写的解析器或编译器涉及到递归或者回退处理时，你需要扫描先前的部分，你可以clone并使用复制品，或者你在实现某种预编译处理，可以clone一些lexer来处理不同的输入文件。</p>
+
+<p>创建克隆跟重新调用lex.lex()的不同点在于，PLY不会重新构建任何的内部分析表或者正则式。当lexer是用类或者闭包创建的，需要注意类或闭包本身的的状态。换句话说你要注意新创建的lexer会共享原始lexer的这些状态，比如：</p>
+
+<p>m = MyLexer()
+a = lex.lex(object=m)      # Create a lexer</p>
+
+<p>b = a.clone()              # Clone the lexer
+4.17 Lexer的内部状态
+lexer有一些内部属性在特定情况下有用：</p>
+
+<p>lexer.lexpos。这是一个表示当前分析点的位置的整型值。如果你修改这个值的话，这会改变下一个token()的调用行为。在标记的规则方法里面，这个值表示紧跟匹配字串后面的第一个字符的位置，如果这个值在规则中修改，下一个返回的标记将从新的位置开始匹配
+lexer.lineno。表示当前行号。PLY只是声明这个属性的存在，却永远不更新这个值。如果你想要跟踪行号的话，你需要自己添加代码（ 4.6 行号和位置信息）
+lexer.lexdata。当前lexer的输入字串，这个字符串就是input()方法的输入字串，更改它可能是个糟糕的做法，除非你知道自己在干什么。
+lexer.lexmatch。PLY内部调用Python的re.match()方法得到的当前标记的原始的Match对象，该对象被保存在这个属性中。如果你的正则式中包含分组的话，你可以通过这个对象获得这些分组的值。注意：这个属性只在有标记规则定义的方法中才有效。
+4.18 基于条件的扫描和启动条件
+在高级的分析器应用程序中，使用状态化的词法扫描是很有用的。比如，你想在出现特定标记或句子结构的时候触发开始一个不同的词法分析逻辑。PLY允许lexer在不同的状态之间转换。每个状态可以包含一些自己独特的标记和规则等。这是基于GNU flex的“启动条件”来实现的，关于flex详见http://flex.sourceforge.net/manual/Start-Conditions.html#Start-Conditions</p>
+
+<p>要使用lex的状态，你必须首先声明。通过在lex模块中声明”states”来做到：</p>
+
+<p>states = (
+   (‘foo’,’exclusive’),
+   (‘bar’,’inclusive’),
+)
+这个声明中包含有两个状态：’foo’和’bar’。状态可以有两种类型：’排他型’和’包容型’。排他型的状态会使得lexer的行为发生完全的改变：只有能够匹配在这个状态下定义的规则的标记才会返回；包容型状态会将定义在这个状态下的规则添加到默认的规则集中，进而，只要能匹配这个规则集的标记都会返回。</p>
+
+<p>一旦声明好之后，标记规则的命名需要包含状态名：</p>
+
+<p>t_foo_NUMBER = r’\d+’                      # Token ‘NUMBER’ in state ‘foo’      <br />
+t_bar_ID     = r’[a-zA-Z_][a-zA-Z0-9_]*’   # Token ‘ID’ in state ‘bar’</p>
+
+<p>def t_foo_newline(t):
+    r’\n’
+    t.lexer.lineno += 1
+一个标记可以用在多个状态中，只要将多个状态名包含在声明中：</p>
+
+<p>t_foo_bar_NUMBER = r’\d+’         # Defines token ‘NUMBER’ in both state ‘foo’ and ‘bar’
+同样的，在任何状态下都生效的声明可以在命名中使用ANY：</p>
+
+<p>t_ANY_NUMBER = r’\d+’         # Defines a token ‘NUMBER’ in all states
+不包含状态名的情况下，标记被关联到一个特殊的状态INITIAL，比如，下面两个声明是等价的：</p>
+
+<p>t_NUMBER = r’\d+’
+t_INITIAL_NUMBER = r’\d+’
+特殊的t_ignore()和t_error()也可以用状态关联：</p>
+
+<p>t_foo_ignore = “ \t\n”       # Ignored characters for state ‘foo’</p>
+
+<p>def t_bar_error(t):          # Special error handler for state ‘bar’
+    pass
+词法分析默认在INITIAL状态下工作，这个状态下包含了所有默认的标记规则定义。对于不希望使用“状态”的用户来说，这是完全透明的。在分析过程中，如果你想要改变词法分析器的这种的状态，使用begin()方法：</p>
+
+<p>def t_begin_foo(t):
+    r’start_foo’
+    t.lexer.begin(‘foo’)             # Starts ‘foo’ state
+使用begin()切换回初始状态：</p>
+
+<p>def t_foo_end(t):
+    r’end_foo’
+    t.lexer.begin(‘INITIAL’)        # Back to the initial state
+状态的切换可以使用栈：</p>
+
+<p>def t_begin_foo(t):
+    r’start_foo’
+    t.lexer.push_state(‘foo’)             # Starts ‘foo’ state</p>
+
+<p>def t_foo_end(t):
+    r’end_foo’
+    t.lexer.pop_state()                   # Back to the previous state
+当你在面临很多状态可以选择进入，而又仅仅想要回到之前的状态时，状态栈比较有用。</p>
+
+<p>举个例子会更清晰。假设你在写一个分析器想要从一堆C代码中获取任意匹配的闭合的大括号里面的部分：这意味着，当遇到起始括号’{‘，你需要读取与之匹配的’}’以上的所有部分。并返回字符串。使用通常的正则表达式几乎不可能，这是因为大括号可以嵌套，而且可以有注释，字符串等干扰。因此，试图简单的匹配第一个出现的’}’是不行的。这里你可以用lex的状态来做到：</p>
+
+<h1 id="declare-the-state">Declare the state</h1>
+<p>states = (
+  (‘ccode’,’exclusive’),
+)</p>
+
+<h1 id="match-the-first--enter-ccode-state">Match the first {. Enter ccode state.</h1>
+<p>def t_ccode(t):
+    r’{’
+    t.lexer.code_start = t.lexer.lexpos        # Record the starting position
+    t.lexer.level = 1                          # Initial brace level
+    t.lexer.begin(‘ccode’)                     # Enter ‘ccode’ state</p>
+
+<h1 id="rules-for-the-ccode-state">Rules for the ccode state</h1>
+<p>def t_ccode_lbrace(t):   <br />
+    r’{’
+    t.lexer.level +=1</p>
+
+<p>def t_ccode_rbrace(t):
+    r’}’
+    t.lexer.level -=1</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code># If closing brace, return the code fragment
+if t.lexer.level == 0:
+     t.value = t.lexer.lexdata[t.lexer.code_start:t.lexer.lexpos+1]
+     t.type = "CCODE"
+     t.lexer.lineno += t.value.count('\n')
+     t.lexer.begin('INITIAL')           
+     return t
+</code></pre></div></div>
+
+<h1 id="c-or-c-comment-ignore">C or C++ comment (ignore)</h1>
+<p>def t_ccode_comment(t):
+    r’(/*(.|\n)<em>?</em>/)|(//.*)’
+    pass</p>
+
+<h1 id="c-string">C string</h1>
+<p>def t_ccode_string(t):
+   r’"([^\\n]|(\.))*?"’</p>
+
+<h1 id="c-character-literal">C character literal</h1>
+<p>def t_ccode_char(t):
+   r’'([^\\n]|(\.))*?'’</p>
+
+<h1 id="any-sequence-of-non-whitespace-characters-not-braces-strings">Any sequence of non-whitespace characters (not braces, strings)</h1>
+<p>def t_ccode_nonspace(t):
+   r’[^\s{}'"]+’</p>
+
+<h1 id="ignored-characters-whitespace">Ignored characters (whitespace)</h1>
+<p>t_ccode_ignore = “ \t\n”</p>
+
+<h1 id="for-bad-characters-we-just-skip-over-it">For bad characters, we just skip over it</h1>
+<p>def t_ccode_error(t):
+    t.lexer.skip(1)
+这个例子中，第一个’{‘使得lexer记录了起始位置，并且进入新的状态’ccode’。一系列规则用来匹配接下来的输入，这些规则只是丢弃掉标记（不返回值），如果遇到闭合右括号，t_ccode_rbrace规则收集其中所有的代码（利用先前记录的开始位置），并保存，返回的标记类型为’CCODE’，与此同时，词法分析的状态退回到初始状态。</p>
+
+<p>4.19 其他问题
+lexer需要输入的是一个字符串。好在大多数机器都有足够的内存，这很少导致性能的问题。这意味着，lexer现在还不能用来处理文件流或者socket流。这主要是受到re模块的限制。
+lexer支持用Unicode字符描述标记的匹配规则，也支持输入字串包含Unicode
+如果你想要向re.compile()方法提供flag，使用reflags选项：lex.lex(reflags=re.UNICODE)
+由于lexer是全部用Python写的，性能很大程度上取决于Python的re模块，即使已经尽可能的高效了。当接收极其大量的输入文件时表现并不尽人意。如果担忧性能，你可以升级到最新的Python，或者手工创建分析器，或者用C语言写lexer并做成扩展模块。
+如果你要创建一个手写的词法分析器并计划用在yacc.py中，只需要满足下面的要求：</p>
+
+<p>需要提供一个token()方法来返回下一个标记，如果没有可用的标记了，则返回None。
+token()方法必须返回一个tok对象，具有type和value属性。如果行号需要跟踪的话，标记还需要定义lineno属性。
+5 语法分析基础
+yacc.py用来对语言进行语法分析。在给出例子之前，必须提一些重要的背景知识。首先，‘语法’通常用BNF范式来表达。例如，如果想要分析简单的算术表达式，你应该首先写下无二义的文法：</p>
+
+<p>expression : expression + term
+           | expression - term
+           | term</p>
+
+<p>term       : term * factor
+           | term / factor
+           | factor</p>
+
+<p>factor     : NUMBER
+           | ( expression )
+在这个文法中，像NUMBER,+,-,*,/的符号被称为终结符，对应原始的输入。类似term，factor等称为非终结符，它们由一系列终结符或其他规则的符号组成，用来指代语法规则。</p>
+
+<p>通常使用一种叫语法制导翻译的技术来指定某种语言的语义。在语法制导翻译中，符号及其属性出现在每个语法规则后面的动作中。每当一个语法被识别，动作就能够描述需要做什么。比如，对于上面给定的文法，想要实现一个简单的计算器，应该写成下面这样：</p>
+
+<p>Grammar                             Action
+——————————–    ——————————————– 
+expression0 : expression1 + term    expression0.val = expression1.val + term.val
+            | expression1 - term    expression0.val = expression1.val - term.val
+            | term                  expression0.val = term.val</p>
+
+<p>term0       : term1 * factor        term0.val = term1.val * factor.val
+            | term1 / factor        term0.val = term1.val / factor.val
+            | factor                term0.val = factor.val</p>
+
+<p>factor      : NUMBER                factor.val = int(NUMBER.lexval)
+            | ( expression )        factor.val = expression.val
+一种理解语法指导翻译的好方法是将符号看成对象。与符号相关的值代表了符号的“状态”（比如上面的val属性），语义行为用一组操作符号及符号值的函数或者方法来表达。</p>
+
+<p>Yacc用的分析技术是著名的LR分析法或者叫移进-归约分析法。LR分析法是一种自下而上的技术：首先尝试识别右部的语法规则，每当右部得到满足，相应的行为代码将被触发执行，当前右边的语法符号将被替换为左边的语法符号。（归约）</p>
+
+<p>LR分析法一般这样实现：将下一个符号进栈，然后结合栈顶的符号和后继符号（译者注：下一个将要输入符号），与文法中的某种规则相比较。具体的算法可以在编译器的手册中查到，下面的例子展现了如果通过上面定义的文法，来分析3 + 5 * ( 10 - 20 )这个表达式，$用来表示输入结束</p>
+
+<p>Step Symbol Stack           Input Tokens            Action
+—- ———————  ———————   ——————————-
+1                           3 + 5 * ( 10 - 20 )$    Shift 3
+2    3                        + 5 * ( 10 - 20 )$    Reduce factor : NUMBER
+3    factor                   + 5 * ( 10 - 20 )$    Reduce term   : factor
+4    term                     + 5 * ( 10 - 20 )$    Reduce expr : term
+5    expr                     + 5 * ( 10 - 20 )$    Shift +
+6    expr +                     5 * ( 10 - 20 )$    Shift 5
+7    expr + 5                     * ( 10 - 20 )$    Reduce factor : NUMBER
+8    expr + factor                * ( 10 - 20 )$    Reduce term   : factor
+9    expr + term                  * ( 10 - 20 )$    Shift *
+10   expr + term *                  ( 10 - 20 )$    Shift (
+11   expr + term * (                  10 - 20 )$    Shift 10
+12   expr + term * ( 10                  - 20 )$    Reduce factor : NUMBER
+13   expr + term * ( factor              - 20 )$    Reduce term : factor
+14   expr + term * ( term                - 20 )$    Reduce expr : term
+15   expr + term * ( expr                - 20 )$    Shift -
+16   expr + term * ( expr -                20 )$    Shift 20
+17   expr + term * ( expr - 20                )$    Reduce factor : NUMBER
+18   expr + term * ( expr - factor            )$    Reduce term : factor
+19   expr + term * ( expr - term              )$    Reduce expr : expr - term
+20   expr + term * ( expr                     )$    Shift )
+21   expr + term * ( expr )                    $    Reduce factor : (expr)
+22   expr + term * factor                      $    Reduce term : term * factor
+23   expr + term                               $    Reduce expr : expr + term
+24   expr                                      $    Reduce expr
+25                                             $    Success!
+（译者注：action里面的Shift就是进栈动作，简称移进；Reduce是归约）</p>
+
+<p>在分析表达式的过程中，一个相关的自动状态机和后继符号决定了下一步应该做什么。如果下一个标记看起来是一个有效语法（产生式）的一部分（通过栈上的其他项判断这一点），那么这个标记应该进栈。如果栈顶的项可以组成一个完整的右部语法规则，一般就可以进行“归约”，用产生式左边的符号代替这一组符号。当归约发生时，相应的行为动作就会执行。如果输入标记既不能移进也不能归约的话，就会发生语法错误，分析器必须进行相应的错误恢复。分析器直到栈空并且没有另外的输入标记时，才算成功。 需要注意的是，这是基于一个有限自动机实现的，有限自动器被转化成分析表。分析表的构建比较复杂，超出了本文的讨论范围。不过，这构建过程的微妙细节能够解释为什么在上面的例子中，解析器选择在步骤9将标记转移到堆栈中，而不是按照规则expr : expr + term做归约。</p>
+
+<p>6 Yacc
+ply.yacc模块实现了PLY的分析功能，‘yacc’是‘Yet Another Compiler Compiler’的缩写并保留了其作为Unix工具的名字。</p>
+
+<p>6.1 一个例子
+假设你希望实现上面的简单算术表达式的语法分析，代码如下：</p>
+
+<h1 id="yacc-example">Yacc example</h1>
+
+<p>import ply.yacc as yacc</p>
+
+<h1 id="get-the-token-map-from-the-lexer--this-is-required">Get the token map from the lexer.  This is required.</h1>
+<p>from calclex import tokens</p>
+
+<p>def p_expression_plus(p):
+    ‘expression : expression PLUS term’
+    p[0] = p[1] + p[3]</p>
+
+<p>def p_expression_minus(p):
+    ‘expression : expression MINUS term’
+    p[0] = p[1] - p[3]</p>
+
+<p>def p_expression_term(p):
+    ‘expression : term’
+    p[0] = p[1]</p>
+
+<p>def p_term_times(p):
+    ‘term : term TIMES factor’
+    p[0] = p[1] * p[3]</p>
+
+<p>def p_term_div(p):
+    ‘term : term DIVIDE factor’
+    p[0] = p[1] / p[3]</p>
+
+<p>def p_term_factor(p):
+    ‘term : factor’
+    p[0] = p[1]</p>
+
+<p>def p_factor_num(p):
+    ‘factor : NUMBER’
+    p[0] = p[1]</p>
+
+<p>def p_factor_expr(p):
+    ‘factor : LPAREN expression RPAREN’
+    p[0] = p[2]</p>
+
+<h1 id="error-rule-for-syntax-errors">Error rule for syntax errors</h1>
+<p>def p_error(p):
+    print “Syntax error in input!”</p>
+
+<h1 id="build-the-parser">Build the parser</h1>
+<p>parser = yacc.yacc()</p>
+
+<p>while True:
+   try:
+       s = raw_input(‘calc &gt; ‘)
+   except EOFError:
+       break
+   if not s: continue
+   result = parser.parse(s)
+   print result
+在这个例子中，每个语法规则被定义成一个Python的方法，方法的文档字符串描述了相应的上下文无关文法，方法的语句实现了对应规则的语义行为。每个方法接受一个单独的p参数，p是一个包含有当前匹配语法的符号的序列，p[i]与语法符号的对应关系如下：</p>
+
+<p>def p_expression_plus(p):
+    ‘expression : expression PLUS term’
+    #   ^            ^        ^    ^
+    #  p[0]         p[1]     p[2] p[3]</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>p[0] = p[1] + p[3] 其中，p[i]的值相当于词法分析模块中对p.value属性赋的值，对于非终结符的值，将在归约时由p[0]的赋值决定，这里的值可以是任何类型，当然，大多数情况下只是Python的简单类型、元组或者类的实例。在这个例子中，我们依赖这样一个事实：NUMBER标记的值保存的是整型值，所有规则的行为都是得到这些整型值的算术运算结果，并传递结果。
+</code></pre></div></div>
+
+<p>注意：在这里负数的下标有特殊意义–这里的p[-1]不等同于p[3]。详见下面的嵌入式动作部分
+在yacc中定义的第一个语法规则被默认为起始规则（这个例子中的第一个出现的expression规则）。一旦起始规则被分析器归约，而且再无其他输入，分析器终止，最后的值将返回（这个值将是起始规则的p[0]）。注意：也可以通过在yacc()中使用start关键字参数来指定起始规则</p>
+
+<p>p_error(p)规则用于捕获语法错误。详见处理语法错误部分</p>
+
+<p>为了构建分析器，需要调用yacc.yacc()方法。这个方法查看整个当前模块，然后试图根据你提供的文法构建LR分析表。第一次执行yacc.yacc()，你会得到如下输出：</p>
+
+<p>$ python calcparse.py
+Generating LALR tables
+calc &gt;
+由于分析表的得出相对开销较大（尤其包含大量的语法的情况下），分析表被写入当前目录的一个叫parsetab.py的文件中。除此之外，会生成一个调试文件parser.out。在接下来的执行中，yacc直到发现文法发生变化，才会重新生成分析表和parsetab.py文件，否则yacc会从parsetab.py中加载分析表。注：如果有必要的话这里输出的文件名是可以改的。</p>
+
+<p>如果在你的文法中有任何错误的话，yacc.py会产生调试信息，而且可能抛出异常。一些可以被检测到的错误如下：</p>
+
+<p>方法重复定义（在语法文件中具有相同名字的方法）
+二义文法产生的移进-归约和归约-归约冲突
+指定了错误的文法
+不可终止的递归（规则永远无法终结）
+未使用的规则或标记
+未定义的规则或标记
+下面几个部分将更详细的讨论语法规则</p>
+
+<p>这个例子的最后部分展示了如何执行由yacc()方法创建的分析器。你只需要简单的调用parse()，并将输入字符串作为参数就能运行分析器。它将运行所有的语法规则，并返回整个分析的结果，这个结果就是在起始规则中赋给p[0]的值。</p>
+
+<p>6.2 将语法规则合并
+如果语法规则类似的话，可以合并到一个方法中。例如，考虑前面例子中的两个规则：</p>
+
+<p>def p_expression_plus(p):
+    ‘expression : expression PLUS term’
+    p[0] = p[1] + p[3]</p>
+
+<p>def p_expression_minus(t):
+    ‘expression : expression MINUS term’
+    p[0] = p[1] - p[3]
+比起写两个方法，你可以像下面这样写在一个方法里面：</p>
+
+<p>def p_expression(p):
+    ‘'’expression : expression PLUS term
+                  | expression MINUS term’’’
+    if p[2] == ‘+’:
+        p[0] = p[1] + p[3]
+    elif p[2] == ‘-‘:
+        p[0] = p[1] - p[3]
+总之，方法的文档字符串可以包含多个语法规则。所以，像这样写也是合法的（尽管可能会引起困惑）：</p>
+
+<p>def p_binary_operators(p):
+    ‘'’expression : expression PLUS term
+                  | expression MINUS term
+       term       : term TIMES factor
+                  | term DIVIDE factor’’’
+    if p[2] == ‘+’:
+        p[0] = p[1] + p[3]
+    elif p[2] == ‘-‘:
+        p[0] = p[1] - p[3]
+    elif p[2] == ‘*’:
+        p[0] = p[1] * p[3]
+    elif p[2] == ‘/’:
+        p[0] = p[1] / p[3]
+如果所有的规则都有相似的结构，那么将语法规则合并才是个不错的注意（比如，产生式的项数相同）。不然，语义动作可能会变得复杂。不过，简单情况下，可以使用len()方法区分，比如：</p>
+
+<p>def p_expressions(p):
+    ‘'’expression : expression MINUS expression
+                  | MINUS expression’’’
+    if (len(p) == 4):
+        p[0] = p[1] - p[3]
+    elif (len(p) == 3):
+        p[0] = -p[2]
+如果考虑解析的性能，你应该避免像这些例子一样在一个语法规则里面用很多条件来处理。因为，每次检查当前究竟匹配的是哪个语法规则的时候，实际上重复做了分析器已经做过的事（分析器已经准确的知道哪个规则被匹配了）。为每个规则定义单独的方法，可以消除这点开销。</p>
+
+<p>6.3 字面字符
+如果愿意，可以在语法规则里面使用单个的字面字符，例如：</p>
+
+<p>def p_binary_operators(p):
+    ‘'’expression : expression ‘+’ term
+                  | expression ‘-‘ term
+       term       : term ‘<em>’ factor
+                  | term ‘/’ factor’’’
+    if p[2] == ‘+’:
+        p[0] = p[1] + p[3]
+    elif p[2] == ‘-‘:
+        p[0] = p[1] - p[3]
+    elif p[2] == ‘</em>’:
+        p[0] = p[1] * p[3]
+    elif p[2] == ‘/’:
+        p[0] = p[1] / p[3]
+字符必须像’+’那样使用单引号。除此之外，需要将用到的字符定义单独定义在lex文件的literals列表里：</p>
+
+<h1 id="literals--should-be-placed-in-module-given-to-lex">Literals.  Should be placed in module given to lex()</h1>
+<p>literals = [’+’,’-‘,’*’,’/’ ]
+字面的字符只能是单个字符。因此，像’&lt;=’或者’==’都是不合法的，只能使用一般的词法规则（例如t_EQ = r’==’)。</p>
+
+<p>6.4 空产生式
+yacc.py可以处理空产生式，像下面这样做：</p>
+
+<p>def p_empty(p):
+    ‘empty :’
+    pass
+现在可以使用空匹配，只要将’empty’当成一个符号使用：</p>
+
+<p>def p_optitem(p):
+    ‘optitem : item’
+    ‘        | empty’
+    …
+注意：你可以将产生式保持’空’，来表示空匹配。然而，我发现用一个’empty’规则并用其来替代’空’，更容易表达意图，并有较好的可读性。</p>
+
+<p>6.5 改变起始符号
+默认情况下，在yacc中的第一条规则是起始语法规则（顶层规则）。可以用start标识来改变这种行为：</p>
+
+<p>start = ‘foo’</p>
+
+<p>def p_bar(p):
+    ‘bar : A B’</p>
+
+<h1 id="this-is-the-starting-rule-due-to-the-start-specifier-above">This is the starting rule due to the start specifier above</h1>
+<p>def p_foo(p):
+    ‘foo : bar X’
+…
+用start标识有助于在调试的时候将大型的语法规则分成小部分来分析。也可把start符号作为yacc的参数：</p>
+
+<p>yacc.yacc(start=’foo’)</p>
+
+<p>https://www.jianshu.com/p/0eaeba15ee68</p>
+
+<p>https://www.cnblogs.com/c00107217/archive/2013/04/10/3013343.html
+https://blog.csdn.net/chosen0ne/article/details/8077880?locationNum=10</p>
+
+<p>https://zhuanlan.zhihu.com/p/55067725</p>
+
+<p>ThriftPy 是由饿了么开源的 Apache Thrift 纯 Python 实现。它在基本兼容 Apache Thrift 的同时相比 Apache 社区的实现有以下优势：</p>
+
+<p>Apache Thrift 由 C++ 渲染 Python 模板代码实现，因此需要在更新 Thrift IDL 文件后重新生成模板代码；而 ThriftPy 充分利用了 Python 元编程的优势，可以做到在程序的运行时构造 Python 代码，省去了独立的编译过程。
+ThriftPy 相比 Apache Thrift 使用了 Cython 进行加速，因此有更强的性能。
+ThriftPy 的 Transport 内置适配了很多 Python 经典的 Web 服务架构比如 Tornado。
+最佳实践中提供了诸如 gunicorn_thrift(并发 woker 管理), thrift_connector(连接池) 外围组件的支持。
+所以 ThriftPy 可能是 Python 下 Thrift 在生产中的最佳选择了。但由于 ThriftPy 完全没有使用 Apache Thrift 的 (C++) 源码，而是自行实现了所有部分——IDL 编译器、Transport 与 Protocol 等。因此依然存在极少部分与 Apache 版不兼容而被人诟病，其中社区最常反馈的问题就是 ThriftPy 不支持递归定义</p>
+
+<p>https://www.jianshu.com/p/404dd88267c7
+https://blog.csdn.net/yzj225/article/details/76855991
+https://www.cnblogs.com/hongtrands/p/11148840.html</p>
+
+<p>https://blog.csdn.net/xiaotao745324325/article/details/41849923</p>
+
+<p>https://blog.csdn.net/chosen0ne/article/details/8077880?locationNum=10
+https://blog.csdn.net/chosen0ne/article/details/8077880</p>
+
+:ET

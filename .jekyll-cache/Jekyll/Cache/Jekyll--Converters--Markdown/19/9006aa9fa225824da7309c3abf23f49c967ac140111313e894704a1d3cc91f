@@ -1,0 +1,362 @@
+I"�K<p>要实现断点续传的功能，通常都需要客户端记录下当前的下载进度，并在需要续传的时候通知服务端本次需要下载的内容片段。</p>
+
+<p>HTTP1.1协议（RFC2616）中定义了断点续传相关的HTTP头 Range和Content-Range字段，一个最简单的断点续传实现大概如下：</p>
+
+<p>1.客户端下载一个1024K的文件，已经下载了其中512K</p>
+
+<ol>
+  <li>网络中断，客户端请求续传，因此需要在HTTP头中申明本次需要续传的片段：</li>
+</ol>
+
+<p>Range:bytes=512000-</p>
+
+<p>这个头通知服务端从文件的512K位置开始传输文件</p>
+
+<ol>
+  <li>服务端收到断点续传请求，从文件的512K位置开始传输，并且在HTTP头中增加：</li>
+</ol>
+
+<p>Content-Range:bytes 512000-/1024000</p>
+
+<p>并且此时服务端返回的HTTP状态码应该是206，而不是200。
+<!-- more -->
+但是在实际场景中，会出现一种情况，即在终端发起续传请求时，URL对应的文件内容在服务端已经发生变化，此时续传的数据肯定是错误的。如何解决这个问题了？显然此时我们需要有一个标识文件唯一性的方法。在RFC2616中也有相应的定义，比如实现Last-Modified来标识文件的最后修改时间，这样即可判断出续传文件时是否已经发生过改动。同时RFC2616中还定义有一个ETag的头，可以使用ETag头来放置文件的唯一标识，比如文件的MD5值。</p>
+
+<p>终端在发起续传请求时应该在HTTP头中申明If-Match 或者If-Modified-Since 字段，帮助服务端判别文件变化。</p>
+
+<p>另外RFC2616中同时定义有一个If-Range头，终端如果在续传是使用If-Range。If-Range中的内容可以为最初收到的ETag头或者是Last-Modfied中的最后修改时候。服务端在收到续传请求时，通过If-Range中的内容进行校验，校验一致时返回206的续传回应，不一致时服务端则返回200回应，回应的内容为新的文件的全部数据</p>
+
+<p>HTTP断点续传</p>
+
+<p>Range：客户端发请求的范围</p>
+
+<p>Content-Range：服务端返回当前请求范围和文件总大小</p>
+
+<p>续传成功返回206</p>
+
+<p>文件又变动，返回200和新文件内容</p>
+
+<p>HTTP1.1 协议（RFC2616）开始支持获取文件的部分内容，这为并行下载以及断点续传提供了技术支持。它通过在 Header 里两个参数实现的，客户端发请求时对应的是 Range ，服务器端响应时对应的是 Content-Range。</p>
+
+<p>Range</p>
+
+<p>用于请求头中，指定第一个字节的位置和最后一个字节的位置，一般格式：</p>
+
+<p>Range:(unit=first byte pos)-[last byte pos]</p>
+
+<p>1.以下几点需要注意：</p>
+
+<p>(1)这个数据区间是个闭合区间，起始值是0，所以“Range: bytes=0-1”这样一个请求实际上是在请求开头的2个字节。</p>
+
+<p>(2)“Range: bytes=-200”，它不是表示请求文件开始位置的201个字节，而是表示要请求文件结尾处的200个字节。</p>
+
+<p>(3)如果last byte pos小于first byte pos，那么这个Range请求就是无效请求，server需要忽略这个Range请求，然后回应一个200，把整个文件发给client。</p>
+
+<p>(4)如果last byte pos大于等于文件长度，那么这个Range请求被认为是不能满足的，server需要回应一个416，Requested range not satisfiable。</p>
+
+<p>2.示例解释：</p>
+
+<p>Range: bytes=0-499    表示第 0-499 字节范围的内容</p>
+
+<p>Range: bytes=500-999 表示第 500-999 字节范围的内容</p>
+
+<p>Range: bytes=-500   表示最后 500 字节的内容</p>
+
+<p>Range: bytes=500-   表示从第 500 字节开始到文件结束部分的内容</p>
+
+<p>Range: bytes=0-0,-1 表示第一个和最后一个字节</p>
+
+<p>Range: bytes=500-600,601-999 同时指定几个范围</p>
+
+<p>Content-Range</p>
+
+<p>用于响应头中，在发出带 Range 的请求后，服务器会在 Content-Range 头部返回当前接受的范围和文件总大小。一般格式：</p>
+
+<p>Content-Range: bytes (unit first byte pos) - [last byte pos]/[entity legth]</p>
+
+<p>例如：</p>
+
+<p>请求下载整个文件:</p>
+
+<p>GET /test.rar HTTP/1.1</p>
+
+<p>Connection: close</p>
+
+<p>Host: 116.1.219.219</p>
+
+<p>Range: bytes=0-801   //一般请求下载整个文件是bytes=0- 或不用这个头</p>
+
+<p>一般正常回应</p>
+
+<p>HTTP/1.1 200 OK</p>
+
+<p>Content-Length: 801</p>
+
+<p>Content-Type: application/octet-stream</p>
+
+<p>Content-Range: bytes 0-800/801   //801:文件总大小</p>
+
+<p>而在响应完成后，返回的响应头内容也不同：</p>
+
+<p>HTTP/1.1 200 Ok（不使用断点续传方式）</p>
+
+<p>HTTP/1.1 206 Partial Content（使用断点续传方式）</p>
+
+<p>总结：</p>
+
+<p>HTTP1.1协议（RFC2616）中定义了断点续传相关的HTTP头 Range和Content-Range字段，一个最简单的断点续传实现大概如下：</p>
+
+<p>1.客户端下载一个1024K的文件，已经下载了其中512K</p>
+
+<ol>
+  <li>
+    <p>网络中断，客户端请求续传，因此需要在HTTP头中申明本次需要续传的片段：</p>
+
+    <p>Range:bytes=512000-</p>
+  </li>
+</ol>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>这个头通知服务端从文件的512K位置开始传输文件 
+</code></pre></div></div>
+
+<ol>
+  <li>服务端收到断点续传请求，从文件的512K位置开始传输，并且在HTTP头中增加：</li>
+</ol>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>Content-Range:bytes 512000-/1024000 
+
+并且此时服务端返回的HTTP状态码应该是206，而不是200。 
+</code></pre></div></div>
+
+<p>但是在实际场景中，会出现一种情况，即在终端发起续传请求时，URL对应的文件内容在服务端已经发生变化，此时续传的数据肯定是错误的。如何解决这个问题了？显然此时我们需要有一个标识文件唯一性的方法。在RFC2616中也有相应的定义，比如实现Last-Modified来标识文件的最后修改时间，这样即可判断出续传文件时是否已经发生过改动。同时RFC2616中还定义有一个ETag的头，可以使用ETag头来放置文件的唯一标识，比如文件的MD5值。</p>
+
+<p>终端在发起续传请求时应该在HTTP头中申明If-Match 或者If-Modified-Since 字段，帮助服务端判别文件变化。</p>
+
+<p>另外RFC2616中同时定义有一个If-Range头，终端如果在续传是使用If-Range。If-Range中的内容可以为最初收到的ETag头或者是Last-Modfied中的最后修改时候。服务端在收到续传请求时，通过If-Range中的内容进行校验，校验一致时返回206的续传回应，不一致时服务端则返回200回应，回应的内容为新的文件的全部数据。</p>
+
+<p>===========================================================</p>
+
+<p>多线程下载：</p>
+
+<p>假设你要开发一个多线程下载工具，你会自然的想到把文件分割成多个部分，比如4个部分，然后创建4个线程，每个线程负责下载一个部分，如果文件大小为403个byte，那么你的分割方式可以为：0-99 (前100个字节)，100-199(第二个100字节)，200-299(第三个100字节)，300-402（最后103个字节）。</p>
+
+<p>分割完成，每个线程都明白自己的任务，比如线程3的任务是负责下载200-299这部分文件，现在的问题是：线程3发送一个什么样的请求报文，才能够保证只请求文件的200-299字节，而不会干扰其他线程的任务。这时，我们可以使用HTTP1.1的Range头。Range头域可以请求实体的一个或者多个子范围，Range的值为0表示第一个字节，也就是Range计算字节数是从0开始的：</p>
+
+<p>表示头500个字节：Range: bytes=0-499</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>表示第二个500字节：Range: bytes=500-999
+
+表示最后500个字节：Range: bytes=-500
+
+表示500字节以后的范围：Range: bytes=500-
+
+第一个和最后一个字节：Range: bytes=0-0,-1
+
+同时指定几个范围：Range: bytes=500-600,601-999
+</code></pre></div></div>
+
+<p>所以，线程3发送的请求报文必须有这一行：</p>
+
+<p>Range: bytes=200-299</p>
+
+<p>服务器接收到线程3的请求报文，发现这是一个带有Range头的GET请求，如果一切正常，服务器的响应报文会有下面这行：</p>
+
+<p>HTTP/1.1 206 OK</p>
+
+<p>表示处理请求成功，响应报文还有这一行</p>
+
+<p>Content-Range: bytes 200-299/403</p>
+
+<p>斜杠后面的403表示文件的大小，通常Content-Range的用法为：</p>
+
+<p>. The first 500 bytes:</p>
+
+<p>Content-Range: bytes 0-499/1234</p>
+
+<p>. The second 500 bytes:</p>
+
+<p>Content-Range: bytes 500-999/1234</p>
+
+<p>. All except for the first 500 bytes:</p>
+
+<p>Content-Range: bytes 500-1233/1234</p>
+
+<p>. The last 500 bytes:</p>
+
+<p>Content-Range: bytes 734-1233/1234</p>
+
+<p>一、概述</p>
+
+<p>所谓断点续传，其实只是指下载，也就是要从文件已经下载的地方开始继续下载。在以前版本的HTTP协议是不支持断点的，HTTP/1.1开始就支持了。一般断点下载时才用到Range和Content-Range实体头。HTTP协议本身不支持断点上传，需要自己实现。</p>
+
+<p>二、Range</p>
+
+<p>用于请求头中，指定第一个字节的位置和最后一个字节的位置，一般格式：</p>
+
+<p>Range:bytes=[first byte pos]-[last byte pos]</p>
+
+<p>1.以下几点需要注意：
+(1)这个数据区间是个闭合区间，起始值是0，所以“Range: bytes=0-1”这样一个请求实际上是在请求开头的2个字节。
+(2)“Range: bytes=-200”，它不是表示请求文件开始位置的201个字节，而是表示要请求文件结尾处的200个字节。
+(3)如果last byte pos小于first byte pos，那么这个Range请求就是无效请求，server需要忽略这个Range请求，然后回应一个200，把整个文件发给client。
+(4)如果last byte pos大于等于文件长度，那么这个Range请求被认为是不能满足的，server需要回应一个416，Requested range not satisfiable。</p>
+
+<p>2.示例解释：
+表示头500个字节：bytes=0-499<br />
+表示第二个500字节：bytes=500-999<br />
+表示最后500个字节：bytes=-500<br />
+表示500字节以后的范围：bytes=500-<br />
+第一个和最后一个字节：bytes=0-0,-1<br />
+同时指定几个范围：bytes=500-600,601-999</p>
+
+<p>三、Content-Range</p>
+
+<p>用于响应头，指定整个实体中的一部分的插入位置，他也指示了整个实体的长度。在服务器向客户返回一个部分响应，它必须描述响应覆盖的范围和整个实体长度。一般格式：</p>
+
+<p>Content-Range: bytes (unit first byte pos) - [last byte pos]/[entity legth]</p>
+
+<p>四、Header示例</p>
+
+<p>请求下载整个文件:</p>
+
+<p>GET /test.rar HTTP/1.1 
+Connection: close 
+Host: 116.1.219.219 
+Range: bytes=0-801 //一般请求下载整个文件是bytes=0- 或不用这个头</p>
+
+<p>一般正常回应</p>
+
+<p>HTTP/1.1 200 OK 
+Content-Length: 801    <br />
+Content-Type: application/octet-stream 
+Content-Range: bytes 0-800/801 //801:文件总大小</p>
+
+<p>”HTTP文件断点续传”就是这样一个好例子，深入了解背后之理，“HTTP文件断点续传原理”其实很简单。</p>
+
+<p>一、什么是断点续传
+1.定义：</p>
+
+<p>可以从下载或上传断开点继续开始传输，就叫断点续传。</p>
+
+<p>2.核心实现原理：</p>
+
+<p>i.RandomAccessFile(文件任意位置保存)
+方法seek():可以移动到保存文件任意位置，在该位置发生下一个读取或写入操作</p>
+
+<p>ii.HttpURLConnection.setRequestProperty()(任意位置请求返回剩余文件)</p>
+
+<p>HttpURLConnection.setRequestProperty(“Range”, “bytes=” + start + “-” + end)</p>
+
+<p>断点续传就是从文件上次中断的地方开始重新下载或上传,当下载或上传文件的时候,如果没有实现断点续传功能,那么每次出现异常或者用户主动的暂停,都会去重头下载,这样很浪费时间。所以断点续传的功能就应运而生了。要实现断点续传的功能，需要客户端记录下当前的下载或上传进度，并在需要续传的时候通知服务端本次需要下载或上传的内容片段。</p>
+
+<p>下面来简单介绍 HTTP 断点续传的原理：</p>
+
+<p>其实断点续传的原理很简单,就是在Http的请求上多定义了断点续传相关的HTTP头 Range和Content-Range字段而已,例如!</p>
+
+<p>1.浏览器请求服务器上的一个文件名为test.zip时,请求内容只展示了一些与本文有关的信息</p>
+
+<p>GET /test.zip HTTP/1.1Accept-Language: zh-cnAccept-Encoding: gzip, deflateConnection: Keep-Alive</p>
+
+<p>2.服务器收到请求后,按要求寻找请求的文件,提取文件的信息,然后返回给浏览器,返回信息如下:</p>
+
+<p>200Content-Length=66667777Accept-Ranges=bytesContent-Type=application/octet-stream</p>
+
+<p>为了实现从文件已经下载的地方开始继续下载。所以在客户端传给服务器的时候要多加一条信息–从哪里开始。下面是客户端请求时的请求信息,要求从44445555字节开始。</p>
+
+<p>GET /test.zip HTTP/1.0User-Agent: NetFoxRANGE: bytes=44445555-</p>
+
+<p>上面的请求信息多了一个新的字段RANGE RANGE:bytes=44445555-
+这段话的意思就是告诉服务器test.zip这个文件从44445555字节开始传,前面的字节不用传了。服务器收到这个请求以后,返回的信息如下:</p>
+
+<p>206Content-Length=66667777Content-Range=bytes 44445555-66667777Content-Type=application/octet-stream</p>
+
+<p>和第一次服务器返回的信息相比,增加了一行:
+Content-Range=bytes 44445555-66667777
+返回的代码也改为206了,而不再是200了。</p>
+
+<p>但是在实际场景中，会出现一种情况，即在终端发起续传请求时，URL对应的文件内容在服务端已经发生变化，此时续传的数据肯定是错误的。如何解决这个问题了？显然此时我们需要有一个标识文件唯一性的方法。在RFC2616中也有相应的定义，比如实现Last-Modified来标识文件的最后修改时间，这样即可判断出续传文件时是否已经发生过改动。同时RFC2616中还定义有一个ETag的头，可以使用ETag头来放置文件的唯一标识，比如文件的MD5值。</p>
+
+<p>终端在发起续传请求时应该在HTTP头中申明If-Match 或者If-Modified-Since 字段，帮助服务端判别文件变化。 </p>
+
+<p>另外RFC2616中同时定义有一个If-Range头，终端如果在续传是使用If-Range。If-Range中的内容可以为最初收到的ETag头或者是Last-Modfied中的最后修改时候。服务端在收到续传请求时，通过If-Range中的内容进行校验，校验一致时返回206的续传回应，不一致时服务端则返回200回应，回应的内容为新的文件的全部数据。</p>
+
+<p>HTTP1.1协议（RFC2616）中定义了断点续传相关的HTTP头 Range和Content-Range字段，一个最简单的断点续传实现大概如下：</p>
+
+<p>1.客户端下载一个1024K的文件，已经下载了其中512K</p>
+
+<ol>
+  <li>网络中断，客户端请求续传，因此需要在HTTP头中申明本次需要续传的片段：</li>
+</ol>
+
+<p>Range:bytes=512000-</p>
+
+<p>这个头通知服务端从文件的512K位置开始传输文件</p>
+
+<ol>
+  <li>服务端收到断点续传请求，从文件的512K位置开始传输，并且在HTTP头中增加：</li>
+</ol>
+
+<p>Content-Range:bytes 512000-/1024000</p>
+
+<p>并且此时服务端返回的HTTP状态码应该是206，而不是200。</p>
+
+<p>但是在实际场景中，会出现一种情况，即在终端发起续传请求时，URL对应的文件内容在服务端已经发生变化，此时续传的数据肯定是错误的。如何解决这个问题了？显然此时我们需要有一个标识文件唯一性的方法。在RFC2616中也有相应的定义，比如实现Last-Modified来标识文件的最后修改时间，这样即可判断出续传文件时是否已经发生过改动。同时RFC2616中还定义有一个ETag的头，可以使用ETag头来放置文件的唯一标识，比如文件的MD5值。</p>
+
+<p>终端在发起续传请求时应该在HTTP头中申明If-Match 或者If-Modified-Since 字段，帮助服务端判别文件变化。</p>
+
+<p>另外RFC2616中同时定义有一个If-Range头，终端如果在续传是使用If-Range。If-Range中的内容可以为最初收到的ETag头或者是Last-Modfied中的最后修改时候。服务端在收到续传请求时，通过If-Range中的内容进行校验，校验一致时返回206的续传回应，不一致时服务端则返回200回应，回应的内容为新的文件的全部数据。
+HTTP 1.1默认支持断点续传。</p>
+
+<p>关联header如下：</p>
+
+<p>Range:用于客户端到服务端的请求，可以通过改字段指定下载文件的某一段大小及其单位，字节偏移从0开始。典型格式：
+    Ranges:    (unit=first byte pos)-[last byte pos]
+    Ranges:    bytes=4000- 下载从第4000字节开始到文件结束部分
+    Ranges:    bytes=0~N 下载第0-N字节范围的内容
+    Ranges:    bytes=M-N 下载第M－N字节范围的内容
+    Ranges:    bytes=-N 下载最后N字节内容</p>
+
+<p>If-Range:用于客户端到服务端的请求，用于判断实体是否发生改变，必须与Range配合使用。若实体未被修改，则响应所缺少的那部分；否则，响应整个新的实体。</p>
+
+<p>The If-Range HTTP request header makes a range request conditional: if the condition is fulfilled, the range request will be issued and the server sends back a 206 Partial Content answer with the appropriate body. If the condition is not fulfilled, the full resource is sent back, with a 200 OK status.</p>
+
+<p>Accept-Ranges:用于server到client的应答，client通过该自段判断server是否支持断点续传。
+    Accept-Ranges:bytes    表示支持以bytes为单位进行传输。
+    Accept-Ranges:none     表示不支持断点续传</p>
+
+<p>Content-Ranges:用于sever到client的应答，与Accept-Ranges在同一个报文内，通过该字段指定了返回的文件资源的字节范围。格式如下：
+    Content-Ranges:bytes M-N/size 大小为size的文件的第M－N字节范围的内容</p>
+
+<p>关于ETag
+ETag用于标识/保证文件的唯一性、完整性，每次文件有更新该值就会变化。</p>
+
+<p>关于HTTP 206
+断点续传，如果返回文件的一部分，则使用HTTP 206状态码；如果返回整个文件，则使用HTTP 200响应码。
+HTTP/1.1 200 OK（不使用断点续传）</p>
+
+<p>HTTP/1.1 206 Partial Content（使用断点续传）</p>
+
+<p>HTTP/1.1 206 Partial Content</p>
+
+<p>Server: nginx/1.4.2</p>
+
+<p>Date: Fri, 20 Oct 2017 03:28:44 GMT</p>
+
+<p>Content-Type: application/octet-stream</p>
+
+<p>Content-Length: 11</p>
+
+<p>Last-Modified: Tue, 25 Aug 2015 08:56:26 GMT</p>
+
+<p>Connection: keep-alive</p>
+
+<p>ETag: “55dc2dba-14dd5b”</p>
+
+<p>Content-Range: bytes 0-10/1367387</p>
+
+<p>断点续传检查：
+curl -i –range 0-9 url    响应中包含Accept-Range或者Content-Ranges则表示支持。</p>
+
+<p>参考：
+If-Range:https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/If-Range</p>
+:ET

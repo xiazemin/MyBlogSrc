@@ -1,0 +1,99 @@
+I"<p>对于Docker来说，存在镜像、容器、存储卷和网络这些对象。因此，也就会生产相对应的这些对象，这些对象会占据磁盘空间。当这些对象不在被使用时，为了不占据额外的磁盘空间，就需要对这些对象进行清理，即进行垃圾清理。在docker 1.13版本之后，提供了对各种对象的prune命令，也提供了清理所有对象类型的docker system prune命令。但在docker 1.13之前的版本，则需要提供其他方式进行垃圾清理。</p>
+
+<p>2、垃圾清理
+2.1 docker v1.13之后版本的垃圾清理
+2.1.1 容器
+在停止容器时，系统并不会知道删除这个容器，除非在运行此容器时设置了–rm字段。停止后的容器仍然会占据磁盘的存储空间，通过docker container prune能够删除这些被停止后的容器。</p>
+
+<p>$ docker container prune
+WARNING! This will remove all stopped containers.
+Are you sure you want to continue? [y/N] y
+执行此命令时，默认会提示是否继续。如果在执行命令是设置了-f或–force字段，则会直接删除已所有已停止的容器。默认情况下，此命令执行时会删除所有的已停止的容器，也可以通过设置–filter字段，来过滤所要删除的容器。例如，下面的命令仅仅删除停止超过24小时的容器。</p>
+
+<p>$ docker container prune –filter “until=24h”
+<!-- more -->
+2.1.2 镜像
+通过执行docker images prune命令可以清除所有不再使用的镜像，默认情况下此命令仅仅清除状态为dangling的镜像。状态为dangling的镜像为未被打标签和没有被任何容器引用的镜像。</p>
+
+<p>$ docker image prune</p>
+
+<p>WARNING! This will remove all dangling images.
+Are you sure you want to continue? [y/N] y
+如果要移除所有未被使用的镜像，则通过设置-a字段来实现：</p>
+
+<p>$ docker image prune -a</p>
+
+<p>WARNING! This will remove all images without at least one container associated to them.
+Are you sure you want to continue? [y/N] y
+执行此命令时，默认会提示是否继续。如果在执行命令是设置了-f或–force字段，则会直接进行删除操作。可以通过设置–filter字段，来过滤所要删除的镜像。例如，下面的命令仅仅删除停止创建超过24小时的镜像。</p>
+
+<p>$ docker image prune -a –filter “until=24h”
+2.1.3 存储卷
+存储卷可以被一个或者多个容器使用，也会占据磁盘空间。为保持数据，存储卷永远都不会自动被删除。</p>
+
+<p>$ docker volume prune</p>
+
+<p>WARNING! This will remove all volumes not used by at least one container.
+Are you sure you want to continue? [y/N] y
+执行此命令时，默认会提示是否继续。如果在执行命令是设置了-f或–force字段，则会直接进行删除操作。默认情况下，此命令执行时会删除所有的未被使用的存储卷，也可以通过设置–filter字段，来过滤所要删除的存储卷。例如，下面的命令仅仅删除label值为keep的存储卷。</p>
+
+<p>$ docker volume prune –filter “label!=keep”
+2.1.4 网络
+docker网络并不会占据磁盘空间，但是会创建iptables规则，桥网络设备和路由表。因此，但如何不再使用这些资源时，应该对其进行清理。</p>
+
+<p>$ docker network prune</p>
+
+<p>WARNING! This will remove all networks not used by at least one container.
+Are you sure you want to continue? [y/N] y
+执行此命令时，默认会提示是否继续。如果在执行命令是设置了-f或–force字段，则会直接进行删除操作。默认情况下，此命令执行时会删除所有的未被使用的网络，也可以通过设置–filter字段，来过滤所要删除的网络。例如，下面的命令仅仅为被使用超过24小时的网络。</p>
+
+<p>$ docker network prune –filter “until=24h”
+2.1.5 删除所有的对象
+通过docker system prune命令能够快速的删除所有的未被使用的对象，包括镜像、容器、网络和存储卷。在docker 17.06.0之前，存储卷会同时被清理。在docker 17.06.1之后，需要通过设置–volumes字段，才会同时清理存储卷。</p>
+
+<p>$ docker system prune</p>
+
+<p>WARNING! This will remove:
+        - all stopped containers
+        - all networks not used by at least one container
+        - all dangling images
+        - all build cache
+Are you sure you want to continue? [y/N] y
+如果所使用的docker 17.06.1之后的版本，则需要在命令后添加–volumes字段来清理存储卷的内容。</p>
+
+<p>$ docker system prune –volumes</p>
+
+<p>WARNING! This will remove:
+        - all stopped containers
+        - all networks not used by at least one container
+        - all volumes not used by at least one container
+        - all dangling images
+        - all build cache
+Are you sure you want to continue? [y/N] y
+2.2 docker v1.13之前版本的垃圾清理
+2.2.1 容器
+在停止容器时，系统并不会知道删除这个容器，除非在运行此容器时设置了–rm字段。停止后的容器仍然会占据磁盘的存储空间，通过docker rm能够删除这些被停止后的容器。通过下面的命令能够清除所有已停止的容器。</p>
+
+<p>$ docker rm $(docker ps -a -q)
+2.2.2 镜像
+通过执行docker rmi命令可以清除所有不再使用的镜像，一般情况下仅仅清除状态为dangling的镜像。状态为dangling的镜像为未被打标签和没有被任何容器引用的镜像。</p>
+
+<p>$ docker rmi $(docker images -q -f “dangling=true”)
+2.2.3 存储卷
+存储卷可以被一个或者多个容器使用，也会占据磁盘空间。为了保持数据，存储卷永远都不会自动被删除。</p>
+
+<p>$ docker volume rm $(docker volume ls -q -f dangling=true)</p>
+
+<p>参考资料
+1.《docker container prune》地址：https://docs.docker.com/engine/reference/commandline/container_prune/</p>
+
+<p>2.《Prune unused Docker objects》地址：https://docs.docker.com/config/pruning/</p>
+
+<p>3.《docker image prune》地址：https://docs.docker.com/engine/reference/commandline/image_prune/</p>
+
+<p>4.《docker volume prune》地址：https://docs.docker.com/engine/reference/commandline/volume_prune/</p>
+
+<p>5.《docker network prune》地址：https://docs.docker.com/engine/reference/commandline/network_prune/</p>
+
+<p>https://jimmysong.io/kubernetes-handbook/guide/docker-cli-to-kubectl.html</p>
+:ET

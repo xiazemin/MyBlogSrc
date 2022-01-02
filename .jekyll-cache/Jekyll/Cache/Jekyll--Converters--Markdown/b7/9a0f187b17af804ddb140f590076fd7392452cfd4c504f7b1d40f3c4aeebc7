@@ -1,0 +1,382 @@
+I"�?<p>记分板是保存FPM池及其工作线程状态的结构。它是在共享内存中创建的，如果无法分配该内存，则会记录错误。</p>
+
+<p>什么是fpm错误日志中的php-fpm警告“无法获取记分牌”？以及如何解决？</p>
+
+<p>tail -f /var/log/php-fpm.log
+[08-Oct-2014 03:36:36] WARNING: failed to acquire scoreboard</p>
+
+<p>http://blog.morysky.info/2016/php-fpm/
+https://stackoverflow.com/questions/26255739/what-is-php-fpm-warning-failed-to-acquire-scoreboard
+<!-- more --></p>
+
+<p>pm_scoreboard(以下简称scoreboard模块)是PHP-FPM核心功能之一，源码位于sapi/fpm/fpm_scoreboard.c。从字面意思理解是一个”记分器”，实际上，是FPM内置的一个worker进程统计功能模块。网上关于这方面的介绍资料稀缺，在阅读这块功能的源码过程中一波三折。经过长时间地反复阅读及推敲，脑海中已经有了一个比较清晰的轮廓。</p>
+
+<p>scoreboard模块定义fpm_scoreboard_s和fpm_scoreboard_proc_s两种数据结构。</p>
+
+<p>struct fpm_scoreboard_s {
+    union {
+        atomic_t lock;
+        char dummy[16];
+    };//锁状态
+    char pool[32];//实例名称 例如：[www]
+    int pm; //PM运行模式
+    time_t start_epoch; //开始时间
+    int idle;//procs的空闲数
+    int active;//procs的使用数
+    int active_max; //最大procs使用数
+    unsigned long int requests;
+    unsigned int max_children_reached; //到达最大进程数限制的次数
+    int lq; //当前listen queue的请求数(accept操作，可以过tcpi_unacked或getsocketopt获取)
+    int lq_max;//listen queue大小
+    unsigned int lq_len;
+    unsigned int nprocs; //procs总数
+    int free_proc; //从procs列表遍历下一个空闲对象的开始下标
+    struct fpm_scoreboard_proc_s <em>procs[]; //列表
+};
+struct fpm_scoreboard_proc_s {
+    union {
+        atomic_t lock;
+        char dummy[16];
+    };//锁状态
+    int used; //使用标识 0=未使用 1=正在使用
+    time_t start_epoch; //使用开始时间
+    pid_t pid; //进程id
+    unsigned long requests; //处理请求次数
+    enum fpm_request_stage_e request_stage; //处理请求阶段
+    struct timeval accepted; //accept请求时间
+    struct timeval duration; //脚本总执行时间
+    time_t accepted_epoch;//accept请求时间戳(秒)
+    struct timeval tv; //活跃时间
+    char request_uri[128]; //请求路径
+    char query_string[512]; //请求参数
+    char request_method[16]; //请求方式
+    size_t content_length; //请求内容长度 /</em> used with POST only */
+    char script_filename[256];//脚本名称
+    char auth_user[32];
+#ifdef HAVE_TIMES
+    struct tms cpu_accepted;
+    struct timeval cpu_duration;
+    struct tms last_request_cpu;
+    struct timeval last_request_cpu_duration;
+#endif
+    size_t memory;//脚本占用的内存大小
+};</p>
+
+<p>fpm_scoreboard_s结构记录FPM所有worker进程的统计信息，其中*procs数组结构保存各worker进程统计单元。fpm_scoreboard_proc_s记录worker进程的运行状态信息(后文称为统计单元)。</p>
+
+<p>根据上面代码的注释可以很容易地理解其属性的含义，在这就不再逐一说明。</p>
+
+<p>下面将重点介绍scoreboard的运行流程。</p>
+
+<p>scoreboard模块初始化</p>
+
+<p>FPM内部通过执行fpm_init()-&gt;fpm_scoreboard_init_main()来完成scoreboard模块的操作。</p>
+
+<p>int fpm_scoreboard_init_main()
+{
+    //…省略部分代码…
+    wp-&gt;scoreboard = fpm_shm_alloc(sizeof(struct fpm_scoreboard_s) + (wp-&gt;config-&gt;pm_max_children - 1) * sizeof(struct fpm_scoreboard_proc_s *));
+    if (!wp-&gt;scoreboard) {
+        return -1;
+    }
+    wp-&gt;scoreboard-&gt;nprocs = wp-&gt;config-&gt;pm_max_children;
+    for (i = 0; i &lt; wp-&gt;scoreboard-&gt;nprocs; i++) {
+        wp-&gt;scoreboard-&gt;procs[i] = fpm_shm_alloc(sizeof(struct fpm_scoreboard_proc_s));
+        if (!wp-&gt;scoreboard-&gt;procs[i]) {
+            return -1;
+        }
+        memset(wp-&gt;scoreboard-&gt;procs[i], 0, sizeof(struct fpm_scoreboard_proc_s));
+    }
+    //…省略部分代码…
+}</p>
+
+<p>fpm_scoreboard_init_main()函数调用fpm_shm_alloc()为 wp-&gt;scoreboard 分配空间，大小根据 wp-&gt;config-&gt;pm_max_children 参数计算。wp-&gt;config-&gt;pm_max_children参数对应php-fpm.conf的pm.max_children配置项，表示FPM允许启动的最大worker进程数。从而保证每个worker进程都能分配到一个可用的统计单元。然后再对wp-&gt;scoreboard-&gt;procs的每个统计单元进行初始化。</p>
+
+<p>上面已经初始化统计单元列表。那这些统计单元是如何分配给每一个worker进程？</p>
+
+<p>scoreboard统计单元分配</p>
+
+<p>从源码(fpm_children.c)可以看到，FPM每次调用fork()新worker进程之前，系统都会执行fpm_resources_prepare()函数。代码如下：</p>
+
+<p>static struct fpm_child_s *fpm_resources_prepare(struct fpm_worker_pool_s *wp)
+{
+    struct fpm_child_s *c;</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>c = fpm_child_alloc();
+//...省略部分代码...
+//此时c-&gt;scoreboard_i=-1
+if (0 &gt; fpm_scoreboard_proc_alloc(wp-&gt;scoreboard, &amp;c-&gt;scoreboard_i)) {
+    fpm_stdio_discard_pipes(c);
+    fpm_child_free(c);
+    return 0;
+}
+return c; }
+</code></pre></div></div>
+
+<p>fpm_resources_prepare()函数：首先，初始化child对象；然后调用fpm_scoreboard_proc_alloc()函数。继续追踪fpm_scoreboard_proc_alloc()函数代码。</p>
+
+<p>int fpm_scoreboard_proc_alloc(struct fpm_scoreboard_s *scoreboard, int *child_index)
+{
+    int i = -1;
+    //…省略部分代码…
+    if (scoreboard-&gt;free_proc &gt;= 0 &amp;&amp; scoreboard-&gt;free_proc &lt; scoreboard-&gt;nprocs) {
+        if (scoreboard-&gt;procs[scoreboard-&gt;free_proc] &amp;&amp; !scoreboard-&gt;procs[scoreboard-&gt;free_proc]-&gt;used) {
+            i = scoreboard-&gt;free_proc;
+        }
+    }
+    if (i &lt; 0) { 
+        for (i = 0; i &lt; scoreboard-&gt;nprocs; i++) {
+            if (scoreboard-&gt;procs[i] &amp;&amp; !scoreboard-&gt;procs[i]-&gt;used) {
+                break;
+            }
+        }
+    }
+    if (i &lt; 0 || i &gt;= scoreboard-&gt;nprocs) {
+        return -1;
+    }
+    //打上“使用”标记
+    scoreboard-&gt;procs[i]-&gt;used = 1;
+    *child_index = i;
+    //重置寻找下一个空闲单元的起始下标
+    if (i + 1 &gt;= scoreboard-&gt;nprocs) {
+        scoreboard-&gt;free_proc = 0;
+    } else {
+        scoreboard-&gt;free_proc = i + 1;
+    }
+    return 0;
+}</p>
+
+<p>fpm_scoreboard_proc_alloc()函数的代码比较容易读懂。首先判断scoreboard-&gt;free_proc位置对应的元素是否可用；如果不可用，则继续遍历scoreboard-&gt;nprocs查找可用的元素；如果找到，则修改该元素的used标识，并重置scoreboard-&gt;free_proc属性值。</p>
+
+<p>结合上面两个函数代码，我们可以看出fpm_resources_prepare()的功能是为每个新的worker进程分配一个可用的统计单元。</p>
+
+<p>我们已经知道worker进程统计单元的分配流程，那这些统计单元在worker进程是如何运用的？有哪些功能或者模块已使用？</p>
+
+<p>scoreboard统计单元运用</p>
+
+<p>在介绍之前，我们先来了解scoreboard模块的fpm_scoreboard_update()、fpm_scoreboard_proc_acquire()、fpm_scoreboard_proc_release()三个函数的功能。</p>
+
+<p>void fpm_scoreboard_update(int idle, int active, int lq, int lq_len, int requests, int max_children_reached, int action, struct fpm_scoreboard_s *scoreboard)
+{
+    //…省略部分代码…
+    fpm_spinlock(&amp;scoreboard-&gt;lock, 0);
+    if (action == FPM_SCOREBOARD_ACTION_SET) {
+        if (idle &gt;= 0) {
+            scoreboard-&gt;idle = idle;
+        }
+        if (active &gt;= 0) {
+            scoreboard-&gt;active = active;
+        }
+        //…省略部分代码…
+    } else {
+        if (scoreboard-&gt;idle + idle &gt; 0) {
+            scoreboard-&gt;idle += idle;
+        } else {
+            scoreboard-&gt;idle = 0;
+        }
+        if (scoreboard-&gt;active + active &gt; 0) {
+            scoreboard-&gt;active += active;
+        } else {
+            scoreboard-&gt;active = 0;
+        }
+        //…省略部分代码…
+    }
+    if (scoreboard-&gt;active &gt; scoreboard-&gt;active_max) {
+        scoreboard-&gt;active_max = scoreboard-&gt;active;
+    }
+    fpm_unlock(scoreboard-&gt;lock);
+}</p>
+
+<p>fpm_scoreboard_update()：修改wp-&gt;scoreboard各属性值，该函数内部引用”锁”机制来保证数据的原子性。action有两个值FPM_SCOREBOARD_ACTION_SET和FPM_SCOREBOARD_ACTION_INC。当action=FPM_SCOREBOARD_ACTION_SET,表示这是一个重置操作。当action=FPM_SCOREBOARD_ACTION_INC时，代表这是一个求和操作。</p>
+
+<p>struct fpm_scoreboard_proc_s *fpm_scoreboard_proc_acquire(struct fpm_scoreboard_s *scoreboard, int child_index, int nohang)
+{
+    //…省略部分代码…
+    proc = fpm_scoreboard_proc_get(scoreboard, child_index);
+    if (!proc) {
+        return NULL;
+    }
+    //请求锁
+    if (!fpm_spinlock(&amp;proc-&gt;lock, nohang)) {
+        return NULL;
+    }
+    return proc;
+}
+struct fpm_scoreboard_proc_s *fpm_scoreboard_proc_get(struct fpm_scoreboard_s *scoreboard, int child_index)
+{
+    //…省略部分代码…
+    return scoreboard-&gt;procs[child_index];
+}</p>
+
+<p>fpm_scoreboard_proc_acquire()：获取统计单元(wp-&gt;scoreboard-&gt;procs[i]),并请求对象锁。值得注意的是这里的”锁”与`fpm_scoreboard_update()的”锁”不是同一个。</p>
+
+<p>//释放对象锁
+void fpm_scoreboard_proc_release(struct fpm_scoreboard_proc_s <em>proc) /</em> {{{ */
+{
+    //…省略部分代码…
+    proc-&gt;lock = 0;
+}</p>
+
+<p>fpm_scoreboard_proc_release()：释放对象锁。</p>
+
+<p>回到刚才那个问题，我们接下来继续分析。worker进程处理客户端请求的完整流程共分为5个阶段。如下。</p>
+
+<p>阶段	备注
+FPM_REQUEST_ACCEPTING	空闲状态(等待请求)
+FPM_REQUEST_READING_HEADERS	读取头信息
+FPM_REQUEST_INFO	获取请求信息
+FPM_REQUEST_EXECUTING	执行状态
+FPM_REQUEST_END	请求结束状态</p>
+<ol>
+  <li>接收客户端请求阶段,执行流程：fpm_request_accepting().</li>
+</ol>
+
+<p>void fpm_request_accepting(){
+    //…省略部分代码…
+    proc = fpm_scoreboard_proc_acquire(NULL, -1, 0);
+    //…省略部分代码…
+    proc-&gt;request_stage = FPM_REQUEST_ACCEPTING;
+    proc-&gt;tv = now;
+    fpm_scoreboard_proc_release(proc);
+    /* idle++, active– */
+    fpm_scoreboard_update(1, -1, 0, 0, 0, 0, FPM_SCOREBOARD_ACTION_INC, NULL);
+}</p>
+
+<p>fpm_scoreboard_proc_acquire()得到管理该worker进程状态的统计单元，然后修改统计单元(wp-&gt;scoreboard-&gt;procs[i])的request_stage及tv属性值，最后调用fpm_scoreboard_update修改wp-&gt;scoreboard统计信息。</p>
+<ol>
+  <li>从FASTCGI读取客户端请求头阶段,执行流程：fpm_request_reading_headers().</li>
+</ol>
+
+<p>void fpm_request_reading_headers()
+{
+    //…省略部分代码…
+    proc = fpm_scoreboard_proc_acquire(NULL, -1, 0);
+    //…省略部分代码…
+    proc-&gt;request_stage = FPM_REQUEST_READING_HEADERS;
+    //记录当前时间
+    proc-&gt;tv = now;
+    proc-&gt;accepted = now;
+    proc-&gt;accepted_epoch = now_epoch;
+#ifdef HAVE_TIMES
+    proc-&gt;cpu_accepted = cpu;
+#endif
+    proc-&gt;requests++;
+    proc-&gt;request_uri[0] = ‘\0’;
+    proc-&gt;request_method[0] = ‘\0’;
+    proc-&gt;script_filename[0] = ‘\0’;
+    proc-&gt;query_string[0] = ‘\0’;
+    proc-&gt;query_string[0] = ‘\0’;
+    proc-&gt;auth_user[0] = ‘\0’;
+    proc-&gt;content_length = 0;
+    fpm_scoreboard_proc_release(proc);
+    /* idle–, active++, request++ */
+    fpm_scoreboard_update(-1, 1, 0, 0, 1, 0, FPM_SCOREBOARD_ACTION_INC, NULL);
+}</p>
+
+<p>该阶段重置request_stage为FPM_REQUEST_READING_HEADERS,然后分别修改tv、accepted、accepted_epoch、requests值，并重置统计单元请求头属性(request_uri、request_method、script_filename等)数据。最后调用fpm_scoreboard_update()修改wp-&gt;scoreboard的idle、active、request属性。</p>
+<ol>
+  <li>FPM获取请求信息阶段，执行代码：fpm_request_info().</li>
+</ol>
+
+<p>void fpm_request_info()
+{
+    //…省略部分代码…
+    proc = fpm_scoreboard_proc_acquire(NULL, -1, 0);
+    if (proc == NULL) {
+        zlog(ZLOG_WARNING, “failed to acquire proc scoreboard”);
+        return;
+    }
+    proc-&gt;request_stage = FPM_REQUEST_INFO;
+    proc-&gt;tv = now;
+    //请求地址
+    if (request_uri) {
+        strlcpy(proc-&gt;request_uri, request_uri, sizeof(proc-&gt;request_uri));
+    }
+    //请求方法
+    if (request_method) {
+        strlcpy(proc-&gt;request_method, request_method, sizeof(proc-&gt;request_method));
+    }
+    //…省略部分代码…
+    fpm_scoreboard_proc_release(proc);
+}</p>
+
+<p>从上面的代码可以看出，该阶段只是将请求信息保存在该worker进程的统计单元中。与前两者不同的是，此阶段无需调用fpm_scoreboard_update()修改wp-&gt;scoreboard属性值。</p>
+<ol>
+  <li>zend执行脚本阶段，执行代码：fpm_request_executing().</li>
+</ol>
+
+<p>void fpm_request_executing() 
+{
+    //…省略部分代码…
+    proc = fpm_scoreboard_proc_acquire(NULL, -1, 0);
+    if (proc == NULL) {
+        zlog(ZLOG_WARNING, “failed to acquire proc scoreboard”);
+        return;
+    }</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>proc-&gt;request_stage = FPM_REQUEST_EXECUTING;
+proc-&gt;tv = now;
+fpm_scoreboard_proc_release(proc); }
+</code></pre></div></div>
+
+<p>此阶段将request_stage属性值修改为FPM_REQUEST_EXECUTING。</p>
+<ol>
+  <li>请求结束阶段，执行代码：fpm_request_end().</li>
+</ol>
+
+<p>void fpm_request_end(TSRMLS_D)
+{
+    //…省略代码…
+    proc = fpm_scoreboard_proc_acquire(NULL, -1, 0);
+    if (proc == NULL) {
+        zlog(ZLOG_WARNING, “failed to acquire proc scoreboard”);
+        return;
+    }
+    proc-&gt;request_stage = FPM_REQUEST_FINISHED;
+    proc-&gt;tv = now;
+    timersub(&amp;now, &amp;proc-&gt;accepted, &amp;proc-&gt;duration);
+#ifdef HAVE_TIMES
+    timersub(&amp;proc-&gt;tv, &amp;proc-&gt;accepted, &amp;proc-&gt;cpu_duration);
+    proc-&gt;last_request_cpu.tms_utime = cpu.tms_utime - proc-&gt;cpu_accepted.tms_utime;
+    proc-&gt;last_request_cpu.tms_stime = cpu.tms_stime - proc-&gt;cpu_accepted.tms_stime;
+    proc-&gt;last_request_cpu.tms_cutime = cpu.tms_cutime - proc-&gt;cpu_accepted.tms_cutime;
+    proc-&gt;last_request_cpu.tms_cstime = cpu.tms_cstime - proc-&gt;cpu_accepted.tms_cstime;
+#endif
+    proc-&gt;memory = memory;
+    fpm_scoreboard_proc_release(proc);
+}</p>
+
+<p>此阶段计算程序运行的时间及占用的内存大小，分别保存在统计单元的duration和memory属性。</p>
+
+<p>scoreboard统计定时更新
+FPM内部定义了一个fpm_pctl_perform_idle_server_maintenance_heartbeat定时器,其内部会进行统计worker进程的idle、active等数据，然后调用fpm_scoreboard_update()功能进行更新wp-&gt;scoreboard信息。</p>
+
+<p>static void fpm_pctl_perform_idle_server_maintenance(struct timeval <em>now) /</em> {{{ */
+{
+    struct fpm_worker_pool_s *wp;
+    //…省略部分代码…
+    for (wp = fpm_worker_all_pools; wp; wp = wp-&gt;next) {
+        for (child = wp-&gt;children; child; child = child-&gt;next) {
+            if (fpm_request_is_idle(child)) {
+                if (last_idle_child == NULL) {
+                    last_idle_child = child;
+                } else {
+                    if (timercmp(&amp;child-&gt;started, &amp;last_idle_child-&gt;started, &lt;)) {
+                        last_idle_child = child;
+                    }
+                }
+                idle++;
+            } else {
+                active++;
+            }
+        }
+        fpm_scoreboard_update(idle, active, cur_lq, -1, -1, -1, FPM_SCOREBOARD_ACTION_SET, wp-&gt;scoreboard);
+        //…省略部分代码…
+    }
+    //…省略部分代码…
+}
+以上就是PHP-FPM scoreboard模块介绍的全部内容。通过这个模块，我们可以快速地掌握PHP-FPM各个worker进程运行状态。</p>
+
+<p>https://blog.csdn.net/Mijar2016/article/details/53414402</p>
+
+:ET

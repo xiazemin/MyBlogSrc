@@ -1,0 +1,530 @@
+I"�P<p>Go自从宣布Go1 Compatible后，直到这次的Go 1.14发布，Go的语法和核心库都没有做出不兼容的变化。这让很多其他主流语言的拥趸们觉得Go很“无趣”。但这种承诺恰恰是Go团队背后努力付出的结果，因此Go的每个发布版本都值得广大gopher尊重，每个发布版本都是Go团队能拿出的最好版本。</p>
+
+<p>下面我们就来解读一下Go 1.14的变化，看看这个新版本中有哪些值得我们重点关注的变化。
+https://tonybai.com/2020/03/08/some-changes-in-go-1-14/
+<!-- more -->
+一. 语言规范
+和其他主流语言相比，Go语言的语法规范的变化那是极其少的（广大Gopher们已经习惯了这个节奏:)），偶尔发布一个变化，那自然是要引起广大Gopher严重关注的:)。不过事先说明：只要Go版本依然是1.x，那么这个规范变化也是backward-compitable的。</p>
+
+<p>Go 1.14新增的语法变化是：嵌入接口的方法集可重叠。这个变化背后的朴素思想是这样的。看下面代码(来自这里)：</p>
+
+<p>type I interface { f(); String() string }
+type J interface { g(); String() string }</p>
+
+<p>type IJ interface { I; J }  —– (1)
+type IJ interface { f(); g(); String() string }  —- (2)</p>
+
+<p>代码中已知定义的I和J两个接口的方法集中都包含有
+String() string
+这个方法。在这样的情况下，我们如果想定义一个方法集合为Union(I, J)的新接口
+IJ
+，我们在Go 1.13及之前的版本中只能使用第(2)种方式，即只能在新接口
+IJ
+中重新书写一遍所有的方法原型，而无法像第(1)种方式那样使用嵌入接口的简洁方式进行。</p>
+
+<p>Go 1.14通过支持嵌入接口的方法集可重叠解决了这个问题：</p>
+
+<p>// go1.14-examples/overlapping_interface.go
+package foo</p>
+
+<p>type I interface {
+    f()
+    String() string
+}
+type J interface {
+    g()
+    String() string
+}</p>
+
+<p>type IJ interface {
+    I
+    J
+}</p>
+
+<p>在go 1.13.6上运行：</p>
+
+<p>$go build overlapping_interface.go</p>
+<h1 id="command-line-arguments">command-line-arguments</h1>
+<p>./overlapping_interface.go:14:2: duplicate method String</p>
+
+<p>但在go 1.14上运行：</p>
+
+<p>$go build overlapping_interface.go</p>
+
+<p>// 一切ok，无报错</p>
+
+<p>不过对overlapping interface的支持仅限于接口定义中，如果你要在struct定义中嵌入interface，比如像下面这样：</p>
+
+<p>// go1.14-examples/overlapping_interface1.go
+package main</p>
+
+<p>type I interface {
+    f()
+    String() string
+}</p>
+
+<p>type implOfI struct{}</p>
+
+<p>func (implOfI) f() {}
+func (implOfI) String() string {
+    return “implOfI”
+}</p>
+
+<p>type J interface {
+    g()
+    String() string
+}</p>
+
+<p>type implOfJ struct{}</p>
+
+<p>func (implOfJ) g() {}
+func (implOfJ) String() string {
+    return “implOfJ”
+}</p>
+
+<p>type Foo struct {
+    I
+    J
+}</p>
+
+<p>func main() {
+    f := Foo{
+        I: implOfI{},
+        J: implOfJ{},
+    }
+    println(f.String())
+}</p>
+
+<p>虽然Go编译器没有直接指出结构体Foo中嵌入的两个接口I和J存在方法的重叠，但在使用Foo结构体时，下面的编译器错误肯定还是会给出的：</p>
+
+<p>$ go run overlapping_interface1.go</p>
+<h1 id="command-line-arguments-1">command-line-arguments</h1>
+<p>./overlapping_interface1.go:37:11: ambiguous selector f.String</p>
+
+<p>对于结构体中嵌入的接口的方法集是否存在overlap，go编译器似乎并没有严格做“实时”检查，这个检查被延迟到为结构体实例选择method的执行者环节了，就像上面例子那样。如果我们此时让Foo结构体 override一个String方法，那么即便I和J的方法集存在overlap也是无关紧要的，因为编译器不会再模棱两可，可以正确的为Foo实例选出究竟执行哪个String方法：</p>
+
+<p>// go1.14-examples/overlapping_interface2.go</p>
+
+<p>…. ….</p>
+
+<p>func (Foo) String() string {
+        return “Foo”
+}</p>
+
+<p>func main() {
+        f := Foo{
+                I: implOfI{},
+                J: implOfJ{},
+        }
+        println(f.String())
+}</p>
+
+<p>运行该代码：</p>
+
+<p>$go run overlapping_interface2.go
+Foo</p>
+
+<p>二. Go运行时</p>
+<ol>
+  <li>支持异步抢占式调度
+在《Goroutine调度实例简要分析》一文中，我曾提到过这样一个例子：</li>
+</ol>
+
+<p>// go1.14-examples/preemption_scheduler.go
+package main</p>
+
+<p>import (
+    “fmt”
+    “runtime”
+    “time”
+)</p>
+
+<p>func deadloop() {
+    for {
+    }
+}</p>
+
+<p>func main() {
+    runtime.GOMAXPROCS(1)
+    go deadloop()
+    for {
+        time.Sleep(time.Second * 1)
+        fmt.Println(“I got scheduled!”)
+    }
+}</p>
+
+<p>在只有一个
+P
+的情况下，上面的代码中deadloop所在goroutine将持续占据该
+P
+，使得main goroutine中的代码得不到调度(GOMAXPROCS=1的情况下)，因此我们无法看到
+I got scheduled!
+字样输出。这是因为Go 1.13及以前的版本的抢占是”协作式“的，只在有函数调用的地方才能插入“抢占”代码(埋点)，而deadloop没有给编译器插入抢占代码的机会。这会导致GC在等待所有goroutine停止时等待时间过长，从而导致GC延迟；甚至在一些特殊情况下，导致在STW（stop the world）时死锁。</p>
+
+<p>Go 1.14采用了基于系统信号的异步抢占调度，这样上面的deadloop所在的goroutine也可以被抢占了：</p>
+
+<p>// 使用Go 1.14版本编译器运行上述代码</p>
+
+<p>$go run preemption_scheduler.go
+I got scheduled!
+I got scheduled!
+I got scheduled!</p>
+
+<p>不过由于系统信号可能在代码执行到任意地方发生，在Go runtime能cover到的地方，Go runtime自然会处理好这些系统信号。但是如果你是通过
+syscall
+包或
+golang.org/x/sys/unix
+在Unix/Linux/Mac上直接进行系统调用，那么一旦在系统调用执行过程中进程收到系统中断信号，这些系统调用就会失败，并以EINTR错误返回，尤其是低速系统调用，包括：读写特定类型文件(管道、终端设备、网络设备)、进程间通信等。在这样的情况下，我们就需要自己处理EINTR错误。一个最常见的错误处理方式就是重试。对于可重入的系统调用来说，在收到EINTR信号后的重试是安全的。如果你没有自己调用syscall包，那么异步抢占调度对你已有的代码几乎无影响。</p>
+
+<p>Go 1.14的异步抢占调度在windows/arm, darwin/arm, js/wasm, and plan9/*上依然尚未支持，Go团队计划在Go 1.15中解决掉这些问题。</p>
+
+<ol>
+  <li>defer性能得以继续优化
+在Go 1.13中，defer性能得到理论上30%的提升。我们还用那个例子来看看go 1.14与go 1.13版本相比defer性能又有多少提升，同时再看看使用defer和不使用defer的对比：</li>
+</ol>
+
+<p>// go1.14-examples/defer_benchmark_test.go
+package defer_test</p>
+
+<p>import “testing”</p>
+
+<p>func sum(max int) int {
+    total := 0
+    for i := 0; i &lt; max; i++ {
+        total += i
+    }</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>return total }
+</code></pre></div></div>
+
+<p>func foo() {
+    defer func() {
+        sum(10)
+    }()</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>sum(100) }
+</code></pre></div></div>
+
+<p>func Bar() {
+    sum(100)
+    sum(10)
+}</p>
+
+<p>func BenchmarkDefer(b *testing.B) {
+    for i := 0; i &lt; b.N; i++ {
+        foo()
+    }
+}
+func BenchmarkWithoutDefer(b *testing.B) {
+    for i := 0; i &lt; b.N; i++ {
+        Bar()
+    }
+}</p>
+
+<p>我们分别用Go 1.13和Go 1.14运行上面的基准测试代码：</p>
+
+<p>Go 1.13:</p>
+
+<p>$go test -bench . defer_benchmark_test.go
+goos: darwin
+goarch: amd64
+BenchmarkDefer-8              17873574            66.7 ns/op
+BenchmarkWithoutDefer-8       26935401            43.7 ns/op
+PASS
+ok      command-line-arguments    2.491s</p>
+
+<p>Go 1.14:</p>
+
+<p>$go test -bench . defer_benchmark_test.go
+goos: darwin
+goarch: amd64
+BenchmarkDefer-8              26179819            45.1 ns/op
+BenchmarkWithoutDefer-8       26116602            43.5 ns/op
+PASS
+ok      command-line-arguments    2.418s
+我们看到，Go 1.14的defer性能照比Go 1.13还有大幅提升，并且已经与不使用defer的性能相差无几了，这也是Go官方鼓励大家在性能敏感的代码执行路径上也大胆使用defer的原因。</p>
+
+<p>img{512x368}</p>
+
+<p>图：各个Go版本defer性能对比(图来自于https://twitter.com/janiszt/status/1215601972281253888)</p>
+<ol>
+  <li>internal timer的重新实现
+鉴于go timer长期以来性能不能令人满意，Go 1.14几乎重新实现了runtime层的timer。其实现思路遵循了Dmitry Vyukov几年前提出的实现逻辑：将timer分配到每个P上，降低锁竞争；去掉timer thread，减少上下文切换开销；使用netpoll的timeout实现timer机制。</li>
+</ol>
+
+<p>// $GOROOT/src/runtime/time.go</p>
+
+<p>type timer struct {
+        // If this timer is on a heap, which P’s heap it is on.
+        // puintptr rather than *p to match uintptr in the versions
+        // of this struct defined in other packages.
+        pp puintptr</p>
+
+<p>}</p>
+
+<p>// addtimer adds a timer to the current P.
+// This should only be called with a newly created timer.
+// That avoids the risk of changing the when field of a timer in some P’s heap,
+// which could cause the heap to become unsorted.</p>
+
+<p>func addtimer(t *timer) {
+        // when must never be negative; otherwise runtimer will overflow
+        // during its delta calculation and never expire other runtime timers.
+        if t.when &lt; 0 {
+                t.when = maxWhen
+        }
+        if t.status != timerNoStatus {
+                badTimer()
+        }
+        t.status = timerWaiting</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    addInitializedTimer(t) }
+</code></pre></div></div>
+
+<p>// addInitializedTimer adds an initialized timer to the current P.
+func addInitializedTimer(t *timer) {
+        when := t.when</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    pp := getg().m.p.ptr()
+    lock(&amp;pp.timersLock)
+    ok := cleantimers(pp) &amp;&amp; doaddtimer(pp, t)
+    unlock(&amp;pp.timersLock)
+    if !ok {
+            badTimer()
+    }
+
+    wakeNetPoller(when) } ... ...
+</code></pre></div></div>
+
+<p>这样你的程序中如果大量使用time.After、time.Tick或者在处理网络连接时大量使用SetDeadline，使用Go 1.14编译后，你的应用将得到timer性能的自然提升。</p>
+
+<p>img{512x368}</p>
+
+<p>图：切换到新timer实现后的各Benchmark数据
+三. Go module已经production ready了
+Go 1.14中带来的关于go module的最大惊喜就是Go module已经production ready了，这意味着关于go module的运作机制，go tool的各种命令和其参数形式、行为特征已趋稳定了。笔者从Go 1.11引入go module以来就一直关注和使用Go module，尤其是Go 1.13中增加go module proxy的支持，使得中国大陆的gopher再也不用为获取类似
+golang.org/x/xxx
+路径下的module而苦恼了。</p>
+
+<p>Go 1.14中go module的主要变动如下：</p>
+
+<p>a) module-aware模式下对vendor的处理：如果go.mod中go version是go 1.14及以上，且当前repo顶层目录下有vendor目录，那么go工具链将默认使用vendor(即-mod=vendor)中的package，而不是module cache中的($GOPATH/pkg/mod下)。同时在这种模式下，go 工具会校验vendor/modules.txt与go.mod文件，它们需要保持同步，否则报错。</p>
+
+<p>在上述前提下，如要非要使用module cache构建，则需要为go工具链显式传入
+-mod=mod
+，比如：
+go build -mod=mod ./…
+。</p>
+
+<p>b) 增加GOINSECURE，可以不再要求非得以https获取module，或者即便使用https，也不再对server证书进行校验。</p>
+
+<p>c) 在module-aware模式下，如果没有建立go.mod或go工具链无法找到go.mod，那么你必须显式传入要处理的go源文件列表，否则go tools将需要你明确go.mod。比如：在一个没有go.mod的目录下，要编译一个hello.go，我们需要使用go build hello.go(hello.go需要显式放在命令后面），如果你执行
+go build .
+就会得到类似如下错误信息：</p>
+
+<p>$go build .
+go: cannot find main module, but found .git/config in /Users/tonybai
+    to create a module there, run:
+    cd .. &amp;&amp; go mod init</p>
+
+<p>也就是说在没有go.mod的情况下，go工具链的功能是受限的。</p>
+
+<p>d) go module支持subversion仓库了，不过subversion使用应该很“小众”了。</p>
+
+<p>要系统全面的了解go module的当前行为机制，建议还是通读一遍Go command手册中关于module的说明以及官方go module wiki。</p>
+
+<p>四. 编译器
+Go 1.14 go编译器在-race和-msan的情况下，默认会执行
+-d=checkptr
+，即对unsafe.Pointer的使用进行合法性检查，主要检查两项内容：</p>
+
+<p>当将unsafe.Pointer转型为
+*T
+时，T的内存对齐系数不能高于原地址的
+比如下面代码：</p>
+
+<p>// go1.14-examples/compiler_checkptr1.go
+package main</p>
+
+<p>import (
+    “fmt”
+    “unsafe”
+)</p>
+
+<p>func main() {
+    var byteArray = [10]byte{‘a’, ‘b’, ‘c’}
+    var p <em>int64 = (</em>int64)(unsafe.Pointer(&amp;byteArray[1]))
+    fmt.Println(*p)
+}</p>
+
+<p>以-race运行上述代码：</p>
+
+<p>$go run -race compiler_checkptr1.go
+fatal error: checkptr: unsafe pointer conversion</p>
+
+<p>goroutine 1 [running]:
+runtime.throw(0x11646fd, 0x23)
+    /Users/tonybai/.bin/go1.14/src/runtime/panic.go:1112 +0x72 fp=0xc00004cee8 sp=0xc00004ceb8 pc=0x106d152
+runtime.checkptrAlignment(0xc00004cf5f, 0x1136880, 0x1)
+    /Users/tonybai/.bin/go1.14/src/runtime/checkptr.go:13 +0xd0 fp=0xc00004cf18 sp=0xc00004cee8 pc=0x1043b70
+main.main()
+    /Users/tonybai/go/src/github.com/bigwhite/experiments/go1.14-examples/compiler_checkptr1.go:10 +0x70 fp=0xc00004cf88 sp=0xc00004cf18 pc=0x11283b0
+runtime.main()
+    /Users/tonybai/.bin/go1.14/src/runtime/proc.go:203 +0x212 fp=0xc00004cfe0 sp=0xc00004cf88 pc=0x106f7a2
+runtime.goexit()
+    /Users/tonybai/.bin/go1.14/src/runtime/asm_amd64.s:1373 +0x1 fp=0xc00004cfe8 sp=0xc00004cfe0 pc=0x109b801
+exit status 2</p>
+
+<p>checkptr检测到：转换后的int64类型的内存对齐系数严格程度要高于转化前的原地址(一个byte变量的地址)。int64对齐系数为8，而一个byte变量地址对齐系数仅为1。</p>
+
+<p>做完指针算术后，转换后的unsafe.Pointer仍应指向原先Go堆对象
+compiler_checkptr2.go
+package main</p>
+
+<p>import (
+    “unsafe”
+)</p>
+
+<p>func main() {
+    var n = 5
+    b := make([]byte, n)
+    end := unsafe.Pointer(uintptr(unsafe.Pointer(&amp;b[0])) + uintptr(n+10))
+    _ = end
+}</p>
+
+<p>运行上述代码：</p>
+
+<p>$go run  -race compiler_checkptr2.go
+fatal error: checkptr: unsafe pointer arithmetic</p>
+
+<p>goroutine 1 [running]:
+runtime.throw(0x10b618b, 0x23)
+    /Users/tonybai/.bin/go1.14/src/runtime/panic.go:1112 +0x72 fp=0xc00003e720 sp=0xc00003e6f0 pc=0x1067192
+runtime.checkptrArithmetic(0xc0000180b7, 0xc00003e770, 0x1, 0x1)
+    /Users/tonybai/.bin/go1.14/src/runtime/checkptr.go:41 +0xb5 fp=0xc00003e750 sp=0xc00003e720 pc=0x1043055
+main.main()
+    /Users/tonybai/go/src/github.com/bigwhite/experiments/go1.14-examples/compiler_checkptr2.go:10 +0x8d fp=0xc00003e788 sp=0xc00003e750 pc=0x1096ced
+runtime.main()
+    /Users/tonybai/.bin/go1.14/src/runtime/proc.go:203 +0x212 fp=0xc00003e7e0 sp=0xc00003e788 pc=0x10697e2
+runtime.goexit()
+    /Users/tonybai/.bin/go1.14/src/runtime/asm_amd64.s:1373 +0x1 fp=0xc00003e7e8 sp=0xc00003e7e0 pc=0x1092581
+exit status 2</p>
+
+<p>checkptr检测到转换后的unsafe.Pointer已经超出原先heap object: b的范围了，于是报错。</p>
+
+<p>不过目前Go标准库依然尚未能完全通过checkptr的检查，因为有些库代码显然违反了unsafe.Pointer的使用规则。</p>
+
+<p>Go 1.13引入了新的Escape Analysis，Go 1.14中我们可以通过
+-m=2
+查看详细的逃逸分析过程日志，比如：</p>
+
+<p>$go run  -gcflags ‘-m=2’ compiler_checkptr2.go</p>
+<h1 id="command-line-arguments-2">command-line-arguments</h1>
+<p>./compiler_checkptr2.go:7:6: can inline main as: func() { var n int; n = 5; b := make([]byte, n); end := unsafe.Pointer(uintptr(unsafe.Pointer(&amp;b[0])) + uintptr(n + 100)); _ = end }
+./compiler_checkptr2.go:9:11: make([]byte, n) escapes to heap:
+./compiler_checkptr2.go:9:11:   flow: {heap} = &amp;{storage for make([]byte, n)}:
+./compiler_checkptr2.go:9:11:     from make([]byte, n) (non-constant size) at ./compiler_checkptr2.go:9:11
+./compiler_checkptr2.go:9:11: make([]byte, n) escapes to heap</p>
+
+<p>五. 标准库
+每个Go版本，变化最多的就是标准库，这里我们挑一个可能影响后续我们编写单元测试行为方式的变化说说，那就是testing包的T和B类型都增加了自己的Cleanup方法。我们通过代码来看一下Cleanup方法的作用：</p>
+
+<p>// go1.14-examples/testing_cleanup_test.go
+package main</p>
+
+<p>import “testing”</p>
+
+<p>func TestCase1(t *testing.T) {</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>t.Run("A=1", func(t *testing.T) {
+    t.Logf("subtest1 in testcase1")
+
+})
+t.Run("A=2", func(t *testing.T) {
+    t.Logf("subtest2 in testcase1")
+})
+t.Cleanup(func() {
+    t.Logf("cleanup1 in testcase1")
+})
+t.Cleanup(func() {
+    t.Logf("cleanup2 in testcase1")
+}) }
+</code></pre></div></div>
+
+<p>func TestCase2(t *testing.T) {
+    t.Cleanup(func() {
+        t.Logf(“cleanup1 in testcase2”)
+    })
+    t.Cleanup(func() {
+        t.Logf(“cleanup2 in testcase2”)
+    })
+}
+运行上面测试：</p>
+
+<p>$go test -v testing_cleanup_test.go
+=== RUN   TestCase1
+=== RUN   TestCase1/A=1
+    TestCase1/A=1: testing_cleanup_test.go:8: subtest1 in testcase1
+=== RUN   TestCase1/A=2
+    TestCase1/A=2: testing_cleanup_test.go:12: subtest2 in testcase1
+    TestCase1: testing_cleanup_test.go:18: cleanup2 in testcase1
+    TestCase1: testing_cleanup_test.go:15: cleanup1 in testcase1
+— PASS: TestCase1 (0.00s)
+    — PASS: TestCase1/A=1 (0.00s)
+    — PASS: TestCase1/A=2 (0.00s)
+=== RUN   TestCase2
+    TestCase2: testing_cleanup_test.go:27: cleanup2 in testcase2
+    TestCase2: testing_cleanup_test.go:24: cleanup1 in testcase2
+— PASS: TestCase2 (0.00s)
+PASS
+ok      command-line-arguments    0.005s
+我们看到：</p>
+
+<p>Cleanup方法运行于所有测试以及其子测试完成之后。</p>
+
+<p>Cleanup方法类似于defer，先注册的cleanup函数后执行（比如上面例子中各个case的cleanup1和cleanup2）。</p>
+
+<p>在拥有Cleanup方法前，我们经常像下面这样做：</p>
+
+<p>// go1.14-examples/old_testing_cleanup_test.go
+package main</p>
+
+<p>import “testing”</p>
+
+<p>func setup(t *testing.T) func() {
+    t.Logf(“setup before test”)
+    return func() {
+        t.Logf(“teardown/cleanup after test”)
+    }
+}</p>
+
+<p>func TestCase1(t *testing.T) {
+    f := setup(t)
+    defer f()
+    t.Logf(“test the testcase”)
+}
+运行上面测试：</p>
+
+<p>$go test -v old_testing_cleanup_test.go
+=== RUN   TestCase1
+    TestCase1: old_testing_cleanup_test.go:6: setup before test
+    TestCase1: old_testing_cleanup_test.go:15: test the testcase
+    TestCase1: old_testing_cleanup_test.go:8: teardown/cleanup after test
+— PASS: TestCase1 (0.00s)
+PASS
+ok      command-line-arguments    0.005s
+有了Cleanup方法后，我们就不需要再像上面那样单独编写一个返回cleanup函数的setup函数了。</p>
+
+<p>此次Go 1.14还将对unicode标准的支持从unicode 11 升级到 unicode 12 ，共增加了554个新字符。</p>
+
+<p>六. 其他
+超强的可移植性是Go的一个知名标签，在新平台支持方面，Go向来是“急先锋”。Go 1.14为64bit RISC-V提供了在linux上的实验性支持(GOOS=linux, GOARCH=riscv64)。</p>
+
+<p>rust语言已经通过cargo-fuzz从工具层面为fuzz test提供了基础支持。Go 1.14也在这方面做出了努力，并且Go已经在向将fuzz test变成Go test的一等公民而努力。</p>
+
+<p>七. 小结
+Go 1.14的详细变更说明在这里可以查看。整个版本的milestone对应的issue集合在这里。</p>
+
+<p>不过目前Go 1.14在特定版本linux内核上会出现crash的问题，当然这个问题源于这些内核的一个已知bug。在这个issue中有关于这个问题的详细说明，涉及到的Linux内核版本包括：5.2.x, 5.3.0-5.3.14, 5.4.0-5.4.1。
+本篇博客涉及的代码在这里可以下载。</p>
+:ET

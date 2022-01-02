@@ -1,0 +1,99 @@
+I"3<p>(gdb) run testmyFile.php
+Starting program: /usr/local/bin/php testmyFile.php
+Unable to find Mach task port for process-id 22822: (os/kern) failure (0x5).
+ (please check gdb is codesigned - see taskgated(8))</p>
+
+<p>$sudo gdb php
+ 这是因为 Darwin 内核在你没有特殊权限的情况下，不允许调试其它进程。调试某个进程，意味着你对这个进程有完全的控制权限，所以为了防止被恶意利用，它是默认禁止的。允许 gdb 控制其它进程最好的方法就是用系统信任的证书对它进行签名。
+ 问题解决
+ https://segmentfault.com/q/1010000004136334
+<!-- more --></p>
+
+<p>php的扩展使用c/c++开发，可以很容易的使用gdb进行调试。具体步骤如下： 首先编译php的时候需要加上** –enable-debug**参数</p>
+
+<p>./configure –enable-debug
+make &amp;&amp; make install
+在我的ubuntu机器上面测试，扩展的目录默认为 /usr/local/lib/php/extensions/debug-non-zts-20131226/
+这样进行php的源码调试也很方便。
+下一步进行扩展创建，进入php源码的ext目录，运行</p>
+
+<p>./ext_skel –extname=mydebug<br />
+当前目录下会自动生成mydebug目录，然后进入该目录，编辑config.m4文件，去掉10~12行的dnl，如下</p>
+
+<p>PHP_ARG_WITH(mydebug, for mydebug support,
+Make sure that the comment is aligned:
+[  –with-mydebug             Include mydebug support])
+在最后一行添加</p>
+
+<p>if test -z “$PHP_DEBUG”; then
+        AC_ARG_ENABLE(debug,
+                [–enable-debg  compile with debugging system],
+                [PHP_DEBUG=$enableval], [PHP_DEBUG=no]
+        )
+fi
+这样就表示该扩展能够进行调试了，然后编译该扩展，使用命令</p>
+
+<p>phpize 
+./configure –enable-debug
+make &amp;&amp; make install
+这里的 phpize 和 php-config 需要事先配置好环境变量，然后加载该扩展。在我的机器上面地址为/usr/local/lib/php/extensions/debug-non-zts-20131226/。进入mydebug扩展源码目录，默认生成的函数为confirm_mydebug_compiled，定义在 mydebug.c，扩展自动生成的函数。</p>
+
+<p>PHP_FUNCTION(confirm_mydebug_compiled)
+{
+        char *arg = NULL;
+        int arg_len, len;
+        char *strg;</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "s", &amp;arg, &amp;arg_len) == FAILURE) {
+            return;
+    }
+ 
+    len = spprintf(&amp;strg, 0, "Congratulations! You have successfully modified ext/%.78s/config.m4. Module %.78s is now compiled into PHP.", "mydebug", arg);
+    RETURN_STRINGL(strg, len, 0); } 大概意思就是获取字符串参数，然后拼成一句字符串返回。通过nm命令查看生成的mydebug.so导出的符号。
+</code></pre></div></div>
+
+<p>运行 nm mydebug.so
+返回 zif_confirm_mydebug_compiled
+    ……
+PHP_FUNCTION 实际就是在函数名前面添加 zif_，然后进行gdb调试</p>
+
+<p>第一步运行: gdb php
+然后运行： break  zif_confirm_mydebug_compiled
+终端提示：Function “zif_confirm_mydebug_compiled” not defined.
+Make breakpoint pending on future shared library load? (y or [n]) 
+输入： y
+输入:  run /tmp/test.php
+此时会回显:Breakpoint 1, zif_confirm_mydebug_compiled (ht=1, return_value=0xb7bf0d44, return_value_ptr=0xb7bd6104, this_ptr=0x0, return_value_used=1)
+    at /…../php-5.6.6/ext/mydebug/mydebug.c:56
+然后输入: l
+显示：
+54      PHP_FUNCTION(confirm_mydebug_compiled)
+55      {
+56              char *arg = NULL;
+57              int arg_len, len;
+58              char *strg;
+59
+60              if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, “s”, &amp;arg, &amp;arg_len) == FAILURE) {
+其中文件/tmp/test.php的内容为：</p>
+
+<p>&lt;?php</p>
+
+<p>echo confirm_mydebug_compiled(“hello world”);</p>
+
+<p>可以看到，函数源代码已经出来了，可以使用常用的gdb命令进行调试了。</p>
+
+<p>https://blog.csdn.net/carzyer/article/details/53339565</p>
+
+<p>https://segmentfault.com/a/1190000002782160</p>
+
+<p>VLD
+VLD（Vulcan Logic Dumper）是 PHP 的一个扩展。它以钩子的方式嵌入到 Zend 引擎中，收集并打印 PHP 脚本编译时期产生所有的 OPCODE。使用它，我们可以很方便地查看 PHP 源码产生的 OPCODE。</p>
+
+<p>安装 VLD 扩展
+通过 Github 直接安装 VLD 扩展。</p>
+
+<p>使用 VLD 查看 OPCODE
+通过一个简单的样例我们来下如何使用 VLD。首先，我们进入 ~/test/php 目录，创建一个简单的 PHP 脚本，保存为 simple.php。</p>
+
+<p>http://joshuais.me/php-nei-he-fen-xi-jing-yan-tan-gong-ju-pian/</p>
+:ET

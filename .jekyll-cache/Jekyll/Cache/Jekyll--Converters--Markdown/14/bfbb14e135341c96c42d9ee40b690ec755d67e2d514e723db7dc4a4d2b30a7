@@ -1,0 +1,47 @@
+I"�	<p>func (o *OptionManager) Get(db *sql.DB, name string) (string, error)
+后面发现这样定义不靠谱， 因为我很有可能需要在事务中调用这个函数。也就是说，还应该这样：</p>
+
+<p>func (o *OptionManager) Get(tx *sql.Tx, name string) (string, error)</p>
+
+<p>type Querier interface {
+    Exec(query string, args …interface{}) (sql.Result, error)
+    Query(query string, args …interface{}) (*sql.Rows, error)
+    QueryRow(query string, args …interface{}) *sql.Row
+}</p>
+
+<p>GORM 中也有类似的实现
+<!-- more -->
+https://blog.twofei.com/744/</p>
+
+<p>sql.DB不是一个连接，它是数据库的抽象接口。它可以根据driver打开关闭数据库连接，管理连接池。正在使用的连接被标记为繁忙，用完后回到连接池等待下次使用。所以，如果你没有把连接释放回连接池，会导致过多连接使系统资源耗尽。</p>
+
+<p>db.Begin()开始事务，Commit() 或 Rollback()关闭事务。Tx从连接池中取出一个连接，在关闭之前都是使用这个连接。Tx不能和DB层的BEGIN, COMMIT混合使用。</p>
+
+<p>如果你需要通过多条语句修改连接状态，你必须使用Tx，例如：</p>
+
+<p>创建仅对单个连接可见的临时表
+设置变量，例如SET @var := somevalue
+改变连接选项，例如字符集，超时</p>
+
+<p>避免错误操作，例如LOCK TABLE后用 INSERT会死锁，因为两个操作不是同一个连接，insert的连接没有table lock。
+当需要连接，且连接池中没有可用连接时，新的连接就会被创建。
+默认没有连接上限，你可以设置一个，但这可能会导致数据库产生错误“too many connections”
+db.SetMaxIdleConns(N)设置最大空闲连接数
+db.SetMaxOpenConns(N)设置最大打开连接数
+长时间保持空闲连接可能会导致db timeout</p>
+
+<p>https://segmentfault.com/a/1190000003036452</p>
+
+<p>(<em>DB) Begin 方法
+func (db *DB) Begin() (</em>Tx, error)
+开启一个事务， 事务的隔离级别由驱动决定。</p>
+
+<p>(<em>DB) BeginTx 方法
+func (db *DB) BeginTx(ctx context.Context, opts *TxOptions) (</em>Tx, error)
+开启一个事务。</p>
+
+<p>给定的上下文会一直使用到事务提交又或者回滚为止。 如果上下文被取消了， 那么 sql 包将会对事务进行回滚。 Tx.Commit 在给定的上下文已被取消时会返回一个错误。</p>
+
+<p>http://cngolib.com/database-sql.html</p>
+
+:ET

@@ -1,0 +1,53 @@
+I"�<p>https://aws.amazon.com/cn/blogs/china/easily-build-serverless-applications-using-aws-lambda-and-aws-step-functions/
+Serverless（无服务器）应用可以说是当前的行业热点，用户无需预配置或管理服务器，只需要部署功能代码，AWS Lambda会在需要的时候执行代码并自动缩放， 从每天几个请求到每秒数千个请求，轻松地实现FaaS （Function as a Service）。无服务器应用的使用场景非常广阔，从微服务架构，到批处理、流处理、运维自动化和移动计算。</p>
+
+<p>实现Serverless应用，除了AWS Lambda还需要什么？
+我们来看一个典型的基于Lambda的无服务器应用。
+<!-- more -->
+这张图上的箭头，就是上一张图里Lambda函数之间的流程，或者可以称为Lambda函数之间的“胶水”，它们起到了编排协调各个Lambda函数的作用。通常在应用中，我们会需要有这样的一些流程：</p>
+
+<p>我想要顺序地执行方法。
+我想要并行地运行这些方法。
+我想要基于数据选择执行方法。
+我想要重试某些方法。
+我想要try/catch/finally。
+我想要代码运行一定时间或者等待一段时间……
+通常我们可以通过方法调用、函数链、DB和消息队列来协调这些函数，实现流程。但是对于所采用的协调机制，我们都希望它具有以下功能：</p>
+
+<p>可以自动伸缩；
+不会丢失状态；
+可以处理错误和超时；
+可以简单的搭建和运维；
+可以审计。
+这里我们介绍一种方式，采用AWS Step Functions协调Lambda函数之间的流程。</p>
+
+<p>AWS Step Functions
+AWS Step Functions是一个可视工作流服务，可用来轻松协调分布式应用程序和微服务的各个组件。用户从单个组件构建应用程序，每个组件都执行一个特定的功能，也就是Task（可以采用Lambda函数实现）。Step Functions提供了一种可靠的方法来协调这些组件并逐步完成应用程序中的这些功能，并且 提供了一个图形控制台，将应用程序的组件可视化为一系列步骤，它可以自动触发并跟踪每一个步骤，并在出现错误时重试，这样应用程序就可以每一次都按照预先设定的顺序执行。Step Functions会记录每一步的状态，因此当事情出错时，用户可以快速地诊断和调试问题。</p>
+
+<p>要使用Step Functions构建应用，首先我们需要在Step Functions里创建State Machine（状态机），也就是对应每一个应用的工作流程。可以采用以下8种蓝图，包括7种预定义好的状态机和1种自定义的。创建好的状态机用JSON描述。</p>
+
+<p>在每一个状态机里，我们需要定义一系列的State（状态），用来完成不同的功能：</p>
+
+<p>Task：在状态机中完成特定的功能，可以采用Lambda函数实现。
+Choice：在各种执行分支中进行选择。
+Fail和Success：停止一个执行，并设为Fail或者Success。
+Pass：简单地将输入传给输出，或者注入一些数据。
+Wait：提供一定时间的延迟，或者等待到特定的时间/数据。
+Parallel：并行地执行分支。
+可以看出，上一节中我们所需要的协调和流程在这些状态中都得到了支持。其中的Task状态是用来真正实现应用的功能，而其他状态用来处理功能之间的流程。比如说，下面是一个名为HelloWorld，执行Lambda函数的状态。</p>
+
+<p>整个架构的流程如下：</p>
+
+<p>一张图片上传到名为PhotoRepo的S3 bucket里，位于“Incoming/”前缀下。
+S3 upload event产生，触发了名为ImageProcStartExecution的Lambda函数，该函数启动了AWS Step Functions中ImageProc状态机的执行，并将S3 bucket和object key作为参数传入状态机。
+ImageProc状态机执行以下步骤：
+从S3中读取文件并抽取出图片的元数据（格式、EXIF数据、大小等等）；
+基于上一步骤的输出，验证上传的文件格式是否支持（png或者jpg）；如果不支持，抛出NotSupportedImageType错误并且结束执行。
+将抽取出的元数据保存在ImageMetadata DynamoDB中。
+并行地同时启动两个进程：
+1)    调用Amazon Rekognition探测图像文件的对象，如果探测到，将tag保存到ImageMetadata DynamoDB中；
+2)    生成缩略图并且保存在名为PhotoRepo的S3 bucket的“Thumbnails/”前缀下面。
+可以通过源代码中的test web app上传图片来测试该图像识别和处理工作流的结果。</p>
+
+<p>https://github.com/aws-samples/lambda-refarch-imagerecognition</p>
+:ET

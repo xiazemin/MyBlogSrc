@@ -1,0 +1,379 @@
+I"�F<p>https://newt0n.github.io/2017/02/10/PHP-%E5%8D%8F%E7%A8%8B%E5%8E%9F%E7%90%86/</p>
+
+<p>https://www.laruence.com/2008/08/16/301.html</p>
+
+<p>https://my.oschina.net/agiledev/blog/343166</p>
+
+<p>https://zhuanlan.zhihu.com/p/84221387</p>
+
+<p>https://github.com/swoole/swoole-src/releases/tag/v4.0.0</p>
+
+<p>https://github.com/swoole/phpx</p>
+
+<p>https://segmentfault.com/a/1190000011360313?utm_source=tag-newest</p>
+
+<p>https://segmentfault.com/a/1190000011111074?utm_source=tag-newest</p>
+
+<p>https://segmentfault.com/u/hantianfeng</p>
+
+<p>https://segmentfault.com/a/1190000011360313
+<!-- more --></p>
+
+<p>###创建第一个PHP扩展类</p>
+
+<p>本节将会通过实现一个简单的PHP扩展类，介绍在PHP扩展开发过程中如何实现面向对象。</p>
+
+<p>在PHP扩展实现中，类的创建主要包含三步：</p>
+
+<p>创建一个全局的zend_class_entry变量，用于存储类的入口。
+创建一个zend_function_entry结构体数组，用于存储类中包含的方法。
+在扩展的MINIT方法中注册类。
+下面将对这三个步骤进行展开描述，我们将会继续在PHP扩展开发 - 构建第一个PHP扩展一节中创建的 ext_demo_1扩展的基础之上进行开发，这里我们所写的所有代码都在ext_demo_1.c文件中。</p>
+
+<p>####创建一个简单的空类</p>
+
+<p>首先，我们创建一个名为php_democlass_entry的zend_class_entry结构体变量， 该结构体变量实际存储了我们创建的类的入口。</p>
+
+<p>zend_class_entry *php_democlass_entry;
+这里的php_democlass_entry在扩展源文件中是一个全局变量，为了使其它扩展可以使用我们创建的类， 这个全局变量应该在头文件中导出。</p>
+
+<p>接下来，我们创建zend_function_entry结构体数组，这个数组与函数定义时的数组是一样的。</p>
+
+<p>const zend_function_entry ext_demo_1_democlass_functions[] = {
+	PHP_FE_END
+};
+与函数注册不同的是，对于类的创建，我们需要在MINIT方法中注册该类。</p>
+
+<p>PHP_MINIT_FUNCTION(ext_demo_1)
+{
+	/* 创建一个临时类入口变量 */
+	zend_class_entry temp_ce;
+	INIT_CLASS_ENTRY(temp_ce, “DemoClass”, ext_demo_1_democlass_functions);</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>php_democlass_entry = zend_register_internal_class(&amp;temp_ce TSRMLS_CC);
+return SUCCESS; } 在MINIT函数中，首先创建了一个temp_ce变量用于存储临时的类入口，接下来使用INIT_CLASS_ENTRY 宏初始化该变量，之后使用zend_register_internal_class()将该类注册到Zend引擎， 该函数会返回一个最终的类入口，将其赋值给前面创建的全局变量。
+</code></pre></div></div>
+
+<p>这里的INIT_CLASS_ENTRY是一个宏定义:</p>
+
+<p>/* zend_API.h 162-163 */
+#define INIT_CLASS_ENTRY(class_container, class_name, functions) <br />
+	INIT_OVERLOADED_CLASS_ENTRY(class_container, class_name, functions, NULL, NULL, NULL)
+它接受三个参数，第一个参数为类容器，也就是我们创建的zend_class_entry变量， 第二个参数为我们要创建的对象名称，第三个参数为我们创建的类包含哪些函数。</p>
+
+<p>在使用INIT_CLASS_ENTRY之后，都执行了哪些操作呢？跟进该宏定义的实现代码后可以发现， 在该宏的定义中，首先为结构体(zend_class_entry)变量class_container设置name属性， 然后对该结构体变量进行初始化(zend_API.h 176-204)。</p>
+
+<p>现在，我们就有了一个空的类，编译该扩展之后，我们可以使用php –rc DemoClass测试一下：</p>
+
+<p>ext_demo_1 mylxsw$ php –rc DemoClass
+Class [ <internal:ext_demo_1> class DemoClass ] {</internal:ext_demo_1></p>
+
+<ul>
+  <li>
+    <p>Constants [0] {
+  }</p>
+  </li>
+  <li>
+    <p>Static properties [0] {
+  }</p>
+  </li>
+  <li>
+    <p>Static methods [0] {
+  }</p>
+  </li>
+  <li>
+    <p>Properties [0] {
+  }</p>
+  </li>
+  <li>
+    <p>Methods [0] {
+  }
+}
+####为PHP类添加方法</p>
+  </li>
+</ul>
+
+<p>接下来，我们为我们刚才创建的空类添加一个名为sayHello的方法。</p>
+
+<p>在ext_demo_1.c文件中，创建一个sayHello的方法：</p>
+
+<p>PHP_METHOD(DemoClass, sayHello)
+{
+	char *name, *str_hello;
+	int name_len, str_hello_len;</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "s", &amp;name, &amp;name_len) == FAILURE) {
+	RETURN_NULL();
+}
+
+str_hello_len = spprintf(&amp;str_hello, 0, "Hello, %s, You are welcome!\n", name);
+RETURN_STRINGL(str_hello, str_hello_len, 0); } 这里我们创建为DemoClass类创建了一个名为sayHello的方法，该方法接收一个字符串类型的参数， 并且返回Hello, 提供的参数, You are welcome!。
+</code></pre></div></div>
+
+<p>不要忘记在头文件php_ext_demo_1.h文件中声明一下，否则编译的时候会因为PHP_ME宏中使用了该方法而报错。</p>
+
+<p>PHP_METHOD(DemoClass, sayHello);
+在ext_demo_1_democlass_functions结构体数组中加入该方法：</p>
+
+<p>const zend_function_entry ext_demo_1_democlass_functions[] = {
+	PHP_ME(DemoClass, sayHello, NULL, ZEND_ACC_PUBLIC) /* sayHello方法为PUBLIC可见性 */
+	PHP_FE_END
+};
+这里的PHP_ME宏与之前函数部分中PHP_FE类似，区别在于增加了第一个参数，用于指定该方法所属的类名， 最后一个参数用于指定方法属性。这里的方法属性包含 ZEND_ACC_PUBLIC，ZEND_ACC_PROTECTED， ZEND_ACC_PRIVATE，ZEND_ACC_STATIC， ZEND_ACC_FINAL，ZEND_ACC_ABSTRACT。</p>
+
+<table>
+  <tbody>
+    <tr>
+      <td>其中，前三个参数可以与后面几个组合使用，多个参数组合时，使用</td>
+      <td>进行分隔， 例如:</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>PHP_ME(
+    Test, protectedFinalStaticMethod, arginfo_xyz,
+    ZEND_ACC_PROTECTED | ZEND_ACC_FINAL | ZEND_ACC_STATIC
+)
+对于抽象方法来说，并不能直接使用ZEND_ACC_ABSTRACT宏，而应该使用Zend定义的 PHP_ABSTRACT_ME(类名, 抽象方法名, 参数信息)取代。</p>
+
+<p>类似于PHP_FUNCTION宏，这里的PHP_METHOD宏展开后如下所示：</p>
+
+<p>/* PHP_METHOD(ClassName, methodName) { } */
+void zim_ClassName_methodName(INTERNAL_FUNCTION_PARAMETERS) { }
+对于sayHello方法，我们可以使用ZEND_ARG_INFO系列宏为其参数提供类型提示功能。</p>
+
+<p>ZEND_BEGIN_ARG_INFO_EX(democlass_sayhello_args, 0, 0, 1)
+	ZEND_ARG_INFO(0, name)
+ZEND_END_ARG_INFO();
+添加该段代码之后，需要修改PHP_ME函数的第三个参数NULL为democlass_sayhello_args。</p>
+
+<p>重新编译扩展，执行以下PHP脚本测试是否扩展功能正常：</p>
+
+<p>&lt;?php
+$demo = new DemoClass();
+echo $demo-&gt;sayHello(‘mylxsw’);
+程序输出：</p>
+
+<p>$ php test.php
+Hello, mylxsw, You are welcome!
+在类方法内，使用getThis()方法获取当前对象实例，返回值类型为zval *，对应PHP中的$this。</p>
+
+<p>####为类添加属性</p>
+
+<p>要在创建好的类中添加属性，要使用zend_declare_property_*系列函数。在MINIT方法中， 添加如下代码：</p>
+
+<p>PHP_MINIT_FUNCTION(ext_demo_1)
+{
+	…
+	zend_declare_property_long(php_democlass_entry, “age”, sizeof(“age”) - 1, 24, ZEND_ACC_PUBLIC TSRMLS_CC);
+	…
+}
+这里我们使用zend_declare_property_long()函数为DemoClass类添加了一个age字段， 并且设置其可见性为PUBLIC，类型为long型。</p>
+
+<p>下面是zend_declare_property_*系列函数:</p>
+
+<p>ZEND_API int zend_declare_property(zend_class_entry *ce, char *name, int name_length, zval *property, int access_type TSRMLS_DC);</p>
+
+<p>ZEND_API int zend_declare_property_ex(zend_class_entry *ce, const char *name, int name_length, zval *property, int access_type, char *doc_comment, int doc_comment_len TSRMLS_DC);</p>
+
+<p>ZEND_API int zend_declare_property_null(zend_class_entry *ce, char *name, int name_length, int access_type TSRMLS_DC);</p>
+
+<p>ZEND_API int zend_declare_property_bool(zend_class_entry *ce, char *name, int name_length, long value, int access_type TSRMLS_DC);</p>
+
+<p>ZEND_API int zend_declare_property_long(zend_class_entry *ce, char *name, int name_length, long value, int access_type TSRMLS_DC);</p>
+
+<p>ZEND_API int zend_declare_property_double(zend_class_entry *ce, char *name, int name_length, double value, int access_type TSRMLS_DC);</p>
+
+<p>ZEND_API int zend_declare_property_string(zend_class_entry *ce, char *name, int name_length, char *value, int access_type TSRMLS_DC);</p>
+
+<p>ZEND_API int zend_declare_property_stringl(zend_class_entry *ce, char *name, int name_length, char *value, int value_len, int access_type TSRMLS_DC);
+要访问类中的属性，比如获取属性的值或者是修改属性的值等，使用zend_read_property()和 zend_update_property()函数。</p>
+
+<p>/* zend_API.h 326-328 */
+ZEND_API zval *zend_read_property(zend_class_entry *scope, zval *object, char *name, int name_length, zend_bool silent TSRMLS_DC);</p>
+
+<p>ZEND_API zval *zend_read_static_property(zend_class_entry *scope, char *name, int name_length, zend_bool silent TSRMLS_DC);</p>
+
+<p>ZEND_API void zend_update_property(zend_class_entry *scope, zval *object, char *name, int name_length, zval *value TSRMLS_DC);</p>
+
+<p>/* 下面这个是zend_update_property_*系列函数，与declare系列类似，不做详述，参考zend_API.h 309-328 */
+ZEND_API void zend_update_property_long(zend_class_entry *scope, zval *object, char *name, int name_length, long value TSRMLS_DC);</p>
+
+<p>为了演示，我们注册一个名为age的long型属性，并创建对应的getter/setter方法。</p>
+
+<p>/* getAge方法的参数类型提示，无参数 */
+ZEND_BEGIN_ARG_INFO_EX(democlass_getage_args, 0, 0, 0)
+ZEND_END_ARG_INFO()</p>
+
+<p>/* setAge方法参数类型提示，一个必须参数，名称$age */
+ZEND_BEGIN_ARG_INFO_EX(democlass_setage_args, 0, 0, 1)
+	ZEND_ARG_INFO(0, age)
+ZEND_END_ARG_INFO()</p>
+
+<p>/* 将创建的方法告诉zend_function_entry，设置可见性为public */
+const zend_function_entry ext_demo_1_democlass_functions[] = {
+	…
+	PHP_ME(DemoClass, setAge, democlass_setage_args, ZEND_ACC_PUBLIC)
+	PHP_ME(DemoClass, getAge, democlass_getage_args, ZEND_ACC_PUBLIC)
+	PHP_FE_END
+};</p>
+
+<p>/* setAge($age)方法 <em>/
+PHP_METHOD(DemoClass, setAge)
+{
+	long age;
+	zval *obj;
+	if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, “l”, &amp;age) == FAILURE) {
+		RETURN_NULL();
+	}
+	obj = getThis();/</em> 获取$this对象 <em>/
+	/</em> 更新age字段的信息 */
+	zend_update_property_long(php_democlass_entry, obj, “age”, sizeof(“age”) - 1, age);
+}</p>
+
+<p>/* getAge方法<em>/
+PHP_METHOD(DemoClass, getAge)
+{
+	zval *obj, *age;
+	obj = getThis();
+	/</em> 检索age属性的值 */
+	age = zend_read_property(php_democlass_entry, obj, “age”, sizeof(“age”) - 1, 1 TSRMLS_CC);
+	RETURN_ZVAL(age, 1, 0);
+}</p>
+
+<p>/* MINIT方法<em>/
+PHP_MINIT_FUNCTION(ext_demo_1)
+{
+	…/</em> 这里省略了，完成类的注册 <em>/
+	/</em> 声明属性age，并设置为public可见性 <em>/
+	zend_declare_property_long(php_democlass_entry, “age”, sizeof(“age”) - 1, 24, ZEND_ACC_PUBLIC TSRMLS_CC);
+	return SUCCESS;
+}
+要创建static属性的话，同样使用zend_declare_property</em>系列函数，区别是类型标识符需要增加 ZEND_ACC_STATIC。对static字段的操作使用zend_read_static_property()和zend_update_static_property*系列函数。</p>
+
+<p>还有一个是类常量，类常量使用zend_declare_class_constant*系列宏声明，使用zend_update_class_constants 进行操作。</p>
+
+<p>####接口和继承</p>
+
+<p>与在PHP中使用类和接口类似，在扩展开发中，扩展内部的类也可以继承其它类或者实现接口。</p>
+
+<p>当我们创建的类需要继承一个已经存在的类的时候，我们只需要将注册类的函数修改为zend_register_internal_class_ex。</p>
+
+<p>designner_entry = zend_register_internal_class_ex(&amp;temp_designner_ce, person_entry, NULL TSRMLS_CC);
+与之前使用zend_register_internal_class不同的是，_ex版本的注册函数增加了两个参数， 第二个参数为要继承的类的全局标识，也就是在创建类的时候我们那个zend_class_entry全局对象。 这里第三个参数为NULL，这个参数的作用是在调用其它扩展类时，如果扩展没有按照规范导出类的全局标识符的话， 我们将第二个参数设置为NULL，第三个参数设为字符串形式的类名，当然，不推荐这样做，例如：</p>
+
+<p>custom_exception_ce = zend_register_internal_class_ex(
+    &amp;tmp_ce, NULL, “RuntimeException” TSRMLS_CC
+);
+接口的创建与类相似，区别在于在接口创建时，在zend_function_entry中，需要将接口所有的方法 使用PHP_ABSTRACT_ME添加，其它步骤与类的创建一样，在MINIT方法中，当初始化类之后，只需要再 设置创建类的ce_flags字段为ZEND_ACC_INTERFACE即可。</p>
+
+<p>zend_class_entry <em>php_sample3_iface_entry;
+PHP_MINIT_FUNCTION(sample3)
+{
+    zend_class_entry ce;
+    INIT_CLASS_ENTRY(ce, “Sample3_Interface”,
+                        php_sample3_iface_methods);
+    php_sample3_iface_entry =
+                zend_register_internal_class(&amp;ce TSRMLS_CC);
+    php_sample3_iface_entry-&gt;ce_flags|= ZEND_ACC_INTERFACE;/</em> 注意这里使用了“|” */
+    …
+如果创建的类要实现接口，只需要再使用zend_class_implements()函数添加一下就可以了。</p>
+
+<p>/* DataClass implements Countable, ArrayAccess, IteratorAggregate */
+zend_class_implements(
+        data_class_ce TSRMLS_CC, 3, spl_ce_Countable, zend_ce_arrayaccess, zend_ce_aggregate
+    );
+这里的zend_class_implements()函数是个变参函数，第一个参数为需要实现接口的类的zend_class_entry对象，第二个参数为需要实现的接口的个数，其它参数是可变的，都为需要实现的接口。</p>
+
+<p>###附录</p>
+
+<p>####对象结构</p>
+
+<p>在zval中，与对象有关的字段是zvalue_value联合体中的zend_object_value字段， 该类型定义如下：</p>
+
+<p>/* zend_types.h 53-59 */
+typedef unsigned int zend_object_handle;
+typedef struct _zend_object_handlers zend_object_handlers;</p>
+
+<p>typedef struct _zend_object_value {
+	zend_object_handle handle;
+	zend_object_handlers *handlers;
+} zend_object_value;
+该结构体zend_object_value中，zend_object_handle类型的handle为int类型的整数值， 该handle是一个唯一的对象ID标识，用于从对象存储中查询实际的对象。</p>
+
+<p>第二个参数是一个指向zend_object_handlers结构体的指针，该结构体定义了实际对象的行为(zend_object_handlers.h 113-141)。</p>
+
+<p>####类结构</p>
+
+<p>在PHP扩展中，Zend引擎定义了zend_class_entry结构体来表示一个类的基本结构。</p>
+
+<p>/* zend.h 418-470 <em>/
+struct _zend_class_entry {
+	char type;/</em> 类的类型：ZEND_INTERNAL_CLASS 或者 ZEND_USER_CLASS <em>/
+	char *name;/</em> 类的名称 <em>/
+	zend_uint name_length;/</em> 类名称长度 ， sizeof(name) - 1 <em>/
+	struct _zend_class_entry *parent; /</em> 该类的父类 <em>/
+	int refcount;/</em> 引用计数 <em>/
+	zend_bool constants_updated;
+  /</em></p>
+<ul>
+  <li>ce_flags指定了类的基本属性</li>
+  <li>ZEND_ACC_IMPLICIT_ABSTRACT_CLASS 隐式的抽象类（含有abstract方法）</li>
+  <li>ZEND_ACC_EXPLICIT_ABSTRACT_CLASS 添加了abstract关键字的抽象类</li>
+  <li>ZEND_ACC_FINAL_CLASS 该类是final的</li>
+  <li>ZEND_ACC_INTERFACE 这是一个接口
+   */
+    zend_uint ce_flags;</li>
+</ul>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>HashTable function_table; /* 方法哈希表 */
+HashTable default_properties; /* 默认属性哈希表 */
+HashTable properties_info; /* 属性信息哈希表 */
+HashTable default_static_members; /* 默认的静态成员变量哈希表 */   /*    * type == ZEND_USER_CLASS    -&gt;  &amp;default_static_members    * type == ZEND_INTERAL_CLASS -&gt; NULL    */
+HashTable *static_members;
+HashTable constants_table; /* 常量哈希表 */
+const struct _zend_function_entry *builtin_functions; /* 方法定义入口 */
+</code></pre></div></div>
+
+<p>/* 构造函数、析构函数、clone函数以及其它魔术方法 */
+	union _zend_function *constructor;
+	union _zend_function *destructor;
+	union _zend_function *clone;
+	union _zend_function *__get;
+	union _zend_function *__set;
+	union _zend_function *__unset;
+	union _zend_function *__isset;
+	union _zend_function *__call;
+	union _zend_function *__callstatic;
+	union _zend_function *__tostring;
+	union _zend_function *serialize_func;
+	union _zend_function *unserialize_func;</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>zend_class_iterator_funcs iterator_funcs;
+
+/* 类句柄handler */
+zend_object_value (*create_object)(zend_class_entry *class_type TSRMLS_DC);
+zend_object_iterator *(*get_iterator)(zend_class_entry *ce, zval *object, int by_ref TSRMLS_DC);
+</code></pre></div></div>
+
+<p>/* 类声明的接口 <em>/
+	int (</em>interface_gets_implemented)(zend_class_entry <em>iface, zend_class_entry *class_type TSRMLS_DC);
+	union _zend_function *(</em>get_static_method)(zend_class_entry <em>ce, char</em> method, int method_len TSRMLS_DC);</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>/* 序列化回调函数 */
+int (*serialize)(zval *object, unsigned char **buffer, zend_uint *buf_len, zend_serialize_data *data TSRMLS_DC);
+int (*unserialize)(zval **object, zend_class_entry *ce, const unsigned char *buf, zend_uint buf_len, zend_unserialize_data *data TSRMLS_DC);
+
+zend_class_entry **interfaces; /* 类实现的接口 */
+zend_uint num_interfaces; /* 类实现的接口数目 */
+
+char *filename; /* 类所在的文件 */
+zend_uint line_start; /* 类定义的开始行 */
+zend_uint line_end;/* 类定义的结束行 */
+char *doc_comment;
+zend_uint doc_comment_len;
+
+struct _zend_module_entry *module;/* 类所在的模块入口*/ };
+</code></pre></div></div>
+
+:ET

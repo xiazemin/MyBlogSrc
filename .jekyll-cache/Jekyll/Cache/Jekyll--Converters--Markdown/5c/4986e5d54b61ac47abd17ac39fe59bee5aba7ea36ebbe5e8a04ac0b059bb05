@@ -1,0 +1,77 @@
+I"F<p>500 Internal Server Error 内部服务错误：顾名思义500错误一般是服务器遇到意外情况，而无法完成请求。解决的方法：查看nginx、php的错误日志文件，从而看出端倪；如果是脚本的问题，则需要修复脚本错误，优化代码。
+502 Bad Gateway错误、504 Bad Gateway timeout 网关超时。解决方法：使用nginx代理，而后端服务器发生故障；或者php-cgi进程数不够用；php执行时间长，或者是php-cgi进程死掉；已经fastCGI使用情况等都会导致502、504错误。
+501，服务器不具备完成请求的功能。例如，服务器无法识别请求方法时可能会返回此代码。
+503，服务器目前无法使用（由于超载或停机维护）。通常，这只是暂时状态。（服务不可用）
+502 Bad Gateway：作为网关或者代理工作的服务器尝试执行请求时，从上游服务器接收到无效的响应。 
+504 Gateway Time-out：作为网关或者代理工作的服务器尝试执行请求时，未能及时从上游服务器（URI标识出的服务器，例如HTTP、FTP、LDAP）或者辅助服务器（例如DNS）收到响应。</p>
+
+<p>502：作为网关或者代理工作的服务器尝试执行请求时，从上游服务器接收到无效的响应。
+503：由于临时的服务器维护或者过载，服务器当前无法处理请求。这个状况是临时的，并且将在一段时间以后恢复。如果能够预计延迟时间，那么响应中可以包含一个 Retry-After 头用以标明这个延迟时间。如果没有给出这个 Retry-After 信息，那么客户端应当以处理500响应的方式处理它。　　注意：503状态码的存在并不意味着服务器在过载的时候必须使用它。某些服务器只不过是希望拒绝客户端的连接。
+504：作为网关或者代理工作的服务器尝试执行请求时，未能及时从上游服务器（URI标识出的服务器，例如HTTP、FTP、LDAP）或者辅助服务器（例如DNS）收到响应。　　注意：某些代理服务器在DNS查询超时时会返回400或者500错误。
+<!-- more -->
+502 Bad Gateway原因分析 
+将请求提交给网关如php-fpm执行，但是由于某些原因没有执行完毕导致php-fpm进程终止执行。说到此，这个问题就很明了了，与网关服务如php-fpm的配置有关了。 
+php-fpm.conf配置文件中有两个参数就需要你考虑到，分别是max_children和request_terminate_timeout。 
+max_children最大子进程数，在高并发请求下，达到php-fpm最大响应数，后续的请求就会出现502错误的。可以通过netstat命令来查看当前连接数。 
+request_terminate_timeout设置单个请求的超时终止时间。还应该注意到php.ini中的max_execution_time参数。当请求终止时，也会出现502错误的。 
+当积累了大量的php请求，你重启php-fpm释放资源，但一两分钟不到，502又再次呈现，这是什么原因导致的呢？ 这时还应该考虑到数据库，查看下数据库进程是否有大量的locked进程，数据库死锁导致超时，前端终止了继续请求，但是SQL语句还在等待释放锁，这时就要重启数据库服务了或kill掉死锁SQL进程了。 
+对于长时间的请求可以考虑使用异步方式，可以参阅《关于PHP实现异步操作的研究》。</p>
+
+<p>504错误一般是与nginx.conf配置有关了。主要与以下几个参数有关：fastcgi_connect_timeout、fastcgi_send_timeout、fastcgi_read_timeout、fastcgi_buffer_size、fastcgi_buffers、fastcgi_busy_buffers_size、fastcgi_temp_file_write_size、fastcgi_intercept_errors。特别是前三个超时时间。如果fastcgi缓冲区太小会导致fastcgi进程被挂起从而演变为504错误。</p>
+
+<p>502错误主要从四个方向入手：</p>
+<ol>
+  <li>max_children</li>
+  <li>request_terminate_timeout、max_execution_time</li>
+  <li>数据库</li>
+  <li>网关服务是否启动如php-fpm 
+504错误主要查看nginx.conf关于网关如fastcgi的配置。</li>
+</ol>
+
+<p>nginx作为一个代理服务器，将请求转发到其他服务器或者php-cgi来处理，当nginx收到了无法理解的响应时，就返回502。当nginx超过自己配置的超时时间还没有收到请求时，就返回504错误。</p>
+
+<p>502
+上面说到nginx收到了无法理解的响应，什么是无法理解的响应呢？</p>
+
+<p>nginx无法与php-fpm进行连接。
+nginx在连接php-fpm一段时间后发现与php-fpm的连接被断开。
+那么什么时候会出现上面的情况呢？</p>
+
+<p>php-fpm没有启动,nginx无法将请求交给php-fpm
+php-fpm运行脚本超时，php-fpm终止了脚本的执行和执行脚本的Worker进程，nginx发现自己与php-fpm的连接断开。</p>
+
+<p>我们关闭php-fpm。
+刷新页面，发现返回502错误：</p>
+
+<p>php-fpm请求超时
+我们首先将php-fpm.conf中的 max_terminate_request 改成5s：
+在php脚本中添加如下语句：
+sleep(20);
+刷新页面，发现返回502错误：</p>
+
+<p>502与max_children之间的关系，有这样的说法：
+max_children最大子进程数，在高并发请求下，达到php-fpm最大响应数，后续的请求就会出现502错误的。当backlog队列满了，会出现502错误,也非如此
+将php-fpm的conf中的listen.backlog修改为1：
+当 queue 满了之后，服务器并不会按照理论所述，不再对 SYN 进行应答，返回 ETIMEDOUT。根据这篇文档的描述，实际情况并非如此，服务器会随机的忽略收到的 SYN，建立起来的连接数可以无限的增加，只不过客户端会遇到延时以及超时的情况。</p>
+
+<p>fastcgi_buffer系列
+还有种说法是当nginx的fastcgi的buffer设置过小时，也会有502。</p>
+
+<p>504即nginx超过了自己设置的超时时间，不等待php-fpm的返回结果，直接给客户端返回504错误。但是此时php-fpm依然还在处理请求（在没有超出自己的超时时间的情况下）。</p>
+
+<p>fastcgi_connect_timeout 300;</p>
+<h1 id="指定连接到后端fastcgi的超时时间">指定连接到后端FastCGI的超时时间。</h1>
+<p>fastcgi_send_timeout 300;</p>
+<h1 id="向fastcgi传送请求的超时时间这个值是指已经完成两次握手后向fastcgi传送请求的超时时间">向FastCGI传送请求的超时时间，这个值是指已经完成两次握手后向FastCGI传送请求的超时时间。</h1>
+<p>fastcgi_read_timeout 300;</p>
+<h1 id="接收fastcgi应答的超时时间这个值是指已经完成两次握手后接收fastcgi应答的超时时间">接收FastCGI应答的超时时间，这个值是指已经完成两次握手后接收FastCGI应答的超时时间。</h1>
+
+<p>这里我们将fastcgi_read_timeout设置为1s，后端还是延迟20s，观测效果：504</p>
+
+<p>499是由于超过客户端设置的请求超时时间，客户端主动关闭连接，服务器code为499。
+500多是由于代码语法错误，导致CGI执行错误并且会把错误结果通知服务器，服务器则报500。
+502是由于CGI由于在自身的执行时间要求内无法按时完成，则无法返回给服务器正常响应，此时服务器会返回502。
+504是CGI在服务器设置的超时时间内无法按时返回响应，服务器则返回504。
+499，502，504都会因为超时而产生，区别是超时超了谁的时，499是超了客户端本身的连接时间，502是超了CGI的执行时间，504是超了服务器本身的最大允许读取时间。</p>
+
+:ET

@@ -1,0 +1,430 @@
+I"�M<p>https://github.com/micro/go-micro
+https://www.kancloud.cn/linimbus/go-micro/529018
+go-micro是基于Go语言实现的插件化RPC微服务框架，与go-kit，kite等微服务框架相比，它具有易上手、部署简单、工具插件化等优点。</p>
+
+<p>go-micro框架提供了服务发现、负载均衡、同步传输、异步通信以及事件驱动等机制，它尝试去简化分布式系统间的通信，让我们可以专注于自身业务逻辑的开发。所以对于新手而言，go-micro是个不错的微服务实践的开始。
+<!-- more -->
+go-micro是组件化的框架，每一个基础功能都是一个interface，方便扩展。同时，组件又是分层的，上层基于下层功能向上提供服务，整体构成go-micro框架。
+go-micro的组件包括：</p>
+
+<p>Registry组件：服务发现组件，提供服务发现机制：解析服务名字至服务地址。目前支持的注册中心有consul、etcd、 zookeeper、dns、gossip等
+Selector组件：构建在Registry之上的客户端智能负载均衡组件，用于Client组件对Registry返回的服务进行智能选择。
+Broker组件：发布/订阅组件，服务之间基于消息中间件的异步通信方式，默认使用http方式，线上通常使用消息中间件，如Kafka、RabbitMQ等。
+Transport组件：服务之间同步通信方式。
+Codec组件：服务之间消息的编码/解码。
+Server组件：服务主体，该组件基于上面的Registry/Selector/Transport/Broker组件，对外提供一个统一的服务请求入口。
+Client组件：提供访问微服务的客户端。类似Server组件，它也是通过Registry/Selector/Transport/Broker组件实现查找服务、负载均衡、同步通信、异步消息等功能。
+所有以上组件功能共同构成一个go-micro微服务。</p>
+
+<p>client与server之间我们使用点对点的同步方式（Transport），即无需消息中间件（Broker），注册中心采用consul系统。</p>
+
+<p>3.1 安装consul - 注册中心
+服务注册中心我们选择consul：</p>
+
+<p>mac：brew install consul
+windows：直接官网下载consul.exe可执行程序
+运行consul：启动Consul agent的开发模式：</p>
+
+<p>consul agent -dev</p>
+
+<p>该命令快速启动一个单节点的consul，且为集群的领袖</p>
+
+<p>查看Consul集群的成员：打开另一个终端执行：</p>
+
+<p>consul members</p>
+
+<p>停止Agent：使用 Ctrl-C，优雅的关闭Agent</p>
+
+<p>也可以通过WebUI来查看各service状态：http://localhost:8500/</p>
+
+<p>3.2 安装micro：微服务管理工具
+micro是以go-micro框架为核心的微服务管理工具，通过它可以方便查看go-micro服务情况。</p>
+
+<p>在$GOPATH目录下，执行go get github.com/micro/micro，该命令会在bin目录（$GOBIN）下生成micro(.exe)工具
+micro命令行工具可以提供诸如服务列表查看、服务详情查看、调用服务接口等功能。</p>
+
+<p>3.3 安装goprotobuf相关工具：GRPC相关工具
+protoc：Protobuf（Protocol Buffers - Google’s data interchange format）编译器：</p>
+
+<p>windows下直接下载 相关win的zip压缩文件（内含protoc.exe）
+mac： brew install protobuf
+protoc-gen-go：goprotobuf 提供的 Protobuf 插件：在$GOPATH目录下执行go get github.com/micro/protobuf/{proto,protoc-gen-go}，该命令会在bin目录下生成protoc-gen-go(.exe)工具，protoc编译器利用protoc-gen-go插件将.proto文件转换为Golang源文件
+protoc-gen-micro（Protobuf code generation for micro）：在$GOPATH目录下执行go get github.com/micro/protoc-gen-micro，该命令会在bin目录下生成protoc-gen-micro(.exe)，protoc编译器利用protoc-gen-micro插件将.proto文件转换为micro代码风格文件
+goprotobuf编译参数：</p>
+
+<p>-I参数：指定import路径，可以指定多个-I参数，编译时按照顺序查找，不指定时默认查找当前目录
+–go_out：Golang编译支持，支持以下参数</p>
+
+<ul>
+  <li><code class="language-plaintext highlighter-rouge">plugins=plugin1+plugin2</code>：指定插件，支持grpc/micro，即：plugins=grpc+micro</li>
+  <li><code class="language-plaintext highlighter-rouge">M</code>参数：指定导入的.proto文件路径编译后对应的goalng包名（不指定默认.proto文件中import语句路径）</li>
+  <li><code class="language-plaintext highlighter-rouge">import_prefix=xxx</code>：为所有import路径添加前缀，主要用于编译子目录内的多个proto文件</li>
+  <li><code class="language-plaintext highlighter-rouge">import_path=foo/bar</code>：指定未声明package或go_package的文件的包名，最右边的斜线前的字符会被忽略
+3.4 编写一个简单的Hello服务
+至此，go-micro框架的编程环境已基本搭建好，接下来就是写代码了。</li>
+</ul>
+
+<p>下面实现一个Hello服务：它接收一个字符串类型参数请求，返回一个字符串问候语：Hello 『参数值』。
+1）定义API</p>
+
+<p>创建proto/hello.proto文件：
+使用protobuf文件来定义服务API接口</p>
+
+<p>syntax = “proto3”;
+service Hello {
+    rpc Ping(Request) returns (Response) {}
+}
+message Request {
+    string name = 1;
+}
+message Response {
+    string msg = 1;
+}
+执行protoc命令，生成当前pb文件的go实现：</p>
+
+<p>protoc –go_out=plugins=micro:. ./proto/hello.proto
+2）创建service</p>
+
+<p>创建services/hello.go文件：</p>
+
+<p>package main</p>
+
+<p>import (
+    “context”
+    “fmt”</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>proto "winmicro/proto"
+
+micro "github.com/micro/go-micro" )
+</code></pre></div></div>
+
+<p>type Hello struct{}</p>
+
+<p>func (h *Hello) Ping(ctx context.Context, req *proto.Request, res *proto.Response) error {
+    res.Msg = “Hello “ + req.Name
+    return nil
+}
+func main() {
+    service := micro.NewService(
+        micro.Name(“hellooo”), // 服务名称
+    )
+    service.Init()
+    proto.RegisterHelloHandler(service.Server(), new(Hello))
+    if err := service.Run(); err != nil {
+        fmt.Println(err)
+    }
+}
+3)模拟client</p>
+
+<p>创建Clients/helloclient.go文件：</p>
+
+<p>package main</p>
+
+<p>import (
+    “context”
+    “fmt”</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>proto "winmicro/proto"
+
+micro "github.com/micro/go-micro" )
+</code></pre></div></div>
+
+<p>func main() {
+    service := micro.NewService(micro.Name(“hello.client”)) // 客户端服务名称
+    service.Init()
+    helloservice := proto.NewHelloService(“hellooo”, service.Client())
+    res, err := helloservice.Ping(context.TODO(), &amp;proto.Request{Name: “World ^_^”})
+    if err != nil {
+        fmt.Println(err)
+    }
+    fmt.Println(res.Msg)
+}
+3.5 运行Hello服务
+启动consul之后
+执行micro list services 查看当前已有服务：</p>
+
+<blockquote>
+  <p>micro list services
+consul
+执行go run services/hello.go命令，启动hellooo服务：</p>
+</blockquote>
+
+<blockquote>
+  <p>go run services/hello.go
+2018/11/29 20:18:08 Listening on [::]:61463
+2018/11/29 20:18:08 Broker Listening on [::]:61464
+2018/11/29 20:18:08 Registering node: hellooo-74122f56-4728-4449-a9d4-6c3c85ba2fcb
+….
+再次执行micro list services 查看当前已有服务：</p>
+</blockquote>
+
+<blockquote>
+  <p>micro list services
+consul
+hellooo
+即hellooo服务已启动</p>
+</blockquote>
+
+<p>注 通过WebUI来查看各service信息：http://localhost:8500/</p>
+
+<p>请求服务
+执行go run clients/helloclient.go命令，向hellooo服务发起请求：</p>
+
+<blockquote>
+  <p>go run clients/helloclient.go
+Hello World ^_^</p>
+</blockquote>
+
+<p>go-micro是go语言下的一个很好的rpc微服务框架，功能很完善，而且我关心的几个问题也解决的很好：</p>
+
+<p>一：服务间传输格式为protobuf，效率上没的说，非常的快，也很安全。</p>
+
+<p>二：go-micro的服务注册和发现是多种多样的。我个人比较喜欢etcdv3的服务服务发现和注册。</p>
+
+<p>三：主要的功能都有相应的接口，只要实现相应的接口，就可以根据自己的需要订制插件。</p>
+
+<p>Server监听客户端的调用，和Brocker推送过来的信息进行处理。并且Server端需要向Register注册自己的存在或消亡，这样Client才能知道自己的状态。</p>
+
+<p>Register服务的注册的发现。</p>
+
+<p>Client端从Register中得到Server的信息，然后每次调用都根据算法选择一个的Server进行通信，当然通信是要经过编码/解码，选择传输协议等一系列过程的。</p>
+
+<p>如果有需要通知所有的Server端可以使用Brocker进行信息的推送。</p>
+
+<p>Brocker 信息队列进行信息的接收和发布。</p>
+
+<p>go-micro之所以可以高度订制和他的框架结构是分不开的，go-micro由8个关键的interface组成，每一个interface都可以根据自己的需求重新实现，这8个主要的inteface也构成了go-micro的框架结构。</p>
+
+<p>Transort
+服务之间通信的接口。也就是服务发送和接收的最终实现方式，是由这些接口定制的。</p>
+
+<p>源码：</p>
+
+<p>type Socket interface {
+    Recv(<em>Message) error
+    Send(</em>Message) error
+    Close() error
+}</p>
+
+<p>type Client interface {
+    Socket
+}</p>
+
+<p>type Listener interface {
+    Addr() string
+    Close() error
+    Accept(func(Socket)) error
+}</p>
+
+<p>type Transport interface {
+    Dial(addr string, opts …DialOption) (Client, error)
+    Listen(addr string, opts …ListenOption) (Listener, error)
+    String() string
+}
+Transport 的Listen方法是一般是Server端进行调用的，他监听一个端口，等待客户端调用。</p>
+
+<p>Transport 的Dial就是客户端进行连接服务的方法。他返回一个Client接口，这个接口返回一个Client接口，这个Client嵌入了Socket接口，这个接口的方法就是具体发送和接收通信的信息。</p>
+
+<p>http传输是go-micro默认的同步通信机制。当然还有很多其他的插件：grpc,nats,tcp,udp,rabbitmq,nats，都是目前已经实现了的方式。在go-plugins里你都可以找到。</p>
+
+<p>Codec
+有了传输方式，下面要解决的就是传输编码和解码问题，go-micro有很多种编码解码方式，默认的实现方式是protobuf,当然也有其他的实现方式，json、protobuf、jsonrpc、mercury等等。</p>
+
+<p>type Codec interface {
+    ReadHeader(<em>Message, MessageType) error
+    ReadBody(interface{}) error
+    Write(</em>Message, interface{}) error
+    Close() error
+    String() string
+}</p>
+
+<p>type Message struct {
+    Id     uint64
+    Type   MessageType
+    Target string
+    Method string
+    Error  string
+    Header map[string]string
+}
+Codec接口的Write方法就是编码过程，两个Read是解码过程。</p>
+
+<p>Registry
+服务的注册和发现，目前实现的consul,mdns, etcd,etcdv3,zookeeper,kubernetes.等等，</p>
+
+<p>type Registry interface {
+    Register(<em>Service, …RegisterOption) error
+    Deregister(</em>Service) error
+    GetService(string) ([]<em>Service, error)
+    ListServices() ([]</em>Service, error)
+    Watch(…WatchOption) (Watcher, error)
+    String() string
+    Options() Options
+}
+简单来说，就是Service 进行Register，来进行注册，Client 使用watch方法进行监控，当有服务加入或者删除时这个方法会被触发，以提醒客户端更新Service信息。</p>
+
+<p>默认的是服务注册和发现是consul</p>
+
+<p>Selector
+以Registry为基础，Selector 是客户端级别的负载均衡，当有客户端向服务发送请求时， selector根据不同的算法从Registery中的主机列表，得到可用的Service节点，进行通信。目前实现的有循环算法和随机算法，默认的是随机算法。</p>
+
+<p>源码：</p>
+
+<p>type Selector interface {
+    Init(opts …Option) error
+    Options() Options
+    // Select returns a function which should return the next node
+    Select(service string, opts …SelectOption) (Next, error)
+    // Mark sets the success/error against a node
+    Mark(service string, node *registry.Node, err error)
+    // Reset returns state back to zero for a service
+    Reset(service string)
+    // Close renders the selector unusable
+    Close() error
+    // Name of the selector
+    String() string
+}
+默认的是实现是本地缓存，当
+前实现的有blacklist,label,named等方式。</p>
+
+<p>Broker
+Broker是消息发布和订阅的接口。很简单的一个例子，因为服务的节点是不固定的，如果有需要修改所有服务行为的需求，可以使服务订阅某个主题，当有信息发布时，所有的监听服务都会收到信息，根据你的需要做相应的行为。</p>
+
+<p>源码</p>
+
+<p>type Broker interface {
+    Options() Options
+    Address() string
+    Connect() error
+    Disconnect() error
+    Init(…Option) error
+    Publish(string, *Message, …PublishOption) error
+    Subscribe(string, Handler, …SubscribeOption) (Subscriber, error)
+    String() string
+}
+Broker默认的实现方式是http方式，但是这种方式不要在生产环境用。go-plugins里有很多成熟的消息队列实现方式，有kafka、nsq、rabbitmq、redis，等等。</p>
+
+<p>Client
+Client是请求服务的接口，他封装Transport和Codec进行rpc调用，也封装了Brocker进行信息的发布。</p>
+
+<p>源码</p>
+
+<p>type Client interface {
+    Init(…Option) error
+    Options() Options
+    NewMessage(topic string, msg interface{}, opts …MessageOption) Message
+    NewRequest(service, method string, req interface{}, reqOpts …RequestOption) Request
+    Call(ctx context.Context, req Request, rsp interface{}, opts …CallOption) error
+    Stream(ctx context.Context, req Request, opts …CallOption) (Stream, error)
+    Publish(ctx context.Context, msg Message, opts …PublishOption) error
+    String() string
+}
+当然他也支持双工通信 Stream 这些具体的实现方式和使用方式，以后会详细解说。</p>
+
+<p>默认的是rpc实现方式，他还有grpc和http方式，在go-plugins里可以找到</p>
+
+<p>Server
+Server看名字大家也知道是做什么的了。监听等待rpc请求。监听broker的订阅信息，等待信息队列的推送等。</p>
+
+<p>源码</p>
+
+<p>type Server interface {
+    Options() Options
+    Init(…Option) error
+    Handle(Handler) error
+    NewHandler(interface{}, …HandlerOption) Handler
+    NewSubscriber(string, interface{}, …SubscriberOption) Subscriber
+    Subscribe(Subscriber) error
+    Register() error
+    Deregister() error
+    Start() error
+    Stop() error
+    String() string
+}
+默认的是rpc实现方式，他还有grpc和http方式，在go-plugins里可以找到</p>
+
+<p>Service
+Service是Client和Server的封装，他包含了一系列的方法使用初始值去初始化Service和Client，使我们可以很简单的创建一个rpc服务。</p>
+
+<p>源码：</p>
+
+<p>type Service interface {
+    Init(…Option)
+    Options() Options
+    Client() client.Client
+    Server() server.Server
+    Run() error
+    String() string
+}</p>
+
+<p>Micro由开源的库与工具组成，旨在辅助微服务开发。</p>
+
+<p>go-micro - 基于Go语言的可插拔RPC微服务开发框架；包含服务发现、RPC客户/服务端、广播/订阅机制等等。
+go-plugins - go-micro的插件有etcd、kubernetes、nats、rabbitmq、grpc等等。
+micro - 微服务工具集包含传统的入口点（entry point）；API 网关、CLI、Slack Bot、代理及Web UI。</p>
+
+<p>可以通过micro工具集的cli，web ui，slack，或者api网关（api gateway）来访问操控务。</p>
+
+<p>除了Consul，可以使用其它的注册中心吗
+当然是可以的，服务的注册发现的实现机制是可插拔的，之所以使用Consul是因为它拥有的特性以及它足够简单。 比如：</p>
+
+<p>Etcd
+如果你想使用etcd那你只需要引用etcd包，然后在启动的注册方式上标明使用的是etcd就行了。</p>
+
+<p>import (
+        _ “github.com/micro/go-plugins/registry/etcd”
+)</p>
+
+<p>service –registry=etcd –registry_address=127.0.0.1:2379</p>
+
+<p>零依赖
+micro专门为零依赖配置内置有一个多路广播DNS服务注册中心。</p>
+
+<p>如果要使用，只需要在程序启动指令上传上–registry=mdns或者MICRO_REGISTRY=mdns。</p>
+
+<p>Micro可以在哪些环境运行
+micro对运行环境不挑食。只要你喜欢，在哪都行，裸机, 亚马逊AWS或者Google Cloud，也可以运行在你喜欢的容器编排系统中比如：Mesos、Kubernetes。</p>
+
+<p>右边的这个链接中有关于如何使用K8s来开发micro服务的micro kubernetes demo</p>
+
+<p>Micro支持gRPC吗
+支持。这儿有几个插件：transport、client、server。</p>
+
+<p>可以查看micro/go-plugins.</p>
+
+<p>我们也提供了golang版本的gRPC快速上手demo：micro/go-grpc.</p>
+
+<p>Micro与Go-Kit比较
+这个问题经常出现，那二者的区别有哪些呢？</p>
+
+<p>Go-kit声称自己是一个微服务的标准库。像GO一样，go-kit提供独立的包，通过这些包，开发者可以用来组建自己的应用程序。Go-kit非常不错，基于Go-kit，你可以完全掌控你定义的服务。</p>
+
+<p>Go-micro则是一个面向微服务的可插拔RPC框架。go-micro是一个只在特殊方向上努力的框架，它尝试简化分布式系统之间的通信，所以我们可以花更多的时间在我们需要关注的业务逻辑上。对于想快速启动，把程序跑起来，同时用拥有一些可插拔的能力从基础架构中断开的能力，而不用修改代码，那么go-micro也很不错。</p>
+
+<p>Micro作为一个微服务工具库，好比一把瑞士军刀，在我们构建微服务时，可以提供传统的接入点，比如http api gateway，web ui，cli，slack bot等等。Micro使用工具来引导架构关注点之间逻辑上的隔离，推动开发者创建API层的服务来暴露对外的API接口，并且创建隔离于对外API的Web层微服务。</p>
+
+<p>如果想全盘掌控，那么使用go-kit；但是如果想弄一个有想法框架，使用go-micro。</p>
+
+<p>https://micro.mu/docs/users.html</p>
+
+<p>https://github.com/micro/examples/tree/master/greeter</p>
+
+<p>https://github.com/asim/kubernetes</p>
+
+<p>Go kit 是一系列由 Go 的包组成的工具集，并且是生产级别的，完全适应于任何公司与组织的业务。</p>
+
+<p>架构：三个层次
+Transport layer：通信层，这里可以用各种不同的通信方式，如 HTTP REST 接口或者 gRPC 接口（这是个很大的优点，方便切换成任何通信协议）；
+Endpoint layer：终端层，类似于 Controller，里面主要实现各种接口的 handler，负责 req／resp 格式的转换（同时也是被吐槽繁杂的原因所在）；
+Service layer：服务层，也就是实现业务逻辑的地方；
+从下面的架构图来看，它其实很简单明了。其中可以注意下中间件：类似于常见框架中的中间件模式，通常用来记录日志、限制频率、负载均衡以及分布式追踪等等，主要在 Endpoint 以及 Service 中实现。</p>
+
+<p>各个模块之间应该是 低耦合，高内聚，于是，Go kit 鼓励你在 main 函数里面实现所有的组装，所有的模块的依赖都需要通过参数传入其它模块，减少甚至消灭所有全局状态，从根本上避免技术债务。</p>
+
+<p>同时还有个很大的好处：便于测试，只要 mock 传入的依赖参数即可。</p>
+
+<p>Eyal Posener 这位老哥在他的博客 为什么我建议不要使用 go-kit 中写到三点原因：</p>
+
+<p>框架太繁琐，每个接口的代码太多，太啰嗦；
+难理解，主要体现在 Go kit 的三层模型；
+interface{} API 太蛋疼，在 Endpoint 层，每个 endpoint 都需要重复类似的转换代码；</p>
+:ET

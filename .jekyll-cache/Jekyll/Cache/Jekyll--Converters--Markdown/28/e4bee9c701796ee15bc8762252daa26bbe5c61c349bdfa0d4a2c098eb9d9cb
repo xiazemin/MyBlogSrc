@@ -1,0 +1,93 @@
+I"K<p>注意和ptrace（ptrace()系统调用提供了一个方法，该方法使一个程序（追踪者）可以观察和控制另外一个程序（被追踪者）的执行，并检查和改变被追踪者的内存及寄存器。它主要用于实现断点调试和追踪系统调用。GDB的工作机制）区分</p>
+
+<p>和jstack一样, pstack亦能展现进程的线程堆栈快照, 非常方便验证和性能评估.
+ pstack的作用, 大致可以归纳如下:
+　　1). 查看线程数(比pstree, 包含了详细的堆栈信息)
+　　2). 能简单验证是否按照预定的调用顺序/调用栈执行
+　　3). 采用高频率多次采样使用时, 能发现程序当前的阻塞在哪里, 以及性能消耗点在哪里?
+　　4). 能反映出疑似的死锁现象(多个线程同时在wait lock, 具体需要进一步验证)
+　　当然还能举例更多的作用, 相信使用过jstack的coder, 必然深以为然.</p>
+
+<p>pstack原理:
+pstack是/usr/bin/gstack的软链接, 而gstack本身是基于gdb封装的shell脚本.
+最核心的片段, backtrace=”thread apply all bt”
+　　shell采用了here document的方式, 完成了GDB的交互工作(注意EOF标识, 及范围内的交互命令). 
+　　重要的是输入thread apply all bt这个交互命令. 该命令要求输出所有的线程堆栈信息.
+　　对GDB输出的结果, 通过管道并借助sed命令进行了替换和过滤.
+　　
+`#!/bin/bash</p>
+
+<p>if test $# -ne 1; then
+    echo “Usage: <code class="language-plaintext highlighter-rouge">basename $0 .sh</code> <process-id>" 1&gt;&amp;2
+    exit 1
+fi</process-id></p>
+
+<p>if test ! -r /proc/$1; then
+    echo “Process $1 not found.” 1&gt;&amp;2
+    exit 1
+fi</p>
+
+<h1 id="gdb-doesnt-allow-thread-apply-all-bt-when-the-process-isnt">GDB doesn’t allow “thread apply all bt” when the process isn’t</h1>
+<h1 id="threaded-need-to-peek-at-the-process-to-determine-if-that-or-the">threaded; need to peek at the process to determine if that or the</h1>
+<h1 id="simpler-bt-should-be-used">simpler “bt” should be used.</h1>
+
+<p>backtrace=”bt”
+if test -d /proc/$1/task ; then
+    # Newer kernel; has a task/ directory.
+    if test <code class="language-plaintext highlighter-rouge">/bin/ls /proc/$1/task | /usr/bin/wc -l</code> -gt 1 2&gt;/dev/null ; then
+        backtrace=”thread apply all bt”
+    fi
+elif test -f /proc/$1/maps ; then
+    # Older kernel; go by it loading libpthread.
+    if /bin/grep -e libpthread /proc/$1/maps &gt; /dev/null 2&gt;&amp;1 ; then
+        backtrace=”thread apply all bt”
+    fi
+fi</p>
+
+<p>GDB=${GDB:-/usr/bin/gdb}</p>
+
+<p>if $GDB -nx –quiet –batch –readnever &gt; /dev/null 2&gt;&amp;1; then
+    readnever=–readnever
+else
+    readnever=
+fi</p>
+
+<h1 id="run-gdb-strip-out-unwanted-noise">Run GDB, strip out unwanted noise.</h1>
+<p>$GDB –quiet $readnever -nx /proc/$1/exe $1 «EOF 2&gt;&amp;1 | 
+$backtrace
+EOF
+/bin/sed -n <br />
+    -e ‘s/^(gdb) //’ <br />
+    -e ‘/^#/p’ <br />
+    -e ‘/^Thread/p’
+`
+<!-- more -->
+利用pstack 和 strace分析程序在哪里耗时</p>
+
+<p>ps	查找进程的pid
+  pstack	打印进程或者线程的栈信息
+  strace 	统计每一步系统调用花费的时间</p>
+
+<ol>
+  <li>
+    <table>
+      <tbody>
+        <tr>
+          <td>ps -aux</td>
+          <td>grep nws    可以看出nws的pid为171211</td>
+        </tr>
+      </tbody>
+    </table>
+  </li>
+  <li>pstack   171211 打印出nws进程下所有的线程栈信息。可以看出程序好几个线程都卡在pwrite这一步。</li>
+  <li>strace -o output.txt -T -tt -e trace=all -p 171264 nws进程中的171264线程进行系统调用跟踪， 将输出的信息保存在output.txt中</li>
+</ol>
+
+<p>1.死机后，输入:
+   info threads ——- 查看所有thread信息</p>
+<ol>
+  <li>thread apply all bt
+   显示所有的线程堆栈</li>
+</ol>
+
+:ET

@@ -1,0 +1,577 @@
+I">G<p>在Go 1.6之前， 内置的map类型是部分goroutine安全的，并发的读没有问题，并发的写可能有问题。自go 1.6之后， 并发地读写map会报错，这在一些知名的开源库中都存在这个问题，所以go 1.9之前的解决方案是额外绑定一个锁，封装成一个新的struct或者单独使用锁都可以。</p>
+
+<p>在Go1.9之前，go自带的map不是并发安全的，也就是说，我们需要自己再封装一层，给map加上把读写锁，比如像下面这样：</p>
+
+<p>type MapWithLock struct {
+    sync.RWMutex
+    M map[string]Kline
+}
+用MapWithLock的读写锁去控制map的并发安全。
+但是到了Go1.9发布，它有了一个新的特性，那就是sync.map，它是原生支持并发安全的map，不过它的用法和以前我们熟悉的map完全不一样，主要还是因为sync.map封装了更为复杂的数据结构，以实现比之前加锁map更优秀的性能。</p>
+
+<p>使用</p>
+
+<p>var mySMap sync.Map
+sync.map就是1.9版本带的线程安全map，主要有如下几种方法：</p>
+
+<p>Load(key interface{}) (value interface{}, ok bool)
+通过提供一个键key，查找对应的值value，如果不存在，则返回nil。ok的结果表示是否在map中找到值
+Store(key, value interface{})
+这个相当于是写map（更新或新增），第一个参数是key，第二个参数是value
+LoadOrStore(key, value interface{}) (actual interface{}, loaded bool)
+通过提供一个键key，查找对应的值value，如果存在返回键的现有值，否则存储并返回给定的值，如果是读取则返回true，如果是存储返回false
+Delete(key interface{})
+通过提供一个键key，删除键对应的值
+Range(f func(key, value interface{}) bool)
+循环读取map中的值。
+因为for … range map是内置的语言特性，所以没有办法使用for range遍历sync.Map, 但是可以使用它的Range方法，通过回调的方式遍历。
+<!-- more -->
+有并发问题的map
+官方的faq已经提到内建的map不是线程(goroutine)安全的。</p>
+
+<p>首先，让我们看一段并发读写的代码,下列程序中一个goroutine一直读，一个goroutine一只写同一个键值，即即使读写的键不相同，而且map也没有”扩容”等操作，代码还是会报错。</p>
+
+<p>1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+package main
+func main() {
+	m := make(map[int]int)
+	go func() {
+		for {
+			_ = m[1]
+		}
+	}()
+	go func() {
+		for {
+			m[2] = 2
+		}
+	}()
+	select {}
+}
+错误信息是: fatal error: concurrent map read and map write。</p>
+
+<p>如果你查看Go的源代码: hashmap_fast.go#L118,会看到读的时候会检查hashWriting标志， 如果有这个标志，就会报并发错误。</p>
+
+<p>写的时候会设置这个标志: hashmap.go#L542</p>
+
+<p>1
+h.flags |= hashWriting
+hashmap.go#L628设置完之后会取消这个标记。</p>
+
+<p>当然，代码中还有好几处并发读写的检查， 比如写的时候也会检查是不是有并发的写，删除键的时候类似写，遍历的时候并发读写问题等。</p>
+
+<p>有时候，map的并发问题不是那么容易被发现, 你可以利用-race参数来检查。</p>
+
+<p>Go 1.9之前的解决方案
+但是，很多时候，我们会并发地使用map对象，尤其是在一定规模的项目中，map总会保存goroutine共享的数据。在Go官方blog的Go maps in action一文中，提供了一种简便的解决方案。</p>
+
+<p>1
+2
+3
+4
+var counter = struct{
+    sync.RWMutex
+    m map[string]int
+}{m: make(map[string]int)}
+它使用嵌入struct为map增加一个读写锁。</p>
+
+<p>读数据的时候很方便的加锁：</p>
+
+<p>1
+2
+3
+4
+counter.RLock()
+n := counter.m[“some_key”]
+counter.RUnlock()
+fmt.Println(“some_key:”, n)
+写数据的时候:</p>
+
+<p>1
+2
+3
+counter.Lock()
+counter.m[“some_key”]++
+counter.Unlock()
+sync.Map
+可以说，上面的解决方案相当简洁，并且利用读写锁而不是Mutex可以进一步减少读写的时候因为锁带来的性能。</p>
+
+<p>但是，它在一些场景下也有问题，如果熟悉Java的同学，可以对比一下java的ConcurrentHashMap的实现，在map的数据非常大的情况下，一把锁会导致大并发的客户端共争一把锁，Java的解决方案是shard, 内部使用多个锁，每个区间共享一把锁，这样减少了数据共享一把锁带来的性能影响，orcaman提供了这个思路的一个实现： concurrent-map，他也询问了Go相关的开发人员是否在Go中也实现这种方案，由于实现的复杂性，答案是Yes, we considered it.,但是除非有特别的性能提升和应用场景，否则没有进一步的开发消息。</p>
+
+<p>那么，在Go 1.9中sync.Map是怎么实现的呢？它是如何解决并发提升性能的呢？</p>
+
+<p>sync.Map的实现有几个优化点，这里先列出来，我们后面慢慢分析。</p>
+
+<p>空间换时间。 通过冗余的两个数据结构(read、dirty),实现加锁对性能的影响。
+使用只读数据(read)，避免读写冲突。
+动态调整，miss次数多了之后，将dirty数据提升为read。
+double-checking。
+延迟删除。 删除一个键值只是打标记，只有在提升dirty的时候才清理删除的数据。
+优先从read读取、更新、删除，因为对read的读取不需要锁。
+下面我们介绍sync.Map的重点代码，以便理解它的实现思想。</p>
+
+<p>首先，我们看一下sync.Map的数据结构：</p>
+
+<p>1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+type Map struct {
+	// 当涉及到dirty数据的操作的时候，需要使用这个锁
+	mu Mutex
+	// 一个只读的数据结构，因为只读，所以不会有读写冲突。
+	// 所以从这个数据中读取总是安全的。
+	// 实际上，实际也会更新这个数据的entries,如果entry是未删除的(unexpunged), 并不需要加锁。如果entry已经被删除了，需要加锁，以便更新dirty数据。
+	read atomic.Value // readOnly
+	// dirty数据包含当前的map包含的entries,它包含最新的entries(包括read中未删除的数据,虽有冗余，但是提升dirty字段为read的时候非常快，不用一个一个的复制，而是直接将这个数据结构作为read字段的一部分),有些数据还可能没有移动到read字段中。
+	// 对于dirty的操作需要加锁，因为对它的操作可能会有读写竞争。
+	// 当dirty为空的时候， 比如初始化或者刚提升完，下一次的写操作会复制read字段中未删除的数据到这个数据中。
+	dirty map[interface{}]*entry
+	// 当从Map中读取entry的时候，如果read中不包含这个entry,会尝试从dirty中读取，这个时候会将misses加一，
+	// 当misses累积到 dirty的长度的时候， 就会将dirty提升为read,避免从dirty中miss太多次。因为操作dirty需要加锁。
+	misses int
+}
+它的数据结构很简单，值包含四个字段：read、mu、dirty、misses。</p>
+
+<p>它使用了冗余的数据结构read、dirty。dirty中会包含read中为删除的entries，新增加的entries会加入到dirty中。</p>
+
+<p>read的数据结构是：</p>
+
+<p>1
+2
+3
+4
+type readOnly struct {
+	m       map[interface{}]*entry
+	amended bool // 如果Map.dirty有些数据不在中的时候，这个值为true
+}
+amended指明Map.dirty中有readOnly.m未包含的数据，所以如果从Map.read找不到数据的话，还要进一步到Map.dirty中查找。</p>
+
+<p>对Map.read的修改是通过原子操作进行的。</p>
+
+<p>虽然read和dirty有冗余数据，但这些数据是通过指针指向同一个数据，所以尽管Map的value会很大，但是冗余的空间占用还是有限的。</p>
+
+<p>readOnly.m和Map.dirty存储的值类型是*entry,它包含一个指针p, 指向用户存储的value值。</p>
+
+<p>1
+2
+3
+type entry struct {
+	p unsafe.Pointer // *interface{}
+}
+p有三种值：</p>
+
+<p>nil: entry已被删除了，并且m.dirty为nil
+expunged: entry已被删除了，并且m.dirty不为nil，而且这个entry不存在于m.dirty中
+其它： entry是一个正常的值
+以上是sync.Map的数据结构，下面我们重点看看Load、Store、Delete、Range这四个方法，其它辅助方法可以参考这四个方法来理解。</p>
+
+<p>Load
+加载方法，也就是提供一个键key,查找对应的值value,如果不存在，通过ok反映：</p>
+
+<p>1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+func (m *Map) Load(key interface{}) (value interface{}, ok bool) {
+	// 1.首先从m.read中得到只读readOnly,从它的map中查找，不需要加锁
+	read, _ := m.read.Load().(readOnly)
+	e, ok := read.m[key]
+	// 2. 如果没找到，并且m.dirty中有新数据，需要从m.dirty查找，这个时候需要加锁
+	if !ok &amp;&amp; read.amended {
+		m.mu.Lock()
+		// 双检查，避免加锁的时候m.dirty提升为m.read,这个时候m.read可能被替换了。
+		read, _ = m.read.Load().(readOnly)
+		e, ok = read.m[key]
+		// 如果m.read中还是不存在，并且m.dirty中有新数据
+		if !ok &amp;&amp; read.amended {
+			// 从m.dirty查找
+			e, ok = m.dirty[key]
+			// 不管m.dirty中存不存在，都将misses计数加一
+			// missLocked()中满足条件后就会提升m.dirty
+			m.missLocked()
+		}
+		m.mu.Unlock()
+	}
+	if !ok {
+		return nil, false
+	}
+	return e.load()
+}
+这里有两个值的关注的地方。一个是首先从m.read中加载，不存在的情况下，并且m.dirty中有新数据，加锁，然后从m.dirty中加载。</p>
+
+<p>二是这里使用了双检查的处理，因为在下面的两个语句中，这两行语句并不是一个原子操作。</p>
+
+<p>1
+2
+if !ok &amp;&amp; read.amended {
+		m.mu.Lock()
+虽然第一句执行的时候条件满足，但是在加锁之前，m.dirty可能被提升为m.read,所以加锁后还得再检查m.read，后续的方法中都使用了这个方法。</p>
+
+<p>双检查的技术Java程序员非常熟悉了，单例模式的实现之一就是利用双检查的技术。</p>
+
+<p>可以看到，如果我们查询的键值正好存在于m.read中，无须加锁，直接返回，理论上性能优异。即使不存在于m.read中，经过miss几次之后，m.dirty会被提升为m.read，又会从m.read中查找。所以对于更新／增加较少，加载存在的key很多的case,性能基本和无锁的map类似。</p>
+
+<p>下面看看m.dirty是如何被提升的。 missLocked方法中可能会将m.dirty提升。</p>
+
+<p>1
+2
+3
+4
+5
+6
+7
+8
+9
+func (m *Map) missLocked() {
+	m.misses++
+	if m.misses &lt; len(m.dirty) {
+		return
+	}
+	m.read.Store(readOnly{m: m.dirty})
+	m.dirty = nil
+	m.misses = 0
+}
+上面的最后三行代码就是提升m.dirty的，很简单的将m.dirty作为readOnly的m字段，原子更新m.read。提升后m.dirty、m.misses重置， 并且m.read.amended为false。</p>
+
+<p>Store
+这个方法是更新或者新增一个entry。</p>
+
+<p>1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29
+30
+31
+32
+33
+34
+35
+36
+37
+38
+39
+40
+41
+42
+43
+44
+45
+46
+47
+48
+49
+50
+51
+52
+53
+func (m <em>Map) Store(key, value interface{}) {
+	// 如果m.read存在这个键，并且这个entry没有被标记删除，尝试直接存储。
+	// 因为m.dirty也指向这个entry,所以m.dirty也保持最新的entry。
+	read, _ := m.read.Load().(readOnly)
+	if e, ok := read.m[key]; ok &amp;&amp; e.tryStore(&amp;value) {
+		return
+	}
+	// 如果<code class="language-plaintext highlighter-rouge">m.read</code>不存在或者已经被标记删除
+	m.mu.Lock()
+	read, _ = m.read.Load().(readOnly)
+	if e, ok := read.m[key]; ok {
+		if e.unexpungeLocked() { //标记成未被删除
+			m.dirty[key] = e //m.dirty中不存在这个键，所以加入m.dirty
+		}
+		e.storeLocked(&amp;value) //更新
+	} else if e, ok := m.dirty[key]; ok { // m.dirty存在这个键，更新
+		e.storeLocked(&amp;value)
+	} else { //新键值
+		if !read.amended { //m.dirty中没有新的数据，往m.dirty中增加第一个新键
+			m.dirtyLocked() //从m.read中复制未删除的数据
+			m.read.Store(readOnly{m: read.m, amended: true})
+		}
+		m.dirty[key] = newEntry(value) //将这个entry加入到m.dirty中
+	}
+	m.mu.Unlock()
+}
+func (m *Map) dirtyLocked() {
+	if m.dirty != nil {
+		return
+	}
+	read, _ := m.read.Load().(readOnly)
+	m.dirty = make(map[interface{}]</em>entry, len(read.m))
+	for k, e := range read.m {
+		if !e.tryExpungeLocked() {
+			m.dirty[k] = e
+		}
+	}
+}
+func (e *entry) tryExpungeLocked() (isExpunged bool) {
+	p := atomic.LoadPointer(&amp;e.p)
+	for p == nil {
+		// 将已经删除标记为nil的数据标记为expunged
+		if atomic.CompareAndSwapPointer(&amp;e.p, nil, expunged) {
+			return true
+		}
+		p = atomic.LoadPointer(&amp;e.p)
+	}
+	return p == expunged
+}
+你可以看到，以上操作都是先从操作m.read开始的，不满足条件再加锁，然后操作m.dirty。</p>
+
+<p>Store可能会在某种情况下(初始化或者m.dirty刚被提升后)从m.read中复制数据，如果这个时候m.read中数据量非常大，可能会影响性能。</p>
+
+<p>Delete
+删除一个键值。</p>
+
+<p>1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+func (m *Map) Delete(key interface{}) {
+	read, _ := m.read.Load().(readOnly)
+	e, ok := read.m[key]
+	if !ok &amp;&amp; read.amended {
+		m.mu.Lock()
+		read, _ = m.read.Load().(readOnly)
+		e, ok = read.m[key]
+		if !ok &amp;&amp; read.amended {
+			delete(m.dirty, key)
+		}
+		m.mu.Unlock()
+	}
+	if ok {
+		e.delete()
+	}
+}
+同样，删除操作还是从m.read中开始， 如果这个entry不存在于m.read中，并且m.dirty中有新数据，则加锁尝试从m.dirty中删除。</p>
+
+<p>注意，还是要双检查的。 从m.dirty中直接删除即可，就当它没存在过，但是如果是从m.read中删除，并不会直接删除，而是打标记：</p>
+
+<p>1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+func (e *entry) delete() (hadValue bool) {
+	for {
+		p := atomic.LoadPointer(&amp;e.p)
+		// 已标记为删除
+		if p == nil || p == expunged {
+			return false
+		}
+		// 原子操作，e.p标记为nil
+		if atomic.CompareAndSwapPointer(&amp;e.p, p, nil) {
+			return true
+		}
+	}
+}
+Range
+因为for … range map是内建的语言特性，所以没有办法使用for range遍历sync.Map, 但是可以使用它的Range方法，通过回调的方式遍历。</p>
+
+<p>1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+28
+func (m *Map) Range(f func(key, value interface{}) bool) {
+	read, _ := m.read.Load().(readOnly)
+	// 如果m.dirty中有新数据，则提升m.dirty,然后在遍历
+	if read.amended {
+		//提升m.dirty
+		m.mu.Lock()
+		read, _ = m.read.Load().(readOnly) //双检查
+		if read.amended {
+			read = readOnly{m: m.dirty}
+			m.read.Store(read)
+			m.dirty = nil
+			m.misses = 0
+		}
+		m.mu.Unlock()
+	}
+	// 遍历, for range是安全的
+	for k, e := range read.m {
+		v, ok := e.load()
+		if !ok {
+			continue
+		}
+		if !f(k, v) {
+			break
+		}
+	}
+}
+Range方法调用前可能会做一个m.dirty的提升，不过提升m.dirty不是一个耗时的操作。</p>
+
+<p>sync.Map的性能
+Go 1.9源代码中提供了性能的测试： map_bench_test.go、map_reference_test.go</p>
+
+<p>我也基于这些代码修改了一下，得到下面的测试数据，相比较以前的解决方案，性能多少回有些提升，如果你特别关注性能，可以考虑sync.Map。</p>
+
+<p>1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+BenchmarkHitAll/<em>sync.RWMutexMap-4   	20000000	        83.8 ns/op
+BenchmarkHitAll/</em>sync.Map-4          	30000000	        59.9 ns/op
+BenchmarkHitAll_WithoutPrompting/<em>sync.RWMutexMap-4         	20000000	        96.9 ns/op
+BenchmarkHitAll_WithoutPrompting/</em>sync.Map-4                	20000000	        64.1 ns/op
+BenchmarkHitNone/<em>sync.RWMutexMap-4                         	20000000	        79.1 ns/op
+BenchmarkHitNone/</em>sync.Map-4                                	30000000	        43.3 ns/op
+BenchmarkHit_WithoutPrompting/<em>sync.RWMutexMap-4            	20000000	        81.5 ns/op
+BenchmarkHit_WithoutPrompting/</em>sync.Map-4                   	30000000	        44.0 ns/op
+BenchmarkUpdate/<em>sync.RWMutexMap-4                          	 5000000	       328 ns/op
+BenchmarkUpdate/</em>sync.Map-4                                 	10000000	       146 ns/op
+BenchmarkUpdate_WithoutPrompting/<em>sync.RWMutexMap-4         	 5000000	       336 ns/op
+BenchmarkUpdate_WithoutPrompting/</em>sync.Map-4                	 5000000	       324 ns/op
+BenchmarkDelete/<em>sync.RWMutexMap-4                          	10000000	       155 ns/op
+BenchmarkDelete/</em>sync.Map-4                                 	30000000	        55.0 ns/op
+BenchmarkDelete_WithoutPrompting/<em>sync.RWMutexMap-4         	10000000	       173 ns/op
+BenchmarkDelete_WithoutPrompting/</em>sync.Map-4                	10000000	       147 ns/op
+其它
+sync.Map没有Len方法，并且目前没有迹象要加上 (issue#20680),所以如果想得到当前Map中有效的entries的数量，需要使用Range方法遍历一次， 比较X疼。</p>
+
+<p>如果你接触过大Java，那你一定对CocurrentHashMap利用锁分段技术增加了锁的数目，从而使争夺同一把锁的线程的数目得到控制的原理记忆深刻。
+那么Golang的sync.Map是否也是使用了相同的原理呢？sync.Map的原理很简单，使用了空间换时间策略，通过冗余的两个数据结构(read、dirty),实现加锁对性能的影响。
+通过引入两个map将读写分离到不同的map，其中read map提供并发读和已存元素原子写，而dirty map则负责读写。 这样read map就可以在不加锁的情况下进行并发读取,当read map中没有读取到值时,再加锁进行后续读取,并累加未命中数,当未命中数大于等于dirty map长度,将dirty map上升为read map。从之前的结构体的定义可以发现，虽然引入了两个map，但是底层数据存储的是指针，指向的是同一份值。</p>
+
+<p>优化点</p>
+
+<p>空间换时间。通过冗余的两个数据结构(read、dirty),实现加锁对性能的影响。
+使用只读数据(read)，避免读写冲突。
+动态调整，miss次数多了之后，将dirty数据提升为read。
+double-checking（双重检测）。
+延迟删除。 删除一个键值只是打标记，只有在提升dirty的时候才清理删除的数据。
+优先从read读取、更新、删除，因为对read的读取不需要锁。</p>
+
+:ET

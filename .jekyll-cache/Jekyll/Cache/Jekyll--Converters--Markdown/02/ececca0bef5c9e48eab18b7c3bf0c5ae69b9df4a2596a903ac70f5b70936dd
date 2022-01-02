@@ -1,0 +1,261 @@
+I"#*<p>https://github.com/google/gops
+一个用于列出和诊断分析系统中正在运行的 Go 程序的命令行工具,Google 自己出品的</p>
+
+<p>java 的开发者没有不知道或者没用过 jps 这个命令的，这个命令是用来在主机上查看有哪些 Java 程序在运行的。</p>
+
+<!-- more -->
+<p>安装
+go get -u github.com/google/gops
+命令帮助
+执行 gops help 查看帮助文档：
+gops is a tool to list and diagnose Go processes.</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>gops &lt;cmd&gt; &lt;pid|addr&gt; ...
+gops &lt;pid&gt; # displays process info
+</code></pre></div></div>
+
+<p>Commands:
+    stack       	Prints the stack trace.
+    gc          	Runs the garbage collector and blocks until successful.
+    setgc	        Sets the garbage collection target percentage.
+    memstats    	Prints the allocation and garbage collection stats.
+    version     	Prints the Go version used to build the program.
+    stats       	Prints the vital runtime stats.
+    help        	Prints this help text.</p>
+
+<p>Profiling commands:
+    trace       	Runs the runtime tracer for 5 secs and launches “go tool trace”.
+    pprof-heap  	Reads the heap profile and launches “go tool pprof”.
+    pprof-cpu   	Reads the CPU profile and launches “go tool pprof”.</p>
+
+<p>All commands require the agent running on the Go process.
+Symbol “*” indicates the process runs the agent.
+使用详解
+为了能更好的分析程序，需要在我们的项目中加一行 agent 诊断分析代码，用于统计分析程序问题。
+package main</p>
+
+<p>import (
+	“log”
+	“time”</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>"github.com/google/gops/agent" )
+</code></pre></div></div>
+
+<p>func main() {
+	if err := agent.Listen(agent.Options{}); err != nil {
+		log.Fatal(err)
+	}</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>time.Sleep(time.Hour) } 其中，agent. 支持更多的参数： // Code reference: github.com/google/gops/agent/agent.go:42
+</code></pre></div></div>
+
+<p>// Options allows configuring the started agent.
+type Options struct {
+	// Addr is the host:port the agent will be listening at.
+	// Optional.
+	Addr string</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>// ConfigDir is the directory to store the configuration file,
+// PID of the gops process, filename, port as well as content.
+// Optional.
+ConfigDir string
+
+// ShutdownCleanup automatically cleans up resources if the
+// running process receives an interrupt. Otherwise, users
+// can call Close before shutting down.
+// Optional.
+ShutdownCleanup bool } Addr
+</code></pre></div></div>
+
+<p>可选。为远程分析服务提供监听地址，例如: :9119。配置了该项，那我们可以在本机查看分析远程服务器上的 Go 程序，非常有帮助。</p>
+
+<p>ConfigDir</p>
+
+<p>可选。用于存放统计数据和配置的目录，默认为当前用户的主目录。也可以通过环境变量GOPS_CONFIG_DIR设置。具体参考代码：
+const gopsConfigDirEnvKey = “GOPS_CONFIG_DIR”</p>
+
+<p>func ConfigDir() (string, error) {
+	if configDir := os.Getenv(gopsConfigDirEnvKey); configDir != “” {
+		return configDir, nil
+	}</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>if runtime.GOOS == "windows" {
+	return filepath.Join(os.Getenv("APPDATA"), "gops"), nil
+}
+homeDir := guessUnixHomeDir()
+if homeDir == "" {
+	return "", errors.New("unable to get current user home directory: os/user lookup failed; $HOME is empty")
+}
+return filepath.Join(homeDir, ".config", "gops"), nil }
+</code></pre></div></div>
+
+<p>func guessUnixHomeDir() string {
+	usr, err := user.Current()
+	if err == nil {
+		return usr.HomeDir
+	}
+	return os.Getenv(“HOME”)
+}
+ShutdownCleanup</p>
+
+<p>可选。设置为 true，则在程序关闭时会自动清理数据。</p>
+
+<p>NOTE: 如果不加 agent 代码，那我们无法更深入的诊断程序，也就是说无法执行gops memstats、gops pprof-heap等所有类似于 gops <cmd> &lt;pid|addr&gt; ... 的子命令。</cmd></p>
+
+<p>gops
+直接执行 gops 命令会列出本机所有正在运行的 Go 程序。
+$ gops</p>
+
+<p>99288 47636 go    go1.10.1 /usr/local/Cellar/go/1.10.1/libexec/bin/go
+99300 99288 main* go1.10.1 /private/var/folders/cs/mfl4k8t54_g1thdzvzkdxbbr0000gn/T/go-build375822490/b001/exe/main
+99570 2899  gops  go1.10.1 /Users/shocker/gowork/bin/gops
+99154 14655 hugo  go1.11.1 /usr/local/Cellar/hugo/0.49.1/bin/hugo
+该命令会显示以下内容：</p>
+
+<p>PID
+PPID
+程序名称
+构建该程序的 Go 版本号
+程序所在绝对路径
+注意，列表中有个程序名称后面带了个 *，表示该程序加入了 gops 的诊断分析代码。</p>
+
+<p>gops <pid>
+用法: gops <pid> 查看本机指定 PID Go 程序的基本信息
+$ gops 99300</pid></pid></p>
+
+<p>parent PID:	99288
+threads:	11
+memory usage:	0.157%
+cpu usage:	0.013%
+username:	shocker
+cmd+args:	/var/folders/cs/mfl4k8t54_g1thdzvzkdxbbr0000gn/T/go-build375822490/b001/exe/main
+local/remote:	*:9105 &lt;-&gt; :0 (LISTEN)
+local/remote:	127.0.0.1:57109 &lt;-&gt; 127.0.0.1:3306 (ESTABLISHED)
+local/remote:	*:8000 &lt;-&gt; :0 (LISTEN)
+local/remote 表示本机建立的监听(LISTEN)，或者与远程服务器建立的链接(ESTABLISHED)</p>
+
+<p>local/remote: *:9105 &lt;-&gt; :0 (LISTEN) 中的 *:9105 是 gops/agent 提供的服务，</p>
+
+<p>gops tree
+用法: gops tree 以目录树的形式展示所有 Go 程序。
+$ gops tree</p>
+
+<p>…
+├── 2899
+│   └── 99996 (gops) {go1.10.1}
+├── 47636
+│   └── 99288 (go) {go1.10.1}
+│       └── [*]  99300 (main) {go1.10.1}
+└── 14655
+    └── 99154 (hugo) {go1.11.1}
+gops stack (<pid>|<addr>)
+用法: gops stack (<pid>|<addr>) 用于显示程序所有堆栈信息，包括每个 goroutine 的堆栈信息、运行状态、运行时长等。
+$ gops stack 99300</addr></pid></addr></pid></p>
+
+<p>goroutine 7 [running]:
+runtime/pprof.writeGoroutineStacks(0x1882720, 0xc4202b8010, 0xd0, 0xd0)
+	/usr/local/Cellar/go/1.10.1/libexec/src/runtime/pprof/pprof.go:650 +0xa7
+runtime/pprof.writeGoroutine(0x1882720, 0xc4202b8010, 0x2, 0x30, 0xc420068248)
+	/usr/local/Cellar/go/1.10.1/libexec/src/runtime/pprof/pprof.go:639 +0x44</p>
+
+<p>goroutine 1 [IO wait, 9 minutes]:
+internal/poll.runtime_pollWait(0x1db4da0, 0x72, 0x0)
+	/usr/local/Cellar/go/1.10.1/libexec/src/runtime/netpoll.go:173 +0x57
+internal/poll.(*pollDesc).wait(0xc4201e7318, 0x72, 0x0, 0x0, 0x0)</p>
+
+<h1 id="more-">more …</h1>
+<p>gops memstats (<pid>|<addr>)
+用法: gops memstats (<pid>|<addr>) 查看程序的内存统计信息
+$ gops memstats 127.0.0.1:9105</addr></pid></addr></pid></p>
+
+<p>alloc: 1.36MB (1428632 bytes)
+total-alloc: 10.21MB (10709376 bytes)
+sys: 9.07MB (9509112 bytes)
+lookups: 91
+mallocs: 102818
+frees: 91896
+heap-alloc: 1.36MB (1428632 bytes)
+heap-sys: 5.22MB (5472256 bytes)
+heap-idle: 2.34MB (2457600 bytes)
+heap-in-use: 2.88MB (3014656 bytes)
+heap-released: 0 bytes
+heap-objects: 10922
+stack-in-use: 704.00KB (720896 bytes)
+stack-sys: 704.00KB (720896 bytes)
+stack-mspan-inuse: 47.95KB (49096 bytes)
+stack-mspan-sys: 80.00KB (81920 bytes)
+stack-mcache-inuse: 6.78KB (6944 bytes)
+stack-mcache-sys: 16.00KB (16384 bytes)
+other-sys: 1.21MB (1266624 bytes)
+gc-sys: 492.00KB (503808 bytes)
+next-gc: when heap-alloc &gt;= 4.00MB (4194304 bytes)
+last-gc: 2018-10-18 13:37:04.37511973 +0800 CST
+gc-pause-total: 9.209158ms
+gc-pause: 52831
+num-gc: 60
+enable-gc: true
+debug-gc: false
+gops gc (<pid>|<addr>)
+用法: gops gc (<pid>|<addr>) 查看指定程序的垃圾回收(GC)信息</addr></pid></addr></pid></p>
+
+<p>gops setgc (<pid>|<addr>)
+用法: gops setgc (<pid>|<addr>) 设定指定程序的 GC 目标百分比</addr></pid></addr></pid></p>
+
+<p>gops version (<pid>|<addr>)
+用法: gops version (<pid>|<addr>) 查看指定程序构建时的 Go 版本号</addr></pid></addr></pid></p>
+
+<p>gops stats (<pid>|<addr>)
+用法: gops stats (<pid>|<addr>) 查看指定程序的 goroutine 数量、GOMAXPROCS 值等信息
+$ gops stats 127.0.0.1:9105</addr></pid></addr></pid></p>
+
+<p>goroutines: 11
+OS threads: 14
+GOMAXPROCS: 4
+num CPU: 4
+gops pprof-cpu (<pid>|<addr>)
+用法: gops pprof-cpu (<pid>|<addr>) 调用并展示 go tool pprof 工具中关于 CPU 的性能分析数据，操作与 pprof 一致。
+$ gops pprof-cpu 99300</addr></pid></addr></pid></p>
+
+<p>Profiling CPU now, will take 30 secs…
+Profile dump saved to: /var/folders/cs/mfl4k8t54_g1thdzvzkdxbbr0000gn/T/profile881383738
+Profiling dump saved to: /var/folders/cs/mfl4k8t54_g1thdzvzkdxbbr0000gn/T/profile881383738
+Binary file saved to: /var/folders/cs/mfl4k8t54_g1thdzvzkdxbbr0000gn/T/binary970030929
+File: binary970030929
+Type: cpu
+Time: Oct 18, 2018 at 2:43pm (CST)
+Duration: 30s, Total samples = 0
+Entering interactive mode (type “help” for commands, “o” for options)
+(pprof)
+gops pprof-heap (<pid>|<addr>)
+用法: gops pprof-heap (<pid>|<addr>) 调用并展示 go tool pprof 工具中关于 heap 的性能分析数据，操作与 pprof 一致。
+$ gops pprof-heap 99300</addr></pid></addr></pid></p>
+
+<p>Profile dump saved to: /var/folders/cs/mfl4k8t54_g1thdzvzkdxbbr0000gn/T/profile045800436
+Profiling dump saved to: /var/folders/cs/mfl4k8t54_g1thdzvzkdxbbr0000gn/T/profile045800436
+Binary file saved to: /var/folders/cs/mfl4k8t54_g1thdzvzkdxbbr0000gn/T/binary315133123
+File: binary315133123
+Type: inuse_space
+Time: Oct 18, 2018 at 2:46pm (CST)
+Entering interactive mode (type “help” for commands, “o” for options)
+(pprof)
+gops trace (<pid>|<addr>)
+用法: gops trace (<pid>|<addr>) 追踪程序运行5秒，生成可视化报告，并可在浏览器中查看: http://127.0.0.1:61380
+$ gops trace 99300</addr></pid></addr></pid></p>
+
+<p>Tracing now, will take 5 secs…
+Trace dump saved to: /var/folders/cs/mfl4k8t54_g1thdzvzkdxbbr0000gn/T/trace136310737
+2018/10/18 14:49:06 Parsing trace…
+2018/10/18 14:49:06 Serializing trace…
+2018/10/18 14:49:06 Splitting trace…
+2018/10/18 14:49:06 Opening browser. Trace viewer is listening on http://127.0.0.1:61380</p>
+
+<p>诊断
+可能有人注意到了上面我的 memory-test 程序后面有个 * 号。这是因为程序中我加入了 gops 用的诊断支持代码：</p>
+
+<p>if err := agent.Listen(agent.Options{ShutdownCleanup:true}); err != nil {
+    log.Fatalln(err)
+}
+对于这样的程序，我们才能进行 gops pprof-cpu 和 gops pprof-heap 等命令。（stack, gc, setgc, memstats, version, stats, trace 等命令运行同样需要加入上面的代码）。</p>
+
+<p>https://github.com/XanthusL/blog-gen/blob/master/content/post/gops.md</p>
+:ET

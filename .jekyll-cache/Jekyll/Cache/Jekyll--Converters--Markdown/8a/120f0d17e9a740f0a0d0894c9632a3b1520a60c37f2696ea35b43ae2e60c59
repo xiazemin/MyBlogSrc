@@ -1,0 +1,616 @@
+I"܀<p>控制并发有两种经典的方式，一种是WaitGroup，另外一种就是Context。</p>
+
+<p>context是Go中广泛使用的程序包，由Google官方开发，在1.7版本引入。它用来简化在多个go routine传递上下文数据、(手动/超时)中止routine树等操作，比如，官方http包使用context传递请求的上下文数据，gRpc使用context来终止某个请求产生的routine树。由于它使用简单，现在基本成了编写go基础库的通用规范。笔者在使用context上有一些经验，遂分享下。</p>
+
+<p>本文主要谈谈以下几个方面的内容：</p>
+
+<p>context的使用。
+context实现原理，哪些是需要注意的地方。
+在实践中遇到的问题，分析问题产生的原因。
+1 使用
+1.1 核心接口Context
+type Context interface {
+    // Deadline returns the time when work done on behalf of this context
+    // should be canceled. Deadline returns ok==false when no deadline is
+    // set.
+    Deadline() (deadline time.Time, ok bool)
+    // Done returns a channel that’s closed when work done on behalf of this
+    // context should be canceled.
+    Done() &lt;-chan struct{}
+    // Err returns a non-nil error value after Done is closed.
+    Err() error
+    // Value returns the value associated with this context for key.
+    Value(key interface{}) interface{}
+}
+简单介绍一下其中的方法：</p>
+<ul>
+  <li>Done会返回一个channel，当该context被取消的时候，该channel会被关闭，同时对应的使用该context的routine也应该结束并返回。</li>
+  <li>Context中的方法是协程安全的，这也就代表了在父routine中创建的context，可以传递给任意数量的routine并让他们同时访问。</li>
+  <li>Deadline会返回一个超时时间，routine获得了超时时间后，可以对某些io操作设定超时时间。</li>
+  <li>Value可以让routine共享一些数据，当然获得数据是协程安全的。</li>
+</ul>
+
+<p>在请求处理的过程中，会调用各层的函数，每层的函数会创建自己的routine，是一个routine树。所以，context也应该反映并实现成一棵树。</p>
+
+<p>要创建context树，第一步是要有一个根结点。context.Background函数的返回值是一个空的context，经常作为树的根结点，它一般由接收请求的第一个routine创建，不能被取消、没有值、也没有过期时间。</p>
+
+<p>func Background() Context
+之后该怎么创建其它的子孙节点呢？context包为我们提供了以下函数：</p>
+
+<p>func WithCancel(parent Context) (ctx Context, cancel CancelFunc)
+func WithDeadline(parent Context, deadline time.Time) (Context, CancelFunc)
+func WithTimeout(parent Context, timeout time.Duration) (Context, CancelFunc)
+func WithValue(parent Context, key interface{}, val interface{}) Context
+这四个函数的第一个参数都是父context，返回一个Context类型的值，这样就层层创建出不同的节点。子节点是从复制父节点得到的，并且根据接收的函数参数保存子节点的一些状态值，然后就可以将它传递给下层的routine了。</p>
+
+<p>WithCancel函数，返回一个额外的CancelFunc函数类型变量，该函数类型的定义为：</p>
+
+<p>type CancelFunc func()
+调用CancelFunc对象将撤销对应的Context对象，这样父结点的所在的环境中，获得了撤销子节点context的权利，当触发某些条件时，可以调用CancelFunc对象来终止子结点树的所有routine。在子节点的routine中，需要用类似下面的代码来判断何时退出routine：</p>
+
+<p>select {
+    case &lt;-cxt.Done():
+        // do some cleaning and return
+}
+根据cxt.Done()判断是否结束。当顶层的Request请求处理结束，或者外部取消了这次请求，就可以cancel掉顶层context，从而使整个请求的routine树得以退出。</p>
+
+<p>WithDeadline和WithTimeout比WithCancel多了一个时间参数，它指示context存活的最长时间。如果超过了过期时间，会自动撤销它的子context。所以context的生命期是由父context的routine和deadline共同决定的。</p>
+
+<p>WithValue返回parent的一个副本，该副本保存了传入的key/value，而调用Context接口的Value(key)方法就可以得到val。注意在同一个context中设置key/value，若key相同，值会被覆盖。</p>
+
+<p>关于更多的使用示例，可参考官方博客。</p>
+
+<p>2 原理
+2.1 上下文数据的存储与查询
+type valueCtx struct {
+    Context
+    key, val interface{}
+}</p>
+
+<p>func WithValue(parent Context, key, val interface{}) Context {
+    if key == nil {
+        panic(“nil key”)
+    }
+    ……
+    return &amp;valueCtx{parent, key, val}
+}</p>
+
+<p>func (c *valueCtx) Value(key interface{}) interface{} {
+    if c.key == key {
+        return c.val
+    }
+    return c.Context.Value(key)
+}
+context上下文数据的存储就像一个树，每个结点只存储一个key/value对。WithValue()保存一个key/value对，它将父context嵌入到新的子context，并在节点中保存了key/value数据。Value()查询key对应的value数据，会从当前context中查询，如果查不到，会递归查询父context中的数据。</p>
+
+<p>值得注意的是，context中的上下文数据并不是全局的，它只查询本节点及父节点们的数据，不能查询兄弟节点的数据。</p>
+
+<p>2.2 手动cancel和超时cancel
+cancelCtx中嵌入了父Context，实现了canceler接口：</p>
+
+<p>type cancelCtx struct {
+    Context      // 保存parent Context
+    done chan struct{}
+    mu       sync.Mutex
+    children map[canceler]struct{}
+    err      error
+}</p>
+
+<p>// A canceler is a context type that can be canceled directly. The
+// implementations are *cancelCtx and *timerCtx.
+type canceler interface {
+    cancel(removeFromParent bool, err error)
+    Done() &lt;-chan struct{}
+}
+cancelCtx结构体中children保存它的所有子canceler， 当外部触发cancel时，会调用children中的所有cancel()来终止所有的cancelCtx。done用来标识是否已被cancel。当外部触发cancel、或者父Context的channel关闭时，此done也会关闭。</p>
+
+<p>type timerCtx struct {
+    cancelCtx     //cancelCtx.Done()关闭的时机：1）用户调用cancel 2）deadline到了 3）父Context的done关闭了
+    timer    *time.Timer
+    deadline time.Time
+}</p>
+
+<p>func WithDeadline(parent Context, deadline time.Time) (Context, CancelFunc) {
+    ……
+    c := &amp;timerCtx{
+        cancelCtx: newCancelCtx(parent),
+        deadline:  deadline,
+    }
+    propagateCancel(parent, c)
+    d := time.Until(deadline)
+    if d &lt;= 0 {
+        c.cancel(true, DeadlineExceeded) // deadline has already passed
+        return c, func() { c.cancel(true, Canceled) }
+    }
+    c.mu.Lock()
+    defer c.mu.Unlock()
+    if c.err == nil {
+        c.timer = time.AfterFunc(d, func() {
+            c.cancel(true, DeadlineExceeded)
+        })
+    }
+    return c, func() { c.cancel(true, Canceled) }
+}
+timerCtx结构体中deadline保存了超时的时间，当超过这个时间，会触发cancel。</p>
+
+<p>可以看出，cancelCtx也是一棵树，当触发cancel时，会cancel本结点和其子树的所有cancelCtx。</p>
+
+<p>3 遇到的问题
+3.1 背景
+某天，为了给我们的系统接入etrace(内部的链路跟踪系统)，需要在gRpc/Mysql/Redis/MQ操作过程中传递requestId、rpcId，我们的解决方案是Context。</p>
+
+<p>所有Mysql、MQ、Redis的操作接口的第一个参数都是context，如果这个context(或其父context)被cancel了，则操作会失败。</p>
+
+<p>func (tx <em>Tx) QueryContext(ctx context.Context, query string, args …interface{}) (</em>Rows, error)
+func(process func(context.Context, redis.Cmder) error) func(context.Context, redis.Cmder) error
+func (ch *Channel) Consume(ctx context.Context, handler Handler, queue string, dc &lt;-chan amqp.Delivery) error
+func (ch *Channel) Publish(ctx context.Context, exchange, key string, mandatory, immediate bool, msg Publishing) (err error)
+上线后，遇到一系列的坑……</p>
+
+<p>3.2 Case 1
+现象：上线后，5分钟后所有用户登录失败，不断收到报警。</p>
+
+<p>原因：程序中使用localCache，会每5分钟Refresh(调用注册的回调函数)一次所缓存的变量。localCache中保存了一个context，在调用回调函数时会传进去。如果回调函数依赖context，可能会产生意外的结果。</p>
+
+<p>程序中，回调函数getAppIDAndAlias的功能是从mysql中读取相关数据。如果ctx被cancel了，会直接返回失败。</p>
+
+<p>func getAppIDAndAlias(ctx context.Context, appKey, appSecret string) (string, string, error)
+第一次localCache.Get(ctx, appKey, appSeret)传的ctx是gRpc call传进来的context，而gRpc在请求结束或失败时会cancel掉context，导致之后cache Refresh()时，执行失败。</p>
+
+<p>解决方法：在Refresh时不使用localCache的context，使用一个不会cancel的context。</p>
+
+<p>3.3 Case 2
+现象：上线后，不断收到报警(sys err过多)。看log/etrace产生2种sys err：</p>
+
+<p>context canceled
+sql: Transaction has already been committed or rolled back
+3.3.1 背景及原因</p>
+
+<p>Ticket是处理Http请求的服务，它使用Restful风格的协议。由于程序内部使用的是gRpc协议，需要某个组件进行协议转换，我们引入了grpc-gateway，用它来实现Restful转成gRpc的互转。</p>
+
+<p>复现context canceled的流程如下：</p>
+
+<p>客户端发送http restful请求。
+grpc-gateway与客户端建立连接，接收请求，转换参数，调用后面的grpc-server。
+grpc-server处理请求。其中，grpc-server会对每个请求启一个stream，由这个stream创建context。
+客户端连接断开。
+grpc-gateway收到连接断开的信号，导致context cancel。grpc client在发送rpc请求后由于外部异常使它的请求终止了(即它的context被cancel)，会发一个RST_STREAM。
+grpc server收到后，马上终止请求（即grpc server的stream context被cancel）。
+可以看出，是因为gRpc handler在处理过程中连接被断开。</p>
+
+<p>sql: Transaction has already been committed or rolled back产生的原因：</p>
+
+<p>程序中使用了官方database包来执行db transaction。其中，在db.BeginTx时，会启一个协程awaitDone：</p>
+
+<p>func (tx *Tx) awaitDone() {
+    // Wait for either the transaction to be committed or rolled
+    // back, or for the associated context to be closed.
+    &lt;-tx.ctx.Done()</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>// Discard and close the connection used to ensure the
+// transaction is closed and the resources are released.  This
+// rollback does nothing if the transaction has already been
+// committed or rolled back.
+tx.rollback(true) } 在context被cancel时，会进行rollback()，而rollback时，会操作原子变量。之后，在另一个协程中tx.Commit()时，会判断原子变量，如果变了，会抛出错误。
+</code></pre></div></div>
+
+<p>3.3.2 解决方法
+这两个error都是由连接断开导致的，是正常的。可忽略这两个error。</p>
+
+<p>3.4 Case 3
+上线后，每两天左右有1~2次的mysql事务阻塞，导致请求耗时达到120秒。在盘古(内部的mysql运维平台)中查询到所有阻塞的事务在处理同一条记录。</p>
+
+<p>3.4.1 处理过程</p>
+<ol>
+  <li>
+    <p>初步怀疑是跨机房的多个事务操作同一条记录导致的。由于跨机房操作，耗时会增加，导致阻塞了其他机房执行的db事务。</p>
+  </li>
+  <li>
+    <p>出现此现象时，暂时将某个接口降级。降低多个事务操作同一记录的概率。</p>
+  </li>
+  <li>
+    <p>减少事务的个数。</p>
+  </li>
+</ol>
+
+<p>将单条sql的事务去掉
+通过业务逻辑的转移减少不必要的事务</p>
+<ol>
+  <li>
+    <p>调整db参数innodb_lock_wait_timeout(120s-&gt;50s)。这个参数指示mysql在执行事务时阻塞的最大时间，将这个时间减少，来减少整个操作的耗时。考虑过在程序中指定事务的超时时间，但是innodb_lock_wait_timeout要么是全局，要么是session的。担心影响到session上的其它sql，所以没设置。</p>
+  </li>
+  <li>
+    <p>考虑使用分布式锁来减少操作同一条记录的事务的并发量。但由于时间关系，没做这块的改进。</p>
+  </li>
+  <li>
+    <p>DAL同事发现有事务没提交，查看代码，找到root cause。</p>
+  </li>
+</ol>
+
+<p>原因是golang官方包database/sql会在某种竞态条件下，导致事务既没有commit，也没有rollback。</p>
+
+<p>3.4.2 源码描述
+开始事务BeginTxx()时会启一个协程：</p>
+
+<p>// awaitDone blocks until the context in Tx is canceled and rolls back
+// the transaction if it’s not already done.
+func (tx *Tx) awaitDone() {
+    // Wait for either the transaction to be committed or rolled
+    // back, or for the associated context to be closed.
+    &lt;-tx.ctx.Done()</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>// Discard and close the connection used to ensure the
+// transaction is closed and the resources are released.  This
+// rollback does nothing if the transaction has already been
+// committed or rolled back.
+tx.rollback(true) } tx.rollback(true)中，会先判断原子变量tx.done是否为1，如果1，则返回；如果是0，则加1，并进行rollback操作。
+</code></pre></div></div>
+
+<p>在提交事务Commit()时，会先操作原子变量tx.done，然后判断context是否被cancel了，如果被cancel，则返回；如果没有，则进行commit操作。</p>
+
+<p>// Commit commits the transaction.
+func (tx *Tx) Commit() error {
+    if !atomic.CompareAndSwapInt32(&amp;tx.done, 0, 1) {
+        return ErrTxDone
+    }</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>select {
+default:
+case &lt;-tx.ctx.Done():
+    return tx.ctx.Err()
+}
+var err error
+withLock(tx.dc, func() {
+    err = tx.txi.Commit()
+})
+if err != driver.ErrBadConn {
+    tx.closePrepared()
+}
+tx.close(err)
+return err } 如果先进行commit()过程中，先操作原子变量，然后context被cancel，之后另一个协程在进行rollback()会因为原子变量置为1而返回。导致commit()没有执行，rollback()也没有执行。
+</code></pre></div></div>
+
+<p>3.4.3 解决方法
+解决方法可以是如下任一个：</p>
+
+<p>在执行事务时传进去一个不会cancel的context
+修正database/sql源码，然后在编译时指定新的go编译镜像
+我们之后给Golang提交了patch，修正了此问题(已合入go 1.9.3)。</p>
+
+<p>4 经验教训
+由于go大量的官方库、第三方库使用了context，所以调用接收context的函数时要小心，要清楚context在什么时候cancel，什么行为会触发cancel。笔者在程序经常使用gRpc传出来的context，产生了一些非预期的结果，之后花时间总结了gRpc、内部基础库中context的生命期及行为，以避免出现同样的问题。
+<!-- more -->
+什么是WaitGroup
+WaitGroup以前我们在并发的时候介绍过，它是一种控制并发的方式，它的这种方式是控制多个goroutine同时完成。</p>
+
+<p>func main() {
+	var wg sync.WaitGroup</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>wg.Add(2)
+go func() {
+	time.Sleep(2*time.Second)
+	fmt.Println("1号完成")
+	wg.Done()
+}()
+go func() {
+	time.Sleep(2*time.Second)
+	fmt.Println("2号完成")
+	wg.Done()
+}()
+wg.Wait()
+fmt.Println("好了，大家都干完了，放工") } 一个很简单的例子，一定要例子中的2个goroutine同时做完，才算是完成，先做好的就要等着其他未完成的，所有的goroutine要都全部完成才可以。
+</code></pre></div></div>
+
+<p>这是一种控制并发的方式，这种尤其适用于，好多个goroutine协同做一件事情的时候，因为每个goroutine做的都是这件事情的一部分，只有全部的goroutine都完成，这件事情才算是完成，这是等待的方式。</p>
+
+<p>在实际的业务种，我们可能会有这么一种场景：需要我们主动的通知某一个goroutine结束。比如我们开启一个后台goroutine一直做事情，比如监控，现在不需要了，就需要通知这个监控goroutine结束，不然它会一直跑，就泄漏了。</p>
+
+<p>chan通知
+我们都知道一个goroutine启动后，我们是无法控制他的，大部分情况是等待它自己结束，那么如果这个goroutine是一个不会自己结束的后台goroutine呢？比如监控等，会一直运行的。</p>
+
+<p>这种情况化，一直傻瓜式的办法是全局变量，其他地方通过修改这个变量完成结束通知，然后后台goroutine不停的检查这个变量，如果发现被通知关闭了，就自我结束。</p>
+
+<p>这种方式也可以，但是首先我们要保证这个变量在多线程下的安全，基于此，有一种更好的方式：chan + select 。</p>
+
+<p>func main() {
+	stop := make(chan bool)</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>go func() {
+	for {
+		select {
+		case &lt;-stop:
+			fmt.Println("监控退出，停止了...")
+			return
+		default:
+			fmt.Println("goroutine监控中...")
+			time.Sleep(2 * time.Second)
+		}
+	}
+}()
+
+time.Sleep(10 * time.Second)
+fmt.Println("可以了，通知监控停止")
+stop&lt;- true
+//为了检测监控过是否停止，如果没有监控输出，就表示停止了
+time.Sleep(5 * time.Second)
+</code></pre></div></div>
+
+<p>}
+例子中我们定义一个stop的chan，通知他结束后台goroutine。实现也非常简单，在后台goroutine中，使用select判断stop是否可以接收到值，如果可以接收到，就表示可以退出停止了；如果没有接收到，就会执行default里的监控逻辑，继续监控，只到收到stop的通知。</p>
+
+<p>有了以上的逻辑，我们就可以在其他goroutine种，给stop chan发送值了，例子中是在main goroutine中发送的，控制让这个监控的goroutine结束。</p>
+
+<p>发送了stop&lt;- true结束的指令后，我这里使用time.Sleep(5 * time.Second)故意停顿5秒来检测我们结束监控goroutine是否成功。如果成功的话，不会再有goroutine监控中…的输出了；如果没有成功，监控goroutine就会继续打印goroutine监控中…输出。</p>
+
+<p>这种chan+select的方式，是比较优雅的结束一个goroutine的方式，不过这种方式也有局限性，如果有很多goroutine都需要控制结束怎么办呢？如果这些goroutine又衍生了其他更多的goroutine怎么办呢？如果一层层的无穷尽的goroutine呢？这就非常复杂了，即使我们定义很多chan也很难解决这个问题，因为goroutine的关系链就导致了这种场景非常复杂。</p>
+
+<p>初识Context
+上面说的这种场景是存在的，比如一个网络请求Request，每个Request都需要开启一个goroutine做一些事情，这些goroutine又可能会开启其他的goroutine。所以我们需要一种可以跟踪goroutine的方案，才可以达到控制他们的目的，这就是Go语言为我们提供的Context，称之为上下文非常贴切，它就是goroutine的上下文。</p>
+
+<p>下面我们就使用Go Context重写上面的示例。</p>
+
+<p>func main() {
+	ctx, cancel := context.WithCancel(context.Background())
+	go func(ctx context.Context) {
+		for {
+			select {
+			case &lt;-ctx.Done():
+				fmt.Println(“监控退出，停止了…”)
+				return
+			default:
+				fmt.Println(“goroutine监控中…”)
+				time.Sleep(2 * time.Second)
+			}
+		}
+	}(ctx)</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>time.Sleep(10 * time.Second)
+fmt.Println("可以了，通知监控停止")
+cancel()
+//为了检测监控过是否停止，如果没有监控输出，就表示停止了
+time.Sleep(5 * time.Second)
+</code></pre></div></div>
+
+<p>}
+重写比较简单，就是把原来的chan stop 换成Context，使用Context跟踪goroutine，以便进行控制，比如结束等。</p>
+
+<p>context.Background() 返回一个空的Context，这个空的Context一般用于整个Context树的根节点。然后我们使用context.WithCancel(parent)函数，创建一个可取消的子Context，然后当作参数传给goroutine使用，这样就可以使用这个子Context跟踪这个goroutine。</p>
+
+<p>在goroutine中，使用select调用&lt;-ctx.Done()判断是否要结束，如果接受到值的话，就可以返回结束goroutine了；如果接收不到，就会继续进行监控。</p>
+
+<p>那么是如何发送结束指令的呢？这就是示例中的cancel函数啦，它是我们调用context.WithCancel(parent)函数生成子Context的时候返回的，第二个返回值就是这个取消函数，它是CancelFunc类型的。我们调用它就可以发出取消指令，然后我们的监控goroutine就会收到信号，就会返回结束。</p>
+
+<p>Context控制多个goroutine
+使用Context控制一个goroutine的例子如上，非常简单，下面我们看看控制多个goroutine的例子，其实也比较简单。</p>
+
+<p>func main() {
+	ctx, cancel := context.WithCancel(context.Background())
+	go watch(ctx,”【监控1】”)
+	go watch(ctx,”【监控2】”)
+	go watch(ctx,”【监控3】”)</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>time.Sleep(10 * time.Second)
+fmt.Println("可以了，通知监控停止")
+cancel()
+//为了检测监控过是否停止，如果没有监控输出，就表示停止了
+time.Sleep(5 * time.Second) }
+</code></pre></div></div>
+
+<p>func watch(ctx context.Context, name string) {
+	for {
+		select {
+		case &lt;-ctx.Done():
+			fmt.Println(name,”监控退出，停止了…”)
+			return
+		default:
+			fmt.Println(name,”goroutine监控中…”)
+			time.Sleep(2 * time.Second)
+		}
+	}
+}
+示例中启动了3个监控goroutine进行不断的监控，每一个都使用了Context进行跟踪，当我们使用cancel函数通知取消时，这3个goroutine都会被结束。这就是Context的控制能力，它就像一个控制器一样，按下开关后，所有基于这个Context或者衍生的子Context都会收到通知，这时就可以进行清理操作了，最终释放goroutine，这就优雅的解决了goroutine启动后不可控的问题。</p>
+
+<p>Context接口
+Context的接口定义的比较简洁，我们看下这个接口的方法。</p>
+
+<p>type Context interface {
+	Deadline() (deadline time.Time, ok bool)</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>Done() &lt;-chan struct{}
+
+Err() error
+
+Value(key interface{}) interface{} } 这个接口共有4个方法，了解这些方法的意思非常重要，这样我们才可以更好的使用他们。
+</code></pre></div></div>
+
+<p>Deadline方法是获取设置的截止时间的意思，第一个返回式是截止时间，到了这个时间点，Context会自动发起取消请求；第二个返回值ok==false时表示没有设置截止时间，如果需要取消的话，需要调用取消函数进行取消。</p>
+
+<p>Done方法返回一个只读的chan，类型为struct{}，我们在goroutine中，如果该方法返回的chan可以读取，则意味着parent context已经发起了取消请求，我们通过Done方法收到这个信号后，就应该做清理操作，然后退出goroutine，释放资源。</p>
+
+<p>Err方法返回取消的错误原因，因为什么Context被取消。</p>
+
+<p>Value方法获取该Context上绑定的值，是一个键值对，所以要通过一个Key才可以获取对应的值，这个值一般是线程安全的。</p>
+
+<p>以上四个方法中常用的就是Done了，如果Context取消的时候，我们就可以得到一个关闭的chan，关闭的chan是可以读取的，所以只要可以读取的时候，就意味着收到Context取消的信号了，以下是这个方法的经典用法。</p>
+
+<p>func Stream(ctx context.Context, out chan&lt;- Value) error {
+  	for {
+  		v, err := DoSomething(ctx)
+  		if err != nil {
+  			return err
+  		}
+  		select {
+  		case &lt;-ctx.Done():
+  			return ctx.Err()
+  		case out &lt;- v:
+  		}
+  	}
+  }
+Context接口并不需要我们实现，Go内置已经帮我们实现了2个，我们代码中最开始都是以这两个内置的作为最顶层的partent context，衍生出更多的子Context。</p>
+
+<p>var (
+	background = new(emptyCtx)
+	todo       = new(emptyCtx)
+)</p>
+
+<p>func Background() Context {
+	return background
+}</p>
+
+<p>func TODO() Context {
+	return todo
+}
+一个是Background，主要用于main函数、初始化以及测试代码中，作为Context这个树结构的最顶层的Context，也就是根Context。</p>
+
+<p>一个是TODO,它目前还不知道具体的使用场景，如果我们不知道该使用什么Context的时候，可以使用这个。</p>
+
+<p>他们两个本质上都是emptyCtx结构体类型，是一个不可取消，没有设置截止时间，没有携带任何值的Context。</p>
+
+<p>type emptyCtx int</p>
+
+<p>func (*emptyCtx) Deadline() (deadline time.Time, ok bool) {
+	return
+}</p>
+
+<p>func (*emptyCtx) Done() &lt;-chan struct{} {
+	return nil
+}</p>
+
+<p>func (*emptyCtx) Err() error {
+	return nil
+}</p>
+
+<p>func (*emptyCtx) Value(key interface{}) interface{} {
+	return nil
+}</p>
+
+<p>这就是emptyCtx实现Context接口的方法，可以看到，这些方法什么都没做，返回的都是nil或者零值。</p>
+
+<p>Context的继承衍生
+有了如上的根Context，那么是如何衍生更多的子Context的呢？这就要靠context包为我们提供的With系列的函数了。</p>
+
+<p>func WithCancel(parent Context) (ctx Context, cancel CancelFunc)
+func WithDeadline(parent Context, deadline time.Time) (Context, CancelFunc)
+func WithTimeout(parent Context, timeout time.Duration) (Context, CancelFunc)
+func WithValue(parent Context, key, val interface{}) Context
+这四个With函数，接收的都有一个partent参数，就是父Context，我们要基于这个父Context创建出子Context的意思，这种方式可以理解为子Context对父Context的继承，也可以理解为基于父Context的衍生。</p>
+
+<p>通过这些函数，就创建了一颗Context树，树的每个节点都可以有任意多个子节点，节点层级可以有任意多个。</p>
+
+<p>WithCancel函数，传递一个父Context作为参数，返回子Context，以及一个取消函数用来取消Context。 WithDeadline函数，和WithCancel差不多，它会多传递一个截止时间参数，意味着到了这个时间点，会自动取消Context，当然我们也可以不等到这个时候，可以提前通过取消函数进行取消。</p>
+
+<p>WithTimeout和WithDeadline基本上一样，这个表示是超时自动取消，是多少时间后自动取消Context的意思。</p>
+
+<p>WithValue函数和取消Context无关，它是为了生成一个绑定了一个键值对数据的Context，这个绑定的数据可以通过Context.Value方法访问到，后面我们会专门讲。</p>
+
+<p>大家可能留意到，前三个函数都返回一个取消函数CancelFunc，这是一个函数类型，它的定义非常简单。</p>
+
+<p>type CancelFunc func()
+这就是取消函数的类型，该函数可以取消一个Context，以及这个节点Context下所有的所有的Context，不管有多少层级。</p>
+
+<p>WithValue传递元数据
+通过Context我们也可以传递一些必须的元数据，这些数据会附加在Context上以供使用。</p>
+
+<p>var key string=”name”</p>
+
+<p>func main() {
+	ctx, cancel := context.WithCancel(context.Background())
+	//附加值
+	valueCtx:=context.WithValue(ctx,key,”【监控1】”)
+	go watch(valueCtx)
+	time.Sleep(10 * time.Second)
+	fmt.Println(“可以了，通知监控停止”)
+	cancel()
+	//为了检测监控过是否停止，如果没有监控输出，就表示停止了
+	time.Sleep(5 * time.Second)
+}</p>
+
+<p>func watch(ctx context.Context) {
+	for {
+		select {
+		case &lt;-ctx.Done():
+			//取出值
+			fmt.Println(ctx.Value(key),”监控退出，停止了…”)
+			return
+		default:
+			//取出值
+			fmt.Println(ctx.Value(key),”goroutine监控中…”)
+			time.Sleep(2 * time.Second)
+		}
+	}
+}
+在前面的例子，我们通过传递参数的方式，把name的值传递给监控函数。在这个例子里，我们实现一样的效果，但是通过的是Context的Value的方式。</p>
+
+<p>我们可以使用context.WithValue方法附加一对K-V的键值对，这里Key必须是等价性的，也就是具有可比性；Value值要是线程安全的。</p>
+
+<p>这样我们就生成了一个新的Context，这个新的Context带有这个键值对，在使用的时候，可以通过Value方法读取ctx.Value(key)。</p>
+
+<p>记住，使用WithValue传值，一般是必须的值，不要什么值都传递。
+Context 使用原则
+不要把Context放在结构体中，要以参数的方式传递
+以Context作为参数的函数方法，应该把Context作为第一个参数，放在第一位。
+给一个函数方法传递Context的时候，不要传递nil，如果不知道传递什么，就使用context.TODO
+Context的Value相关方法应该传递必须的数据，不要什么数据都使用这个传递
+Context是线程安全的，可以放心的在多个goroutine中传递</p>
+
+<p>拥有超时控制的context有以下几种：</p>
+
+<p>context.WithTimeout(parent Context, timeout time.Duration) (Context, CancelFunc) 指定时长超时结束
+context.WithCancel(parent Context) (ctx Context, cancel CancelFunc) 手动结束
+context.WithDeadline(parent Context, d time.Time) (Context, CancelFunc) 指定时间结束
+一般常用的话就context.WithTimeout</p>
+
+<p>创建Context
+在context中有两种基础的Context，分别通过Backgroud和TODO函数创建，下面是具体的函数声明：</p>
+
+<p>func Background() Context</p>
+
+<p>func TODO() Context
+通常情况下，使用Backgroud函数即可，调用函数可以得到一个Context，但是这个Context不能够直接使用，只是作为一个基础的根Context使用，所有的Context都需要从这个Context上衍生。</p>
+
+<p>衍生 Context
+要创建一个可使用的Context，你需要使用下面的三个函数，在根Context衍生出新的Context。当然，由于Context是以树状结构存在的，你也可以通过调用这些函数在任何一个Context上创建子Context。</p>
+
+<p>WithCancel
+WithCancel会返回一个可以取消的Context，函数声明如下：</p>
+
+<p>func WithCancel(parent Context) (ctx Context, cancel CancelFunc)
+1
+函数接收一个Contex作为参数，返回两个值，第一个是新创建的Context，结构上来看，这个Context是输入Context的子节点；第二个参数是cancel函数，用于向这个Context发送cancel信号。由于Context存在继承关系，当父节点调用cancel子节点的cancel也会被调用。</p>
+
+<p>CancelFunc &amp; Done
+这里介绍一下CancelFunc，Done这一对函数，类似于signal，wait；CancelFunc函数会向Context发送cancel信号；而Done方法返回一个通道，若当前Context被cancel，那么这个通道会被关闭；也就是说，通过CancelFunc和Done的协作，可以对子协程传递cancel信号，一个常用的代码段如下：</p>
+
+<p>func Stream(ctx context.Context, out chan&lt;- Value) error {
+     for {
+             v, err := DoSomething(ctx)
+            if err != nil {
+                return err
+            }
+            select {
+            case &lt;-ctx.Done():
+                return ctx.Err()
+            case out &lt;- v:
+            }
+       }
+}
+子协程不停地运行并检查当前任务是否被取消，若被取消则结束当前任务并返回。</p>
+
+<p>WithDeadLine &amp; WithTimeout
+和WithCancel类似，WithDeadLine和WithTimeout额外接收一个参数分别是消亡时间和超时时间。也就是说对于这两类Context，即使不主动取消，当发生超时时，该Context也会接收到cancel信号。函数声明如下：</p>
+
+<p>func WithDeadline(parent Context, d time.Time) (Context, CancelFunc)</p>
+
+<p>func WithTimeout(parent Context, timeout time.Duration) (Context, CancelFunc)
+同样的，即使设置了很大的值，但是子Context的deadline和timeout也不会超过父Context的值。</p>
+
+<p>WithValue
+这类Context用于在同一个上下文中传递数据，这个Context是不可取消的，其函数声明如下：</p>
+
+<p>func WithValue(parent Context, key, val interface{}) Context
+除了Context参数外，还接收key和val参数用于保存数据，数据以键值对的方式存储；然后可以通过Context.Value(key)来获取对应的值。</p>
+
+<p>一些建议
+子协程不能cancel父协程的Context
+Context需要显式的传递，而不是作为某个类型的一个字段</p>
+:ET

@@ -1,0 +1,324 @@
+I"�?<p>https://www.laruence.com/2009/04/28/719.html</p>
+
+<p>函数声明宏	语义
+PHP_MINIT_FUNCTION()	当PHP被装载时，模块启动函数即被引擎调用。这使得引擎做一些例如资源类型，注册INI变量等的一次初始化。
+PHP_MSHUTDOWN_FUNCTION()	当PHP完全关闭时，模块关闭函数即被引擎调用。通常用于注销INI条目
+PHP_RINIT_FUNCTION()	在每次PHP请求开始，请求前启动函数被调用。通常用于管理请求前逻辑。
+PHP_RSHUTDOWN_FUNCTION()	在每次PHP请求结束后，请求前关闭函数被调用。经常应用在清理请求前启动函数的逻辑。
+PHP_MINFO_FUNCTION()	调用phpinfo()时模块信息函数被呼叫，从而打印出模块信息。
+<!-- more --></p>
+
+<p>PHP框架提供了称作VCWD （virtual current working directory 虚拟当前工作目录）宏，用来代替任何依赖当前工作目录的存取函数。这些宏与被替代的函数具备同样的功能，同时是被透明地处理。在某些没有标准C函数库平台的情况下，VCWD框架则不会得到支持。例如，Win32下不存在chown()，就不会有相应的VCWD_CHOWN()宏被定义。</p>
+
+<p>INI文件(php.ini)的实现使得PHP扩展注册和监听各自的INI条目。如果这些INI条目由php.ini、Apache的htaccess或其他配置方法来赋值，注册的INI变量总是更新到正确的值。整个INI框架有许多不同的选项以实现其灵活性。我们涉及一些基本的（也是个好的开端），借助本章的其他材料，我们就能够应付日常开发工作的需要。
+通过在PHP_INI_BEGIN()/PHP_INI_END()宏之间的STD_PHP_INI_ENTRY()宏注册PHP INI指令。</p>
+
+<p>PECL_Gen(http://pear.php.net/package/PECL_Gen)，这个工具正在开发之中，比起本章使用的ext_skel有更多的特性。</p>
+
+<p>https://www.jianshu.com/p/ad5afec527f0</p>
+
+<p>php-src/ext/myFile/myFile.c:37:25: error: unknown type name
+      ‘zend_rsrc_list_entry’
+zend_rsrc_list_entry =&gt; zend_resource</p>
+
+<p>参数类型是zend_resource。这是 PHP7 新增的数据结构，在 PHP 5 则是zend_rsrc_list_entry。</p>
+
+<p>ZEND_REGISTER_RESOURCE(rsrc_result, rsrc_pointer, rsrc_type);
+在 PHP 7 中删除了原来的ZEND_REGISTER_RESOURCE宏，直接使用zend_register_resource函数</p>
+
+<p>ZEND_API zend_resource<em> zend_register_resource(void</em>rsrc_pointer,intrsrc_type)</p>
+
+<p>新写法     RETURN_RES(zend_register_resource(rsrc_pointer, rsrc_type));</p>
+
+<p>ZEND_API int zend_register_list_destructors_ex(rsrc_dtor_func_t ld, rsrc_dtor_func_t pld,constchar*type_name,intmodule_number)</p>
+
+<p>error: use of undeclared identifier
+      ‘rsrc_pointer’
+    RETURN_RES(zend_register_resource(rsrc_pointer, rsrc_type));</p>
+
+<p>RETURN_RES(zend_register_resource(fp, le_myfile));</p>
+
+<p>php-src/ext/myFile/myFile.c:100:43: error: use of undeclared identifier
+      ‘le_myfile’; did you mean ‘le_myFile’?
+    RETURN_RES(zend_register_resource(fp, le_myfile));
+                                          ^~~~~~~~~
+                                          le_myFile</p>
+
+<p>写错了，看生成的代码
+ /* True global resources - no need for thread safety here */
+static int le_myFile;</p>
+
+<p>ext/myFile/myFile.c:150:29: error: unexpected type name ‘FILE’:
+      expected expression
+    ZEND_FETCH_RESOURCE(fp, FILE *, &amp;filehandle, -1, “standard-cfile”, le_myFile);</p>
+
+<p>ZEND_APIvoid<em>zend_fetch_resource(zend_resource </em>res,constchar*resource_type_name,intresource_type)</p>
+
+<p>在 PHP 7 中删除了原有的ZEND_FETCH_RESOURCE宏，直接使用函数zend_fetch_resource，而且解析方式也变得简单了很多，想比 PHP 5 要高效很多</p>
+
+<p>php-src/ext/myFile/myFile.c:154:28: error: too many arguments provided to
+      function-like macro invocation
+     RETURN_STRING(result, 0);
+                           ^
+     //RETURN_STRING(result, 0);
+     RETURN_STRING(result);</p>
+
+<p>php-src/ext/myFile/myFile.c:150:60: error: too many arguments to function
+      call, expected 3, have 4
+    zend_fetch_resource(&amp;filehandle, -1, “standard-cfile”, le_myFile);</p>
+
+<p>zend_fetch_resource(&amp;filehandle, -1, “standard-cfile”, le_myFile);
+zend_fetch_resource(&amp;filehandle, “standard-cfile”, le_myFile);</p>
+
+<p>Build complete.
+Don’t forget to run ‘make test’.</p>
+
+<p>$php testmyFile.php
+Segmentation fault: 11</p>
+
+<p>/Users/didi/PhpstormProjects/c/php-src/ext/myFile/myFile.c:120:27: warning: implicit declaration of
+      function ‘Z_RESVAL_P’ is invalid in C99 [-Wimplicit-function-declaration]
+     if (zend_list_delete(Z_RESVAL_P(filehandle)) == FAILURE) {
+                          ^
+/Users/didi/PhpstormProjects/c/php-src/ext/myFile/myFile.c:120:27: warning: incompatible integer to
+      pointer conversion passing ‘int’ to parameter of type ‘zend_resource *’
+      (aka ‘struct _zend_resource *’) [-Wint-conversion]
+     if (zend_list_delete(Z_RESVAL_P(filehandle)) == FAILURE) {
+                          ^~~~~~~~~~~~~~~~~~~~~~
+/usr/local/include/php/Zend/zend_list.h:59:46: note: passing argument to parameter ‘res’ here
+ZEND_API int zend_list_delete(zend_resource *res);
+                                             ^
+/Users/didi/PhpstormProjects/c/php-src/ext/myFile/myFile.c:150:25: warning: incompatible pointer types
+      passing ‘zval **’ (aka ‘struct _zval_struct **’) to parameter of type ‘zend_resource *’
+      (aka ‘struct _zend_resource *’) [-Wincompatible-pointer-types]
+    zend_fetch_resource(&amp;filehandle,”standard-cfile”, le_myFile);
+                        ^~~~~~~~~~~
+/usr/local/include/php/Zend/zend_list.h:63:51: note: passing argument to parameter ‘res’ here
+ZEND_API void *zend_fetch_resource(zend_resource *res, const char *resource_type_name, int resour…
+                                                  ^
+/Users/didi/PhpstormProjects/c/php-src/ext/myFile/myFile.c:181:23: warning: incompatible pointer types
+      passing ‘zval **’ (aka ‘struct _zval_struct **’) to parameter of type ‘zend_resource *’
+      (aka ‘struct _zend_resource *’) [-Wincompatible-pointer-types]
+                zend_fetch_resource(&amp;filehandle,”standard-cfile”, le_myFile);
+                                    ^~~~~~~~~~~
+/usr/local/include/php/Zend/zend_list.h:63:51: note: passing argument to parameter ‘res’ here
+ZEND_API void *zend_fetch_resource(zend_resource *res, const char *resource_type_name, int resour…
+                                                  ^
+4 warnings generated.</p>
+
+<p>一步步测试
+$fp_in = file_open(“test.txt”, “r”) or die(“Unable to open input file\n”);
+$fp_out = file_open(“test.txt.new”, “w”) or die(“Unable to open output file\n”);
+var_dump(file_eof($fp_in));
+var_dump(file_read($fp_in, 1024));</p>
+
+<p>发现file_read 报错了</p>
+
+<p>写php扩展时最后返回值不管是RETURN_STRING(str10,1);还是RETURN_STRING(str10,0);总是显示Segmentation fault (core dumped)错误。</p>
+
+<p>str10=(char <em>)malloc((strlen(str9)+1)</em>sizeof(char));</p>
+
+<p>是哪个地方出错了吗？</p>
+
+<p>不写RETURN_STRING只用下面就没Segmentation fault了
+printf(“%s\n”,str10);free(str10);str10=NULL;</p>
+
+<p>如果我直接使用类似如下的代码，就会出segfault错误</p>
+
+<p>char* ret = “hello world”;
+RETURN_STRINGL(ret, strlen(ret), 0);
+无论ret是直接写字符串，还是先初始化成char[100]这样，都不行
+但是只要将程序稍加改进使用动态分配内存就没事：</p>
+
+<p>char* hello = “hello world”;
+int   len = strlen(hello);
+char* ret = (char*)emalloc(len);
+memcpy(ret, hello, len);
+RETURN_STRINGL(ret, len, 0);
+补充一句：后来发现RETURN_STRINGL的第三个参数改成1也不会有越界访问错误了</p>
+
+<p>php本身是类型安全的脚本语言，对于RETURN_STRINGL或是RETURN_STRING返回的字符串，php会在适当的时候free掉，所以程序员要保证返回的字符串在堆里，能够free掉，这就是为什么动态分配就没事的原因。而：</p>
+
+<p>char* ret = “hello world”;
+RETURN_STRINGL(ret, strlen(ret), 0);
+这是直接返回了一个静态字符串，导致php在free这个字符串的时候出错。
+RETURN_STRINGL和RETURN_STRING最后一个参数，如果是1，表示对第一个参数中的字符串在堆里复制一份返回。这就是为什么最后一个参数等于1的时候，程序正常的原因。</p>
+
+<p>//RETURN_STRING(result, 0);
+ RETURN_STRING(result，bytes_read＋1，1);</p>
+
+<p>27error::  errortoo : many argumentstoo  providedmany  toarguments
+       providedfunction-like  tomacro
+       function-likeinvocation macro
+ invocation
+     RETURN_STRING(result,bytes_read+1,1);
+     RETURN_STRING(result,bytes_read+1,1);</p>
+
+<p>/php-src/ext/myFile/myFile.c7::157 :7:error : error: use ofuse  undeclaredof  identifierundeclared
+       identifier’RETURN_STRING’</p>
+
+<p>‘RETURN_STRING’
+             RETURN_STRING(result,0);
+             ^
+             RETURN_STRING(result,0);</p>
+
+<p>RETURN_STRING(result);</p>
+
+<p>make clean 
+ make</p>
+
+<p>var_dump(file_eof($fp_in));  //这一行注释掉就没有问题了
+var_dump(file_read($fp_in, 1024));</p>
+
+<p>Warning: file_read(): supplied resource is not a valid standard-cfile resource in /Users/didi/PhpstormProjects/c/php-src/ext/myFile/testmyFile.php on line 5</p>
+
+<p>https://github.com/zhoumengkang/notes/blob/master/php-extension/php7.0/tipi_file/tipi_file.c</p>
+
+<p>仔细看代码发现，一个FILE＊指针没有初始化，干掉，问题解决</p>
+
+<p>ln: myFile.la: File exists
+make: *** [myFile.la] Error 1</p>
+
+<p>$rm myFile.la</p>
+
+<p>$make clean &amp; make &amp; make install</p>
+
+<p>$php testmyFile.php
+bool(true)
+string(16) “13456576
+dfghjk
+“
+[Thu May 28 12:54:56 2020]  Script:  ‘/Users/didi/PhpstormProjects/c/php-src/ext/myFile/testmyFile.php’
+/Users/didi/PhpstormProjects/c/php-src/ext/myFile/myFile.c(153) :  Freeing 0x000000010e26c000 (1025 bytes), script=/Users/didi/PhpstormProjects/c/php-src/ext/myFile/testmyFile.php
+=== Total 1 memory leaks detected ===</p>
+
+<p>$php testmyFile.php
+dyld: lazy symbol binding failed: Symbol not found: _Z_RESVAL_P
+  Referenced from: /usr/local/lib/php/extensions/debug-non-zts-20160303/myFile.so
+  Expected in: flat namespace</p>
+
+<p>dyld: Symbol not found: _Z_RESVAL_P
+  Referenced from: /usr/local/lib/php/extensions/debug-non-zts-20160303/myFile.so
+  Expected in: flat namespace</p>
+
+<p>Trace/BPT trap: 5</p>
+
+<p>报这个错的原因是:路径所指向的文件不对;或者路径下没有这个文件</p>
+
+<p>https://blog.csdn.net/moqiluoji/article/details/79792671</p>
+
+<p>替换
+     if (zend_list_delete(Z_RESVAL_P(filehandle)) == FAILURE) {
+          RETURN_FALSE;
+     }</p>
+
+<p>为</p>
+
+<p>zend_list_close(Z_RES_P(filehandle));</p>
+
+<p>testbool(true)
+string(16) “13456576
+dfghjk
+“
+PHP Fatal error:  Allowed memory size of 268435456 bytes exhausted at /Users/didi/PhpstormProjects/c/php-src/ext/myFile/myFile.c:150 (tried to allocate 1280 bytes) in /Users/didi/PhpstormProjects/c/php-src/ext/myFile/testmyFile.php on line 8</p>
+
+<p>Fatal error: Allowed memory size of 268435456 bytes exhausted at /Users/didi/PhpstormProjects/c/php-src/ext/myFile/myFile.c:150 (tried to allocate 1280 bytes) in /Users/didi/PhpstormProjects/c/php-src/ext/myFile/testmyFile.php on line 8</p>
+
+<p>把  RETURN_STRING(result);
+替换为  RETURN_STRINGL(result,0);
+如果是1，表示对第一个参数中的字符串在堆里复制一份返回。这就是为什么最后一个参数等于1的时候，程序正常的原因。</p>
+
+<p>https://www.cnblogs.com/zjoch/p/5260883.html</p>
+
+<p>$php testmyFile.php
+testbool(true)
+string(0) “”
+PHP Fatal error:  Allowed memory size of 268435456 bytes exhausted at /Users/didi/PhpstormProjects/c/php-src/ext/myFile/myFile.c:150 (tried to allocate 1280 bytes) in /Users/didi/PhpstormProjects/c/php-src/ext/myFile/testmyFile.php on line 8</p>
+
+<p>替换
+RETURN_STRINGL(result,0);
+ RETURN_STRINGL(result,bytes_read);</p>
+
+<p>https://my.oschina.net/kear/blog/85257</p>
+
+<p>如果我们在一次请求的生命周期中通过emalloc分配了内存，但是没有释放，那么在PHP整个生命周期是不会造成内存泄漏的。因为在请求结束的时候，PHP会自动帮我们释放掉这些内存。但是，在一次请求中，如果一直不自己释放内存，那么这次请求很可能会内存不够，导致PHP进程挂掉。</p>
+
+<p>https://zhuanlan.zhihu.com/p/83815759
+ https://www.cnblogs.com/farwish/p/5663993.html</p>
+
+<p>char *dest = (char *)emalloc(1024);</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>strcat(dest, src1);
+strcat(dest, ori);
+strcat(dest, src2);
+
+RETURN_STRING(dest, 0);
+</code></pre></div></div>
+
+<p>显然 dest 是长期占用内存的，但你如何在返回值之后，还能再把它销毁呢，恐怕无法做到。</p>
+
+<p>这里就要引入一个概念，当你的函数没有返回值时，函数默认返回的变量是 zval *return_value，也就是你用它就不会有问题。</p>
+
+<p>feof(fp) 0表示未结束，非0表示结束
+if (feof(fp) &lt;= 0) {
+RETURN_TRUE;
+}
+这段脚本有误吧。当feof得到0时，返回TURE，下面while循环是不执行的。
+while (!file_eof($fp_in))</p>
+
+<p>feof是C语言标准库函数，其原型在stdio.h中，其功能是检测流上的文件结束符，如果文件结束，则返回非0值，否则返回0（即，文件结束：返回非0值；文件未结束：返回0值）。</p>
+
+<p>[Thu May 28 13:51:36 2020]  Script:  ‘/Users/didi/PhpstormProjects/c/php-src/ext/myFile/testmyFile.php’
+/Users/didi/PhpstormProjects/c/php-src/ext/myFile/myFile.c(150) :  Freeing 0x000000010ec66000 (513 bytes), script=/Users/didi/PhpstormProjects/c/php-src/ext/myFile/testmyFile.php
+=== Total 1 memory leaks detected ===</p>
+
+<p>整个问题解决</p>
+
+<p>定义了全局变量需要把生成的.h文件里
+ZEND_BEGIN_MODULE_GLOBALS(myFile)
+	zend_long  global_value;
+	char *global_string;
+ZEND_END_MODULE_GLOBALS(myFile)
+注释去掉</p>
+
+<p>同时需要把 .c文件里的注释也去掉
+/* If you declare any globals in php_myFile.h uncomment this:
+ZEND_DECLARE_MODULE_GLOBALS(myFile)
+*/</p>
+
+<p>你也许希望在每次PHP请求的开始初始化全局变量。另外，做为一个例子，全局变量已指向了一个已分配的内存，在每次PHP请求结束时需要释放内存。为了达到这些目的，全局变量机制提供了一个特殊的宏，用于注册全局变量的构造和析构函数（参考表对宏参数的说明）：</p>
+
+<p>ZEND_INIT_MODULE_GLOBALS(module_name, globals_ctor, globals_dtor)</p>
+
+<p>添加自定义INI指令
+通过在PHP_INI_BEGIN()/PHP_INI_END()宏之间的STD_PHP_INI_ENTRY()宏注册PHP INI指令。</p>
+
+<p>为了使自定义INI条目机制正常工作，你需要分别去掉PHP_MINIT_FUNCTION(myfile)中的REGISTER_INI_ENTRIES()调用和PHP_MSHUTDOWN_FUNCTION(myfile)中的UNREGISTER_INI_ENTRIES()的注释。
+访问两个示例全局变量中的一个与在扩展里编写MYFILE_G(global_value) 和MYFILE_G(global_string)一样简单。
+如果你把下面的两行放在php.ini中，MYFILE_G(global_value)的值会变为99。</p>
+
+<p>; php.ini – The following line sets the INI entry myFile.global_value to 99.
+myFile.global_value = 99</p>
+
+<p>void myfunc(){
+     TSRMLS_FETCH();
+     MYFILE_G(myglobal) = 2;
+}</p>
+
+<p>最后，为了使自定义INI条目机制正常工作，你需要分别去掉PHP_MINIT_FUNCTION(myfile)中的REGISTER_INI_ENTRIES()调用和PHP_MSHUTDOWN_FUNCTION(myfile)中的UNREGISTER_INI_ENTRIES()的注释。
+访问两个示例全局变量中的一个与在扩展里编写MYFILE_G(global_value) 和MYFILE_G(global_string)一样简单。
+如果你把下面的两行放在php.ini中，MYFILE_G(global_value)的值会变为99。</p>
+
+<p>$php testmyFile.php
+testbool(false)
+xiazemin:99	13456576
+dfghjk
+get result:xiazemin:99	13456576
+dfghjk
+[Thu May 28 14:29:19 2020]  Script:  ‘/Users/didi/PhpstormProjects/c/php-src/ext/myFile/testmyFile.php’
+/Users/didi/PhpstormProjects/c/php-src/ext/myFile/myFile.c(161) :  Freeing 0x000000010da04c80 (28 bytes), script=/Users/didi/PhpstormProjects/c/php-src/ext/myFile/testmyFile.php
+=== Total 1 memory leaks detected ===</p>
+
+<p>完美解决</p>
+
+:ET

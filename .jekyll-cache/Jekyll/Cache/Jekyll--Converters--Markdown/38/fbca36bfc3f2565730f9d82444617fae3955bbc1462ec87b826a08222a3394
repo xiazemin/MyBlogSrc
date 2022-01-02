@@ -1,0 +1,388 @@
+I"�H<!-- more -->
+<p>rpc服框架，提供多语言的编译功能，并提供多种服务器工作模式；用户通过Thrift的IDL（接口定义语言）来描述接口函数及数据类型，然后通过Thrift的编译环境生成各种语言类型的接口文件，用户可以根据自己的需要采用不同的语言开发客户端代码和服务器端代码。</p>
+
+<p>还有哪些RPC框架:protobuf、Avro、MessagePack等
+Thrift interface definition language（IDL）可以用来定义Thrift Types。一个IDL文件可以通过Thrift代码生成器用来产生不同语言的代码从而支持IDL文件中声明的结构体和服务。</p>
+
+<p>thrift IDL
+一. Document</p>
+
+<p>每个thrift idl包含0个或者更多地headers，headers后面包含0个或者更多地定义。</p>
+
+<p>[1]  Document        ::=  Header* Definition*
+二. Header</p>
+
+<p>每个header要么是一个Thrift include，要么是一个C++ include，或者是一个namespace声明。</p>
+
+<p>[2]  Header          ::=  Include | CppInclude | Namespace
+Thrift Include 
+thrift include可以使得另一个thrift文件中的符号可以在当前文件中可用（使用一个前缀），并且把对应的include声明语句加入到当前thrift文件生成的代码中。
+[3]  Include         ::=  ‘include’ Literal
+C++ Include 
+C++ Include把特定的C++包含到C++代码输出里面。
+[4]  CppInclude      ::=  ‘cpp_include’ Literal
+Namespace 
+命名空间申明了namespaces/package/module/etc，“*”表示namespace适用所有目标语言。
+[5]  Namespace       ::=  ( ‘namespace’ ( NamespaceScope Identifier ) |
+                                        ( ‘smalltalk.category’ STIdentifier ) |
+                                        ( ‘smalltalk.prefix’ Identifier ) ) |
+                          ( ‘php_namespace’ Literal ) |
+                          ( ‘xsd_namespace’ Literal )</p>
+
+<p>[6]  NamespaceScope  ::=  ‘*’ | ‘cpp’ | ‘java’ | ‘py’ | ‘perl’ | ‘rb’ | ‘cocoa’ | ‘csharp’
+举个栗子：</p>
+
+<p>namespace java com.ffy.thrift.test
+namespace cpp com.ffy.thrift.test
+//namespace * com.ffy.thrift.test
+三. Definition</p>
+
+<p>[7]  Definition      ::=  Const | Typedef | Enum | Senum | Struct | Union | Exception | Service
+Const
+[8]  Const           ::=  ‘const’ FieldType Identifier ‘=’ ConstValue ListSeparator?
+例如：</p>
+
+<p>const i32 DEFAULT_ID = 32
+Typedef 
+Typedef用于给某个类型创建一个别名
+[9]  Typedef         ::=  ‘typedef’ DefinitionType Identifier
+例如：</p>
+
+<p>typedef i32 MyInteger
+Enum 
+枚举类型，包含名称和值；如果常量的值没有声明，则要么是0（第一个位置），要么是一个比前面枚举值大的值。任何常量值都必须是非负数。
+[10] Enum            ::=  ‘enum’ Identifier ‘{‘ (Identifier (‘=’ IntConstant)? ListSeparator?)* ‘}’
+例如：</p>
+
+<p>enum StatusType{
+    SUCCESS = 1 
+    FAILURE = 2
+}
+Senum 
+已废弃，统一使用String代替
+Struct 
+struct是Thrift中的基础组合类型。struct中的每个field的名称必须唯一。
+[12] Struct          ::=  ‘struct’ Identifier ‘xsd_all’? ‘{‘ Field* ‘}’
+备注：xsd_all关键词在Facebook内部有一些特殊意义，但thrift本身没有，强烈建议大家不用用这个关键词。 
+栗子来了：</p>
+
+<p>struct Book{
+    1:required i32 id;
+    2:required string sn;
+    3:required float64 price;
+    4:optional string writer;
+    5:i32 year;
+}
+Union 
+Union和struct类似，除了他们提供一种方式在传输的时候只传输多个field中的一个field，和C++中的union{}类似。简单的说，unio的成员隐式的定义为optional。
+[13] Union          ::=  ‘union’ Identifier ‘xsd_all’? ‘{‘ Field* ‘}’
+Exception 
+Exceptions 和Structs类似，除了他主要是用了对接目标语言的异常处理逻辑。exception中的每个field都必须是唯一的。
+[14] Exception       ::=  ‘exception’ Identifier ‘{‘ Field* ‘}’
+Service 
+service提供了Thrift server对外暴露的interface。而interface这是简单的function列表。一个service可以继承另一个service，表示它除了提供它自身特点的function外，还扩展了被继承service的functions。
+[15] Service         ::=  ‘service’ Identifier ( ‘extends’ Identifier )? ‘{‘ Function* ‘}’
+1
+四. Field</p>
+
+<p>[16] Field           ::=  FieldID? FieldReq? FieldType Identifier (‘= ConstValue)? XsdFieldOptions ListSeparator?
+1
+Field ID
+[17] FieldID         ::=  IntConstant ‘:’
+1
+Field Requiredness 
+field的requiredness具有两个显示值，以及如果required和optional都没有显示指定，设置一个default requiredness。
+[18] FieldReq        ::=  ‘required’ | ‘optional’
+1
+requiredness 规则如下：</p>
+<ul>
+  <li>required</li>
+  <li>Write：Required fields总是被写入并且期望被设置。</li>
+  <li>Read：Required fields总是可读并且期望被包含在在输入流中。</li>
+  <li>Default values：总是写入</li>
+</ul>
+
+<p>如果一个required field在读的过程中缺失，期望的行为是反馈给调用者读取操作不成功，例如：抛出一个exception或者返回一个error。 
+正因为这个约定存在，required fields彻底地限定了soft versioning的极限。因为的读取的时候field必须存在，所以改field永远不能被设置为过期。如果一个required field被移除，或者修改为optional，不同版本之间的数据就不在兼容。</p>
+<ul>
+  <li>optional</li>
+  <li>Write: Optional field 只有在他们被设置了之后才会写入。</li>
+  <li>Read：Optional field 可以是，也可以不是输入流的一部分。</li>
+  <li>Default values：只有isset flag被设置之后才会写入。</li>
+</ul>
+
+<p>大部分语言都采用一种被称为“isset” flag的推荐方案，来表名一个特定的optional field是否被设置。只有该标记被设置，field才会被写入；相反的，只有field value从输入流中读取到，改标记才会被设置。</p>
+
+<p>default requiredness(implicit) 
+Write: 理论上，field总是被写入，当然有一些例外，见下文。
+Read: 和optional一样，field可以是，也可以不是输入流的一部分。
+Default values: 可以不被写入（见下一章）
+Default requiredness 是一个不错的起点。期望的行为是optional和required的综合，因此也被称为“opt-in,req-out”。尽管理论上这些field期望的是被写入（”req-out”），现实中unset的fields总是不被写入。特别是一些特殊情况下，一些field的值是无法通过thrift传输的。达到这种效果的唯一途径是根本就不去写改field，而这也是绝大多数语言所做的。</p>
+<ul>
+  <li>Default Values的语义</li>
+</ul>
+
+<p>There are ongoing discussions about that topic, see JIRA for details. Not all implementations treat default values in the very same way, but the current status quo is more or less that default fields are typically set at initialization time. Therefore, a value that equals the default may not be written, because the read end will set the value implicitly. On the other hand, an implementation is free to write the default value anyways, as there is no hard restriction that prevents this. 
+The major point to keep in mind here is the fact, that any unwritten default value implicitly becomes part of the interface version. If that default is changed, the interface changes. If, in contrast, the default value is written into the output data, the default in the IDL can change at any time without affecting serialized data.</p>
+
+<p>XSD Options 
+N.B.: These have some internal purpose at Facebook but serve no current purpose in Thrift. Use of these options is strongly discouraged.
+[19] XsdFieldOptions ::=  ‘xsd_optional’? ‘xsd_nillable’? XsdAttrs?
+[20] XsdAttrs        ::=  ‘xsd_attrs’ ‘{‘ Field* ‘}’
+五. Functions</p>
+
+<p>[21] Function        ::=  ‘oneway’? FunctionType Identifier ‘(‘ Field* ‘)’ Throws? ListSeparator?</p>
+
+<table>
+  <tbody>
+    <tr>
+      <td>[22] FunctionType    ::=  FieldType</td>
+      <td>‘void’</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>[23] Throws          ::=  ‘throws’ ‘(‘ Field* ‘)’
+六. Types</p>
+
+<table>
+  <tbody>
+    <tr>
+      <td>[24] FieldType       ::=  Identifier</td>
+      <td>BaseType</td>
+      <td>ContainerType</td>
+    </tr>
+  </tbody>
+</table>
+
+<table>
+  <tbody>
+    <tr>
+      <td>[25] DefinitionType  ::=  BaseType</td>
+      <td>ContainerType</td>
+    </tr>
+  </tbody>
+</table>
+
+<table>
+  <tbody>
+    <tr>
+      <td>[26] BaseType        ::=  ‘bool’</td>
+      <td>‘byte’</td>
+      <td>‘i8’</td>
+      <td>‘i16’</td>
+      <td>‘i32’</td>
+      <td>‘i64’</td>
+      <td>‘double’</td>
+      <td>‘string’</td>
+      <td>‘binary’</td>
+      <td>‘slist’</td>
+    </tr>
+  </tbody>
+</table>
+
+<table>
+  <tbody>
+    <tr>
+      <td>[27] ContainerType   ::=  MapType</td>
+      <td>SetType</td>
+      <td>ListType</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>[28] MapType         ::=  ‘map’ CppType? ‘&lt;’ FieldType ‘,’ FieldType ‘&gt;’</p>
+
+<p>[29] SetType         ::=  ‘set’ CppType? ‘&lt;’ FieldType ‘&gt;’</p>
+
+<p>[30] ListType        ::=  ‘list’ ‘&lt;’ FieldType ‘&gt;’ CppType?</p>
+
+<p>[31] CppType         ::=  ‘cpp_type’ Literal
+七. Constant Values</p>
+
+<table>
+  <tbody>
+    <tr>
+      <td>[32] ConstValue      ::=  IntConstant</td>
+      <td>DoubleConstant</td>
+      <td>Literal</td>
+      <td>Identifier</td>
+      <td>ConstList</td>
+      <td>ConstMap</td>
+    </tr>
+  </tbody>
+</table>
+
+<table>
+  <tbody>
+    <tr>
+      <td>[33] IntConstant     ::=  (‘+’</td>
+      <td>’-‘)? Digit+</td>
+    </tr>
+  </tbody>
+</table>
+
+<table>
+  <tbody>
+    <tr>
+      <td>[34] DoubleConstant  ::=  (‘+’</td>
+      <td>’-‘)? Digit* (‘.’ Digit+)? ( (‘E’</td>
+      <td>‘e’) IntConstant )?</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>[35] ConstList       ::=  ‘[’ (ConstValue ListSeparator?)* ‘]’</p>
+
+<p>[36] ConstMap        ::=  ‘{‘ (ConstValue ‘:’ ConstValue ListSeparator?)* ‘}’
+八. Basic Definitions</p>
+<ol>
+  <li>Literal</li>
+</ol>
+
+<p>[37] Literal         ::=  (‘”’ [^”]* ‘”’) | (“’” [^’]* “’”)
+1
+Identifier
+[38] Identifier      ::=  ( Letter | ‘<em>’ ) ( Letter | Digit | ‘.’ | ‘</em>’ )*</p>
+
+<p>[39] STIdentifier    ::=  ( Letter | ‘<em>’ ) ( Letter | Digit | ‘.’ | ‘</em>’ | ‘-‘ )*
+1
+2
+3
+List Separator
+[40] ListSeparator   ::=  ‘,’ | ‘;’
+1
+Letters and Digits
+[41] Letter          ::=  [‘A’-‘Z’] | [‘a’-‘z’]</p>
+
+<p>[42] Digit           ::=  [‘0’-‘9’]</p>
+
+<p>Thrift支持的数据类型 
+1.基本类型 
+bool：布尔值 (true or false), one byte 
+byte：有符号字节 
+i16：16位有符号整型 
+i32：32位有符号整型 
+i64：64位有符号整型 
+double：64位浮点型 
+string：编码或者二进制的字符串</p>
+
+<p>2.容器（Containers） 
+Thrift容器与流行编程语言的容器类型相对应，采用Java泛型风格。它有3种可用容器类型： 
+list: 元素类型为t1的有序表，容许元素重复。 
+set:元素类型为t1的无序表，不容许元素重复。 
+map</p>
+
+<p>include：引入thrift文件 * * *为thrit的文件名 
+typedef：定义需要的结构体</p>
+
+<p>编写IDL文件时需要注意的问题</p>
+
+<p>[1]函数的参数要用数字依序标好，序号从1开始，形式为：“序号:参数名”;
+[2]每个函数的最后要加上“,”，最后一个函数不加；
+[3]在IDL中可以使用/<em>……</em>/添加注释
+[4]IDL大小写敏感</p>
+
+<p>【类型 之 异常】</p>
+
+<p>除了使用exception来替代struct以外，“异常”这个类型，在语法上和刚才介绍过的结构体的用法是完全一致的。但是从语义上讲，exception和struct却大相径庭。exception是在远程调用发生异常时用来抛出异常用的。</p>
+
+<p>【类型 之 服务】</p>
+
+<p>服务的定义，与面向对象技术中定义一个接口很类似，而这些接口其实就是纯虚函数。thrift编译工具会根据服务的定义来产生相应的方法和函数。</p>
+
+<p>每个服务，都包括了若干个函数，每个函数包括了若干参数和一个返回值（返回值可以是void）。</p>
+
+<p>（小技巧：返回值为void的函数，你可以在函数名前加上oneway标识符，将此函数以异步模式执行，这样在调用此函数后，函数会立即返回。）</p>
+
+<p>对于返回void的函数，thrift仍然会确保函数返回，这样就表示这个函数已被正确执行，且服务器端已有返回信息了。但是如果给void的函数前加上oneway，那么此函数的返回只能表示数据已经进入传输层，并不能表示服务器端已经收到并返回了数据。</p>
+
+<p>服务类型 
+规则 
+继承类必须实现这些方法 
+参数可以是基本类型或者结构体 
+返回值可以是void 
+服务支持继承，一个service可使用extends关键字继承另一个service 
+服务不支持重载</p>
+
+<p>传输方式：</p>
+<ol>
+  <li>TSocket：阻塞型 socket，用于客户端，采用系统函数 read 和 write 进行读写数据。</li>
+  <li>TServerSocket：非阻塞型 socket，用于服务器端，accecpt 到的 socket 类型都是 TSocket（即阻塞型 socket）。</li>
+  <li>TBufferedTransport 和 TFramedTransport 都是有缓存的，均继承TBufferBase，调用下一层 TTransport 类进行读写操作吗，结构极为相似。其中 TFramedTransport 以帧为传输单位，帧结构为：4个字节（int32_t）+传输字节串，头4个字节是存储后面字节串的长度，该字节串才是正确需要传输的数据，因此 TFramedTransport 每传一帧要比 TBufferedTransport 和 TSocket 多传4个字节。</li>
+  <li>TMemoryBuffer 继承 TBufferBase，用于程序内部通信用，不涉及任何网络I/O，可用于三种模式： 
+（1）OBSERVE模式，不可写数据到缓存； 
+（2）TAKE_OWNERSHIP模式，需负责释放缓存； 
+（3）COPY模式，拷贝外面的内存块到TMemoryBuffer。</li>
+  <li>TFileTransport 直接继承 TTransport，用于写数据到文件。对事件的形式写数据，主线程负责将事件入列，写线程将事件入列，并将事件里的数据写入磁盘。这里面用到了两个队列，类型为 TFileTransportBuffer，一个用于主线程写事件，另一个用于写线程读事件，这就避免了线程竞争。在读完队列事件后，就会进行队列交换，由于由两个指针指向这两个队列，交换只要交换指针即可。它还支持以 chunk（块）的形式写数据到文件。</li>
+  <li>TFDTransport 是非常简单地写数据到文件和从文件读数据，它的 write 和 read 函数都是直接调用系统函数 write 和 read 进行写和读文件。</li>
+  <li>TSimpleFileTransport 直接继承 TFDTransport，没有添加任何成员函数和成员变量，不同的是构造函数的参数和在 TSimpleFileTransport 构造函数里对父类进行了初始化（打开指定文件并将fd传给父类和设置父类的close_policy为CLOSE_ON_DESTROY）。</li>
+  <li>TZlibTransport 跟 TBufferedTransport 和 TFramedTransport一样，调用下一层 TTransport 类进行读写操作。它采用提供的 zlib 压缩和解压缩库函数来进行压解缩，写时先压缩再调用底层 TTransport 类发送数据，读时先调用 TTransport 类接收数据再进行解压，最后供上层处理。</li>
+  <li>TSSLSocket 继承 TSocket，阻塞型 socket，用于客户端。采用 openssl 的接口进行读写数据。checkHandshake(）函数调用 SSL_set_fd 将 fd 和 ssl 绑定在一起，之后就可以通过 ssl 的 SSL_read和SSL_write 接口进行读写网络数据。</li>
+  <li>TSSLServerSocket 继承 TServerSocket，非阻塞型 socket， 用于服务器端。accecpt 到的 socket 类型都是 TSSLSocket 类型。</li>
+  <li>THttpClient 和 THttpServer 是基于 Http1.1 协议的继承 Transport 类型，均继承 THttpTransport，其中 THttpClient 用于客户端，THttpServer 用于服务器端。两者都调用下一层 TTransport 类进行读写操作，均用到TMemoryBuffer 作为读写缓存，只有调用 flush() 函数才会将真正调用网络 I/O 接口发送数据。</li>
+</ol>
+
+<p>传输协议： 
+Thrift 传输协议上总体可划分为文本 (text) 和二进制 (binary) 传输协议两大类，一般在生产环境中使用二进制类型的传输协议为多数。 
+TBinaryProtocol：是Thrift的默认协议，使用二进制编码格式进行数据传输，基本上直接发送原始数据 
+TCompactProtocol：压缩的、密集的数据传输协议，基于Variable-length quantity的zigzag 编码格式 
+TJSONProtocol：以JSON (JavaScript Object Notation)数据编码协议进行数据传输 
+TDebugProtocol：常常用以编码人员测试，以文本的形式展现方便阅读</p>
+
+<p>服务端编写： 
+包含三个主要的组件：protocol，transport 和 server。 
+其中，protocol 定义了消息是怎样序列化的；transport 定义了消息是怎样在客户端和服务器端之间通信的；server 用于从 transport 接收序列化的消息，根据 protocol 反序列化之，调用用户定义的消息处理器，并序列化消息处理器的响应，然后再将它们写回 transport。</p>
+
+<p>thrift编译工具的名称就是thrift，其最常见的使用方式是这样的：
+thrift –gen ${开发语言} ${thrift接口描述文件}</p>
+
+<p>eg:
+thrift -gen php:server xxxApi.thrift
+thrift -gen php xxxApi.thrift</p>
+
+<p>加了：server 会产生 xxxProcessor 的类，包含处理函数</p>
+
+<p>服务端编写的一般步骤：</p>
+
+<ol>
+  <li>
+    <p>创建Handler</p>
+  </li>
+  <li>
+    <p>基于Handler创建Processor</p>
+  </li>
+  <li>
+    <p>创建Transport（通信方式）</p>
+  </li>
+  <li>
+    <p>创建Protocol方式（设定传输格式）</p>
+  </li>
+  <li>
+    <p>基于Processor, Transport和Protocol创建Server</p>
+  </li>
+  <li>
+    <p>运行Server</p>
+  </li>
+</ol>
+
+<p>客户端编写的一般步骤：</p>
+
+<ol>
+  <li>
+    <p>创建Transport</p>
+  </li>
+  <li>
+    <p>创建Protocol方式</p>
+  </li>
+  <li>
+    <p>基于Transport和Protocol创建Client</p>
+  </li>
+  <li>
+    <p>运行Client的方法</p>
+  </li>
+</ol>
+
+<p>结构体域标识唯一，可以不连续，必须为正整数，否则报错
+Nonpositive value (0) not allowed as a field key.</p>
+:ET

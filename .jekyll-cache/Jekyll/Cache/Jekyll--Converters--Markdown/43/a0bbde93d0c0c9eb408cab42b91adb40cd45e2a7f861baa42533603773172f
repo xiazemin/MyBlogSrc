@@ -1,0 +1,264 @@
+I"*!<!-- more -->
+<p>1，Elasticsearch slow-log
+input {
+    file {
+        path =&gt; [“/var/log/elasticsearch/private_test_index_search_slowlog.log”]
+        start_position =&gt; “beginning”
+        ignore_older =&gt; 0
+        # sincedb_path =&gt; “/dev/null”
+        type =&gt; “elasticsearch_slow”
+        } <br />
+}</p>
+
+<p>filter {
+    grok {
+        match =&gt;  { “message” =&gt; “^[(\d\d){1,2}-(?:0[1-9]|1[0-2])-(?:(?:0[1-9])|(?:[12][0-9])|(?:3[01])|[1-9])\s+(?:2[0123]|[01]?[0-9]):(?:[0-5][0-9]):(?:(?:[0-5]?[0-9]|60)(?:[:.,][0-9]+)?)][(TRACE|DEBUG|WARN\s|INFO\s)][(?<io_type>[a-z\.]+)\]\s\[(?<node>[a-z0-9\-\.]+)\]\s\[(?<index>[A-Za-z0-9\.\_\-]+)\]\[\d+\]\s+took\[(?<took_time>[\.\d]+(ms|s|m))\]\,\s+took_millis\[(\d)+\]\,\s+types\[(?<types>([A-Za-z\_]+|[A-Za-z\_]*))\]\,\s+stats\[\]\,\s+search_type\[(?<search_type>[A-Z\_]+)\]\,\s+total_shards\[\d+\]\,\s+source\[(?<source />[\s\S]+)\]\,\s+extra_source\[[\s\S]*\]\,\s*$" }
+        remove_field =&gt; ["message"]
+        }</search_type></types></took_time></index></node></io_type></p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>date {
+    match =&gt; ["timestamp","dd/MMM/yyyy:HH:mm:ss Z"] 
+    }   
+ruby {
+    code =&gt; "event.timestamp.time.localtime"
+    }   
+}
+</code></pre></div></div>
+
+<p>output {
+     elasticsearch {
+         codec =&gt; “json”
+         hosts =&gt; [“127.0.0.1:9200”]
+         index =&gt; “logstash-elasticsearch-slow-%{+YYYY.MM.dd}”
+         user =&gt; “admin”
+         password =&gt; “xxxx”
+    }</p>
+
+<p>}</p>
+
+<p>2，Mysql-slow log
+input {
+    file {
+        path =&gt; “/var/lib/mysql/slow.log”
+        start_position =&gt; “beginning”
+        ignore_older =&gt; 0
+        # sincedb_path =&gt; “/dev/null”
+        type =&gt; “mysql-slow”
+    } <br />
+}
+filter {
+    if ([message] =~ “^(\/usr\/local|Tcp|Time)[\s\S]*”) { drop {} }
+    multiline {
+        pattern =&gt; “^#\s+Time:\s+\d+\s+(0[1-9]|[12][0-9]|3[01]|[1-9])”
+        negate =&gt; true
+        what =&gt; “previous”
+    } <br />
+    grok {
+        match =&gt; { “message” =&gt; “^#\sTime:\s+\d+\s+(?<datetime>%{TIME})\n+\#\s+User@Host\:\s+[A-Za-z0-9\_]+\[(?<mysql_user>[A-Za-z0-9\_]+)\]\s+@\s+(?<mysql_host>[A-Za-z0-9\_]+)\s+\[\]\n+\#\s+Query\_time\:\s+(?<query_time>[0-9\.]+)\s+Lock\_time\:\s+(?<lock_time>[0-9\.]+)\s+Rows\_sent\:\s+(?<rows_sent>\d+)\s+Rows\_examined\:\s+(?<rows_examined>\d+)(\n+|\n+use\s+(?<dbname>[A-Za-z0-9\_]+)\;\n+)SET\s+timestamp\=\d+\;\n+(?<slow_message>[\s\S]+)$"
+   }   
+        remove_field =&gt; ["message"]
+   }   
+    date {
+        match =&gt; ["timestamp","dd/MMM/yyyy:HH:mm:ss Z"] 
+    }   
+    ruby {
+        code =&gt; "event.timestamp.time.localtime"
+    }   
+}
+output { 
+    elasticsearch {
+        codec =&gt; "json"
+        hosts =&gt; ["127.0.0.1:9200"]
+        index =&gt; "logstash-mysql-slow-%{+YYYY.MM.dd}"
+        user =&gt; "admin"
+        password =&gt; "xxxxx"
+    }   
+}</slow_message></dbname></rows_examined></rows_sent></lock_time></query_time></mysql_host></mysql_user></datetime></p>
+
+<p>3，Nginx access.log
+logstash 中内置 nginx 的正则,我们只要稍作修改就能使用 
+将下面的内容写入到/opt/logstash/vendor/bundle/jruby/1.9/gems/logstash- 
+patterns-core-2.0.5/patterns/grok-patterns 文件中</p>
+
+<table>
+  <tbody>
+    <tr>
+      <td>X_FOR (%{IPV4}</td>
+      <td>-)</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>NGINXACCESS %{COMBINEDAPACHELOG} "%{X_FOR:http_x_forwarded_for}"</p>
+
+<p>ERRORDATE %{YEAR}/%{MONTHNUM}/%{MONTHDAY} %{TIME}</p>
+
+<table>
+  <tbody>
+    <tr>
+      <td>NGINXERROR_ERROR %{ERRORDATE:timestamp}\s{1,}[%{DATA:err_severity}]\s{1,}(%{NUMBER:pid:int}#%{NUMBER}:\s{1,}*%{NUMBER}</td>
+      <td>*%{NUMBER}) %{DATA:err_message}(?:,\s{1,}client:\s{1,}(?<client_ip>%{IP}</client_ip></td>
+      <td>%{HOSTNAME}))(?:,\s{1,}server:\s{1,}%{IPORHOST:server})(?:, request: %{QS:request})?(?:, host: %{QS:server_ip})?(?:, referrer:"%{URI:referrer})?</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>NGINXERROR_OTHER %{ERRORDATE:timestamp}\s{1,}[%{DATA:err_severity}]\s{1,}%{GREEDYDATA:err_message}</p>
+
+<p>之后的 log 配置文件如下</p>
+
+<p>input {
+    file {
+    path =&gt; [ “/var/log/nginx/www-access.log” ]
+    start_position =&gt; “beginning”
+    # sincedb_path =&gt; “/dev/null”
+    type =&gt; “nginx_access”
+    } <br />
+}
+filter {
+    grok {
+         match =&gt; { “message” =&gt; “%{NGINXACCESS}”}
+    }
+    mutate {
+        convert =&gt; [ “response”,”integer” ]
+        convert =&gt; [ “bytes”,”integer” ]
+    }
+    date {
+        match =&gt; [ “timestamp”,”dd/MMM/yyyy:HH:mm:ss Z”]
+    } <br />
+    ruby {
+        code =&gt; “event.timestamp.time.localtime”
+    } <br />
+}
+output {
+    elasticsearch {
+        codec =&gt; “json”
+        hosts =&gt; [“127.0.0.1:9200”]
+        index =&gt; “logstash-nginx-access-%{+YYYY.MM.dd}”
+        user =&gt; “admin”
+        password =&gt; “xxxx”
+    }
+}</p>
+
+<p>4，Nginx error.log
+input {
+    file {
+    path =&gt; [ “/var/log/nginx/www-error.log” ]
+    start_position =&gt; “beginning”
+    # sincedb_path =&gt; “/dev/null”
+    type =&gt; “nginx_error”
+    }
+}
+filter {
+    grok {
+        match =&gt; [
+                   “message”,”%{NGINXERROR_ERROR}”,
+                   “message”,”%{NGINXERROR_OTHER}”
+                 ]
+    } <br />
+    ruby {
+        code =&gt; “event.timestamp.time.localtime”
+    } <br />
+     date {
+         match =&gt; [ “timestamp”,”dd/MMM/yyyy:HH:mm:ss”]
+     }</p>
+
+<p>}</p>
+
+<p>output {
+    elasticsearch {
+        codec =&gt; “json”
+        hosts =&gt; [“127.0.0.1:9200”]
+        index =&gt; “logstash-nginx-error-%{+YYYY.MM.dd}”
+        user =&gt; “admin”
+        password =&gt; “xxxx”
+    } <br />
+}</p>
+
+<p>5，PHP error.log
+input {
+    file {
+        path =&gt; [“/var/log/php/error.log”]
+        start_position =&gt; “beginning”
+        # sincedb_path =&gt; “/dev/null”
+        type =&gt; “php-fpm_error”
+    } <br />
+}</p>
+
+<p>filter {
+    multiline {
+        pattern =&gt; “^[(0[1-9]|[12][0-9]|3[01]|[1-9])-%{MONTH}-%{YEAR}[\s\S]+”
+        negate =&gt; true
+        what =&gt; “previous”
+    } <br />
+    grok {
+        match =&gt; { “message” =&gt; “^[(?<timestamp>(0[1-9]|[12][0-9]|3[01]|[1-9])\-%{MONTH}-%{YEAR}\s+%{TIME}?)\s+[A-Za-z]+\/[A-Za-z]+\]\s+(?<category>(?:[A-Z]{3}\s+[A-Z]{1}[a-z]{5,7}|[A-Z]{3}\s+[A-Z]{1}[a-z\s]{9,11}))\:\s+(?<error_message>[\s\S]+$)" }</error_message></category></timestamp></p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    remove_field =&gt; ["message"]
+}   
+
+date {
+    match =&gt; ["timestamp","dd/MMM/yyyy:HH:mm:ss Z"] 
+}   
+
+ruby {
+    code =&gt; "event.timestamp.time.localtime"
+}   
+</code></pre></div></div>
+
+<p>}</p>
+
+<p>output {
+    elasticsearch {
+        codec =&gt; “json”
+        hosts =&gt; [“127.0.0.1:9200”]
+        index =&gt; “logstash-php-error-%{+YYYY.MM.dd}”
+        user =&gt; “admin”
+        password =&gt; “xxxxx”
+    } <br />
+}</p>
+
+<p>6，Php-fpm slow-log
+input {
+    file {
+        path =&gt; [“/var/log/php-fpm/www.slow.log”]
+        start_position =&gt; “beginning”
+        # sincedb_path =&gt; “/dev/null”
+        type =&gt; “php-fpm_slow”
+    } <br />
+}</p>
+
+<p>filter {
+    multiline {
+        pattern =&gt; “^$”
+        negate =&gt; true
+        what =&gt; “previous”
+    } <br />
+    grok {
+        match =&gt; { “message” =&gt; “^[(?<timestamp>(0[1-9]|[12][0-9]|3[01]|[1-9])\-%{MONTH}-%{YEAR}\s+%{TIME})\]\s+\[[a-z]{4}\s+(?<pool>[A-Za-z0-9]{1,8})\]\s+[a-z]{3}\s+(?<pid>\d{1,7})\n(?<slow_message>[\s\S]+$)" }</slow_message></pid></pool></timestamp></p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    remove_field =&gt; ["message"]
+}   
+
+date {
+    match =&gt; ["timestamp","dd-MMM-yyyy:HH:mm:ss Z"] 
+}   
+
+ruby {
+    code =&gt; "event.timestamp.time.localtime"
+}   
+</code></pre></div></div>
+
+<p>}</p>
+
+<p>output {</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>elasticsearch {
+    codec =&gt; "json"
+    hosts =&gt; ["127.0.0.1:9200"]
+    index =&gt; "logstash-php-fpm-slow-%{+YYYY.MM.dd}"
+    user =&gt; "admin"
+    password =&gt; "xxxx"
+}    }
+</code></pre></div></div>
+:ET

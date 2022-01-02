@@ -1,0 +1,207 @@
+I"D<p>1.Go对象有没有Object Header？Go语言中虚函数都在interface里面，普通类没有虚函数，所以不需要存储虚表。但是垃圾收集也需要有一个对象头来标记信息，反射信息也可能需要对象头来记录。</p>
+
+<p>2.据说数组元素或者内连对象是紧密排列的，没有Object Header。那么取地址转为指针的时候需不需要unbox操作？如果不是，垃圾收集的时候怎么处理？
+<!-- more --></p>
+<ol>
+  <li>没有，是紧密排列的。垃圾回收用位图存内存状况。反射取的参数是 interface{}，interface{}  里会持有类型，不需要对象头。2. 语言层面上 Go 没有 box 和 unbox 这种东西，事实上 Go 可以用 unsafe 包去直接操作内存，当然这是不推荐的。垃圾回收不需要特殊处理。</li>
+</ol>
+
+<p>我们定义了一个Go语言结构体
+type MyData struct { 
+        aByte byte 
+        aShort int16 
+        anInt32 int32 
+        aSlice [] byte 
+}</p>
+
+<p>第一步，首先应该弄明白编译器如何识别我们编写的Go语言代码。反射可以帮我们这个忙。</p>
+
+<p>typ := reflect.TypeOf(MyData{})
+fmt.Printf(“Struct is %d bytes long\n”, typ.Size())
+n := typ.NumField()
+for i := 0; i &lt; n; i++ {
+  field := typ.Field(i)
+  fmt.Printf(“%s at offset %v, size=%d, align=%d\n”,
+ field.Name, field.Offset, field.Type.Size(),
+  field.Type.Align())
+ }</p>
+
+<p>通过上文的代码，我们通过反射找出字段的大小以及偏移量，上述代码输出结果如下：</p>
+
+<p>Struct is 32 bytes long
+aByte at offset 0, size=1, align=1
+aShort at offset 2, size=2, align=2
+anInt32 at offset 4, size=4, align=4
+aSlice at offset 8, size=24, align=8</p>
+
+<p>对齐，CPU更好的访问位于2字节的倍数的地址处的2个字节，并访问位于4字节边界上的4个字节。</p>
+
+<p>接下来可以再看看内存的情况。首先，我们可以实例化一个MyData结构体对象，并在初始化时进行赋值操作。如下所示：
+data := MyData{
+        aByte:   0x1,
+        aShort:  0x0203,
+        anInt32: 0x04050607,
+        aSlice:  []byte{
+                0x08, 0x09, 0x0a,
+                },
+ }</p>
+
+<p>我们想要获取结构体对象在内存中真实的地址，并查看一下其中的内容。可以通过unsafe包来实现</p>
+
+<p>dataBytes := (*[32]byte)(unsafe.Pointer(&amp;data))
+ fmt.Printf(“Bytes are %#v\n”, dataBytes)</p>
+
+<p>运行如上程序，输出结果如下：
+ Bytes are &amp;[32]uint8{0x1, 0x0, 0x3, 0x2,0x7, 0x6, 0x5, 0x4, 0x5a, 0x5, 0x1, 0x20,0xc4, 0x0, 0x0, 0x0, 0x3, 0x0, 0x0,0x0, 0x0, 0x0, 0x0, 0x0, 0x3, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0}</p>
+
+<p>第一个0x1表示aByte字段，即单字节aByte=0x1在便宜0。接下来我们来看看AShort。这是在偏移量2的位置并且长度为2。而aShort = 0x0203，但数据显示的字节是倒序。 这是因为大多数现代CPU都是Little-Endian：该值的最低位字节首先出现在内存中，也就是我们常说的小端位序排列。总之，我们能看到字段的存储在指针地址中确实是按照我们之前编辑器分析的规则进行排列和存储的。</p>
+
+<p>在结构体实例化时有aSlice = [] byte {0x08，0x09，0x0a}</p>
+
+<p>aSlice应该是在偏移量为8的位置上，大小是24个字节</p>
+
+<p>Bytes are &amp;[32]uint8{0x1, 0x0, 0x3, 0x2, 0x7, 0x6,0x5, 0x4, 0x5a, 0x5,0x1, 0x20, 0xc4, 0x0, 0x0, 0x0, 0x3, 0x0,0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x3, 0x0,0x0, 0x0, 0x0, 0x0, 0x0, 0x0}</p>
+
+<p>我们并没有找到有关0x08，0x09，0x0a的字样
+ slice在Go语言中通过结构体表示
+ type SliceHeader struct {
+        Data uintptr
+        Len  int
+        Cap  int
+}</p>
+
+<p>我们得到以下偏移和大小：数据指针和两个长度各为8个字节，具有8个字节对齐的变量。
+dataslice := <em>(</em>reflect.SliceHeader）(unsafe.Pointer(&amp;data.aSlice))</p>
+
+<p>fmt.Printf(“Slice data is %#v\n”,(*[3]byte)(unsafe.Pointer(dataslice.Data)))</p>
+
+<p>最后的输出结果是：
+Slice data is &amp;[3]uint8{0x8, 0x9, 0xa}</p>
+
+<p>结构良好的Java程序中数据结构比同样结构良好的C程序的数据结构会耗用更多内存是不争的事实。跟Go相比的话看情况</p>
+
+<p>以C或者C++为例，对数据的操作可以有若干自由度：（下面提到“对象”不只指class或者struct，而是也包括像int这样的原始类型。为了方便叙述而统称为对象）直接访问对象的实体（值）通过指针间接访问对象可以在聚合类型（数组或struct / class / union）中直接嵌入别的对象的实体（值）可以在聚合类型中存指针，间接指向别的对象甚至可以在定长的聚合类型的末尾嵌入不定长的数据</p>
+
+<p>在C或C++里，class或者struct自身其实并没有限制该以值类型还是引用类型的方式来使用之，纯粹取决于某次使用具体是怎么用的。当然C++里可以通过一些声明方式来引导使用者只以某些特定的方式来用某些自定义class，例如说只允许作为局部变量使用（StackObject），只允许作为值来使用（ValueObject），或者只能够通过某种分配器来分配，或者只允许在堆上独立分配（HeapObject）——换言之只能应该指针来访问；但这些都并不是class或者struct内在的特性，而是需要额外通过技巧来实现的。</p>
+
+<p>相比之下，Java的自由度有哪些呢？类型有分值类型和引用类型，其中到Java 9为止值类型只有Java语义预定义的几种整型和浮点型原始类型；引用类型可以分为类、接口和数组三种，引用类型的实例可以是类的实例或者数组的实例。由于值类型不支持自定义，所有聚合类型都无可避免的是引用类型。对于值类型，只能直接访问其实体（值）；对于引用类型，只能通过引用去间接访问其实体，用户写的代码只能持有指向引用类型的实例的引用，而无法持有其实体。引申出来，值类型的实体可以直接嵌入在聚合类型中，而引用类型则只能让引用嵌入在聚合类型中。</p>
+
+<p>Java的数据密度低，除了数据结构里常常充满指针（引用）之外，还有就是Java的引用类型的实例的对象头（object header）有不可控的额外开销。对象头里的信息对JVM来说是必要的，例如说记录对象的类型、对象的GC、identity hash code、锁状态等许多信息，但对写Java程序的人来说这就无可避免使得数据比想像的要更耗内存。在64位HotSpot VM上，开压缩指针的话类实例的对象头会默认占12字节，不要压缩指针的话占16字节；数组实例则是开压缩指针的话占16字节，不开的话要占20字节；这些数据还得额外考虑某些必要的padding还要额外吃空间。HotSpot VM是用2-word header的，而较早期的IBM J9 VM则有很长一段时间都是用3-word header，对象头吃的空间更多。为了让Java对数据布局有更高度的控制，Java社区有几种不同的方案：IBM提出的 PackedObject 实验性功能。随手放个传送门：IBM Knowledge CenterAzul Systems提出的 ObjectLayout 项目，可以在对其有优化的JVM上给Java提供三种额外的自由度array-of-struct：例如说StructuredArray<Point>就会直接在数组内部嵌入Point的实体，而不像普通Java数组Point[]那样只能持有Point的引用（指针）struct-with-struct：例如说使用ObjectLayout方式声明Line的话就可以直接嵌入两个Point的实体struct-with-array-at-the-end：经典例子就是像String那样的场景Oracle提出的Value Objects，本质上是用户自定义值类型，将在Java 10或之后的未来版本Java中出现。放个传送门：JEP 169: Value Objects其中Azul的ObjectLayout是试图兼容Java当前语义的前提下提供更高的Java堆内数据布局的控制度，Oracle的Value Object是直接给新加值类型，而IBM的PackedObject其实最主要的场景是让Java能更好地跟Java堆外的数据互操作。PackedObject的未来发展方向被并入了OpenJDK: Panama 。Java的泛型采用擦除法来实现，常常会导致不必要的对象包装，也会增加内存的使用量。</Point></p>
+
+<p>另外，Java程序通常要跑在JVM上，而JVM的常见实现都是通过tracing GC来实现Java堆的自动内存管理的。Tracing GC的一个常见结果是在回收内存的时效性上偏弱——要过一会儿再一口气回收一大堆已经无用的内存，而不会总是在对象刚无用的时候就立即回收其空间。而且tracing GC通常都需要更多额外空间（head room）才会比较高效；如果给tracing GC预留的空间只是刚好比程序某一时刻动态所需要的有用对象的总大小大一点点（意味着head room几乎为0）的话，那么tracing GC就会工作得特别辛苦，需要频繁触发GC，带来极大的额外开销。通常tracing GC就会建议用户配置较大的堆来保证其不需要频繁收集，从而提高收集效率。这也会使得一个常见的健康运行的Java系统吃内存显得比较多。</p>
+
+<p>I like the tone in blogs where the author doesn’t know something, then works through it in the blog until both they and the reader knows it. This isn’t one of those. In this case I know something, and I’ve realised not everyone does, particularly if they’ve come to Go from Python or Ruby, where this kind of stuff barely matters, rather than from C, where it constantly punches you in the face.</p>
+
+<p>I’m going to try to explain how Go lays out structures in memory, and what they look like in terms of bits and bytes. Hopefully I’ll succeed, otherwise reading this will be very dull and confusing.</p>
+
+<p>Imagine you have a structure like the following.</p>
+
+<p>type MyData struct {
+        aByte   byte
+        aShort  int16
+        anInt32 int32
+        aSlice  []byte
+}
+Then what actually is this structure? Fundamentally, its a description of how you lay out data in memory. But what does that mean, and how does the compiler lay things out? Lets have a look. First lets use reflection to examine the fields in the structure.</p>
+
+<p>Upon Reflection
+Here’s some code that uses reflection to find out the size of our fields, and their offset (where they lie in memory relative to the start of the structure). Reflection is cool. It tells us what the compiler thinks about types, including structures.</p>
+
+<p>// First ask Go to give us some information about the MyData type
+typ := reflect.TypeOf(MyData{})
+fmt.Printf(“Struct is %d bytes long\n”, typ.Size())
+// We can run through the fields in the structure in order
+n := typ.NumField()
+for i := 0; i &lt; n; i++ {
+        field := typ.Field(i)
+        fmt.Printf(“%s at offset %v, size=%d, align=%d\n”,
+            field.Name, field.Offset, field.Type.Size(), 
+            field.Type.Align())
+ }
+And here’s the result. As well as the offset and size of each field, I’ve also printed the align for each field, which I’ll obliquely refer to later.</p>
+
+<p>Struct is 32 bytes long
+aByte at offset 0, size=1, align=1
+aShort at offset 2, size=2, align=2
+anInt32 at offset 4, size=4, align=4
+aSlice at offset 8, size=24, align=8
+aByte is the first field in our structure, at offset 0. It uses 1 byte of memory.</p>
+
+<p>aShort is the second field. It uses 2 bytes of memory. Mysteriously it is at offset 2. Why is this? The answer is a mixture of safety, efficiency and convention. CPUs are better at accessing 2 byte numbers that lie at addresses that are a multiple of 2 bytes (on a “2-byte boundary”), and accessing 4 byte quantities that lie on a 4-byte boundary, etc, up to the CPU’s natural integer size, which on modern CPUs is 8 bytes (64 bits).</p>
+
+<p>On some older RISC CPUs accessing mis-aligned numbers caused a fault: on some UNIX systems this would be a SIGBUS, and it would stop your program (or the kernel) dead in its tracks. Some systems had the ability to handle these faults and fix-up the misalignment: your code would run, but it would run slowly as additional code would be run by the OS to fix up the mistake. I believe Intel &amp; ARM CPUs just handle any misalignment on-chip: perhaps we’ll test that, and any performance impact, in a later post.</p>
+
+<p>Anyway, alignment is the reason the Go compiler skips a byte before placing the field aShort so that it sits on a 2-byte boundary. And because of this we can squeeze another field into the structure without making it any larger. Here’s a new version of our structure with a new field anotherByte immediately after aByte.</p>
+
+<p>type MyData struct {
+       aByte       byte
+       anotherByte byte
+       aShort      int16
+       anInt32     int32
+       aSlice      []byte
+}
+If we run the reflection code again we see that anotherByte fits in the spare space between aByte and aShort. It sits at offset 1, and aShort is still at offset 2. And now is probably the time to pay attention to that mysterious align field I referred to earlier. This tells us, and the Go complier, how the field needs to be aligned.</p>
+
+<p>Struct is 32 bytes long
+aByte at offset 0, size=1, align=1
+anotherByte at offset 1, size=1, align=1
+aShort at offset 2, size=2, align=2
+anInt32 at offset 4, size=4, align=4
+aSlice at offset 8, size=24, align=8
+Show me the memory!
+But what does our structure actually look like in memory? Lets see if we can find out. First let’s built an instance of MyData with some values filled in. I’ve picked values that should be easy to spot in memory.</p>
+
+<p>data := MyData{
+        aByte:   0x1,
+        aShort:  0x0203,
+        anInt32: 0x04050607,
+        aSlice:  []byte{
+                0x08, 0x09, 0x0a,
+        },
+ }
+Now some code to access the bytes that make up this structure. We want to take this instance of our structure, find its address in memory, and print out the bytes in that memory.</p>
+
+<p>We use the alarmingly named unsafe package to help us do this. This lets us bypass the Go type system to convert a pointer to our structure to a 32 byte array, which will show us the bytes that make up the memory behind our structure.</p>
+
+<p>dataBytes := (*[32]byte)(unsafe.Pointer(&amp;data))
+fmt.Printf(“Bytes are %#v\n”, dataBytes)
+We run our unsafe code, cross our fingers, and nothing bad happens. This is the result, with the first field, aByte, from our structure in bold. This is hopefully what you expect, the single byte aByte = 0x01 at offset 0.</p>
+
+<p>Bytes are &amp;[32]uint8{0x1, 0x0, 0x3, 0x2, 0x7, 0x6, 0x5, 0x4, 0x5a, 0x5, 0x1, 0x20, 0xc4, 0x0, 0x0, 0x0, 0x3, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x3, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0}
+And the least shall be first
+Next we look at aShort. This is at offset 2 with length 2. If you remember, aShort = 0x0203, but the data shows the bytes in the other order. This is because most modern CPUs are Little-Endian: the lowest order bytes from the value come first in memory.</p>
+
+<p>Bytes are &amp;[32]uint8{0x1, 0x0, 0x3, 0x2, 0x7, 0x6, 0x5, 0x4, 0x5a, 0x5, 0x1, 0x20, 0xc4, 0x0, 0x0, 0x0, 0x3, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x3, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0}
+The same thing happens for anInt32 = 0x04050607. The lowest-order byte comes first in memory.</p>
+
+<p>Bytes are &amp;[32]uint8{0x1, 0x0, 0x3, 0x2, 0x7, 0x6, 0x5, 0x4, 0x5a, 0x5, 0x1, 0x20, 0xc4, 0x0, 0x0, 0x0, 0x3, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x3, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0}
+Mysterious interlude
+Now what do we see next? This is aSlice = []byte{0x08, 0x09, 0x0a}, 24 bytes at offset 8. I don’t see any sign of my sequence 0x08, 0x09, 0x0a anywhere in this. What’s going on?</p>
+
+<p>Bytes are &amp;[32]uint8{0x1, 0x0, 0x3, 0x2, 0x7, 0x6, 0x5, 0x4, 0x5a, 0x5, 0x1, 0x20, 0xc4, 0x0, 0x0, 0x0, 0x3, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x3, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0}
+The Go reflect package has the answer. A slice is represented in Go by the following structure, which starts with a pointer Data to the memory holding the data in the slice; then the length Len of the useful data in that memory, and the size Cap of the piece of memory.</p>
+
+<p>type SliceHeader struct {
+        Data uintptr
+        Len  int
+        Cap  int
+}
+If we feed this into our code we get the following offsets and sizes. The Data pointer and the two lengths are 8 bytes each, with 8 byte alignment.</p>
+
+<p>Struct is 24 bytes long
+Data at offset 0, size=8, align=8
+Len at offset 8, size=8, align=8
+Cap at offset 16, size=8, align=8
+If we look again at the memory behind out structure we can see the Data is at address 0x000000c42001055a. After that we see both the Len and Cap are 3, the length of our data.</p>
+
+<p>Bytes are &amp;[32]uint8{0x1, 0x0, 0x3, 0x2, 0x7, 0x6, 0x5, 0x4, 0x5a, 0x5, 0x1, 0x20, 0xc4, 0x0, 0x0, 0x0, 0x3, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x3, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0}
+We can get access these data bytes directly with the following code. This first gets us direct access to the slice header, then prints out the memory that Data points to.</p>
+
+<p>dataslice := <em>(</em>reflect.SliceHeader)(unsafe.Pointer(&amp;data.aSlice))
+fmt.Printf(“Slice data is %#v\n”, 
+        (*[3]byte)(unsafe.Pointer(dataslice.Data)))
+And this is what we see.</p>
+
+<p>Slice data is &amp;[3]uint8{0x8, 0x9, 0xa}
+And that’s plenty enough for now. Hit the “like” button if you, erm…, liked reading this.</p>
+:ET

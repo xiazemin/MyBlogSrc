@@ -1,0 +1,368 @@
+I"�P<p>https://github.com/statsd/statsd
+https://github.com/smira/go-statsd</p>
+
+<p>tatsD 就是一个简单的网络守护进程，基于 Node.js 平台，通过 UDP 或者 TCP 方式侦听各种统计信息，包括计数器和定时器，并发送聚合信息到后端服务，如 Graphite。</p>
+
+<p>StatsD 最初是由 Etsy 的 Erik Kastner 写的提供 Graphite/Carbon 指标的前端代理，初衷是为了汇总和分析应用指标。它基于两大功能：计数和计时。最开始使用 Node，后来也实现了其他语言。通过 Statsd ，能通过特定语言的客户端检测应用程序的指标。基于个性化需求，可以通过 Statsd 收集任何想要的数据。Statsd 通过发送 UDP 数据包来调用每个 Statsd 服务器，下面我们来了解一下为什么选择 UDP 而不是 TCP。</p>
+
+<p>go-metrics是一个go语言的metrics库。其README中说的为：This library provides a metrics package which can be used to instrument code, expose application metrics, and profile runtime performance in a flexible manner.</p>
+
+<p>通过MetricsSink接口提供了如下库。</p>
+
+<p>StatsiteSink : Sinks to a statsite instance (TCP)</p>
+
+<p>StatsdSink: Sinks to a StatsD / statsite instance (UDP)</p>
+
+<p>PrometheusSink: Sinks to a Prometheus metrics endpoint (exposed via HTTP for scrapes)</p>
+
+<p>InmemSink : Provides in-memory aggregation, can be used to export stats</p>
+
+<p>FanoutSink : Sinks to multiple sinks. Enables writing to multiple statsite instances for example.</p>
+
+<p>BlackholeSink : Sinks to nowhere
+<!-- more -->
+一、MetricsSink</p>
+
+<p>github.com/armon/go-metrics/sink.go</p>
+
+<p>上面有四种类型的数据Gauge、Emitkey、IncrCounter、AddSample。</p>
+
+<p>提供了一个黑洞操作的MetricSink。其实就是空的处理</p>
+
+<p>FanoutSink是封装了一个[]MetricSink，接口函数，都是遍历各个MetricSink操作。</p>
+
+<p>以上为网络上的提供了三个MetricSink的封装。</p>
+
+<p>二、StatsiteSink</p>
+
+<p>github.com/armon/go-metrics/statsite.go</p>
+
+<p>StatsiteSink的结构体很简单，就两个成员</p>
+
+<p>初始化了之后，开启了一个协程。后面再重点分析。</p>
+
+<p>先看Sink的接口</p>
+
+<p>以上两个函数对key的操作，不过多解释</p>
+
+<p>以上的接口都很简单，将key和val等处理后，全部都调用pushMetric函数</p>
+
+<p>这个是将数据发送到了StatsiteSink结构体中的chan中。</p>
+
+<p>下面进入到初始化时候的协程中，也就是真正处理的地方</p>
+
+<p>根据初始化的addr，创建了tcp的连接，并将sock封装到了buffio中</p>
+
+<p>真正的逻辑操作在for循环中。从chan中接收数据，并将其写入到buffio中。</p>
+
+<p>通过定时器进行flush，这里的flush就是将数据写到tcp中。</p>
+
+<p>后续的操作就是退出时候的操作了。</p>
+
+<p>三、StatsdSink</p>
+
+<p>github.com/armon/go-metrics/statsd.go</p>
+
+<p>这里的StatsdSink与StatsiteSink一样，其不一样的地方就是构建的是udp连接。</p>
+
+<p>四、InmemSink</p>
+
+<p>这个会复杂一些。</p>
+
+<p>先看github.com/armon/go-metrics/inmem_endpoint.go</p>
+
+<p>先看几个数据结构</p>
+
+<p>GaugeValue：其实就是key value的封装，当然还包含了labels</p>
+
+<p>PointValue：其实就是一个foloat32的数组</p>
+
+<p>SampledValue：是一个涉及到数据操作的，比如加减，平均数等</p>
+
+<p>github.com/armon/go-metrics/inmem_endpoint.go</p>
+
+<p>以下是AggregateSample</p>
+
+<p>以下是提供的数据操作，包括Stddev，Mean、Ingest等</p>
+
+<p>下面看看InmemSink结构体。最重要的就是intervals</p>
+
+<p>其中包含了Gauges，points counters samples4个数据结构</p>
+
+<p>初始化</p>
+
+<p>从上面的代码可以看出，会有一个最大数量的Intervals。interval时间间隔，retain时间长度。通过这个来计算出最大的保存数据的数组大小</p>
+
+<p>代码过多，这里就通过一个接口进行跟踪解释</p>
+
+<p>上面中最主要 的是getInterval。其余逻辑都很简单</p>
+
+<p>根据当前时间，寻找当前时间内的Interval</p>
+
+<p>如果时间间隔是新的，则创建一个新的IntervalMetrics</p>
+
+<p>再介绍一个函数Data</p>
+
+<p>分为两个部分，一个拷贝历史的，一个拷贝当前interval。逻辑就如上面两个框</p>
+
+<p>五、InmemSignal</p>
+
+<p>github.com/armon/go-metrics/inmem_signal.go</p>
+
+<p>当有信号的时候，将InmemSink信息打印出来</p>
+
+<p>其中writer就是要打印的入口</p>
+
+<p>监听信号，开启协程</p>
+
+<p>接收到信号后，dumpStas</p>
+
+<p>https://github.com/armon/go-metrics</p>
+
+<p>https://salsa.debian.org/go-team/packages/golang-github-armon-go-metrics</p>
+
+<p>为什么使用 UDP?
+前面也说了, StatsD 是通过 UDP 传输数据的，那么有人会问为什么选 UDP 而不选 TCP 呢? 首先，它速度很快。任何人都不想为了追踪应用的表现而减慢其速度。此外，UDP 包遵循「fire-and-forget」机制。所以要么 StatsD 接收了这个包，要么没有。应用不会在意 StatsD 是运行、宕机还是着火了，它单纯地相信一切运行正常。也就是说我们不用在意后台 StatsD 服务器是不是崩了，就算崩了也不会影响前台应用。（当然，我们可以通过图表追踪 UDP 包接收失败的情况。）</p>
+
+<p>StatsD 的一些概念
+为了更加了解 StatsD，我们先来了解几个 StatsD 概念：buckets、values、flush interval。</p>
+
+<p>Buckets
+当一个 Whisper 文件被创建，它会有一个不会改变的固定大小。在这个文件中可能有多个 buckets 对应于不同分辨率的数据点，每个 bucket 也有一个保留属性指明数据点应该在 bucket 中应该被保留的时间长度，Whisper 执行一些简单的数学计算来计算出多少数据点会被实际保存在每个 bucket 中。</p>
+
+<p>Values
+每个 stat 都有一个 value，该值的解释方式依赖于 modifier。通常，values 应该是整数。</p>
+
+<p>Flush Interval
+在 flush interval (冲洗间隔，通常为10秒) 超时之后，stats 会聚集起来，传送到上游的后端服务。</p>
+
+<p>追踪所有事件是提高效率的关键。有了 StatsD，工程师们可以轻松追踪他们需要关注的事务，而无需费时地修改配置等。</p>
+
+<p>StatsD 的延伸
+收集和可视化数据是对服务器和应用做出明智决定的重要方式，StatsD 具有以下优点：</p>
+
+<p>简单——非常容易获取的应用程序，StatsD 协议是基于文本的，可以直接写入和读取。
+低耦合性——基于后台程序运行的应用程序，采取 UDP 这种「fire-and-forget」的协议，收集指标和应用程序本身之间没有依赖。
+占用空间小——StatsD 客户端非常轻便的，不带任何状态，不需要的线程。
+普遍及支持多种语言——有基于 Ruby，Python, Java, erlang, Node, Scala, Go, haskell 等几乎所有语言的客户端。
+Etsy 使用 Statsd 监控系统
+Etsy 曾写 blog 介绍自己怎样使用 Statsd 以及为什么使用它：Measure Anything, Measure Everything，文章介绍 Etsy 以图表的方式追踪自己服务器，应用，网络三者的变化，而三者中尤以应用的数据最为复杂，为了做出的图表让与三者相关的人都能够读懂，决定统一收集数据，根据时间轴画出图表，使得所有的指标都能够被可视化和衡量。</p>
+
+<p>Statsd 采用了计数器，用于收集数字。计时器的一大好处在于，你可以得到平均值、总值、计数值和上下限值。Etsy 在使用时发现追踪的事件非常频繁，而 Statsd 没有任何缓冲的数据，这样在两者间调用时保持简单，如果有大数据量的操作时，可以在数据发送到 Statsd 时加入样本数据，即只发送一定比例的数据。Statsd 后台守护进程会监听所有应用库的 UDP 流量，通过时间流收集数据并在后台于所需时间间隔内更新数据。例如，聚合功能调用计时器可以每 10 秒收集一次数据，并分析出这些数据的最大值，最小值，平均值，中间值，90 值和 95 值。</p>
+
+<p>Etsy 也将 StatsD 开源，介绍了简单的使用方式 基于基本线路协议预期发送的指标格式：</p>
+
+<metricname> : <value> | <type>
+如果你在本地运行 StatsD 和默认的 UDP 服务器，在命令行最简单的发送指标方式：
+
+echo "foo:1|c" | nc -u -w0 127.0.0.1 8125  
+collectd
+collectd 其实也是一个守护(daemon)进程，用来收集系统性能数据和提供各种存储方式来存储不同值的机制。具体可以参考 Collectd 的官方网站。
+
+collectd 不仅仅是收集性能数据，还根据这些数据周期性统计系统的相关信息，以这些统计信息为依准，检查当前服务器性能和预测系统未来，但它本身不能生成图形——虽然它能写 RRD 文件，但是不能从这些文件生成图形——所以一般需要结合一个数据绘图工具 Graphite 。像 VPSee 就是选用 collectd 来收集机器的各个性能参数。
+
+相对于其他收集系统性能指标的项目，collectd 有一定的优点，比如嵌入式系统，C 语言开发（高效）、无需系统 cron 支持（独立）、简单易用等，此外他还包含超过70多种插件以及文档支持。
+
+StatsD 和 Graphite
+我们笃信图表对数据呈现的意义，Ian Malpass 在 Code as Craft 发表的文章中这么描述: 只要是变化的事件，我们就去追踪。我们通常关注网络、设备和应用的数据，而其中应用性能数据往往是这三者中最难测量、但又最重要的，它们与你的业务息息相关。那么是否可以将工程师可能测量或计时的指标以最简便的方式做成图表呢？
+
+大家都知道，StatsD 经常与 Graphite 一起出现在工程师的视野中，众所周知，StatsD 负责收集并聚合测量值，之后，它会将数据传给 Graphite，后者以时间序列为依据存储数据，并绘制图表。意即 StatsD 负责数据的初步处理，Graphite 负责数据展现,相得益彰。
+
+我们中意 Graphite 的原因很多：它使用简便，画图和数据操纵的能力强大。我们可以结合来自 StatsD 和其他指标收集系统的数据。最重要的是，对于 StatsD 来说，只要将测量指标的数据推送给 Graphite, 它就会创建新的测量指标。这意味着，工程师们在追踪新的指标时无需担心管理成本，他只要告诉 StatsD 「我想要追踪 grue.dinners」该指标就会自动出现在 Graphite 中。此外，向 Graphite 推送数据的频率为10秒，因此，StatsD 的测量指标展现近乎实时。
+
+Integrations
+由于 StatsD 本身不负责定义指标的涵义，所以从数据库或者操作系统中采集的工作，需要进行脚本的开发。其中在这方面做出突出贡献的就是 Datadog。
+
+dd-agent 这个项目在 GitHub 多达 150 个贡献者，兼容多达 60 多种操作系统、中间件、数据库。
+
+StatsD！次世代系统监控的核心 技术分享 第4张
+
+除此之外，Librato 和 App First 也加入到 StatsD 的阵营中。而基础设施管理的解决方案：Puppet 和 Chef 也开始兼容将 StatsD 批量安装到基础设施中。
+
+Visualization 和 Data Hosting
+Graphite 作为一个可视化的控件，不仅包含可视化还自带存储的部分。但是单论可视化，Grafana 是做得最好的一家，其展现形式丰富，可配置项目巨细靡遗。Signal FX 后来居上，也参与到竞争中。
+
+StatsD！次世代系统监控的核心 技术分享 第5张
+
+在数据可视化的基础之上，也有服务开始从事可视化数据的托管服务。例如：Host Graphite。
+
+StatsD！次世代系统监控的核心 技术分享 第6张
+
+时间序列数据库和事件处理引擎
+其实 StatsD 和时间序列数据库的出现，是相辅相成的。在 OpenTSDB 和 InfluxDB 基础之上，StatsD 的应用才日渐丰满。
+
+而事件处理引擎，如 Riemann 开始与时间序列数据库，或者基于 StastD 的一体化解决方案对接，从而弥补除开展现之外的报警这个方向上的不足。
+
+一体化解决方案
+那么，有没有一体化的解决方案呢？
+
+国外除开这些细分的方向之外，也有厂商提供一体化的解决方案，通过轻量级的 StatsD 来达到更高的计算能力，来处理日益复杂的基础设施架构。如：Datadog、Librato 等等。
+
+而国内的 Cloud Insight，也是基于同样的思路，提供系统监控的服务。Cloud Insight 采用 StatsD 的采集技术，对接 MySQL、Redis、MongoDB，以及 CentOS、RedHat 操作系统，在 HBase 存储之上，使用了 OpenTSDB 来对性能指标进行聚合、分组、过滤。通过 StatsD 的生态环境的研究，整合不同的工具为用户提供一体化解决方案。
+
+StatsD！次世代系统监控的核心 技术分享 第7张 StatsD！次世代系统监控的核心 技术分享 第8张
+
+今年年初 Datadog 获得 C 轮融资，融资金额为 3100 万美元。而其客户名单从 Facebook 到 Airbnb，成绩斐然。孕育 Cloud Insight 的公司 OneAPM 同样在不久前也获得 C 轮1.65亿的融资，被业界普遍看好。
+
+应用程序的监控是微服务中很重要的一环。监控主要包括四个方面的内容：指标（metrics）的采集、存储、展示以及相应的报警机制。目前相关的解决方案以及工具非常多。今天就介绍一款用于采集数据的工具——statsd。
+Statsd 最早是 2008 年 Flickr 公司用 Perl 写的针对 Graphite、datadog 等监控数据后端存储开发的前端网络应用，2011 年 Etsy 公司用 node.js 重构。statsd狭义来讲，其实就是一个监听UDP（默认）或者TCP的守护程序，根据简单的协议收集statsd客户端发送来的数据，聚合之后，定时推送给后端，如graphite和influxdb等，再通过grafana等展示。
+statsd系统包括三部分：客户端（client）、服务器（server）和后端（backend）。客户端植入于应用代码中，将相应的metrics上报给statsd server。statsd server聚合这些metrics之后，定时发送给backends。backends则负责存储这些时间序列数据，并通过适当的图表工具展示。
+
+基本原理与概念
+statsd采用简单的行协议：
+
+<bucket>:<value>|<type>[|@sample_rate]
+bucket
+bucket是一个metric的标识，可以看成一个metric的变量。
+
+value
+metric的值，通常是数字。
+
+type
+metric的类型，通常有timer、counter、gauge和set四种。
+
+sample_rate
+如果数据上报量过大，很容易溢满statsd。所以适当的降低采样，减少server负载。
+这个频率容易误解，需要解释一下。客户端减少数据上报的频率，然后在发送的数据中加入采样频率，如0.1。statsd server收到上报的数据之后，如cnt=10，得知此数据是采样的数据，然后flush的时候，按采样频率恢复数据来发送给backend，即flush的时候，数据为cnt=10/0.1=100，而不是容易误解的10*0.1=1。
+
+UDP 和 TCP
+statsd可配置相应的server为UDP和TCP。默认为UDP。UDP和TCP各有优劣。但
+UDP确实是不错的方式。
+
+UDP不需要建立连接，速度很快，不会影响应用程序的性能。
+“fire-and-forget”机制，就算statsd server挂了，也不会造成应用程序crash。
+当然，UDP更适合于上报频率比较高的场景，就算丢几个包也无所谓，对于一些一天已上报的场景，任何一个丢包都影响很大。另外，对于网络环境比较差的场景，也更适合用TCP，会有相应的重发，确保数据可靠。
+建议使用UDP。TCP还是有许多弊端的。
+
+安装
+statsd的安装非常简单。可选择两种方式：克隆源码和docker。
+
+克隆源码
+首先需要安装node环境。不清楚的可以参考这篇文章。然后到github克隆代码，修改相关配置启动即可。
+
+1、 git clone git@github.com:etsy/statsd.git
+2、 cd path/to/statsd
+3、 根据exampleConfig文件定义自己的配置文件
+4、 node stats.js path/to/config
+这样statsd server就搭建成功了。
+
+docker
+用docker也是个好选择。
+
+docker run -p 8125:8125 -p 8126:8126 --name statsd -d dockerana/statsd
+statsd 默认监听8125来收集udp包。
+可以通过nc指令测试数据收发。
+
+echo "foo:1|c" | nc -w 1 -u 127.0.0.1 8125
+配置
+statsd提供默认的配置文件exampleConfig.js。可以参考相应的注释按需配置，接下来将简单介绍一些配置项。
+
+端口
+默认为8125端口。
+
+port: 8125
+后端
+默认有console、greaphite等，也有influxdb等backend。console的后端通常加上prettyprint。可以同时配置多个backends。backends都要放在代码目录的backends目录下。
+
+backends: ["./backends/console", "./backends/graphite"],
+console: {
+    prettyprint: true
+}
+flush interval
+statsd 默认是10s执行一次flush。可通过flushInterval设置，单位ms。
+
+flushInterval: 2000  // 设为2s
+reload 配置
+设置automaticConfigReload，watch配置文件，如果修改，即reload配置文件。默认为true。（然而reload配置之后，并没有生效。）
+
+delete系列配置
+metric上报时，每次flush之后，就会重置为0（gauge是保持原有值）。如果不上报这些空闲值，可以通过delete*来设置。
+
+deleteGauges: true,
+deleteTimers: true,
+deleteSets: true,
+deleteCounters: true
+percentThreshold
+对于timer数据，会计算一个百分比的数据（过滤掉峰值数据），默认是90%。可以通过percentThreshold修改这个值或配置多个值。
+
+//分别计算50%和80%的相关值
+percentThreshold: [50, 80]
+只列举了部分配置项，具体请参考配置文件。
+
+指标 metric
+statsd 有四种指标类型：counter、timer、gauge和set。
+
+计数器 counter
+counter类型的指标，用来计数。在一个flush区间，把上报的值累加。值可以是正数或者负数。
+
+user.logins:10|c        // user.logins + 10
+user.logins:-1|c        // user.logins - 1
+user.logins:10|c|@0.1   // user.logins + 100
+                        // users.logins = 10-1+100=109
+计时器 timer
+timers用来记录一个操作的耗时，单位ms。statsd会记录平均值（mean）、最大值（upper）、最小值（lower）、累加值（sum）、平方和（sum_squares）、个数（count）以及部分百分值。
+
+rpt:100|g
+如下是在一个flush期间，发送了一个rpt的timer值100。以下是记录的值。
+
+count_80: 1,
+mean_80: 100,
+upper_80: 100,
+sum_80: 100,
+sum_squares_80: 10000,
+std: 0,
+upper: 100,
+lower: 100,
+count: 1,
+count_ps: 0.1,
+sum: 100,
+sum_squares: 10000,
+mean: 100,
+median: 100
+对于百分数相关的数据需要解释一下。以90为例。statsd会把一个flush期间上报的数据，去掉10%的峰值，即按大小取cnt*90%（四舍五入）个值来计算百分值。
+举例说明，假如10s内上报以下10个值。
+
+1,3,5,7,13,9,11,2,4,8
+则只取10*90%=9个值，则去掉13。百分值即按剩下的9个值来计算。
+
+$KEY.mean_90   // (1+3+5+7+9+2+11+4+8)/9
+$KEY.upper_90  // 11
+$KEY.lower_90  // 1
+标量 gauge
+gauge是任意的一维标量值。gague值不会像其它类型会在flush的时候清零，而是保持原有值。statsd只会将flush区间内最后一个值发到后端。另外，如果数值前加符号，会与前一个值累加。
+
+age:10|g    // age 为 10
+age:+1|g    // age 为 10 + 1 = 11
+age:-1|g    // age为 11 - 1 = 10
+age:5|g     // age为5,替代前一个值
+sets
+记录flush期间，不重复的值。
+
+request:1|s  // user 1
+request:2|s  // user1 user2
+request:1|s  // user1 user2
+statsd 客户端
+statsd的客户端已经支持多种语言的实现,参看列表。nodejs相关有几个推荐的：lynx、node-statsd和node-statsd-client，使用都差不多，星也差不多。以(node-statsd-client)[https://github.com/msiebuhr/node-statsd-client]为例：
+
+const SDC = require('statsd-client'),
+const sdc = new SDC({ host: 'localhost', port: 8125 });
+//counter
+sdc.counter('cnt', 10, 0.1); // 100/0.1=1000
+sdc.increment('cnt', 10); // +10
+sdc.decrement('cnt', 10); // -10
+//gauge
+sdc.gauge('rpt', 100);
+sdc.gaugeDelta('rpt', -10);  // -10
+//sets
+sdc.set('ips', '1');
+//timer
+sdc.timing('rpt', 200);
+//close
+sdc.close()
+总结
+基本原理：statsd是一个udp或tcp的守护进程。使用简单的行协议收集客户端的metic数据。statsd使用udp的好处。
+安装及配置
+metric类型：counter、timer、gauge和sets。
+statsd的node客户端。
+</type></value></bucket></type></value></metricname>
+:ET

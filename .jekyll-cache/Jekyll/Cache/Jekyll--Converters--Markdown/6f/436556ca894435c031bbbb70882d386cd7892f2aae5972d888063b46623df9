@@ -1,0 +1,151 @@
+I"�!<p>Go Runtime除了提供:GC, goroutine调度， 定时器，network polling等服务外， 还提供其它一些工具设施，用于开启额外的调试输出，</p>
+
+<p>或是改变Go Runtime自身的一些行为。这些工具设施由传给Go program的一些环境变量控制， 本文主要讲述它们。</p>
+
+<p>GOGC</p>
+
+<p>GOGC 是Go Runtime最早支持的环境变量，甚至比GOROOT还早，几乎无人不知。GOGC 用于控制GC的处发频率， 其值默认为100,</p>
+
+<p>意为直到自上次垃圾回收后heap size已经增长了100%时GC才触发运行。即是GOGC=100意味着live heap size 每增长一倍，GC触发运行一次。</p>
+
+<p>如设定GOGC=200, 则live heap size 自上次垃圾回收后，增长2倍时，GC触发运行， 总之，其值越大则GC触发运行频率越低， 反之则越高，</p>
+
+<p>如果GOGC=off 则关闭GC.</p>
+
+<p>虽然go 1.5引入了低延迟的GC, 但是GOGC对GC运行频率的影响不变， 仍然是其值大于100,则越大GC运行频率越高，
+反之则越低。
+<!-- more -->
+GOTRACEBACK</p>
+
+<p>GOTRACEBACK用于控制当异常发生时，系统提供信息的详细程度， 在go 1.5， GOTRACEBACK有4个值。</p>
+
+<p>GOTRACEBACK=0 只输出panic异常信息。
+GOTRACEBACK=1 此为go的默认设置值， 输出所有goroutine的stack traces, 除去与go runtime相关的stack frames.
+GOTRACEBACK=2 在GOTRACEBACK=1的基础上， 还输出与go runtime相关的stack frames,从而了解哪些goroutines是由go runtime启动运行的。
+GOTRACEBACK=crash, 在GOTRACEBACK=2的基础上，go runtime处发进程segfault错误，从而生成core dump, 当然要操作系统允许的情况下， 而不是调用os.Exit。</p>
+
+<p>以下为GOTRACEBACK的代码测试例子</p>
+
+<p>package main</p>
+
+<p>func main() {</p>
+
+<p>panic(“kerboom”)</p>
+
+<p>}</p>
+
+<p>运行结果：</p>
+
+<p>$ env GOTRACEBACK=0 ./crash 
+panic: kerboom
+$ echo $?
+2</p>
+
+<p>读者有兴趣可以尝试其它值， 看看效果。</p>
+
+<p>GOTRACEBACK 在go 1.6中的变化</p>
+
+<p>GOTRACEBACK=none 只输出panic异常信息。
+GOTRACEBACK=single 只输出被认为引发panic异常的那个goroutine的相关信息。
+GOTRACEBACK=all 输出所有goroutines的相关信息，除去与go runtime相关的stack frames.
+GOTRACEBACK=system 输出所有goroutines的相关信息，包括与go runtime相关的stack frames,从而得知哪些goroutine是go runtime启动运行的。
+GOTRACEBACK=crash 与go 1.5相同， 未变化。</p>
+
+<p>为了与go 1.5兼容，0 对应 none, 1 对应 all, 以及 2 对应 system.</p>
+
+<p>注意： 在go 1.6中， 默认，只输出引发panci异常的goroutine的stack trace.</p>
+
+<p>GOMAXPROCS</p>
+
+<p>GOMAXPROCS 大家比较熟悉， 用于控制操作系统的线程数量， 这些线程用于运行go程序中的goroutines.
+到go 1.5的时候， GOMAXPROCS的默认值就是我们的go程序启动时可见的操作系统认为的CPU个数。</p>
+
+<p>注意： 在我们的go程序中使用的操作系统线程数量，也包括：正服务于cgo calls的线程, 阻塞于操作系统calls的线程，
+所以go 程序中使用的操作系统线程数量可能大于GOMAXPROCS的值。</p>
+
+<p>GODEBUG</p>
+
+<p>老鼠拉铁锹，大头在后边， 本文其余篇幅主要讲讲GODEBUG. GODEBUG的值被解释为一个个的
+name=value对， 每一对间由逗号分割，每一对用于控制go runtime 调试工具设施， 例如：</p>
+
+<p>$ env GODEBUG=gctrace=1,schedtrace=1000 godoc -http=:8080</p>
+
+<p>上面这条命令用于运行godoc程序时开启 GC tracing and schedule tracing.</p>
+
+<p>下面开始介绍几个比较有用的调试工具设施</p>
+
+<p>gctrace</p>
+
+<p>这个工具我认为最有用处了，请看程序输出便知</p>
+
+<p>$ env GODEBUG=gctrace=1 godoc -http=:8080 -index
+gc #1 @0.042s 4%: 0.051+1.1+0.026+16+0.43 ms clock, 0.10+1.1+0+2.0/6.7/0+0.86 ms cpu, 4-&gt;32-&gt;10 MB, 4 MB goal, 4 P
+gc #2 @0.062s 5%: 0.044+1.0+0.017+2.3+0.23 ms clock, 0.044+1.0+0+0.46/2.0/0+0.23 ms cpu, 4-&gt;12-&gt;3 MB, 8 MB goal, 4 P
+gc #3 @0.067s 6%: 0.041+1.1+0.078+4.0+0.31 ms clock, 0.082+1.1+0+0/2.8/0+0.62 ms cpu, 4-&gt;6-&gt;4 MB, 8 MB goal, 4 P
+gc #4 @0.073s 7%: 0.044+1.3+0.018+3.1+0.27 ms clock, 0.089+1.3+0+0/2.9/0+0.54 ms cpu, 4-&gt;7-&gt;4 MB, 6 MB goal, 4 P</p>
+
+<p>此信息的输出格式随着go的每一不同的版本发生变化，但总是能发现共性的东西， 如： 每一GC 阶段所花费的时间量， heap size 的变化量， 
+也包括每一GC阶段完成时间，相对于程序启动时的时间，当然老版本go可能省略一些信息。</p>
+
+<p>每一行信息都很有用， 不过我认为综合分析这些信息则更有用，比如， 不断输出的gc tracing,可以清楚在表明程序的内存分配情况，</p>
+
+<p>持续不断增长的heap size 则表明可能有内存泄露，也许一些被引用的东西没有被释放。</p>
+
+<p>开启gctrace的代价是很小的，不过其通常是关闭的， 不过我推荐在一些产品环境中，抽取一些
+样本产品，开启这个调试工具。</p>
+
+<p>原文未翻译，未找到准确表述。
+note:setting gctrace to values larger than 1 causes each garbage collection cycle to be run twice.
+ This exercises some aspects of finalisation that require two garbage collection cycles to complete. 
+ You should not use this as a mechanism to alter finalisation performance in your programs because you should not write programs who’s correctness depends on finalisation.</p>
+
+<p>The heap scavenger</p>
+
+<p>到目前为止，gctrace给出的最有用的信息就是 the heap scavenger的输出.</p>
+
+<p>scvg143: inuse: 8, idle: 104, sys: 113, released: 104, consumed: 8 (MB)</p>
+
+<p>scavenger 的工作就是周期性地打扫heap中无用的操作系统内存分页， 它会向操作系统发出建义，请操作系统回收无用内存页，</p>
+
+<p>当然并不能强迫操作系统立刻就去做回收处理，操作系统可以忽略此建义，或是延迟回收，比如直到可分配的空闲内存不够的时候。</p>
+
+<p>scavenger输出的信息是我们了解go程序虚拟内存空间使用情况的最好方式， 当然你也可以通过其它工具，如free, top来获到这些信息，
+不过你应用信任scavenger.</p>
+
+<p>schedtrace</p>
+
+<p>因为go runtime管理着大量的goroutine, 并调度goroutine在操作系统线程集上运行，
+这个操作系统线程集，其实是就是线程池， 所以从外部考察go程序的性能我们不能获取足够的细节信息，
+更谈不上准确分析程序性能。故此我们需要直接了解go runtime scheduler的每一个操作，其输出如下：</p>
+
+<p>$ env GODEBUG=schedtrace=1000 godoc -http=:8080 -index
+SCHED 0ms: gomaxprocs=4 idleprocs=2 threads=4 spinningthreads=1 idlethreads=0 runqueue=0 [0 0 0 0]
+SCHED 1001ms: gomaxprocs=4 idleprocs=0 threads=8 spinningthreads=0 idlethreads=2 runqueue=0 [189 197 231 142]
+SCHED 2004ms: gomaxprocs=4 idleprocs=0 threads=9 spinningthreads=0 idlethreads=1 runqueue=0 [54 45 38 86]
+SCHED 3011ms: gomaxprocs=4 idleprocs=0 threads=9 spinningthreads=0 idlethreads=2 runqueue=2 [85 0 67 111]
+SCHED 4018ms: gomaxprocs=4 idleprocs=3 threads=9 spinningthreads=0 idlethreads=4 runqueue=0 [0 0 0 0]</p>
+
+<p>详细讨论请看 Dmitry Vyukov’s excellent blog post from the Intel DeveloperZone.</p>
+
+<p>设定scheddetail=1将使go runtime输出总结性信息时， 一并输出每一个goroutine的状态信息，如：</p>
+
+<p>$ env GODEBUG=scheddetail=1,schedtrace=1000 godoc -http=:8080 -index
+SCHED 0ms: gomaxprocs=4 idleprocs=3 threads=3 spinningthreads=0 idlethreads=0 runqueue=0 gcwaiting=0 nmidlelocked=0 stopwait=0 sysmonwait=0
+  P0: status=1 schedtick=0 syscalltick=0 m=0 runqsize=0 gfreecnt=0
+  P1: status=0 schedtick=0 syscalltick=0 m=-1 runqsize=0 gfreecnt=0
+  P2: status=0 schedtick=0 syscalltick=0 m=-1 runqsize=0 gfreecnt=0
+  P3: status=0 schedtick=0 syscalltick=0 m=-1 runqsize=0 gfreecnt=0
+  M2: p=-1 curg=-1 mallocing=0 throwing=0 preemptoff= locks=1 dying=0 helpgc=0 spinning=false blocked=false lockedg=-1
+  M1: p=-1 curg=17 mallocing=0 throwing=0 preemptoff= locks=0 dying=0 helpgc=0 spinning=false blocked=false lockedg=17
+  M0: p=0 curg=1 mallocing=0 throwing=0 preemptoff= locks=2 dying=0 helpgc=0 spinning=false blocked=false lockedg=1
+  G1: status=2(stack growth) m=0 lockedm=0
+  G17: status=3() m=1 lockedm=1
+  G2: status=1() m=-1 lockedm=-1</p>
+
+<p>这个输出对于调试goroutines leaking很有帮助， 不过其它工具， 诸如：net/http/pprof 
+ 好像更有用一些。</p>
+
+<p>深入阅读请看godoc for the runtime package.</p>
+
+<p>https://studygolang.com/articles/6346</p>
+:ET

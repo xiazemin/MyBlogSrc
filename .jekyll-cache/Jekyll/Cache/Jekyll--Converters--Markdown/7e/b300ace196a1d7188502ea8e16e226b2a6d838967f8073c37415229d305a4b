@@ -1,0 +1,261 @@
+I"U"<p>1.”“用法
+使用”“判断string变量是否为空。
+2.nil用法
+使用nil判断结构体的指针是否为空。
+3.len(s)用法
+用于求数组、切片和字典的长度。</p>
+
+<p>每种类型对应的零值：
+bool      -&gt; false                            <br />
+numbers -&gt; 0                               <br />
+string    -&gt; “”</p>
+
+<p>pointers -&gt; nil
+slices -&gt; nil
+maps -&gt; nil
+channels -&gt; nil
+functions -&gt; nil
+interfaces -&gt; nil</p>
+
+<p>结构体，声明后会默认对每个字段初始化，所以一定不是nil，直接比较会报类型错误
+type Person struct {
+  AgeYears int
+  Name string
+  Friends []Person
+}
+var p Person // Person{0, “”, nil}</p>
+
+<!-- more -->
+<p>nil是预定义的标识符，代表指针、通道、函数、接口、映射或切片的零值，也就是预定义好的一个变量：
+type Type int
+var nil Type</p>
+
+<p>是不是有点惊讶？nil并不是Go的关键字之一，你甚至可以自己去改变nil的值：
+var nil = errors.New(“hi”)
+这样是完全可以编译得过的</p>
+
+<p>在了解了什么是nil之后，再来说说nil有什么用。
+pointers
+var p *int
+p == nil    // true
+*p          // panic: invalid memory address or nil pointer dereference</p>
+
+<p>指针表示指向内存的地址，如果对为nil的指针进行解引用的话就会导致panic。那么为nil的指针有什么用呢？先来看一个计算二叉树和的例子：
+type tree struct {
+  v int
+  l *tree
+  r *tree
+}</p>
+
+<p>// first solution
+func (t *tree) Sum() int {
+  sum := t.v
+  if t.l != nil {
+    sum += t.l.Sum()
+  }
+  if t.r != nil {
+    sum += t.r.Sum()
+  }
+  return sum
+}</p>
+
+<p>上面的代码有两个问题，一个是代码重复：
+if v != nil {
+  v.m()
+}</p>
+
+<p>另一个是当t是nil的时候会panic：
+var t *tree
+sum := t.Sum()   // panic: invalid memory address or nil pointer dereference</p>
+
+<p>怎么解决上面的问题？我们先来看看一个指针接收器的例子：
+type person struct {}
+func sayHi(p *person) { fmt.Println(“hi”) }
+func (p *person) sayHi() { fmt.Println(“hi”) }
+var p *person
+p.sayHi() // hi</p>
+
+<p>对于指针对象的方法来说，就算指针的值为nil也是可以调用的，基于此，我们可以对刚刚计算二叉树和的例子进行一下改造：
+func(t *tree) Sum() int {
+  if t == nil {
+    return 0
+  }
+  return t.v + t.l.Sum() + t.r.Sum()
+}</p>
+
+<p>跟刚才的代码一对比是不是简洁了很多？对于nil指针，只需要在方法前面判断一下就ok了，无需重复判断。换成打印二叉树的值或者查找二叉树的某个值都是一样的：
+func(t *tree) String() string {
+  if t == nil {
+    return “”
+  }
+  return fmt.Sprint(t.l, t.v, t.r)
+}</p>
+
+<p>// nil receivers are useful: Find
+func (t *tree) Find(v int) bool {
+  if t == nil {
+    return false
+  }
+  return t.v == v || t.l.Find(v) || t.r.Find(v)
+}</p>
+
+<p>所以如果不是很需要的话，不要用NewX()去初始化值，而是使用它们的默认值。
+slices
+// nil slices
+var s []slice
+len(s)  // 0
+cap(s)  // 0
+for range s  // iterates zero times
+s[i]  // panic: index out of range</p>
+
+<p>一个为nil的slice，除了不能索引外，其他的操作都是可以的，当你需要填充值的时候可以使用append函数，slice会自动进行扩充。那么为nil的slice的底层结构是怎样的呢？根据官方的文档，slice有三个元素，分别是长度、容量、指向数组的指针：</p>
+
+<p>slice</p>
+
+<p>当有元素的时候：</p>
+
+<p>slice</p>
+
+<p>所以我们并不需要担心slice的大小，使用append的话slice会自动扩容。（视频中说slice自动扩容速度很快，不必担心性能问题，这个值得商榷，在确定slice大小的情况只进行一次内存分配总是好的）</p>
+
+<p>map
+对于Go来说，map，function，channel都是特殊的指针，指向各自特定的实现，这个我们暂时可以不用管。
+// nil maps
+var m map[t]u
+len(m)  // 0
+for range m // iterates zero times
+v, ok := m[i] // zero(u), false
+m[i] = x // panic: assignment to entry in nil map</p>
+
+<p>对于nil的map，我们可以简单把它看成是一个只读的map，不能进行写操作，否则就会panic。那么nil的map有什么用呢？看一下这个例子：
+func NewGet(url string, headers map[string]string) (*http.Request, error) {
+  req, err := http.NewRequest(http.MethodGet, url, nil)
+  if err != nil {
+    return nil, err
+  }</p>
+
+<p>for k, v := range headers {
+    req.Header.Set(k, v)
+  }
+  return req, nil
+}</p>
+
+<p>对于NewGet来说，我们需要传入一个类型为map的参数，并且这个函数只是对这个参数进行读取，我们可以传入一个非空的值：
+NewGet(“http://google.com”, map[string]string{
+  “USER_AGENT”: “golang/gopher”,
+},)</p>
+
+<p>或者这样传：
+NewGet(“http://google.com”, map[string]string{})</p>
+
+<p>但是前面也说了，map的零值是nil，所以当header为空的时候，我们也可以直接传入一个nil：
+NewGet(“http://google.com”, nil)</p>
+
+<p>是不是简洁很多？所以，把nil map作为一个只读的空的map进行读取吧。
+channel
+// nil channels
+var c chan t
+&lt;- c      // blocks forever
+c &lt;- x    // blocks forever
+close(c)  // panic: close of nil channel</p>
+
+<p>关闭一个nil的channel会导致程序panic（如何关闭channel可以看这篇文章：如何优雅地关闭Go channel）举个例子，假如现在有两个channel负责输入，一个channel负责汇总，简单的实现代码：
+func merge(out chan&lt;- int, a, b &lt;-chan int) {
+  for {
+    select {
+      case v := &lt;-a:
+        out &lt;- v
+      case v := &lt;- b:
+        out &lt;- v
+    }
+  }
+}</p>
+
+<p>如果在外部调用中关闭了a或者b，那么就会不断地从a或者b中读出0，这和我们想要的不一样，我们想关闭a和b后就停止汇总了，修改一下代码：
+func merge(out chan&lt;- int, a, b &lt;-chan int) {
+  for a != nil || b != nil {
+    select {
+      case v, ok := &lt;-a:
+          if !ok {
+            a = nil
+            fmt.Println(“a is nil”)
+            continue
+          }
+          out &lt;- v
+      case v, ok := &lt;-b:
+          if !ok {
+            b = nil
+            fmt.Println(“b is nil”)
+            continue
+          }
+          out &lt;- v
+    }
+  }
+  fmt.Println(“close out”)
+  close(out)
+}</p>
+
+<p>在知道channel关闭后，将channel的值设为nil，这样子就相当于将这个select case子句停用了，因为nil的channel是永远阻塞的。
+interface
+interface并不是一个指针，它的底层实现由两部分组成，一个是类型，一个值，也就是类似于：(Type, Value)。只有当类型和值都是nil的时候，才等于nil。看看下面的代码：
+func do() error {   // error(*doError, nil)
+  var err *doError
+  return err  // nil of type *doError
+}</p>
+
+<p>func main() {
+  err := do()
+  fmt.Println(err == nil)
+}</p>
+
+<p>输出结果是false。do函数声明了一个<em>doErro的变量err，然后返回，返回值是error接口，但是这个时候的Type已经变成了：（</em>doError，nil），所以和nil肯定是不会相等的。所以我们在写函数的时候，不要声明具体的error变量，而是应该直接返回nil：
+func do() error {
+  return nil
+}</p>
+
+<p>再来看看这个例子：
+func do() *doError {  // nil of type *doError
+  return nil
+}</p>
+
+<p>func wrapDo() error { // error (*doError, nil)
+  return do()       // nil of type *doError
+}</p>
+
+<p>func main() {
+  err := wrapDo()   // error  (*doError, nil)
+  fmt.Println(err == nil) // false
+}</p>
+
+<p>这里最终的输出结果也是false。为什么呢？尽管wrapDo函数返回的是error类型，但是do返回的却是<em>doError类型，也就是变成了（</em>doError，nil），自然也就和nil不相等了。因此，不要返回具体的错误类型。遵从这两条建议，才可以放心地使用if x != nil。</p>
+
+<p>package main
+import (
+“fmt”
+)
+type Person struct {
+name string
+age int
+tel string
+}
+func main() {
+var man *Person = nil
+var ai interface{} = man
+var ei interface{} = nil
+fmt.Printf(“man == nil: %v\n”, man == nil)
+fmt.Printf(“ai == nil: %v\n”, ai == nil)
+fmt.Printf(“ai == ei: %v\n”, ai == ei)
+fmt.Printf(“ei == man: %v\n”, ei == man)
+fmt.Printf(“ei == nil: %v\n”, ei == nil)
+}</p>
+
+<p>man == nil: true
+ai == nil: false
+ai == ei: false
+ei == man: false
+ei == nil: true</p>
+
+<p>interface在golang内部其实是一个结构体，有_type,data两个指针组成，_type存数据类型，data存值
+看内存需要添加编译选项，保证不被编译器优化变量值，go build -gcflags “-N -l”.
+LiteIDE这样设置：编译-&gt;编译配置，设置编译参数。在BUILDARGS添加-gcflags “-N -l”</p>
+:ET

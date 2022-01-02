@@ -1,0 +1,182 @@
+I"Q<p>编译型语言（比如 Go）的源码要经过编译和链接才能转化为计算机可以执行的程序，这个过程的第一步就是词法分析。
+什么是词法分析呢？
+它就是将源代码转化为一个个预先定义的 token 的过程。为了便于理解，我们将其分为两个阶段进行介绍。
+第一阶段，对源码串进行扫描，按预先定义的 token 规则进行匹配并切分为一个个有语法含义、最小单元的字符串，即词素（lexme），并在此基础上将其划归为某一类 token。这个阶段，一些字符可能会被过滤掉，比如，空白符、注释等。
+第二阶段，通过评估器 Evaluator 评估扫描出来的词素，并确定它字面值，生成最终的 Token。
+<!-- more -->
+一个简单的示例
+先看一段代码，经典的 hello world，如下：
+package main</p>
+
+<p>import “fmt”</p>
+
+<p>func main() {
+    fmt.Println(“Hello World”)
+}
+复制代码我们可以通过这个例子的源码逐步拆解词法分析的整个流程。
+什么是词素
+理论性的概念就不说了，直接看效果吧。
+首先，将这段示例代码通过词法分析的第一阶段，我们将会得到如下内容：
+package
+main
+\n
+import
+“fmt”
+\n
+func
+main
+(
+)
+{
+\n
+fmt
+.
+Println
+(
+“Hello World”
+)
+\n
+}
+复制代码输出的这一个个独立的字符序列就是词素。
+词素的切分规划和语言的语法规则有关。此处的输出中除了一些可见的字符，换行符同样也具有语法含义，因为 Go 不像 C/C++ 必须是分号分隔语句，也可以通过换行符分隔。
+源码分割为一个个词素的过程是有一定的规则的，这和具体的语言有关。但虽有差异，其实规则都差不多，无非两种，一是通过无语法含义的字符（空格符、制表符等）切分，还有是每个词素可以用作为分隔符。
+什么是 token
+token，也称为词法单元、记号等，它由名称和字面值两部分组成。从词素到 token 有固定的对应关系，而且并非所有的 token 都有字面值。
+将 hello world 的源码转化为 token，我们将会得到如下的一张对应表格。</p>
+
+<p>lexme
+name
+value</p>
+
+<p>package
+PACKAGE
+“package”</p>
+
+<p>main
+IDENT
+“main”</p>
+
+<p>\n
+SEMICOLON
+“\n”</p>
+
+<p>import
+IMPORT
+“import”</p>
+
+<p>“fmt”
+STRING
+“"fmt"”</p>
+
+<p>\n
+SEMICOLON
+“\n”</p>
+
+<p>func
+FUNC
+“func”</p>
+
+<p>main
+IDENT
+“main”</p>
+
+<p>(
+LPAREN
+“”</p>
+
+<p>)
+RPAREN
+“”</p>
+
+<p>{
+LBRACE
+“”</p>
+
+<p>fmt
+IDENT
+“fmt”</p>
+
+<p>.
+PERIOD
+“”</p>
+
+<p>Println
+IDENT
+“Println”</p>
+
+<p>(
+LPAREN
+“”</p>
+
+<p>“Hello World”
+STRING
+““Hello World””</p>
+
+<p>)
+RPAREN
+“”</p>
+
+<p>\n
+SEMICOLON
+“\n”</p>
+
+<p>}
+LBRACE
+“”</p>
+
+<p>\n
+SEMICOLON
+“\n”</p>
+
+<p>稍微有点长，因为这里没有省略。表格中的第一列是原始内容，第二列对应的 token 的名称，最后一列是 token 的字面值。
+从表格中可以观察出，其中有一些 token 并没有值，比如，括号、点，名称本身已经表示了它们的内容。
+token 的分类
+token 一般可以分为关键字、标识符、字面量、操作符这四个大类。这个分类其实在 Go 的源码中有非常明显的体现。
+查看源码文件 src/go/token/token.go，将会找到 Token 类型如下的几个方法。
+// 是否是字面常量
+func (tok Token) IsLiteral() bool { return literal_beg &lt; tok &amp;&amp; tok &lt; literal_end }
+// 是否是操作符
+func (tok Token) IsOperator() bool { return operator_beg &lt; tok &amp;&amp; tok &lt; operator_end }
+// 是否是关键字
+func (tok Token) IsKeyword() bool { return keyword_beg &lt; tok &amp;&amp; tok &lt; keyword_end }
+复制代码代码非常简单，通过比较确定 Token 是否位于指定范围确定它的类型。上面的这三个方法分别对应于判断 Token 是字面常量、操作符还是关键字。
+额？怎么没有标识符呢？
+当然也有啦，只不过它不是 Token 的方法，而是单独的一个函数。如下：
+func IsIdentifier(name string) bool {
+	for i, c := range name {
+		if !unicode.IsLetter(c) &amp;&amp; c != ‘_’ &amp;&amp; (i == 0 || !unicode.IsDigit(c)) {
+			return false
+		}
+	}
+	return name != “” &amp;&amp; !IsKeyword(name)
+}
+复制代码我们常说的变量、常量、函数、方法的名称不能为关键字，且必须是由字母、下划线或数字组成，且名称的开头不能为数字的规则，看到这个函数是不是一些就明白了。
+到这里，其实已经写的差不多了。但想想还是拿其中一个类型再简单说说吧。
+关键字
+就以关键字为例吧，Go 中的关键字有哪些呢？
+继续看源码。将之前那段如何判断一个 token 是关键字的代码再看一遍。如下：
+func (tok Token) IsKeyword() bool {
+	return keyword_beg &lt; tok &amp;&amp; tok &lt; keyword_end
+}
+复制代码只要 Token 大于 keyword_beg 且小于 keyword_end 即为关键字，看起来还挺好理解的。那在 keyword_beg 和 keyword_end 之间有哪些关键字呢？代码如下：
+const (
+	…
+	keyword_beg
+	// Keywords
+	BREAK
+	CASE
+	CHAN
+	CONST
+	CONTINUE</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>...
+
+SELECT
+STRUCT
+SWITCH
+TYPE
+VAR
+keyword_end
+... ) 复制代码总共梳理出了 25 个关键字。如下： break       case        chan    const       continue default     defer       else    fallthrough for func        go          goto    if          import interface   map         package range       return select      struct      switch  type        var 复制代码关键字的确挺少的。可见。。。 嗯？！ 是不是猜到我要说，Go 语言就是简洁，关键字的都这么少。你看 Java，足足有 53 个关键字，其中有两个是保留字。你再看看 Go，连保留字都没有，就是这么自信。 既然你猜到了，那我还是先不说了吧。 其他 操作符和字面常量就不追了，思路都是一样的。 Go 中的操作符有 47 个，比如赋值运算符、位运算符、算术运算符，比较运算符，还有其他的操作符。相信我吧，都是从源码中数出来的，没有看任何资料。[此处应该放个捂脸笑]。 字面常量呢？ 有 5 种类型，分别是 INT（整型）、FLOAT（浮点型）、IMG（复数类型）、CHAR（字符型）、STRING（字符串型）。
+</code></pre></div></div>
+:ET

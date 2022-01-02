@@ -1,0 +1,249 @@
+I"�<p>php.ini</p>
+
+<h1 id="只用设置成0以后重启php才能清空preload的文件">只用设置成0以后重启php才能清空preload的文件</h1>
+<p>opcache.enable = 1</p>
+<h1 id="配置进行preload的php脚本php-fpm启动的时候会先根据这个文件进行预加载">配置进行preload的php脚本，php-fpm启动的时候会先根据这个文件进行预加载</h1>
+<p>opcache.preload=/home/www/test/preload.php</p>
+<h1 id="preload的用户不建议使用root">preload的用户，不建议使用root</h1>
+<p>opcache.preload_user = www 
+使用opcache_compile_file进行文件缓存，一旦缓存不会被清除，使用opcache_reset()不会清除预加载的文件，opcache_invalidate()也不能进行清除，使用opcache_get_status()可以查看缓存占用的内存大小，以及缓存的文件名</p>
+
+<p>//preload.php
+$files = glob(‘/home/www/test/*.php’);</p>
+
+<p>foreach ($files as $file) {
+    opcache_compile_file($file);
+}
+//parent.php
+class A{
+   public function a(){
+      echo ‘class A’;
+   }
+}
+//child.php
+require(‘./parent.php’);
+class B extends A{
+  public function b (){
+          echo ‘clsss B’.PHP_EOL;
+  }
+}
+//conf.php
+return array_fill(0,20,’abc’);
+//index.php
+&lt;?php
+require(‘./child.php’);
+require(‘./conf.php’);
+opcache_reset();
+print_r(opcache_get_status());
+$obj = new B;
+$obj-&gt;b();
+ab -c 1 -n 10000
+<!-- more -->
+https://segmentfault.com/a/1190000023228958</p>
+
+<p>对于执行过的代码，再次执行时将命中cache，cache中的opcode可以直接被取出，进而执行。从而省了下了词法析，语法分析，编译生成opcode的时间。</p>
+
+<p>但是从cache中的opcode到执行opcode过程中还需要做两件事</p>
+
+<p>将opcode从SHM（cache）中拷贝到处理请求的进程（比如php-fpm）空间中。
+链接，也就是解决依赖问题。</p>
+
+<p>opcode是可以设置对文件的变化做检查的，比如每隔2秒，看下文件是否有变，如果改变，则cache中的opcode失效，重新编译。</p>
+
+<p>上面这些事，都是在执行之前发生的，是否可以提前做好，把时间省下来呢？可以的，这就是preload的主要工作！</p>
+
+<p>执行前将opcode直接放入处理进程中。
+提前链接，解决依赖。
+载入的opcode不可更改，省去了检查文件变更及可能的重新编译时间。相应的副作用是，如果不重启进程（比如php-fpm），代码的修改将不会生效。</p>
+
+<ol>
+  <li>如何启用preload
+2.1修改php.ini
+[opcache]
+zend_extension=opcache.so
+opcache.enable=1             # 启用 opcache
+opcache.preload=your_preload_script.php  #该脚本用于执行预加载哪些文件
+opcache.preload_user=a_user_name     # preload用户，安全考虑禁止root用户</li>
+</ol>
+
+<p>2.2预加载脚本
+一段最简单的预加载脚本如下：</p>
+
+<p>$files = /* An array of files you want to preload */;</p>
+
+<p>foreach ($files as $file) {
+    opcache_compile_file($file);
+}</p>
+
+<p>files中对应的class将被预加载到内存中</p>
+
+<ol>
+  <li>实例
+3.1 php.ini配置
+[opcache]
+opcache.enable=1
+opcache.preload=/home/rawphp/preload.php
+opcache.preload_user=odin</li>
+</ol>
+
+<p>3.2 预加载脚本
+rawphp目录结构如下</p>
+
+<p>├── a.php //业务代码
+├── lib //基础库
+│   ├── 1.php
+│   ├── 2.php
+│   └── base.php
+└── preload.php预加载脚本</p>
+
+<p>preload.php</p>
+
+<p>&lt;?php
+$files = [
+    “lib/base.php”,
+    “lib/1.php”,
+    “lib/2.php”
+];</p>
+
+<p>foreach ($files as $one){
+    opcache_compile_file($one);
+}</p>
+
+<p>3.3 目录中的其它代码
+a.php</p>
+
+<p>&lt;?php
+$obj = new A1();
+$obj-&gt;say();</p>
+
+<p>lib/1.php</p>
+
+<p>&lt;?php
+require_once(<strong>DIR</strong>.”/base.php”);
+class A1 extends Base{
+    public function say(){
+        echo “i’m A1”;
+    }
+}</p>
+
+<p>lib/2.php</p>
+
+<p>&lt;?php
+class A2{
+    public function sayhi(){
+        echo “i’m A2”;
+    }
+}</p>
+
+<p>lib/base.php</p>
+
+<p>&lt;?php
+abstract class Base{
+    abstract function say();
+}</p>
+
+<p>3.4 说明及注意
+因为作了preload， 所以a.php中不需要require(“lib/1.php”)就可以直接new A1()。
+A1依赖Base, 已经在文件中
+require_once(<strong>DIR</strong>.”/base.php”)
+1
+但是在preload.php中依然要对base.php进行opcache_compile_file()。不然重启php-fpm时会报NOTICE</p>
+
+<p>Can’t preload unlinked class A1: Unknown parent Base.
+1
+也就是A1不会被预加载。进而带来的后里是，执行a.php时报Fatal error</p>
+
+<p>Fatal error: Uncaught Error: Class ‘A1’ not found 
+1
+3.5 从底层看效果
+我们只启动一个php-fpm进程，这样可以通过strace对比一下开关preload的效果。</p>
+
+<p>3.5.1开启preload
+首先，我们打开preload，从浏览器执行a.php，看到strace结果如下：
+image
+只读取了a.php，没有读取依赖的1.php, base.php。因为已经直接从内存中加载。</p>
+
+<p>3.5.2关闭preload，只保留opcache
+修改php.ini</p>
+
+<p>;opcache.preload=/home/ballqiu/rawphp/preload.php
+1
+修改a.php</p>
+
+<p>//增加如下代码，否则无法执行
+require_once(“lib/1.php”);
+1
+2
+从浏览器执行a.php，第一次执行看到strace结果如下：
+image
+读取了1.php, base.php两个依赖。</p>
+
+<p>第二次执行看到strace结果如下：
+image
+因为开启了opcache, 所以，虽然没有读取依赖文件，但仍然检查了文件是否更新。</p>
+
+<ol>
+  <li>万物皆可preload么？
+RFC的中Preloading Limitation是这样说明的。</li>
+</ol>
+
+<p>Only classes without unresolved parent, interfaces, traits and constant values may be preloaded。</p>
+
+<p>我的实验结果如下：</p>
+
+<p>class, funciton, trait, interface能够进行预加载(在满足依赖的情况下)。
+全局变量，define, const，无法被预加载。比如preload.php中如果有如下代码：
+&lt;?php
+define(“NAME”, “BALL”);
+$name = “ball”;
+const BOOK = “pot”;
+1
+2
+3
+4
+那么这些变量和常量在a.php中都是无法看到的。</p>
+
+<p>预加载只加载文件，不执行文件，因此动态生成的一切无法被预加载。</p>
+<ol>
+  <li>特别注意
+修改preload.php(预加载脚本)时一定要特别小心，如果出问题，会导致php-fpm重启失败。
+被预加载的文件如果有修改，一定要重启php-fpm才会生效。
+开preload的前提是开opcache， 所以不存在只开preload不开opcache的情况。反之是可以的。</li>
+  <li>性能测试
+我们使用一个最简单的hello world程序，测试superphp框架(内部的一个中等复杂度的框架，可以类比CI)在不同条件下的性能。(测试机器配置：4核8G)</li>
+</ol>
+
+<p>&lt;?php
+class Page_User_Index extends SOSO_Page{
+    public function run(){
+        echo “hello world”;
+    }
+}</p>
+
+<p>使用ab做压测，记录不同并发下Time per request（单位毫秒）。</p>
+
+<p>php 7.4.0
+image</p>
+
+<p>可见框架在开preload与不开preload时差别不大。这是因为代码比较简单，依赖不多，框架预加的类也不多。</p>
+
+<p>php 7.0.1
+image</p>
+
+<p>可见同样是只开opcache, 即使在如此简单的逻辑下7.4的性能还是高于7.0。</p>
+
+<ol>
+  <li>总结
+预加载可以提升性能，但只有依赖繁多时才会起到明显效果。
+即使只开启opcache，性能提供也非常明显。
+升级php7.4得到的性能提供明显。</li>
+</ol>
+
+<p>https://blog.csdn.net/qmhball/article/details/103503939</p>
+
+<p>https://stitcher.io/blog/preloading-in-php-74</p>
+
+<p>http://www.phpxs.com/post/6748/</p>
+
+<p>https://learnku.com/articles/29604?order_by=vote_count&amp;</p>
+:ET

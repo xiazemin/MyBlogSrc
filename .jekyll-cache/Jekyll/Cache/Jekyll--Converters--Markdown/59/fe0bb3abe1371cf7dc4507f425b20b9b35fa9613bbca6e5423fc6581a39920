@@ -1,0 +1,280 @@
+I"r<p>fasthttp是golang下的一个http框架，顾名思义，与原生的http实现相比，它的特点在于快，按照官网的说法，它的客户端和服务端性能比原生有了十倍的提升。它的高性能主要源自于“复用”，通过服务协程和内存变量的复用，节省了大量资源分配的成本。工作协程的复用协程的复用可以参见​workerpool.go​
+https://github.com/valyala/fasthttp
+<!-- more -->
+减少[]byte的分配，尽量去复用它们
+两种方式进行复用：</p>
+
+<p>sync.Pool</p>
+
+<p>slice = slice[:0]。所有的类型的Reset方法，均使用此方式。例如类型URI、Args、ByteBuffer、Cookie、RequestHeader、ResponseHeader等。</p>
+
+<p>fasthttp里共有35个地方使用了sync.Pool。sync.Pool除了降低GC的压力，还能复用对象，减少内存分配。</p>
+
+<p>// 例如类型Server
+type Server struct {
+    // …
+    ctxPool        sync.Pool // 存RequestCtx对象
+  readerPool     sync.Pool // 存bufio对象，用于读HTTP Request
+  writerPool     sync.Pool // 存bufio对象，用于写HTTP Request
+  hijackConnPool sync.Pool
+  bytePool       sync.Pool
+}</p>
+
+<p>// 例如cookies
+var cookiePool = &amp;sync.Pool{
+  New: func() interface{} {
+    return &amp;Cookie{}
+  },
+}</p>
+
+<p>func AcquireCookie() <em>Cookie {
+  return cookiePool.Get().(</em>Cookie)
+}</p>
+
+<p>func ReleaseCookie(c *Cookie) {
+  c.Reset()
+  cookiePool.Put(c)
+}</p>
+
+<p>// 例如workPool. 每个请求以一个新的goroutine运行。就是workpool做的调度
+type workerPool struct {
+    // …
+  workerChanPool sync.Pool
+}</p>
+
+<p>func (wp *workerPool) getCh() *workerChan {
+  var ch *workerChan
+  // …</p>
+
+<p>if ch == nil {
+    if !createWorker {
+            // 已经达到worker数量上限，不允许创建了
+      return nil
+    }
+        // 尝试复用旧worker
+    vch := wp.workerChanPool.Get()
+    if vch == nil {
+      vch = &amp;workerChan{
+        ch: make(chan net.Conn, workerChanCap),
+      }
+    }
+    ch = vch.(*workerChan)
+        // 创建新的goroutine处理请求
+    go func() {
+      wp.workerFunc(ch)
+            // 用完了返回去
+      wp.workerChanPool.Put(vch)
+    }()
+  }
+  return ch
+}</p>
+
+<p>还有复用已经分配的[]byte。</p>
+
+<p>s = s[:0]和s = append(s[:0], b…)这两种复用方式，总共出现了191次。</p>
+
+<p>// 清空 URI
+func (u *URI) Reset() {
+  u.pathOriginal = u.pathOriginal[:0]
+  u.scheme = u.scheme[:0]
+  u.path = u.path[:0]
+    // ….
+}</p>
+
+<p>// 清空 ResponseHeader
+func (h *ResponseHeader) resetSkipNormalize() {
+  // …
+  h.contentLengthBytes = h.contentLengthBytes[:0]</p>
+
+<p>h.contentType = h.contentType[:0]
+  h.server = h.server[:0]</p>
+
+<p>h.h = h.h[:0]
+  h.cookies = h.cookies[:0]
+}</p>
+
+<p>// 清空Cookies
+func (c *Cookie) Reset() {
+  c.key = c.key[:0]
+  c.value = c.value[:0]
+  // …
+  c.domain = c.domain[:0]
+  c.path = c.path[:0]
+  // …
+}</p>
+
+<p>func (c *Cookie) SetKey(key string) {
+  c.key = append(c.key[:0], key…)
+}</p>
+
+<p>方法参数尽量用[]byte. 纯写场景可避免用bytes.Buffer</p>
+
+<p>方法参数使用[]byte，这样做避免了[]byte到string转换时带来的内存分配和拷贝。毕竟本来从net.Conn读出来的数据也是[]byte类型。</p>
+
+<p>某些地方确实想传string类型参数，fasthttp也提供XXString()方法。</p>
+
+<p>String方法背后是利用了a = append(a, string…)。这样做不会造成string到[]byte的转换(该结论通过查看汇编得到，汇编里并没用到runtime.stringtoslicebyte方法)</p>
+
+<p>// 例如写Response时，提供专门的String方法
+func (resp *Response) SetBodyString(body string) {
+  // …
+  bodyBuf.WriteString(body)
+}</p>
+
+<p>上面的bodyBuf变量类型为ByteBuffer，来源于作者另外写的一个库，bytebufferpool(https://github.com/valyala/bytebufferpool)。</p>
+
+<p>正如介绍一样，库的主要目标是反对多余的内存分配行为。与标准库的bytes.Buffer类型对比，性能高30%。</p>
+
+<p>但ByteBuffer只提供了write类操作。适合高频写场景。</p>
+
+<p>先看下标准库bytes.Buffer是如何增长底层slice的。重点是bytes.Buffer没有内存复用。</p>
+
+<p>// 增长slice时，都会调用grow方法
+func (b <em>Buffer) grow(n int) int {
+  // …
+  if m+n &lt;= cap(b.buf)/2 {
+    copy(b.buf[:], b.buf[b.off:])
+  } else {
+    // 通过makeSlice获取新的slice
+    buf := makeSlice(2</em>cap(b.buf) + n)
+    // 而且还要拷贝
+    copy(buf, b.buf[b.off:])
+    b.buf = buf
+  }
+    // …
+}</p>
+
+<p>func makeSlice(n int) []byte {
+    // maekSlice 是直接分配出新的slice，没有复用的意思
+  return make([]byte, n)
+}</p>
+
+<p>再看ByteBuffer的做法。重点是复用内存。</p>
+
+<p>// 通过复用减少内存分配，下次复用
+func (b *ByteBuffer) Reset() {
+  b.B = b.B[:0]
+}</p>
+
+<p>// 提供专门String方法，通过append避免string到[]byte转换带来的内存分配和拷贝
+func (b *ByteBuffer) WriteString(s string) (int, error) {
+  b.B = append(b.B, s…)
+  return len(s), nil
+}</p>
+
+<p>// 如果写buffer的内容很大呢？增长的事情交给append
+// 但因为Reset()做了复用，所以cap足够情况下，append速度会很快
+func (b *ByteBuffer) Write(p []byte) (int, error) {
+  b.B = append(b.B, p…)
+  return len(p), nil
+}</p>
+
+<p>Request和Response都是用ByteBuffer存body的。清空body是把ByteBuffer交还给pool，方便复用。</p>
+
+<p>var (
+  requestBodyPool  bytebufferpool.Pool
+  // responseBodyPool和requestBodyPool一样，就不贴代码了
+  responseBodyPool bytebufferpool.Pool
+)</p>
+
+<p>func (req *Request) ResetBody() {
+  // …
+  if req.body != nil {
+    if req.keepBodyBuffer {
+      req.body.Reset()
+    } else {
+      // 交还给pool
+      requestBodyPool.Put(req.body)
+      req.body = nil
+    }
+  }
+}</p>
+
+<p>不放过能复用内存的地方
+有些地方需要kv型数据，一般使用map[string]string。但map不利于复用。所以fasthttp使用slice来实现了map</p>
+
+<p>缺点是查询时间复杂度O(n)。</p>
+
+<p>可key数量不多时，slice的方式能够很好地减少内存分配，尤其在大并发场景下。</p>
+
+<p>type argsKV struct {
+  key     []byte
+  value   []byte
+  noValue bool
+}</p>
+
+<p>// 增加新的kv
+func appendArg(args []argsKV, key, value string, noValue bool) []argsKV {
+  var kv *argsKV
+  args, kv = allocArg(args)
+  // 复用原来key的内存空间
+  kv.key = append(kv.key[:0], key…)
+  if noValue {
+    kv.value = kv.value[:0]
+  } else {
+    // 复用原来value的内存空间
+    kv.value = append(kv.value[:0], value…)
+  }
+  kv.noValue = noValue
+  return args
+}</p>
+
+<p>func allocArg(h []argsKV) ([]argsKV, *argsKV) {
+  n := len(h)
+  if cap(h) &gt; n {
+    // 复用底层数组空间，不用分配
+    h = h[:n+1]
+  } else {
+    // 空间不足再分配
+    h = append(h, argsKV{})
+  }
+  return h, &amp;h[n]
+}</p>
+
+<p>避免string与[]byte转换开销
+这两种类型转换是带内存分配与拷贝开销的，但有一种办法(trick)能够避免开销。利用了string和slice在runtime里结构只差一个Cap字段实现的。</p>
+
+<p>type StringHeader struct {
+  Data uintptr
+  Len  int
+}</p>
+
+<p>type SliceHeader struct {
+  Data uintptr
+  Len  int
+  Cap  int
+}</p>
+
+<p>// []byte -&gt; string
+func b2s(b []byte) string {
+  return <em>(</em>string)(unsafe.Pointer(&amp;b))
+}</p>
+
+<p>// string -&gt; []byte
+func s2b(s string) []byte {
+  sh := (<em>reflect.StringHeader)(unsafe.Pointer(&amp;s))
+  bh := reflect.SliceHeader{
+    Data: sh.Data,
+    Len:  sh.Len,
+    Cap:  sh.Len,
+  }
+  return *(</em>[]byte)(unsafe.Pointer(&amp;bh))
+}
+注意这种做法带来的问题：</p>
+
+<p>转换出来的[]byte不能有修改操作</p>
+
+<p>依赖了XXHeader结构，runtime更改结构会受到影响</p>
+
+<p>如果unsafe.Pointer作用被更改，也受到影响</p>
+
+<p>最后总结下来</p>
+
+<p>fasthttp避免绝大部分多余的内存分配行为，能复用绝不分配。</p>
+
+<p>善用sync.Pool。</p>
+
+<p>尽量避免[]byte与string之间转换带来的开销。</p>
+
+<p>巧用[]byte相关的特性。</p>
+:ET

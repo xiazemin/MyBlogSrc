@@ -1,0 +1,69 @@
+I"�	<p>type Hijacker interface {
+	Hijack() (net.Conn, *bufio.ReadWriter, error)
+}
+//返回连接接口net.Conn和ReadWriter,bufio读写的
+// Hijack lets the caller take over the connection. —–翻译Hijack让调用者管理连接</p>
+
+<p>// After a call to Hijack(), the HTTP server library</p>
+
+<p>// will not do anything else with the connection.</p>
+
+<p>// It becomes the caller’s responsibility to manage</p>
+
+<p>// and close the connection.</p>
+
+<p>————翻译调用Hijack后，HTTP的server不会对连接做多余的处理让用户自己管理和关闭连接
+<!-- more -->
+再看一下docker中对hijack的使用
+         dial, err := cli.dial()  //设置TCP keepAlive做长连接
+	// When we set up a TCP connection for hijack, there could be long periods
+	// of inactivity (a long running command with no output) that in certain
+	// network setups may cause ECONNTIMEOUT, leaving the client in an unknown
+	// state. Setting TCP KeepAlive on the socket connection will prohibit
+	// ECONNTIMEOUT unless the socket connection truly is broken
+	if tcpConn, ok := dial.(*net.TCPConn); ok {
+		tcpConn.SetKeepAlive(true)
+		tcpConn.SetKeepAlivePeriod(30 * time.Second)
+	}
+	if err != nil {
+		if strings.Contains(err.Error(), “connection refused”) {
+return fmt.Errorf(“Cannot connect to the Docker daemon. Is ‘docker daemon’ running on this host?”)
+		}
+		return err
+	}
+	clientconn := httputil.NewClientConn(dial, nil) 
+	defer clientconn.Close()</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>// Server hijacks the connection, error 'connection closed' expected
+clientconn.Do(req)
+
+rwc, br := clientconn.Hijack() 
+//清理掉buffer 这步非常重要,返回这个两个参数就是给用户自己管理连接和数据处理
+defer rwc.Close()
+</code></pre></div></div>
+
+<p>再看看clientconn.Hijack的实现：</p>
+
+<p>func (cc <em>ClientConn) Hijack() (c net.Conn, r *bufio.Reader) {
+	cc.lk.Lock()
+	defer cc.lk.Unlock()
+	c = cc.c
+	r = cc.r
+	cc.c = nil
+	cc.r = nil
+	return
+}
+//就是在NewClientConn时候保存的net.Conn和bufio.Reader
+func NewClientConn(c net.Conn, r *bufio.Reader) *ClientConn {
+	if r == nil {
+		r = bufio.NewReader(c)
+	}
+	return &amp;ClientConn{
+		c:        c,
+		r:        r,
+		pipereq:  make(map[</em>http.Request]uint),
+		writeReq: (*http.Request).Write,
+	}
+}
+总结：hijack就是不用重新建立连接或者重新构造ClientConn设置net.Conn和bufio，然后不断复用net.Conn和bufio，自己管理</p>
+:ET

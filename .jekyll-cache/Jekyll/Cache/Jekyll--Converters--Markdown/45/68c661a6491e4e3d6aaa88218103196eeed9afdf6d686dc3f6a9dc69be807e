@@ -1,0 +1,1086 @@
+I"д<p>golang操作数据库，是通过database/sql包，以及第三方的实现了database/sql/driver接口的数据库驱动包来共同完成的。</p>
+
+<p>其中database/sql/driver中的接口Conn和Stmt，官方交给第三方实现驱动，并且是协程不安全的。官方实现的database/sql包中的DB和Stmt是协程安全的，因为内部实现是连接池。</p>
+
+<p>如何使用
+刚开始接触database/sql包，并且网上的很多使用例子，都类似下面这种方式：</p>
+
+<p>db,err := sql.Open(“mysql”,”test:test@tcp(127.0.0.1:3306)/abwork?charset=utf8”)
+rows,err := db.Query(“select id,name,age from test limit 0,5”)
+res, err := db.Exec(“INSERT test SET name=?,age =?”, “xiaowei”, 18)
+或者下面这种：</p>
+
+<p>stmt,err := db.Prepare(“insert into test(name,age)values(?,?)”)
+defer stmt.Close()
+stmt.Exec(“张三”,20)
+其实仔细看database/sql的源码实现，上面两个例子的方式都是一样的。 首先看一下第一种方式的使用，以下是golang1.3版本database/sql包sql.go中，type DB的exec方法，第899-906行的实现：</p>
+
+<p>dc.Lock()
+si, err := dc.ci.Prepare(query)
+dc.Unlock()
+if err != nil {
+    return nil, err
+}
+defer withLock(dc, func() { si.Close() })
+return resultFromStatement(driverStmt{dc, si}, args…)
+可以看到，dc.ci.Prepare(query)这句，会先创建一个预处理语句，然后调用resultFromStatement方法执行sql操作。而Query方法，最终的实现也是一样。</p>
+
+<p>我们再看第二种方式，先调用Papare方法生成一个Stmt，在Prepare中，会调用dc.prepareLocked(query)，请看sql.go中844行，而最终dc.prepareLocked(query)这个方法，还是会调用dc.ci.Prepare(query)创建预处理语句，请看251行。接下来，就是调用Stmt的Exec或者Query方法，而最终这两个方法还是会调用resultFromStatement方法去执行。</p>
+
+<p>那么两种方式的相通之处，都是会预处理，不同的是使用db.Prepare会额外的创建Stmt，由Stmt实例在去处理具体的数据库操作。</p>
+
+<p>那么大家也看出来了，如果不是批量的操作，是没必要使用db.Papare方法的，否则即多了Stmt创建和关闭的性能开销，又多写了两行代码，有点得不偿失。如果是批量的操作，那么毋庸置疑，肯定是db.Papare拿到Stmt，再由Stmt去执行sql，这样保证批量操作只进行一次预处理
+<!-- more -->
+发现的问题
+按照上文说的，在实际使用过程中，也发现了一些问题。</p>
+
+<p>DB默认的最大open连接数是0，而最大空闲数是defaultMaxIdleConns = 2。在数据库操作很频繁的实际使用场景中，尤其是一波又一波访问高峰不间断来临的时候，数据库性能会不断的消耗在连接的创建和销毁上，这是很拖累数据和和机器的，所以我们根据mysql的max_user_connections参数，设置合理的值之后，这种现象很快的稳定下来。</p>
+
+<p>而连接稳定，在使用db.Exec和Query时，每次都会向数据库创建预处理语句。虽说在批量操作时使用db.Papare拿到Stmt然后执行批量操作更好，但我们的实际业务场景中，涉及到批量操作的地方很少（可以说没有），那么问题来了。。。不是挖掘机哪家强，而是该如何合理的使用Stmt</p>
+
+<p>虽说批量操作不多，但我们所有的操作都是相同的sql语句，没有在用户使用过程中，根据用户不同行为，生成不同sql语句的业务场景。</p>
+
+<p>所以我们决定改变使用方式，直接在程序初始化的时候，通过db.Papare创建Stmt，在运行期间，总是由预先创建好的Stmt去执行sql，这样就可以达到预处理语句复用的效果，应该能够很大的减少mysql预处理语句上的性能开销。</p>
+
+<p>而且Stmt的源码实现，也是使用的DB连接池，管理着一批已经创建预处理语句的连接，具体就是下面的struct：</p>
+
+<p>type connStmt struct {
+    dc *driverConn
+    si driver.Stmt
+}
+可以看见，每一个连接driverConn对应着一个预处理driver.Stmt。</p>
+
+<p>而Stmt在执行Exec和Query等方法时，会先执行connStmt方法（注意，这是及其重要的一个方法）：</p>
+
+<p>func (s *Stmt) connStmt() (ci *driverConn, releaseConn func(error), si driver.Stmt, err error)
+拿到type connStmt struct中的driverConn和driver.Stmt，再由resultFromStatement方法去做具体的数据库操作。</p>
+
+<p>Stmt的坑
+上文所说的方法，经过实际使用，确实会降低mysql在预处理语句上的性能开销，但问题来了，Stmt的坑是啥呢。。。</p>
+
+<p>回到connStmt方法，Stmt通过该方法获得driverConn和driver.Stmt，那么具体的逻辑是咋样的呢，请看以下源码分析：</p>
+
+<p>func (s *Stmt) connStmt() (ci *driverConn, releaseConn func(error), si driver.Stmt, err error) {
+    if err = s.stickyErr; err != nil {
+        return
+    }
+    s.mu.Lock()
+    if s.closed {
+        s.mu.Unlock()
+        err = errors.New(“sql: statement is closed”)
+        return
+    }</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>// In a transaction, we always use the connection that the
+// transaction was created on.
+if s.tx != nil { // 这里如果有事务，则通过事务tx获取连接（不是本文重点）
+    s.mu.Unlock()
+    ci, err = s.tx.grabConn() // blocks, waiting for the connection.
+    if err != nil {
+        return
+    }
+    releaseConn = func(error) {}
+    return ci, releaseConn, s.txsi.si, nil
+}
+    // 重点开始
+var cs connStmt
+match := false
+for i := 0; i &lt; len(s.css); i++ { // 如果你翻开Stmt源码，就会发现css是type connStmt的一个slice：css []connStmt
+    v := s.css[i]
+    _, err := s.db.connIfFree(v.dc) // Stmt首先会从css中找到当前空闲的连接
+    if err == nil {
+        match = true // 如果有空闲连接，将match设为true
+        cs = v
+        break
+    }
+    if err == errConnClosed { // 顺便还处理下关闭的连接，从css中remove掉
+        // Lazily remove dead conn from our freelist.
+        s.css[i] = s.css[len(s.css)-1]
+        s.css = s.css[:len(s.css)-1]
+        i--
+    }
+
+}
+s.mu.Unlock()
+
+// Make a new conn if all are busy.
+// TODO(bradfitz): or wait for one? make configurable later?
+if !match { // 注意match，如果css中没有空闲连接
+    dc, err := s.db.conn() // 就会从db的连接池中取
+    if err != nil {
+        return nil, nil, nil, err
+    }
+    dc.Lock()
+    si, err := dc.prepareLocked(s.query) // 取到连接，这里加把锁去创建预处理语句（注意，这里是重点！！！）
+    dc.Unlock()
+    if err != nil {
+        s.db.putConn(dc, err) // 将连接放到池中
+        return nil, nil, nil, err
+    }
+    s.mu.Lock()
+    cs = connStmt{dc, si} // 创建connStmt
+    s.css = append(s.css, cs) // 将connStmt加到css
+    s.mu.Unlock()
+}
+
+conn := cs.dc
+return conn, conn.releaseConn, cs.si, nil } 看完上面的源码，相信大家还是没太明白问题出在哪。
+</code></pre></div></div>
+
+<p>我们先明确一件事，那就是Stmt中css里的driveConn，和db连接池中的conn，有可能数量不同，状态不同，有可能db连接池中被干掉的连接，也有可能还在css中。</p>
+
+<p>更有可能，s.db.connIfFree(v.dc)时还不是空闲的连接，在执行到if !match 时，已经是了，然后被dc, err := s.db.conn()从连接池中取出，接下来就到了源码分析中，重点的那句，那里不管连接有木有处于css中，都会创建一个新的connStmt，然后再存入css中。这么一来，导致的问题就是不断有driverConn创建新的driver.Stmt，然后存入css却不销毁。同一个driverConn，有可能会对应着成千上万不同的driver.Stmt。</p>
+
+<p>而我们之所以会发现这个坑，就是在观察mysql状态时，发现Prepared_stmt_count的值，会随着时间的推移，不断的上涨，直到达到max_prepared_stmt_count的最大值，然后代码报错。而这个时候，我们只能通过杀掉进程重启，使Prepared_stmt_count归0，来缓解这个问题。</p>
+
+<p>后续
+发现这个问题后，我们分别在：
+https://code.google.com/p/go/issues/detail?id=8376
+https://groups.google.com/forum/#!topic/golang-nuts/bbFX0qQvsB0
+这两个地方提出了问题，然后也得到了热心朋友的支持。</p>
+
+<p>ma…@joh.to(找不到对方的真实邮箱，有问题的朋友可以在golang-nuts，通过回复发送邮件联系)帮我们在：
+https://codereview.appspot.com/116930043
+给官方提了codereview和临时解决方案，遗憾的是他的解决方案依然存在这个问题。</p>
+
+<p>最终，database/sql的作者，Brad Fitzpatrick大神亲自回复，明确了问题，然后在：
+https://code.google.com/p/go/source/detail?r=fdb52a28028a
+里做了解决，并且在go1.4中会得到修复。</p>
+
+<p>以下是go1.4beta1中，Brad Fitzpatrick大神的修改，可以对比下旧的实现：</p>
+
+<p>func (s *Stmt) connStmt() (ci *driverConn, releaseConn func(error), si driver.Stmt, err error) {
+    if err = s.stickyErr; err != nil {
+        return
+    }
+    s.mu.Lock()
+    if s.closed {
+        s.mu.Unlock()
+        err = errors.New(“sql: statement is closed”)
+        return
+    }</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>// In a transaction, we always use the connection that the
+// transaction was created on.
+if s.tx != nil {
+    s.mu.Unlock()
+    ci, err = s.tx.grabConn() // blocks, waiting for the connection.
+    if err != nil {
+        return
+    }
+    releaseConn = func(error) {}
+    return ci, releaseConn, s.txsi.si, nil
+}
+
+for i := 0; i &lt; len(s.css); i++ {
+    v := s.css[i]
+    _, err := s.db.connIfFree(v.dc)
+    if err == nil {
+        s.mu.Unlock()
+        return v.dc, v.dc.releaseConn, v.si, nil
+    }
+    if err == errConnClosed {
+        // Lazily remove dead conn from our freelist.
+        s.css[i] = s.css[len(s.css)-1]
+        s.css = s.css[:len(s.css)-1]
+        i--
+    }
+
+}
+s.mu.Unlock()
+
+// If all connections are busy, either wait for one to become available (if
+// we've already hit the maximum number of open connections) or create a
+// new one.
+//
+// TODO(bradfitz): or always wait for one? make configurable later?
+dc, err := s.db.conn()
+if err != nil {
+    return nil, nil, nil, err
+}
+
+// Do another pass over the list to see whether this statement has
+// already been prepared on the connection assigned to us.
+s.mu.Lock()
+for _, v := range s.css { // 这里又做了一次css的检查，看连接是否已经预处理过了
+    if v.dc == dc {
+        s.mu.Unlock()
+        return dc, dc.releaseConn, v.si, nil
+    }
+}
+s.mu.Unlock()
+
+// No luck; we need to prepare the statement on this connection
+dc.Lock()
+si, err = dc.prepareLocked(s.query)
+dc.Unlock()
+if err != nil {
+    s.db.putConn(dc, err)
+    return nil, nil, nil, err
+}
+s.mu.Lock()
+cs := connStmt{dc, si}
+s.css = append(s.css, cs)
+s.mu.Unlock()
+
+return dc, dc.releaseConn, si, nil }
+</code></pre></div></div>
+
+<p>https://studygolang.com/articles/1795</p>
+
+<p>go语言通过database/sql使用mysql数据库，以及以及第三方sqlx扩展
+mysql支持插件式的存储引擎, 常见的存储引擎有：MyISAM，InnoDB</p>
+
+<p>MyISAM：</p>
+
+<p>查询速度快</p>
+
+<p>只支持表锁</p>
+
+<p>不支持事务</p>
+
+<p>InnoDB:</p>
+
+<p>整体速度快
+支持表锁和行锁
+支持事务
+事务：多个SQL操作为一个整体执行</p>
+
+<p>事务特点：ACID</p>
+
+<p>原子性
+一致性
+隔离性
+持久性
+索引：</p>
+
+<p>原理：B树和B+树</p>
+
+<p>需要掌握的知识点： 索引类型 命中 分库分表 SQL注入 SQL慢优化查询 MYSQL主从 读写分离</p>
+
+<p>database/sql
+原生支持连接池，是并发安全的</p>
+
+<p>该标准库没有具体实现，只列出第三方库需要实现的具体内容</p>
+
+<p>mysql驱动
+go get github.com/go-sql-driver/mysql</p>
+
+<p>1
+2
+连接数据库
+package main</p>
+
+<p>import (
+	“database/sql”
+	“fmt”
+	_ “github.com/go-sql-driver/mysql”
+)</p>
+
+<p>func main() {
+	// 连接数据库
+	dsn:=”root:【填入自己的数据库密码】@tcp(127.0.0.1:3306)/hello”
+	// 连接数据库
+	db,err:=sql.Open(“mysql”,dsn)// 不会校验用户和密码石是否正确，只会校验格式是否正确
+	if err != nil {               // dsn格式不正确会报错
+		fmt.Printf(“ %s invalid, err:%v\n”,dsn,err)
+		return
+	}
+	err=db.Ping()
+	if err != nil {
+		fmt.Printf(“Open %s failed, err:%v\n”,dsn,err)
+		return
+	}
+    db.SetMaxOpenConns(10)// 最大连接数
+	db.SetMaxIdleConns(3)// 最大空闲连接数
+	fmt.Println(“连接数据库成功!”)
+}</p>
+
+<p>增删改查
+package main</p>
+
+<p>import (
+	“database/sql”
+	“fmt”
+	_ “github.com/go-sql-driver/mysql”
+)</p>
+
+<p>var db *sql.DB //一个连接池</p>
+
+<p>type user struct{
+	id int <code class="language-plaintext highlighter-rouge">db:"id"</code>
+	name string <code class="language-plaintext highlighter-rouge">db:"name"</code>
+	age int <code class="language-plaintext highlighter-rouge">db:"age"</code>
+}
+func initDB()(err error) {
+	// 连接数据库
+	dsn:=”root:6862273@tcp(127.0.0.1:3306)/hello”
+	// 连接数据库
+	db,err=sql.Open(“mysql”,dsn)// 不会校验用户和密码石是否正确，只会校验格式是否正确
+	if err != nil {               // dsn格式不正确会报错
+		//fmt.Printf(“ %s invalid, err:%v\n”,dsn,err)
+		return 
+	}
+	err=db.Ping()
+	if err != nil {
+		//fmt.Printf(“Open %s failed, err:%v\n”,dsn,err)
+		return 
+	}
+	// fmt.Println(“连接数据库成功!”)
+	db.SetMaxOpenConns(10)// 最大连接数
+	db.SetMaxIdleConns(3)// 最大空闲连接数
+	return
+}</p>
+
+<p>func queryone(id int)(u *user){
+	u=&amp;user{}
+	// 1. 查询单条记录的sql语句
+	sqlstr:=”select id,name,age from user where id=?;”
+	// 2.执行
+	db.QueryRow(sqlstr,id).Scan(&amp;u.id,&amp;u.name,&amp;u.age) // 从连接池取取一个连接出来，去数据库查询单条记录,并调用scan拿结果
+	// 3 返回结果
+	return u
+}</p>
+
+<p>func queryMore(n int){
+	// 1. sql语句
+	sqlstr:=”select id,name,age from user where id &gt; ?”
+	// 2 执行
+	rows, err := db.Query(sqlstr, n)
+	if err!=nil{
+		fmt.Printf(“ exec %s query faile, err := %v”,sqlstr,err)
+		return
+	}
+	// 3 关闭数据库连接
+	defer rows.Close()
+	// 循环取数
+	for rows.Next(){
+		var u1 user
+		err:=rows.Scan(&amp;u1.id,&amp;u1.name,&amp;u1.age)
+		if err != nil{
+			fmt.Printf(“scan failed, err : %v\n”,err)
+		}
+		fmt.Printf(“user:%#v\n”,u1)
+	}
+}</p>
+
+<p>// 插入数据
+func insert(name string,age int){
+	// 1写sql语句
+	sqlstr:=”insert into user(name,age) values(?,?)”
+	// 2 执行exec
+	ret,err:=db.Exec(sqlstr,name,age)
+	if err != nil {
+		fmt.Printf(“insert failed, err : %v\n”,err)
+		return
+	}
+	// 插入数据的操作，会拿到操作数据的id值
+	id,err:=ret.LastInsertId()
+	if err != nil {
+		fmt.Printf(“get id failed, err : %v\n”,err)
+		return
+	}
+	fmt.Println(“id”,id)
+}</p>
+
+<p>// 更新数据
+func updateRow(newAge int,id int){
+	sqlstr:=”update user set age = ? where id =?”
+	ret,err:=db.Exec(sqlstr,newAge,id)
+	if err != nil {
+		fmt.Printf(“update failed, err : %v\n”,err)
+		return
+	}
+	n,err:=ret.RowsAffected()
+	if err != nil {
+		fmt.Printf(“get id failed, err : %v\n”,err)
+		return
+	}
+	fmt.Printf(“更新了%d行数据\n”,n)
+}</p>
+
+<p>// 删除数据
+func deleteRow(id int){
+	sqlstr:=”delete from user where id=?”
+	ret,err := db.Exec(sqlstr,id)
+	if err != nil {
+		fmt.Printf(“delete failed, err : %v\n”,err)
+		return
+	}
+	n,err:=ret.RowsAffected()
+	if err != nil {
+		fmt.Printf(“get id failed, err : %v\n”,err)
+		return
+	}
+	fmt.Printf(“删除了%d行数据\n”,n)</p>
+
+<p>}</p>
+
+<p>func main() {
+	err:=initDB()
+	if err != nil {
+		fmt.Printf(“init DB failed, err : %v\n”, err)
+	}
+	fmt.Println(“连接数据库成功!”)
+	//insert(“wangkai”,400) 
+	//queryone(2)
+	//queryMore(3)
+	 updateRow(34,2)
+	//deleteRow(2)
+}</p>
+
+<p>mysql预处理
+普通SQL语句执行过程：</p>
+
+<p>客户端对SQL语句进行占位符替换得到完整的SQL语句。
+客户端发送完整SQL语句到MySQL服务端
+MySQL服务端执行完整的SQL语句并将结果返回给客户端。
+预处理执行过程：</p>
+
+<p>把SQL语句分成两部分，命令部分与数据部分。
+先把命令部分发送给MySQL服务端，MySQL服务端进行SQL预处理。
+然后把数据部分发送给MySQL服务端，MySQL服务端对SQL语句进行占位符替换。
+MySQL服务端执行完整的SQL语句并将结果返回给客户端。
+优点：</p>
+
+<p>优化MySQL服务器重复执行SQL的方法，可以提升服务器性能，提前让服务器编译，一次编译多次执行，节省后续编译的成本。
+避免SQL注入问题。
+适用于批量处理类的操作。</p>
+
+<p>Go 实现mysql预处理：</p>
+
+<p>func (db <em>DB) Prepare(query string) (</em>Stmt, error)
+1
+Prepare方法会先将sql语句发送给MySQL服务端，返回一个准备好的状态用于之后的查询和命令。返回值可以同时执行多个查询和命令。</p>
+
+<p>// 预处理方式插入多条数据
+func prepareInsert(){
+	sqlstr:=”insert into user(name,age) values(?,?)”
+	stmt,err := db.Prepare(sqlstr)
+	if err != nil {
+		fmt.Printf(“prepar failed, err : %v\n”,err)
+		return
+	}
+	defer stmt.Close()
+	// 后续只需要stmt 执行操作 
+	var m= map[string]int{
+		“dazhangwei”:30,
+		“lushuo”:230,
+		“zhangerwei”:46,
+	}
+	for k,v := range m {
+		stmt.Exec(k,v)
+	}</p>
+
+<p>}</p>
+
+<p>Go语言实现事务
+什么是事务？
+事务：一个最小的不可再分的工作单元；通常一个事务对应一个完整的业务(例如银行账户转账业务，该业务就是一个最小的工作单元)，同时这个完整的业务需要执行多次的DML(insert、update、delete)语句共同联合完成。A转账给B，这里面就需要执行两次update操作。</p>
+
+<p>在MySQL中只有使用了Innodb数据库引擎的数据库或表才支持事务。事务处理可以用来维护数据库的完整性，保证成批的SQL语句要么全部执行，要么全部不执行。</p>
+
+<p>事务的ACID
+通常事务必须满足4个条件（ACID）：原子性（Atomicity，或称不可分割性）、一致性（Consistency）、隔离性（Isolation，又称独立性）、持久性（Durability）。</p>
+
+<p>条件	解释
+原子性	一个事务（transaction）中的所有操作，要么全部完成，要么全部不完成，不会结束在中间某个环节。事务在执行过程中发生错误，会被回滚（Rollback）到事务开始前的状态，就像这个事务从来没有执行过一样。
+一致性	在事务开始之前和事务结束以后，数据库的完整性没有被破坏。这表示写入的资料必须完全符合所有的预设规则，这包含资料的精确度、串联性以及后续数据库可以自发性地完成预定的工作。
+隔离性	数据库允许多个并发事务同时对其数据进行读写和修改的能力，隔离性可以防止多个事务并发执行时由于交叉执行而导致数据的不一致。事务隔离分为不同级别，包括读未提交（Read uncommitted）、读提交（read committed）、可重复读（repeatable read）和串行化（Serializable）。
+持久性	事务处理结束后，对数据的修改就是永久的，即便系统故障也不会丢失。
+事务相关方法
+Go语言中使用以下三个方法实现MySQL中的事务操作。</p>
+
+<p>开始事务</p>
+
+<p>func (db <em>DB) Begin() (</em>Tx, error)
+1
+提交事务</p>
+
+<p>func (tx *Tx) Commit() error
+1
+回滚事务</p>
+
+<p>func (tx *Tx) Rollback() error
+1
+func transaction(){
+	// 开启事务
+	tx,err := db.Begin()
+	if err != nil {
+		fmt.Printf(“Transaction Begin failed, err: %v\n”,err)
+		return
+	}
+	// 执行多个sql操作
+	sqlstr1 := “update user set age=age-2 where id=1”
+	sqlstr2:=”update user set age=age+2 where id=2”
+	ret,err:=tx.Exec(sqlstr1)
+	if err != nil{
+		// 要回滚
+		tx.Rollback()
+		fmt.Println(“执行sql1出错，要回滚”)
+	}
+	if rows,<em>:=ret.RowsAffected();rows==0{
+		tx.Rollback()
+		fmt.Println(“执行sql1出错，要回滚”)
+	}
+	ret,err=tx.Exec(sqlstr2)
+	if err != nil{
+		// 要回滚
+		tx.Rollback()
+		fmt.Println(“执行sql2出错，要回滚”)
+	}
+	if rows,</em>:=ret.RowsAffected();rows==0{
+		tx.Rollback()
+		fmt.Println(“执行sql2出错，要回滚”)
+	}
+	 // 上面都执行成功，提交
+	 err=tx.Commit()
+	 if err != nil {
+		 tx.Rollback()
+		 fmt.Println(“提交出错，要回滚”)
+	 }
+	 fmt.Println(“事务执行成功！”)
+}</p>
+
+<p>sqlx 的使用
+sqlx是一个go语言包，在内置database/sql包之上增加了很多扩展，简化数据库操作代码的书写</p>
+
+<p>handle types
+sqlx设计和database/sql使用方法是一样的。包含有4种主要的handle types:</p>
+
+<p>sqlx.DB: 和sql.DB相似，表示数据库
+sqlx.Tx: 和sql.Tx相似，表示transacion
+sqlx.Stmt: 和sql.Stmt相似，表示prepared statement.
+sqlx.NamedStmt: 表示prepared statement(支持named parameters)
+所有的handler types都提供了对database/sql的兼容，意味着当用调用sqlx.DB.Query时，可以直接替换为sql.DB.Query。这就使得sqlx可以很容易的加入到已有的数据库项目中。</p>
+
+<p>此外，sqlx还有两个cursor类型:</p>
+
+<p>sqlx.Rows 和sql.Rows类似，Queryx返回。
+sqlx.Row 和 sql.Row类似，QueryRowx返回。
+与官方包sql的区别
+1初始化：
+sql：
+func initDB() (err error) {
+	// 连接数据库
+	dsn := “root:[你的数据库密码]@tcp(127.0.0.1:3306)/hello”
+	// 连接数据库
+	db, err = sqlx.Open(“mysql”, dsn) // 不会校验用户和密码石是否正确，只会校验格式是否正确
+	if err != nil {                  // dsn格式不正确会报错
+		//fmt.Printf(“ %s invalid, err:%v\n”,dsn,err)
+		return
+	}
+	err = db.Ping()
+	if err != nil {
+		//fmt.Printf(“Open %s failed, err:%v\n”,dsn,err)
+		return
+	}
+	// fmt.Println(“连接数据库成功!”)
+	db.SetMaxOpenConns(10) // 最大连接数
+	db.SetMaxIdleConns(3)  // 最大空闲连接数
+	return
+}</p>
+
+<p>sqlx:</p>
+
+<p>func initDB() (err error) {
+	// 连接数据库
+	dsn := “root:[你的数据库密码]@tcp(127.0.0.1:3306)/hello”
+	// 连接数据库</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>db, err = sqlx.Connect("mysql",dsn) // 
+if err != nil {
+	//fmt.Printf("connect failed, err : %v\n",err)
+	return
+}
+// fmt.Println("连接数据库成功!")
+db.SetMaxOpenConns(10) // 最大连接数
+db.SetMaxIdleConns(3)  // 最大空闲连接数
+return }
+</code></pre></div></div>
+
+<p>主要区别是connect 相当于sqlx的open和ping的结合，下面是connect的代码：</p>
+
+<p>// Connect to a database and verify with a ping.
+func Connect(driverName, dataSourceName string) (*DB, error) {
+	db, err := Open(driverName, dataSourceName)
+	if err != nil {
+		return nil, err
+	}
+	err = db.Ping()
+	if err != nil {
+		db.Close()
+		return nil, err
+	}
+	return db, nil
+}</p>
+
+<p>2 查询语句
+sqlx中的handle types实现了数据库查询相同的基本的操作语法。</p>
+
+<p>Exec(…) (sql.Result,error) 和database/sql相比没有改变
+Query(…) (*sql.Rows, error) 和database/sql相比没有改变
+QueryRow(…) *sql.Row 和database/sql相比没有改变
+对内置语法的扩展</p>
+
+<p>MustExec()sql.Result - Exec, but panic or error
+Queryx(…) (*sqlx.Rows, error) - Query, but return an sqlx.Rows
+QueryRows(…) *sqlx.Row - QueryRow, but return an sqlx.Row
+扩展下面新的语法</p>
+
+<p>Get(dest interface{},…) error
+Select(dest interface{},…) error
+因为官方的sql包query()和quertrow(）在将查询到的数据传递到变量时，对于结构体变量，只能通过scan（）方法逐一传递。sqlx包扩展了structscan()方法。可以对结果体变量直接传值。</p>
+
+<p>例子：</p>
+
+<p>type Place struct {
+    Country       string
+    City          sql.NullString
+    TelephoneCode int <code class="language-plaintext highlighter-rouge">db:"telcode"</code>
+}
+// 多条查询
+rows, err := db.Queryx(“SELECT * FROM place”)
+for rows.Next() {
+    var p Place
+    err = rows.StructScan(&amp;p)
+}
+// 单条查询
+var p Place
+err := db.QueryRowx(“SELECT city, telcode FROM place LIMIT 1”).StructScan(&amp;p)</p>
+
+<p>get 和select语法
+他们是上述查询（query）和传值扫描（scan）操作的集合。</p>
+
+<p>可扫描的定义:</p>
+
+<p>a value is scannable if it is not a struct, eg string, int
+a value is scannable if it implements sql.Scanner
+a value is scannable if it is a struct with no exported fields (eg. time.Time)
+get和select使用 rows.Scan方法扫描可扫描的数据， rows.StructScan扫描不可扫描的数据。get用于查询单条数据，select用于查询多条数据。</p>
+
+<p>例子：</p>
+
+<p>p := Place{}
+pp := []Place{}</p>
+
+<p>// this will pull the first place directly into p
+err = db.Get(&amp;p, “SELECT * FROM place LIMIT 1”)</p>
+
+<p>// this will pull places with telcode &gt; 50 into the slice pp
+err = db.Select(&amp;pp, “SELECT * FROM place WHERE telcode &gt; ?”, 50)</p>
+
+<p>// they work with regular types as well
+var id int
+err = db.Get(&amp;id, “SELECT count(*) FROM place”)</p>
+
+<p>// fetch at most 10 place names
+var names []string
+err = db.Select(&amp;names, “SELECT name FROM place LIMIT 10”)</p>
+
+<p>Get 和 Select 会关闭rows ，无需再调用rows.close()方法。</p>
+
+<p>但是要注意的是，select会把查询结果一次性全放到内存，如果查询量较大的话，可以使用queryx和stuctscan结合的方法。</p>
+
+<p>func Select(q Queryer, dest interface{}, query string, args …interface{}) error {
+	rows, err := q.Queryx(query, args…)
+	if err != nil {
+		return err
+	}
+	// if something happens here, we want to make sure the rows are Closed
+	defer rows.Close()
+	return scanAll(rows, dest, false)
+}</p>
+
+<p>3事务：
+没啥区别</p>
+
+<p>4 预处理:
+Preparex和get方法可用于预处理</p>
+
+<p>stmt, err := db.Preparex(<code class="language-plaintext highlighter-rouge">SELECT * FROM place WHERE telcode=?</code>)
+var p Place
+err = stmt.Get(&amp;p, 852)</p>
+
+<p>5 in 查询
+因为database / sql不会检查您的查询，而是将您的参数直接传递给驱动程序，所以使用IN子句处理查询变得困难。</p>
+
+<p>SELECT * FROM users WHERE level IN (?);
+1
+？只会接受一个单变量，但是更希望它接受一个可变数组。</p>
+
+<p>var levels = []int{4, 6, 7}
+rows, err := db.Query(“SELECT * FROM users WHERE level IN (?);”, levels)</p>
+
+<p>可以先使用 sqlx.In语法构建查询语句和参数列表。</p>
+
+<p>var levels = []int{4, 6, 7}
+query, args, err := sqlx.In(“SELECT * FROM users WHERE level IN (?);”, levels) 
+// sqlx.In returns queries with the <code class="language-plaintext highlighter-rouge">?</code> bindvar, we can rebind it for our backend
+query = db.Rebind(query)
+rows, err := db.Query(query, args…)</p>
+
+<p>例子：</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>sqlstr, args, err := sqlx.In("select id,category_name,category_no from category where id in (?)", categoryIds)
+if err != nil {
+	return
+}
+// 查询
+err = DB.Select(&amp;categoryList, sqlstr, args...)
+</code></pre></div></div>
+
+<p>##遇到的问题及解决方案</p>
+
+<p>Q：go的time包的time.time类型与 mysql的date datetime 自动解析？
+A：在dsn地址加上parseTime=true字段</p>
+
+<p>Q：时差问题?
+A:loc=local</p>
+
+<p>package main</p>
+
+<p>import (
+    “database/sql”
+    “fmt”
+    “time”</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>_ "github.com/go-sql-driver/mysql" )
+</code></pre></div></div>
+
+<p>func main() {
+    db, err := sql.Open(“mysql”, 
+    “root:6862273aliyun@tcp(39.97.229.151:3306)/weixiaobo?parseTime=true&amp;loc=Local”)</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>var myTime time.Time
+rows, err := db.Query("SELECT current_timestamp()")
+fmt.Println(time.Now())
+if rows.Next() {
+    if err = rows.Scan(&amp;myTime); err != nil {
+        panic(err)
+    }
+}
+
+fmt.Println(myTime) }
+</code></pre></div></div>
+
+<p>https://www.cnblogs.com/wanghui-garcia/p/10406829.html
+https://www.cnblogs.com/wanghui-garcia/p/10405601.html
+https://studygolang.com/articles/8357
+https://zhuanlan.zhihu.com/p/99699351
+什么是池化技术
+池化技术 (Pool) 是一种很常见的编程技巧，在请求量大时能明显优化应用性能，降低系统频繁建连的资源开销。我们日常工作中常见的有数据库连接池、线程池、对象池等，它们的特点都是将 “昂贵的”、“费时的” 的资源维护在一个特定的 “池子” 中，规定其最小连接数、最大连接数、阻塞队列等配置，方便进行统一管理和复用，通常还会附带一些探活机制、强制回收、监控一类的配套功能。</p>
+
+<p>database/sql 包
+设计哲学
+在 Go 语言中对数据库进行操作需要借助标准库下的 database/sql 包进行，它对上层应用提供了标准的 API 操作接口，对下层驱动暴露了简单的驱动接口，并在内部实现了连接池管理。这意味着不同数据库的驱动可以很方便地实现这些驱动接口，但不再需要关心连接池的细节，只需要基于单个连接。</p>
+
+<p>极简接口
+它对外暴露的接口简单易懂，利于第三方 Driver 去实现，接口的功能包括 Driver 注册、Conn、Stmt、Tx、Rows结果集等，我们通过 Conn 和 Stmt 这两个接口来体会一下接口设计的精妙（这两个接口对应到 Java 就是 Connection 和 Statement 接口，只是 Go 更加简单）</p>
+
+<p>我相信你即使没有学习过 Go 语言，仅凭你的 Java 知识，也可以毫不费力地看懂上面这些接口的意思，这些对于驱动层暴露的接口非常简单，让驱动程序可以方便地去实现。</p>
+
+<p>调用关系
+整个 database/sql 驱动接口的调用关系非常清晰，简单来说驱动程序先通过 Open 方法拿到一个新建的 Conn，然后调用 Conn 的 Prepare 方法，传入 SQL 语句得到该语句的 Stmt，最后调用 Stmt 的 Exec 方法传入参数返回结果，查询语句同理，但返回的是行数据结果集。</p>
+
+<p>连接池设计
+sql.DB 对象关键属性
+Go 语言操作数据库时，我们先使用 sql.Open 方法返回一个具体的 sql.DB 对象，如下代码片中的 db ：</p>
+
+<p>sql.DB 对象即是我们访问数据库的入口，我们看看它里面的关键属性，均与连接池的设计相关</p>
+
+<p>建立连接
+事实上，连接并不是在 sql.Open 返回 db 对象时就建立的，这一步仅仅开了个接收建连请求的 channel，实际建连步骤要等到执行具体 SQL 语句时才会进行。下面我们通过一些例子讲述一下连接是怎么建立的，连接池的逻辑又是怎么实现的。</p>
+
+<p>讲述这部分原理不会贴太多的源码，那就变成源码解析了，对不了解 Go 语言的同学也不友好，主要希望能传达一些连接池设计的思想。
+在 database/sql 对上层应用暴露的操作接口中，比较常用的是 Exec 和 Query，前者常用于执行写 SQL，后者可以用于读 SQL。但是不论走哪个方法，都会调用到建连逻辑 db.conn 方法，附带建连上下文和建连策略两个参数。</p>
+
+<p>其中建连策略分为 cachedOrNewConn 和 alwaysNewConn。前者优先从 freeConn 空闲连接中取出连接，否则就新建一个；后者则永远走新建连接的逻辑。</p>
+
+<p>使用 cachedOrNewConn 策略的建连逻辑中，会先判断是否有空闲连接，如果有取出首个空闲连接，紧接着判断该连接是否过期需要被回收，如果没有过期则可以正常使用进入后续逻辑。如果没有空闲连接则判断连接数是不是已经达到最大，若没有可以新建连接，反之就得阻塞这个请求让它等待可用连接。</p>
+
+<p>如果需要新建连接，则调用底层 Driver 实现的连接器的 Connect 接口，这部分就是由各个数据库 Driver 自行去实现了。</p>
+
+<p>释放连接
+某个连接使用完毕之后需要归还给连接池，这也是数据库连接池实现中比较重要的逻辑，通常还伴随着对连接的可靠性检测，如果连接异常关闭，那么不应该继续还给连接池，而是应该新建一个连接进行替换。</p>
+
+<p>在 Java 中 Druid 连接池会有 testOnReturn 或者 testOnBorrow 选项，表示在归还连接或者是获取连接时进行有效性检测，但是开启这两项本质上会延长连接被占用的时间，损失一部分性能。Go 语言中对这项功能的实现比较简单，并没有具体的有效性检测机制，只是直接根据连接附带的 err 信息，如果是 ErrBadConn 异常则关闭并发送信号新建一个。</p>
+
+<p>清理连接
+database/sql 包下提供了与连接池相关的三个关键参数设置，分别是 maxIdle、maxOpen 和 maxLifeTime。</p>
+
+<p>三个参数的含义很容易理解，如果想要深入了解，推荐阅读 Configuring sql.DB for Better Performance
+MySQL 侧会强制 kill 掉长时间空闲的连接（8h），Go 语言提供了 maxLifeTime 选项设置连接被复用的最大时间，注意并不是连接空闲时间，而是从连接建立到这个时间点就会被回收，从而保证连接活性。</p>
+
+<p>这块的清理机制是通过一个异步任务来做的，关键是逻辑是每个一秒遍历检查 freeConn 中的空闲连接，判断是否超出最大复用期限，超出的连接加入 Closing 数组，后续被 Close。</p>
+
+<p>总结
+最近的工作内容是基于 go-sql-driver 实现了一个支持读写分离和高可用的自定义 driver，在调研和学习期间感受到了 Go 语言 database/sql 包的简明清晰，虽然它在部分功能的实现上偏简单甚至没有，但是依旧覆盖了大部分数据库连接池的主要功能和特性，因此我觉得用它来抛砖引玉是个好选择。</p>
+
+<p>https://www.jianshu.com/p/ee0d2e7bef54</p>
+
+<p>前面我们已经学习了sql的基本curd操作。总体而言，有两类操作Query和Exec。前者返回数据库记录，后者返回数据库影响或插入相关的结果。上面两种操作，多数是针对单次操作的查询。如果需要批量插入一堆数据，就可以使用Prepared语句。golang处理prepared语句有其独特的行为，了解其底层的实现，对于用好它十分重要。</p>
+
+<p>查询
+我们可以使用Query方式查询记录，Query函数提供了两种选择，第一种情况下参数是拼接好的sql，另外一种情况，第一参数是带有占位符的sql，第二个参数为sql的实际参数。</p>
+
+<p>rows, err := db.Query(“SELECT * FROM user WHERE gid = 1”)</p>
+
+<p>rows, err := db.Query(“SELECT * FROM user WHERE gid = ?”, 1)</p>
+
+<p>上面两种方式都能获取数据，那么他们的底层实现是一样的么？实际上，上面两种方式的底层通信不完全一样。一种你是plaintext方式，另外一种是prepared方式。</p>
+
+<p>prepared
+所谓prepared，即带有占位符的sql语句，客户端将该语句和参数发给mysql服务器。mysql服务器编译成一个prepared语句，这个语句可以根据不同的参数多次调用。prepared语句执行的方式如下：</p>
+
+<p>准备prepare语句
+执行prepared语句和参数
+关闭prepared语句
+之所以会出现prepare语句方式，主要因为这样有下面的两个好处：</p>
+
+<p>避免通过引号组装拼接sql语句。避免sql注入带来的安全风险
+可以多次执行的sql语句。
+单纯的看prepared语句发好处，会下意识的觉得既然如此，都使用prepared语句查询不就好了么？其实不然。关于prepared语句注意事项，稍后再讨论。</p>
+
+<p>golang的pliantext和prepare查询方式
+现在我们再回顾上面调用Qeury函数的两个操作。对于第一个操作，执行pliantext的sql语句。先看db.Query方法：</p>
+
+<p>// Query executes a query that returns rows, typically a SELECT.
+// The args are for any placeholder parameters in the query.
+func (db <em>DB) Query(query string, args …interface{}) (</em>Rows, error) {
+ var rows *Rows
+ var err error
+ for i := 0; i &lt; maxBadConnRetries; i++ {
+  rows, err = db.query(query, args, cachedOrNewConn)    // 查询
+  if err != driver.ErrBadConn {
+   break
+  }
+ }
+ if err == driver.ErrBadConn {
+  return db.query(query, args, alwaysNewConn)
+ }
+ return rows, err
+}
+Query方法我们很熟悉了，它的内部调用了db.query方法，并且根据连接重连的状况选择是cachedOrNewConn模式还是alwaysNewConn模式。前者会从返回一个cached连接或者等待一个可用连接，甚至也可能建立一个新的连接；后者表示打开连接时的策略为每次建立一个新的连接。这就是签名所说的retry10次连接。</p>
+
+<p>func (db <em>DB) query(query string, args []interface{}, strategy connReuseStrategy) (</em>Rows, error) {
+ ci, err := db.conn(strategy)
+ if err != nil {
+  return nil, err
+ }</p>
+
+<p>return db.queryConn(ci, ci.releaseConn, query, args)
+}
+query方法逻辑很简单，通过db.conn方法返回一个新创建或者缓存的空闲连接。driverConn。随机调用queryConn方法。</p>
+
+<p>// queryConn executes a query on the given connection.
+// The connection gets released by the releaseConn function.
+func (db <em>DB) queryConn(dc *driverConn, releaseConn func(error), query string, args []interface{}) (</em>Rows, error) {</p>
+
+<p>// 判断驱动是否实现了Queryer
+ if queryer, ok := dc.ci.(driver.Queryer); ok {
+  dargs, err := driverArgs(nil, args)
+  if err != nil {
+   releaseConn(err)
+   return nil, err
+  }
+  dc.Lock()
+  rowsi, err := queryer.Query(query, dargs)  // 调用驱动的查询方法  connection.go 第305行
+  dc.Unlock()
+  if err != driver.ErrSkip {  // 不带参数的返回
+   if err != nil {
+    releaseConn(err)
+    return nil, err
+   }
+   // Note: ownership of dc passes to the *Rows, to be freed
+   // with releaseConn.
+   rows := &amp;Rows{
+    dc:          dc,
+    releaseConn: releaseConn,
+    rowsi:       rowsi,
+   }
+   return rows, nil
+  }
+ }</p>
+
+<p>dc.Lock()
+ si, err := dc.ci.Prepare(query)  // 带参数的返回，创建prepare对象
+ dc.Unlock()
+ if err != nil {
+  releaseConn(err)
+  return nil, err
+ }</p>
+
+<p>ds := driverStmt{dc, si}
+ rowsi, err := rowsiFromStatement(ds, args…)   // 执行语句
+ if err != nil {
+  dc.Lock()
+  si.Close()
+  dc.Unlock()
+  releaseConn(err)
+  return nil, err
+ }</p>
+
+<p>// Note: ownership of ci passes to the *Rows, to be freed
+ // with releaseConn.
+ rows := &amp;Rows{
+  dc:          dc,
+  releaseConn: releaseConn,
+  rowsi:       rowsi,
+  closeStmt:   si,
+ }
+ return rows, nil
+}
+queryConn函数内容比较多。先判断驱动是否实现了Queryer，如果实现了即调用其Query方法。方法会针对sql查询语句做查询。例如mysql的驱动如下，connection.go 第305行左右，即：</p>
+
+<p>func (mc *mysqlConn) Query(query string, args []driver.Value) (driver.Rows, error) {
+ if mc.netConn == nil {
+  errLog.Print(ErrInvalidConn)
+  return nil, driver.ErrBadConn
+ }
+ if len(args) != 0 {
+  if !mc.cfg.InterpolateParams {
+   return nil, driver.ErrSkip
+  }
+  // try client-side prepare to reduce roundtrip
+  prepared, err := mc.interpolateParams(query, args)
+  if err != nil {
+   return nil, err
+  }
+  query = prepared
+  args = nil
+ }
+ // Send command
+ err := mc.writeCommandPacketStr(comQuery, query)
+ if err == nil {
+  // Read Result
+  var resLen int
+  resLen, err = mc.readResultSetHeaderPacket()
+  if err == nil {
+   rows := new(textRows)
+   rows.mc = mc</p>
+
+<p>if resLen == 0 {
+    // no columns, no more data
+    return emptyRows{}, nil
+   }
+   // Columns
+   rows.columns, err = mc.readColumns(resLen)
+   return rows, err
+  }
+ }
+ return nil, err
+}
+Query先检查参数是否为0，然后调用writeCommandPacketStr方法执行sql并通过readResultSetHeaderPacket读取数据库服务返回的结果。
+如果参数不为0，会先判断是否是prepared语句。这里会返回一个driver.ErrSkip错误。把函数执行权再返回到queryConn函数中。然后再调用si, err := dc.ci.Prepare(query)创建Stmt对象，接下来调用rowsiFromStatement执行查询：</p>
+
+<p>func rowsiFromStatement(ds driverStmt, args …interface{}) (driver.Rows, error) {
+ ds.Lock()
+ want := ds.si.NumInput()
+ ds.Unlock()</p>
+
+<p>// -1 means the driver doesn’t know how to count the number of
+ // placeholders, so we won’t sanity check input here and instead let the
+ // driver deal with errors.
+ if want != -1 &amp;&amp; len(args) != want {
+  return nil, fmt.Errorf(“sql: statement expects %d inputs; got %d”, want, len(args))
+ }</p>
+
+<p>dargs, err := driverArgs(&amp;ds, args)
+ if err != nil {
+  return nil, err
+ }</p>
+
+<p>ds.Lock()
+ rowsi, err := ds.si.Query(dargs)
+ ds.Unlock()
+ if err != nil {
+  return nil, err
+ }
+ return rowsi, nil
+}
+rowsiFromStatement方法会调用驱动的ds.si.Query(dargs)方法，执行最后的查询。大概再statement.go的第84行</p>
+
+<p>func (stmt *mysqlStmt) Query(args []driver.Value) (driver.Rows, error) {
+ if stmt.mc.netConn == nil {
+  errLog.Print(ErrInvalidConn)
+  return nil, driver.ErrBadConn
+ }</p>
+
+<p>// Send command
+ err := stmt.writeExecutePacket(args)
+ if err != nil {
+  return nil, err
+ }</p>
+
+<p>mc := stmt.mc</p>
+
+<p>// Read Result
+ resLen, err := mc.readResultSetHeaderPacket()
+ if err != nil {
+  return nil, err
+ }</p>
+
+<p>rows := new(binaryRows)</p>
+
+<p>if resLen &gt; 0 {
+  rows.mc = mc
+  // Columns
+  // If not cached, read them and cache them
+  if stmt.columns == nil {
+   rows.columns, err = mc.readColumns(resLen)
+   stmt.columns = rows.columns
+  } else {
+   rows.columns = stmt.columns
+   err = mc.readUntilEOF()
+  }
+ }</p>
+
+<p>return rows, err
+}
+调用 stmt和参数执行sql查询。查询完毕之后，返回到queryConn方法中，使用releaseConn释放查询的数据库连接。</p>
+
+<p>自定义prepare 查询
+从query查询可以看到，对于占位符的prepare语句，go内部通过的dc.ci.Prepare(query)会自动创建一个 stmt对象。其实我们也可以自定义stmt语句，使用方式如下：</p>
+
+<p>stmt, err := db.Prepare(“SELECT * FROM user WHERE gid = ?”)
+ if err != nil {
+  log.Fatalln(err)
+ }
+ defer stmt.Close()</p>
+
+<p>rows, err :=  stmt.Query(1)
+ if err != nil{
+  log.Fatalln(err)
+ }
+即通过Prepare方法创建一个stmt对象，然后执行stmt对象的Query（Exec）方法得到sql.Rows结果集。最后关闭stmt.Close。这个过程就和之前所说的prepare三步骤匹配了。</p>
+
+<p>创建stmt的preprea方式是golang的一个设计，其目的是Prepare once, execute many times。为了批量执行sql语句。但是通常会造成所谓的三次网络请求（ three network round-trips）。即preparing executing和closing三次请求。</p>
+
+<p>对于大多数数据库，prepread的过程都是，先发送一个带占位符的sql语句到服务器，服务器返回一个statement id，然后再把这个id和参数发送给服务器执行，最后再发送关闭statement命令。</p>
+
+<p>golang的实现了连接池，处理prepare方式也需要特别注意。调用Prepare方法返回stmt的时候，golang会在某个空闲的连接上进行prepare语句，然后就把连接释放回到连接池，可是golang会记住这个连接，当需要执行参数的时候，就再次找到之前记住的连接进行执行，等到stmt.Close调用的时候，再释放该连接。</p>
+
+<p>在执行参数的时候，如果记住的连接正处于忙碌阶段，此时golang将会从新选一个新的空闲连接进行prepare（re-prepare）。当然，即使是重新reprepare，同样也会遇到刚才的问题。那么将会一而再再而三的进行reprepare。直到找到空闲连接进行查询的时候。</p>
+
+<p>这种情况将会导致leak连接的情况，尤其是再高并发的情景。将会导致大量的prepare过程。因此使用stmt的情况需要仔细考虑应用场景，通常在应用程序中。多次执行同一个sql语句的情况并不多，因此减少prepare语句的使用。</p>
+
+<p>之前有一个疑问，是不是所有sql语句都不能带占位符，因为这是prepare语句。只要看了一遍database/sql和驱动的源码才恍然大悟，对于query(prepare, args)的方式，正如我们前面所分析的，database/sql会使用ds.si.Query(dargs)创建stmt的，然后就立即执行prepare和参数，最后关闭stmt。整个过程都是同一个连接上完成，因此不存在reprepare的情况。当然也无法使用所谓的创建一次，执行多次的目。</p>
+
+<p>对于prepare的使用方式，基于其好处和缺点，我们将会再后面的最佳实践再讨论。目前需要注意的大致就是：</p>
+
+<p>单次查询不需要使用prepared，每次使用stmt语句都是三次网络请求次数，prepared execute close</p>
+
+<p>不要循环中创建prepare语句</p>
+
+<p>注意关闭 stmt</p>
+
+<p>尽管会有reprepare过程，这些操作依然是database/sql帮我们所做的，与连接retry10次一样，开发者无需担心。</p>
+
+<p>对于Qeruy操作如此，同理Exec操作也一样。</p>
+
+<p>总结
+目前我们学习database/sql提供两类查询操作，Query和Exec方法。他们都可以使用plaintext和preprea方式查询。对于后者，可以有效的避免数据库注入。而prepare方式又可以有显示的声明stmt对象，也有隐藏的方式。显示的创建stmt会有3次网络请求，创建-&gt;执行-&gt;关闭，再批量操作可以考虑这种做法，另外一种方式创建prepare后就执行，因此不会因为reprepare导致高并发下的leak连接问题。</p>
+
+<p>具体使用那种方式，还得基于应用场景，安全过滤和连接管理等考虑。至此，关于查询和执行操作已经介绍了很多。关系型数据库的另外一个特性就是关系和事务处理。下一节，我们将会讨论database/sql的数据库事务功能。</p>
+:ET

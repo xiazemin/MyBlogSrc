@@ -1,0 +1,599 @@
+I"��<p>ip netns 命令用来管理 network namespace。它可以创建命名的 network namespace，然后通过名字来引用 network namespace，所以使用起来很方便。</p>
+
+<p>ip netns 命令格式如下：
+ip [ OPTIONS ] netns  { COMMAND | help }</p>
+
+<p>可以通过 help 命令查看 ip netns 所有操作的帮助信息：
+<!-- more -->
+network namespace
+network namespace 在逻辑上是网络堆栈的一个副本，它有自己的路由、防火墙规则和网络设备。
+默认情况下，子进程继承其父进程的 network namespace。也就是说，如果不显式创建新的 network namespace，所有进程都从 init 进程继承相同的默认 network namespace。
+根据约定，命名的 network namespace 是可以打开的 /var/run/netns/ 目录下的一个对象。比如有一个名称为 net1 的 network namespace 对象，则可以由打开 /var/run/netns/net1 对象产生的文件描述符引用 network namespace net1。通过引用该文件描述符，可以修改进程的 network namespace。</p>
+
+<p>显示所有命名的 network namespace
+ip netns list 命令显示所有命名的 network namesapce，其实就是显示 /var/run/netns 目录下的所有 network namespace 对象：</p>
+
+<p>创建命名的 network namespace
+ip netns add NAME 命令创建一个命名的 network namespace：</p>
+
+<p>删除命名的 network namespace
+ip [-all] netns del [ NAME ] 命令删除指定名称的 network namespace。如果指定了 -all 选项，则尝试删除所有的 network namespace。</p>
+
+<p>注意，如果我们把网卡设置到了某个 network namespace 中，并在该 network namespace 中启动了进程：</p>
+
+<p>$ sudo ip netns add net0
+$ sudo ip link set dev eth0 netns net0
+$ sudo ip netns exec net0 bash
+在另一个 bash 进程中删除 network namespace net0：</p>
+
+<p>$ sudo ip netns del net0
+此时虽然可以删除 netowrk namespace，但是在进程退出之前，网卡一直会保持在你已经删除了的那个 network namespace 中。</p>
+
+<p>查看进程的 network namespace
+ip netns identify [PID] 命令用来查看进程的 network namespace。如果不指定 PID 就显示当前进程的 network namespace：
+下面的命令指定了 PID：
+查看 network namespace 中进程的 PID
+ip netns pids NAME 命令用来查看指定的 network namespace 中的进程的 PID。这个命令其实就是去检查 /proc 下的所有进程，看进程的 network namespace 是不是指定的 network namespace：</p>
+
+<p>在指定的 network namespace 中执行命令
+ip [-all] netns exec [ NAME ] cmd 命令用来在指定的 network namespace 中执行命令。比如我们要看一下某个 network namespace 中有哪些网卡：
+ip netns exec neta ip addr</p>
+
+<p>ip netns exec 后面跟着 namespace 的名字，比如这里的 neta，然后是要执行的命令，只要是合法的 shell 命令都能运行，比如上面的 ip addr 或者 bash。
+更棒的是，执行的可以是任何命令，不只是和网络相关的(当然，和网络无关命令执行的结果和在外部执行没有区别)。比如下面例子中，执行 bash 命令之后，后面所有的命令都是在这个 network namespace 中执行的，好处是不用每次执行命令都要把 ip netns exec NAME 补全，缺点是你无法清楚知道自己当前所在的 shell，容易混淆</p>
+
+<p>通过 -all 参数我们可以同时在所有的 network namespace 执行命令：</p>
+
+<p>输出中的 netns: 指示在某个 network namespace 中执行的结果。</p>
+
+<p>监控对 network namespace 的操作
+ip netns monitor 命令用来监控对 network namespace 的操作。比如我们删除一个 network namespace 时就会收到相应的通知</p>
+
+<p>理解 ip netns add 命令
+我们通过下面的演示来理解 ip netns add 命令的本质。
+查看默认 network namespace 的 ID：</p>
+
+<p>$ readlink /proc/$$/ns/net
+在 /var/run/netns 目录下创建一个用于绑定 network namespace 的文件，名为 mynet：</p>
+
+<p>$ sudo mkdir -p /var/run/netns
+$ sudo touch /var/run/netns/mynet</p>
+
+<p>通过 unshare 命令创建新的 network namespace，并在新的 namespace 中启动新的 bash：</p>
+
+<p>$ sudo unshare –net bash
+查看新的 network namespace ID：</p>
+
+<h1 id="readlink-procnsnet">readlink /proc/$$/ns/net</h1>
+
+<p>通过绑定挂载把当前 bash 进程的 network namespace 文件挂载到前面创建的 mynet 文件上：</p>
+
+<h1 id="mount-bind-procnsnet-varrunnetnsmynet">mount –bind /proc/$$/ns/net /var/run/netns/mynet</h1>
+<h1 id="ls--i-varrunnetnsmynet">ls -I /var/run/netns/mynet</h1>
+<p>通过 ls -I 命令可以看到文件 mynet 的 inode 号和 network namespace 的 ID 相同，说明绑定成功：</p>
+
+<p>退出新创建的 bash，再检查一次 mynet 文件的 inode：</p>
+
+<h1 id="exit">exit</h1>
+<p>$ ls -I /var/run/netns/mynet</p>
+
+<p>可以看出 mynet 文件的 inode 没有发生变化，说明我们使用了绑定挂载后，虽然新的 network namespace 中已经没有进程了，但这个新的 network namespace 还继续存在。</p>
+
+<p>上面的一系列操作其实等同于执行了命令：sudo ip netns add mynet
+下面的 nsenter 命令则等同于执行了命令： sudo ip netns exec mynet bash</p>
+
+<p>$ sudo nsenter –net=/var/run/netns/mynet bash</p>
+<h1 id="readlink-procnsnet-1">readlink /proc/$$/ns/net</h1>
+
+<p>通过 nsenter 命令新建了一个 bash 进程，并把它加入 mynet 所关联的 network namespace(net:[4026532616])。</p>
+
+<p>从上面的示例可以看出，创建命名的 network namespace 其实就是创建一个文件，然后通过绑定挂载的方式将新创建的 network namespace 文件(/proc/$$/ns/net)和该文件绑定，就算该 network namespace 里的所有进程都退出了，内核还是会保留该 network namespace，以后我们还可以通过这个绑定的文件来加入该 network namespace。</p>
+
+<p>network namespace 是实现网络虚拟化的重要功能，它能创建多个隔离的网络空间，它们有独自的网络栈信息。不管是虚拟机还是容器，运行的时候仿佛自己就在独立的网络中
+network namespace 是 linux 内核提供的功能，
+借助 ip 命令来完成各种操作。ip 命令来自于 iproute2 安装包，一般系统会默认安装</p>
+
+<p>NOTE：ip 命令因为需要修改系统的网络配置，默认需要 sudo 权限。这篇文章使用 root 用户执行，请不要在生产环境或者重要的系统中用 root 直接执行，以防产生错误。</p>
+
+<p>ip 命令管理的功能很多， 和 network namespace 有关的操作都是在子命令 ip netns 下进行的，可以通过 ip netns help` 查看所有操作的帮助信息。</p>
+
+<p>默认情况下，使用 ip netns 是没有网络 namespace 的，所以 ip netns ls 命令看不到任何输出。</p>
+
+<p>[root@localhost ~]# ip netns help
+Usage: ip netns list
+       ip netns add NAME
+       ip netns delete NAME
+       ip netns identify PID
+       ip netns pids NAME
+       ip netns exec NAME cmd …
+       ip netns monitor
+[root@localhost ~]# ip netns ls
+创建 network namespace 也非常简单，直接使用 ip netns add 后面跟着要创建的 namespace 名称。如果相同名字的 namespace 已经存在，命令会报 Cannot create namespace 的错误。</p>
+
+<p>[root@localhost ~]# ip netns add net1
+[root@localhost ~]# ip netns ls
+net1
+ip netns 命令创建的 network namespace 会出现在 /var/run/netns/ 目录下，如果需要管理其他不是 ip netns 创建的 network namespace，只要在这个目录下创建一个指向对应 network namespace 文件的链接就行。</p>
+
+<p>有了自己创建的 network namespace，我们还需要看看它里面有哪些东西。对于每个 network namespace 来说，它会有自己独立的网卡、路由表、ARP 表、iptables 等和网络相关的资源。ip 命令提供了 ip netns exec 子命令可以在对应的 network namespace 中执行命令，比如我们要看一下这个 network namespace 中有哪些网卡。更棒的是，要执行的可以是任何命令，不只是和网络相关的（当然，和网络无关命令执行的结果和在外部执行没有区别）。比如下面例子中，执行 bash 命令了之后，后面所有的命令都是在这个 network namespace 中执行的，好处是不用每次执行命令都要把 ip netns exec NAME 补全，缺点是你无法清楚知道自己当前所在的 shell，容易混淆。</p>
+
+<p>[root@localhost ~]# ip netns exec net1 ip addr
+1: lo: <LOOPBACK> mtu 65536 qdisc noop state DOWN
+    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
+[root@localhost ~]# ip netns exec net1 bash
+[root@localhost ~]# ip addr
+1: lo: <LOOPBACK> mtu 65536 qdisc noop state DOWN
+    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
+[root@localhost ~]# exit
+exit
+更新：通过修改 bash 的前缀信息可以区分不同 shell，操作如下：</LOOPBACK></LOOPBACK></p>
+
+<p>$ ip netns exec ns1 /bin/bash –rcfile &lt;(echo “PS1="namespace ns1&gt; "”)</p>
+
+<p>namespace ns1&gt; ping www.google.com
+PING www.google.com (178.60.128.38) 56(84) bytes of data.
+64 bytes from cache.google.com (178.60.128.38): icmp_seq=1 ttl=58 time=17.6 ms
+ip netns exec 后面跟着 namespace 的名字，比如这里的 net1，然后是要执行的命令，只要是合法的 shell 命令都能运行，比如上面的 ip addr 或者 bash。</p>
+
+<p>每个 namespace 在创建的时候会自动创建一个 lo 的 interface，它的作用和 linux 系统中默认看到的 lo 一样，都是为了实现 loopback 通信。如果希望 lo 能工作，不要忘记启用它：</p>
+
+<p>[root@localhost ~]# ip netns exec net1 ip link set lo up
+默认情况下，network namespace 是不能和主机网络，或者其他 network namespace 通信的。</p>
+
+<p>network namespace 之间通信
+有了不同 network namespace 之后，也就有了网络的隔离，但是如果它们之间没有办法通信，也没有实际用处。要把两个网络连接起来，linux 提供了 veth pair 。可以把 veth pair 当做是双向的 pipe（管道），从一个方向发送的网络数据，可以直接被另外一端接收到；或者也可以想象成两个 namespace 直接通过一个特殊的虚拟网卡连接起来，可以直接通信。</p>
+
+<p>使用上面提到的方法，我们再创建另外一个 network namespace，这里我们使用 net0 和 net1 两个名字。</p>
+
+<p>我们可以使用 ip link add type veth 来创建一对 veth pair 出来，需要记住的是 veth pair 无法单独存在，删除其中一个，另一个也会自动消失。</p>
+
+<p>[root@localhost ~]# ip link add type veth
+[root@localhost ~]# ip link
+4: veth0: &lt;BROADCAST,MULTICAST&gt; mtu 1500 qdisc noop state DOWN mode DEFAULT qlen 1000
+    link/ether 36:88:73:83:c9:64 brd ff:ff:ff:ff:ff:ff
+5: veth1: &lt;BROADCAST,MULTICAST&gt; mtu 1500 qdisc noop state DOWN mode DEFAULT qlen 1000
+    link/ether fe:7e:75:4d:79:2e brd ff:ff:ff:ff:ff:ff
+小知识: 创建 veth pair 的时候可以自己指定它们的名字，比如 ip link add vethfoo type veth peer name vethbar 创建出来的两个名字就是 vethfoo 和 vethbar 。因为这里我们对名字没有特殊要求，所以就直接使用系统自动生成的名字。如果 pair 的一端接口处于 DOWN 状态，另一端能自动检测到这个信息，并把自己的状态设置为 NO-CARRIER。</p>
+
+<p>创建结束之后，我们能看到名字为 veth0 和 veth1 两个网络接口，名字后面的数字是系统自动生成的。接下来，要做的是把这对 veth pair 分别放到已经两个 namespace 里面，这个可以使用 ip link set DEV netns NAME 来实现：</p>
+
+<p>[root@localhost ~]# ip link set veth0 netns net0
+[root@localhost ~]# ip link set veth1 netns net1
+[root@localhost ~]# ip netns exec net0 ip addr
+1: lo: <LOOPBACK> mtu 65536 qdisc noop state DOWN
+    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
+4: veth0: &lt;BROADCAST,MULTICAST&gt; mtu 1500 qdisc noop state DOWN qlen 1000
+    link/ether 36:88:73:83:c9:64 brd ff:ff:ff:ff:ff:ff
+[root@localhost ~]# ip netns exec net1 ip addr
+1: lo: <LOOPBACK> mtu 65536 qdisc noop state DOWN
+    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
+5: veth1: &lt;BROADCAST,MULTICAST&gt; mtu 1500 qdisc noop state DOWN qlen 1000
+    link/ether fe:7e:75:4d:79:2e brd ff:ff:ff:ff:ff:ff
+最后，我们给这对 veth pair 配置上 ip 地址，并启用它们。</LOOPBACK></LOOPBACK></p>
+
+<p>[root@localhost ~]# ip netns exec net0 ip link set veth0 up
+[root@localhost ~]# ip netns exec net0 ip addr add 10.0.1.1/24 dev veth0
+[root@localhost ~]# ip netns exec net0 ip route
+10.0.1.0/24 dev veth0  proto kernel  scope link  src 10.0.1.1</p>
+
+<p>[root@localhost ~]# ip netns exec net1 ip link set veth1 up
+[root@localhost ~]# ip netns exec net1 ip addr add 10.0.1.2/24 dev veth1
+可以看到，最每个 namespace 中，在配置玩 ip 之后，还自动生成了对应的路由表信息，网络 10.0.1.0/24 数据报文都会通过 veth pair 进行传输。使用 ping 命令可以验证它们的连通性：</p>
+
+<p>[root@localhost ~]# ip netns exec net0 ping -c 3 10.0.1.2
+PING 10.0.1.2 (10.0.1.2) 56(84) bytes of data.
+64 bytes from 10.0.1.2: icmp_seq=1 ttl=64 time=0.039 ms
+64 bytes from 10.0.1.2: icmp_seq=2 ttl=64 time=0.039 ms
+64 bytes from 10.0.1.2: icmp_seq=3 ttl=64 time=0.139 ms</p>
+
+<p>— 10.0.1.2 ping statistics —
+3 packets transmitted, 3 received, 0% packet loss, time 2004ms
+rtt min/avg/max/mdev = 0.039/0.072/0.139/0.047 ms</p>
+
+<p>使用 bridge 连接不同的 namespace
+虽然 veth pair 可以实现两个 network namespace 之间的通信，但是当多个 namespace 需要通信的时候，就无能为力了。
+讲到多个网络设备通信，我们首先想到的交换机和路由器。因为这里要考虑的只是同个网络，所以只用到交换机的功能。linux 当然也提供了虚拟交换机的功能，我们还是用 ip 命令来完成所有的操作。</p>
+
+<p>NOTE：和 bridge 有关的操作也可以使用命令 brctl，这个命令来自 bridge-utils 这个包，读者可以根据自己的发行版进行安装，使用方法请查阅 man 页面或者相关文档。</p>
+
+<p>首先我们来创建需要的 bridge，简单起见名字就叫做 br0。</p>
+
+<p>[root@localhost ~]# ip link add br0 type bridge
+[root@localhost ~]# ip link set dev br0 up
+下面只演示一个 namespace 的操作，其他 namespace 要做的事情和这个类似。创建 veth pair：</p>
+
+<p>[root@localhost ~]# ip link add type veth
+把其中一个 veth（veth1） 放到 net0 里面，设置它的 ip 地址并启用它：</p>
+
+<p>[root@localhost ~]# ip link set dev veth1 netns net0
+[root@localhost ~]# ip netns exec net0 ip link set dev veth1 name eth0
+[root@localhost ~]# ip netns exec net0 ip addr add 10.0.1.1/24 dev eth0
+[root@localhost ~]# ip netns exec net0 ip link set dev eth0 up
+最后，把另一个 veth（veth0）连接到创建的 bridge 上，并启用它：</p>
+
+<p>[root@localhost ~]# ip link set dev veth0 master br0
+[root@localhost ~]# ip link set dev veth0 up
+可以通过 bridge 命令（也是 iproute2 包自带的命令）来查看 bridge 管理的 link 信息：</p>
+
+<p>[root@localhost ~]# bridge link
+17: veth0 state UP : &lt;BROADCAST,MULTICAST,UP,LOWER_UP&gt; mtu 1500 master br0 state forwarding priority 32 cost 2
+最后通过 ping 命令来测试网络的连通性：</p>
+
+<p>[root@localhost ~]# ip netns exec net0 ping -c 3 10.0.1.3
+PING 10.0.1.3 (10.0.1.3) 56(84) bytes of data.
+64 bytes from 10.0.1.3: icmp_seq=1 ttl=64 time=0.251 ms
+64 bytes from 10.0.1.3: icmp_seq=2 ttl=64 time=0.047 ms
+64 bytes from 10.0.1.3: icmp_seq=3 ttl=64 time=0.046 ms</p>
+
+<p>— 10.0.1.3 ping statistics —
+3 packets transmitted, 3 received, 0% packet loss, time 2008ms
+下图是这部分网络的拓扑结构，如果对 docker 网络熟悉的话，其实这和 docker 默认的 bridge 网络模型非常相似。当然要实现每个 namespace 对外网的访问还需要额外的配置（设置默认网关，开启 ip_forward，为网络添加 NAT 规则等）。</p>
+
+<p>https://blog.kghost.info/2013/03/01/linux-network-emulator/
+https://blog.scottlowe.org/2013/09/04/introducing-linux-network-namespaces/</p>
+
+<ol>
+  <li>ip netns add xx 创建一个 namespace
+    <h1 id="ip-netns-add-net1">ip netns add net1</h1>
+    <h1 id="ip-netns-ls">ip netns ls</h1>
+    <p>net1</p>
+  </li>
+  <li>ip netns exec xx yy 在新 namespace xx 中执行 yy 命令
+    <h1 id="ip-netns-exec-net1-ip-addr">ip netns exec net1 ip addr</h1>
+    <p>1: lo: <LOOPBACK> mtu 65536 qdisc noop state DOWN group default qlen 1
+ link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00</LOOPBACK></p>
+    <h1 id="ip-netns-exec-net1-bash--在-net1-中打开一个shell终端">ip netns exec net1 bash // 在 net1 中打开一个shell终端</h1>
+    <h1 id="ip-addr--在net1中的shell终端">ip addr // 在net1中的shell终端</h1>
+    <p>1: lo: <LOOPBACK> mtu 65536 qdisc noop state DOWN group default qlen 1
+ link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00</LOOPBACK></p>
+    <h1 id="exit--退出net1">exit // 退出net1</h1>
+    <p>上面 bash 不好区分是当前是在哪个 shell，可以采用下面的方法解决：</p>
+    <h1 id="ip-netns-exec-net1-binbash-rcfile-echo-ps1namespace-net1-">ip netns exec net1 /bin/bash –rcfile &lt;(echo “PS1="namespace net1&gt; "”)</h1>
+    <p>namespace net1&gt; ping www.baidu.com
+每个 namespace 在创建的时候会自动创建一个回环接口 lo ，默认不启用，可以通过 ip link set lo up 启用。</p>
+  </li>
+  <li>network namespace 之间的通信
+新创建的 namespace 默认不能和主机网络，以及其他 namespace 通信。</li>
+</ol>
+
+<p>可以使用 Linux 提供的 veth pair 来完成通信。</p>
+
+<p>3.1 ip link add type veth 创建 veth pair</p>
+<h1 id="ip-link-add-type-veth">ip link add type veth</h1>
+<h1 id="ip-link">ip link</h1>
+<p>3: veth0@veth1: &lt;BROADCAST,MULTICAST,M-DOWN&gt; mtu 1500 qdisc noop state DOWN mode DEFAULT group default qlen 1000
+    link/ether 1a:53:39:5a:26:12 brd ff:ff:ff:ff:ff:ff
+4: veth1@veth0: &lt;BROADCAST,MULTICAST,M-DOWN&gt; mtu 1500 qdisc noop state DOWN mode DEFAULT group default qlen 1000
+    link/ether 46:df:46:1f:bf:d6 brd ff:ff:ff:ff:ff:ff
+使用命令 ip link add xxx type veth peer name yyy 指定 veth pair 的名字。</p>
+
+<p>3.2 ip link set xx netns yy 将 veth xx 加入到 namespace yy 中</p>
+<h1 id="ip-link-set-veth0-netns-net0">ip link set veth0 netns net0</h1>
+<h1 id="ip-link-set-veth1-netns-net1">ip link set veth1 netns net1</h1>
+<p>#</p>
+<h1 id="ip-netns-exec-net0-ip-addr">ip netns exec net0 ip addr</h1>
+<p>1: lo: <LOOPBACK> mtu 65536 qdisc noop state DOWN group default qlen 1
+    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
+10: veth0@if11: &lt;BROADCAST,MULTICAST&gt; mtu 1500 qdisc noop state DOWN group default qlen 1000
+    link/ether 1a:53:39:5a:26:12 brd ff:ff:ff:ff:ff:ff link-netnsid 1
+3.3 给 veth pair 配上 ip 地址</LOOPBACK></p>
+<h1 id="ip-netns-exec-net0-ip-link-set-veth0-up">ip netns exec net0 ip link set veth0 up</h1>
+<h1 id="ip-netns-exec-net0-ip-addr-1">ip netns exec net0 ip addr</h1>
+<p>1: lo: &lt;LOOPBACK,UP,LOWER_UP&gt; mtu 65536 qdisc noqueue state UNKNOWN group default qlen 1
+    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
+    inet 127.0.0.1/8 scope host lo
+       valid_lft forever preferred_lft forever
+    inet6 ::1/128 scope host
+       valid_lft forever preferred_lft forever
+10: veth0@if11: &lt;NO-CARRIER,BROADCAST,MULTICAST,UP&gt; mtu 1500 qdisc noqueue state LOWERLAYERDOWN group default qlen 1000
+    link/ether 1a:53:39:5a:26:12 brd ff:ff:ff:ff:ff:ff link-netnsid 1</p>
+<h1 id="ip-netns-exec-net0-ip-addr-add-1011124-dev-veth0">ip netns exec net0 ip addr add 10.1.1.1/24 dev veth0</h1>
+<h1 id="ip-netns-exec-net0-ip-route">ip netns exec net0 ip route</h1>
+<p>10.1.1.0/24 dev veth0  proto kernel  scope link  src 10.1.1.1 linkdown
+#</p>
+<h1 id="ip-netns-exec-net1-ip-link-set-veth1-up">ip netns exec net1 ip link set veth1 up</h1>
+<h1 id="ip-netns-exec-net1-ip-addr-add-1011224-dev-veth1">ip netns exec net1 ip addr add 10.1.1.2/24 dev veth1</h1>
+<p>可以看到，在配完 ip 之后，还自动生成了对应的路由表信息。</p>
+
+<p>3.4. ping 测试两个 namespace 的连通性</p>
+<h1 id="ip-netns-exec-net0-ping-10112">ip netns exec net0 ping 10.1.1.2</h1>
+<p>PING 10.1.1.2 (10.1.1.2) 56(84) bytes of data.
+64 bytes from 10.1.1.2: icmp_seq=1 ttl=64 time=0.069 ms
+64 bytes from 10.1.1.2: icmp_seq=2 ttl=64 time=0.054 ms
+64 bytes from 10.1.1.2: icmp_seq=3 ttl=64 time=0.053 ms
+64 bytes from 10.1.1.2: icmp_seq=4 ttl=64 time=0.053 ms
+Done!</p>
+
+<ol>
+  <li>多个不同 namespace 之间的通信
+2 个 namespace 之间通信可以借助 veth pair ，多个 namespace 之间的通信则可以使用 bridge 来转接，不然每两个 namespace 都去配 veth pair 将会是一件麻烦的事。下面就看看如何使用 bridge 来转接。</li>
+</ol>
+
+<p>4.1 使用 ip link 和 brctl 创建 bridge
+通常 Linux 中和 bridge 有关的操作是使用命令 brctl (yum install -y bridge-utils ) 。但为了前后照应，这里都用 ip 相关的命令来操作。
+// 建立一个 bridge</p>
+<h1 id="ip-link-add-br0-type-bridge">ip link add br0 type bridge</h1>
+<h1 id="ip-link-set-dev-br0-up">ip link set dev br0 up</h1>
+<p>9: br0: &lt;BROADCAST,MULTICAST,UP,LOWER_UP&gt; mtu 1500 qdisc noqueue state UNKNOWN group default qlen 1000
+    link/ether 42:55:ed:eb:a0:07 brd ff:ff:ff:ff:ff:ff
+    inet6 fe80::4055:edff:feeb:a007/64 scope link
+       valid_lft forever preferred_lft forever
+4.2 创建 veth pair
+//（1）创建 3 个 veth pair</p>
+<h1 id="ip-link-add-type-veth-1">ip link add type veth</h1>
+<h1 id="ip-link-add-type-veth-2">ip link add type veth</h1>
+<h1 id="ip-link-add-type-veth-3">ip link add type veth</h1>
+<p>4.3 将 veth pair 的一头挂到 namespace 中，一头挂到 bridge 上，并设 IP 地址
+// （1）配置第 1 个 net0</p>
+<h1 id="ip-link-set-dev-veth1-netns-net0">ip link set dev veth1 netns net0</h1>
+<h1 id="ip-netns-exec-net0-ip-link-set-dev-veth1-name-eth0">ip netns exec net0 ip link set dev veth1 name eth0</h1>
+<h1 id="ip-netns-exec-net0-ip-addr-add-1001124-dev-eth0">ip netns exec net0 ip addr add 10.0.1.1/24 dev eth0</h1>
+<h1 id="ip-netns-exec-net0-ip-link-set-dev-eth0-up">ip netns exec net0 ip link set dev eth0 up</h1>
+<p>#</p>
+<h1 id="ip-link-set-dev-veth0-master-br0">ip link set dev veth0 master br0</h1>
+<h1 id="ip-link-set-dev-veth0-up">ip link set dev veth0 up</h1>
+
+<p>// （2）配置第 2 个 net1</p>
+<h1 id="ip-link-set-dev-veth3-netns-net1">ip link set dev veth3 netns net1</h1>
+<h1 id="ip-netns-exec-net1-ip-link-set-dev-veth3-name-eth0">ip netns exec net1 ip link set dev veth3 name eth0</h1>
+<h1 id="ip-netns-exec-net1-ip-addr-add-1001224-dev-eth0">ip netns exec net1 ip addr add 10.0.1.2/24 dev eth0</h1>
+<h1 id="ip-netns-exec-net1-ip-link-set-dev-eth0-up">ip netns exec net1 ip link set dev eth0 up</h1>
+<p>#</p>
+<h1 id="ip-link-set-dev-veth2-master-br0">ip link set dev veth2 master br0</h1>
+<h1 id="ip-link-set-dev-veth2-up">ip link set dev veth2 up</h1>
+
+<p>// （3）配置第 3 个 net2</p>
+<h1 id="ip-link-set-dev-veth5-netns-net2">ip link set dev veth5 netns net2</h1>
+<h1 id="ip-netns-exec-net2-ip-link-set-dev-veth5-name-eth0">ip netns exec net2 ip link set dev veth5 name eth0</h1>
+<h1 id="ip-netns-exec-net2-ip-addr-add-1001324-dev-eth0">ip netns exec net2 ip addr add 10.0.1.3/24 dev eth0</h1>
+<h1 id="ip-netns-exec-net2-ip-link-set-dev-eth0-up">ip netns exec net2 ip link set dev eth0 up</h1>
+<p>#</p>
+<h1 id="ip-link-set-dev-veth4-master-br0">ip link set dev veth4 master br0</h1>
+<h1 id="ip-link-set-dev-veth4-up">ip link set dev veth4 up</h1>
+<p>这样之后，竟然通不了，经查阅 参见 ，是因为</p>
+
+<p>原因是因为系统为bridge开启了iptables功能，导致所有经过br0的数据包都要受iptables里面规则的限制，而docker为了安全性，将iptables里面filter表的FORWARD链的默认策略设置成了drop，于是所有不符合docker规则的数据包都不会被forward，导致你这种情况ping不通。</p>
+
+<p>解决办法有两个，二选一：</p>
+
+<p>关闭系统bridge的iptables功能，这样数据包转发就不受iptables影响了：echo 0 &gt; /proc/sys/net/bridge/bridge-nf-call-iptables
+为br0添加一条iptables规则，让经过br0的包能被forward：iptables -A FORWARD -i br0 -j ACCEPT
+第一种方法不确定会不会影响docker，建议用第二种方法。</p>
+
+<p>我采用以下方法解决：
+iptables -A FORWARD -i br0 -j ACCEPT
+结果：</p>
+<h1 id="ip-netns-exec-net0-ping--c-2-10012">ip netns exec net0 ping -c 2 10.0.1.2</h1>
+<p>PING 10.0.1.2 (10.0.1.2) 56(84) bytes of data.
+64 bytes from 10.0.1.2: icmp_seq=1 ttl=64 time=0.071 ms
+64 bytes from 10.0.1.2: icmp_seq=2 ttl=64 time=0.072 ms</p>
+
+<p>— 10.0.1.2 ping statistics —
+2 packets transmitted, 2 received, 0% packet loss, time 999ms
+rtt min/avg/max/mdev = 0.071/0.071/0.072/0.008 ms</p>
+
+<h1 id="ip-netns-exec-net0-ping--c-2-10013">ip netns exec net0 ping -c 2 10.0.1.3</h1>
+<p>PING 10.0.1.3 (10.0.1.3) 56(84) bytes of data.
+64 bytes from 10.0.1.3: icmp_seq=1 ttl=64 time=0.071 ms
+64 bytes from 10.0.1.3: icmp_seq=2 ttl=64 time=0.087 ms</p>
+
+<p>— 10.0.1.3 ping statistics —
+2 packets transmitted, 2 received, 0% packet loss, time 1000ms
+rtt min/avg/max/mdev = 0.071/0.079/0.087/0.008 ms
+Done!</p>
+
+<ol>
+  <li>Bridge 之间的同住机通信</li>
+</ol>
+
+<p>为bridge开启了iptables功能，导致所有经过br0的数据包都要受iptables里面规则的限制，而docker为了安全性，将iptables里面filter表的FORWARD链的默认策略设置成了drop，于是所有不符合docker规则的数据包都不会被forward，导致你这种情况ping不通。</p>
+
+<p>解决办法有两个，二选一：</p>
+
+<p>关闭系统bridge的iptables功能，这样数据包转发就不受iptables影响了：echo 0 &gt; /proc/sys/net/bridge/bridge-nf-call-iptables</p>
+
+<p>为br0添加一条iptables规则，让经过br0的包能被forward：iptables -A FORWARD -i br0 -j ACCEPT</p>
+
+<p>第一种方法不确定会不会影响docker，建议用第二种方法。</p>
+
+<p>在专业的网络世界中，经常使用到Virtual Routing and Forwarding（VRF），比如Cisco，Alcatel-Lucent, Juniper 等。对于L2 switch，自从上世纪90年代就开始使用VLAN，一个物理交换机上可以使用多个广播域，如今大多数交换机都支持4K vlan。</p>
+
+<p>这个概念被引入到L3，如今很多网络设备支持VRF。这意味着，单个物理设备上可运行多个虚拟路由（L3 转发实例）。</p>
+
+<p>在linux中，VRF被叫做“network namespace”，当然了linux中还包括其他namespace，不过本文不讨论。</p>
+
+<p>每个network namespace拥有其对应的路由表（routing table）&amp; 其对应的iptables，并且运行程序运行其中。 为什么有人使用它？比如一个运行在linux上的 Firewall，将firewall的所有服务端口分配给一个network namespace，这样，默认的network namespace 和 Firewall network namespace就运行着不同的路由表。像SSH这样的application运行在默认的network namespace，但是不在Firewall network namespace。</p>
+
+<p>下面展示了其基本用法。</p>
+
+<p>Basic network namespace commands
+基本命令为“ip”，有些用户使用它来代替废弃的 ifconfig，route，netstat… 必须为root用户来使用它，这样才能更改network stack的配置。下面是ip命令和其他命令的映射：</p>
+
+<p>ifconfig                                            –&gt; ip addr or just ip a
+ifconfig <interface> up/down                        --&gt; ip link set dev <interface> up/down
+ifconfig <interface> <ip> netmask <netmask>         --&gt; ip addr add <ip>/<masklen> dev <interface>
+netstat -rn                                         --&gt; ip route or just ip r
+route add -net <net> netmask <netmask> gw <gateway> --&gt; ip r add <net>/<netmasklen> via <gateway>
+Check your Linux for namespace support
+使用前，先检查系统是否支持。</gateway></netmasklen></net></gateway></netmask></net></interface></masklen></ip></netmask></ip></interface></interface></interface></p>
+
+<p>Creating a network namespace</p>
+<h1 id="add-a-new-namespace">add a new namespace</h1>
+<p>ip netnas add <network namespace="" name="">
+#Example:
+ip netns add nstest
+Listing all existing network namespaces in the system</network></p>
+<h1 id="list-all-namespaces">list all namespaces</h1>
+<p>ip netns list
+#will show the namespace from above</p>
+
+<p>nstest
+Deleting a network namespace
+ip netns delete <network namespace="" name="">
+Executing a command in a network namespace
+下面展示了使程序运行在network namespace中的“黑魔法”。</network></p>
+
+<h1 id="execute-a-command-in-a-namespace">execute a command in a namespace</h1>
+<p>ip netns exec <network namespace="" name=""> <command />
+#Example using the namespace from above:
+ip netns exec nstest ip addr
+展示了在此network namespace中的所有的ip interface</network></p>
+
+<p>lo: <LOOPBACK> mtu 65536 qdisc noop state DOWN mode DEFAULT 
+    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
+一个脏技巧是在network namespace中运行shell：</LOOPBACK></p>
+
+<p>ip netns exec <network namespace="" name=""> bash
+现在，你已经“trapped”入namespace中了，exit退出。</network></p>
+
+<p>Exploring the network namespace
+当我们已经创建了network namespace，第一个task是bring up其中的lo interface。应该注意到的是，在创建了network namespace后，lo interface的状态是down。如果忽略了这个，可能会发生一些奇怪的事。</p>
+
+<h1 id="set-the-link-of-lo-in-the-namespace-to-up">set the link of lo in the namespace to up</h1>
+<p>ip netns exec nstest ip link set dev lo up</p>
+<h1 id="list-all-interfaces-and-the-state-in-the-namespace">list all interfaces and the state in the namespace</h1>
+<p>ip netns exec nstest ip link
+现在lo interface状态为up，现在，是时候将network namespace链接到外部空间。</p>
+
+<p>Adding interfaces to a network namespace
+将一个物理interface分配给network namespace是不可能的，而是使用 virtual interface来实现。所以，我们先创建一个virtual interface，同样使用 ip command：</p>
+
+<p>ip link add veth-a type veth peer name veth-b
+上述命令创建了两个virtual interface，分别为veth-a &amp; veth-b,他们之间通过一个virtual cable链接。ip link命令显示了在默认namespace下这两个interface的信息。</p>
+
+<p>ip link
+veth-b: &lt;BROADCAST,MULTICAST&gt; mtu 1500 qdisc noop state DOWN mode DEFAULT qlen 1000
+ link/ether 72:01:ad:c5:67:84 brd ff:ff:ff:ff:ff:ff
+veth-a: &lt;BROADCAST,MULTICAST&gt; mtu 1500 qdisc noop state DOWN mode DEFAULT qlen 1000
+ link/ether 8e:8b:bd:b1:88:e5 brd ff:ff:ff:ff:ff:ff
+下面我们将其中的一个interface添加入之前我们创建的namespace nstest：</p>
+
+<p>ip link set veth-b netns nstest
+现在veth-b不在默认的namespace下了，而出现在了nstest 中，使用如下命令验证：</p>
+
+<h1 id="list-all-interfaces-in-the-namespace-nstest">list all interfaces in the namespace nstest</h1>
+<p>ip netns exec nstest ip link</p>
+
+<p>lo: &lt;LOOPBACK,UP,LOWER_UP&gt; mtu 65536 qdisc noqueue state UNKNOWN mode DEFAULT 
+ link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
+veth-b: &lt;BROADCAST,MULTICAST&gt; mtu 1500 qdisc noop state DOWN mode DEFAULT qlen 1000
+ link/ether 72:01:ad:c5:67:84 brd ff:ff:ff:ff:ff:ff
+现在，在network namespace nstest中，就拥有了两个interface。</p>
+
+<p>Assign ip addresses to the veth interfaces
+现在是时候为这个veth interface分配ip并且使他的状态为up。</p>
+
+<h1 id="default-namespace">default namespace</h1>
+<p>ip addr add 10.0.0.1/24 dev veth-a
+ip link set dev veth-a up
+#</p>
+<h1 id="namespace-nstest">namespace nstest</h1>
+<p>ip netns exec nstest ip addr add 10.0.0.2/24 dev veth-b
+ip netns exec nstest ip link set dev veth-b up
+可通过“ip link”查看interface状态是否为up，使用“ip addr”查看interface的ip 地址，使用“ip route”查看其路由。</p>
+
+<p>现在可以在default namespace中，通过veth-a来ping通 位于 nstest中的veth-b。</p>
+
+<p>ping 10.0.0.2
+PING 10.0.0.2 (10.0.0.2) 56(84) bytes of data.
+64 bytes from 10.0.0.2: icmp_req=1 ttl=64 time=0.054 ms
+64 bytes from 10.0.0.2: icmp_req=2 ttl=64 time=0.034 ms
+64 bytes from 10.0.0.2: icmp_req=3 ttl=64 time=0.039 ms
+64 bytes from 10.0.0.2: icmp_req=4 ttl=64 time=0.036 ms
+以及在nstest network namespace中，通过veth-b来ping通 veth-a：</p>
+
+<p>ip netns exec nstest ping 10.0.0.1
+PING 10.0.0.1 (10.0.0.1) 56(84) bytes of data.
+64 bytes from 10.0.0.1: icmp_req=1 ttl=64 time=0.064 ms
+64 bytes from 10.0.0.1: icmp_req=2 ttl=64 time=0.036 ms
+64 bytes from 10.0.0.1: icmp_req=3 ttl=64 time=0.039 ms
+Demo
+下面一起来实现一个demo，最终实现如下的case：
+图片描述</p>
+
+<p>首先，先建立对应的namespace：</p>
+
+<p>$ sudo ip netns add server
+$ sudo ip netns add gateway
+$ sudo ip netns add client
+$ ip netns list
+client
+gateway
+server
+然后，启用gateway namespace中的ip forward功能，注意，操作全是在root权限下执行：</p>
+
+<p>$ ip netns exec gateway sysctl net.ipv4.ip_forward=1
+net.ipv4.ip_forward = 1
+下面我们来创建两对veth，用来连接不同的namespace：</p>
+
+<p>$ ip link add svr-veth type veth peer name svrgw-veth
+$ ip link add cli-veth type veth peer name cligw-veth
+$ ip link show | grep veth
+3: svrgw-veth:  mtu 1500 qdisc noop state DOWN mode DEFAULT qlen 1000
+4: svr-veth:  mtu 1500 qdisc noop state DOWN mode DEFAULT qlen 1000
+5: cligw-veth:  mtu 1500 qdisc noop state DOWN mode DEFAULT qlen 1000
+6: cli-veth:  mtu 1500 qdisc noop state DOWN mode DEFAULT qlen 1000
+将veth对的两端加入对应的namespace中，这样在默认的default namespace中就看不到他们了：</p>
+
+<p>$ ip link set svr-veth netns server
+$ ip link set svrgw-veth netns gateway
+$ ip link set cligw-veth netns gateway
+$ ip link set cli-veth netns client
+$ ip link show | grep veth
+在指定的namespace上可以看到对应的interface：</p>
+
+<p>$ ip netns exec server ip link show | grep veth
+4: svr-veth:  mtu 1500 qdisc noop state DOWN mode DEFAULT qlen 1000
+为各个veth分配ip：</p>
+
+<p>$ ip netns exec server ifconfig svr-veth 192.168.100.1
+$ ip netns exec gateway ifconfig svrgw-veth 192.168.100.254
+$ ip netns exec gateway ifconfig cligw-veth 10.0.100.254
+$ ip netns exec client ifconfig cli-veth 10.0.100.1
+在各个veth对中，通过ping来检查连通性：</p>
+
+<p>$ ip netns exec gateway ping 192.168.100.1 -I 192.168.100.254
+PING 192.168.100.1 (192.168.100.1) from 192.168.100.254 : 56(84) bytes of data.
+64 bytes from 192.168.100.1: icmp_req=1 ttl=64 time=0.044 ms
+64 bytes from 192.168.100.1: icmp_req=2 ttl=64 time=0.036 ms
+64 bytes from 192.168.100.1: icmp_req=3 ttl=64 time=0.040 ms
+^C
+— 192.168.100.1 ping statistics —
+3 packets transmitted, 3 received, 0% packet loss, time 1999ms
+rtt min/avg/max/mdev = 0.036/0.040/0.044/0.003 ms</p>
+
+<p>$ ip netns exec gateway ping 10.0.100.1 -I 10.0.100.254
+PING 10.0.100.1 (10.0.100.1) from 10.0.100.254 : 56(84) bytes of data.
+64 bytes from 10.0.100.1: icmp_req=1 ttl=64 time=0.107 ms
+64 bytes from 10.0.100.1: icmp_req=2 ttl=64 time=0.037 ms
+64 bytes from 10.0.100.1: icmp_req=3 ttl=64 time=0.037 ms
+^C
+— 10.0.100.1 ping statistics —
+3 packets transmitted, 3 received, 0% packet loss, time 1998ms
+rtt min/avg/max/mdev = 0.037/0.060/0.107/0.033 ms
+接下来设定路由，将各namespace中的默认路由指向对应的veth ip：</p>
+
+<p>$ sudo ip netns exec client route add default gw 10.0.100.254
+$ sudo ip netns exec client netstat -rn
+Kernel IP routing table
+Destination     Gateway         Genmask         Flags   MSS Window  irtt Iface
+0.0.0.0         10.0.100.254    0.0.0.0         UG        0 0          0 cli-veth
+10.0.0.0        0.0.0.0         255.0.0.0       U         0 0          0 cli-veth
+$ ip netns exec server route add default gw 192.168.100.254
+$ ip netns exec server netstat -rn
+Kernel IP routing table
+Destination     Gateway         Genmask         Flags   MSS Window  irtt Iface
+0.0.0.0         192.168.100.254 0.0.0.0         UG        0 0          0 svr-veth
+192.168.100.0   0.0.0.0         255.255.255.0   U         0 0          0 svr-veth
+最后我们尝试从client namespace 到 server namespace的网络连通性，通过ping命令来测试：</p>
+
+<p>$ ip netns exec client ping 192.168.100.1 -I 10.0.100.1
+PING 192.168.100.1 (192.168.100.1) from 10.0.100.1 : 56(84) bytes of data.
+64 bytes from 192.168.100.1: icmp_req=1 ttl=63 time=0.106 ms
+64 bytes from 192.168.100.1: icmp_req=2 ttl=63 time=0.076 ms
+64 bytes from 192.168.100.1: icmp_req=3 ttl=63 time=0.050 ms
+^C
+— 192.168.100.1 ping statistics —
+3 packets transmitted, 3 received, 0% packet loss, time 1999ms
+rtt min/avg/max/mdev = 0.050/0.077/0.106/0.024 ms</p>
+:ET

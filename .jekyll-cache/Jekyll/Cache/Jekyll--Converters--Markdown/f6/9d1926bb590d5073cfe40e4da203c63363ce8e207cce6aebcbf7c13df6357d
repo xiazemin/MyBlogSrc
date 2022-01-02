@@ -1,0 +1,259 @@
+I"�+<p>Nginx 在 1.13.10 中，新增了对gRPC的原生支持，Nginx 1.14.0 主线版已经发布</p>
+
+<p>Nginx 中的 gRPC 服务。gRPC 服务做为一个 TCP 服务，配置方式与 HTTP/HTPTS 类似。</p>
+
+<p>Nginx版本要求：1.13.10+。gRPC必须使用 HTTP/2 传输数据，支持明文和TLS加密数据，支持流数据的交互。这是为了充分利用 HTTP/2 连接的多路复用和流式特性。所以在安装部署nginx时需要安装http/2。使用源码安装，编译时需要加入http_ssl和http_v2模块：</p>
+
+<p>$ auto/configure –with-http_ssl_module –with-http_v2_module
+<!-- more -->
+以明文的方式发布gRPC服务。
+nginx是使用http服务器监听gRPC的请求。</p>
+
+<p>http {
+  server {
+    listen 80 http2;</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>access_log logs/access.log main;
+
+location / {
+  # The 'grpc://' prefix is optional; unencrypted gRPC is the default   
+  grpc_pass grpc://localhost:50051;
+}   } }
+</code></pre></div></div>
+
+<p>指令grpc_pass用来指定代理的gRPC服务器地址，前缀协议有两种：</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>     (adsbygoogle = window.adsbygoogle || []).push({}); 
+</code></pre></div></div>
+
+<p>grpc://：与gRPC服务器端交互是以明文的方式
+grpcs://：与gRPC服务器端交互式以TLS加密方式
+gRPC服务器地址的前缀“grpc://”是可以忽略，默认就是明文交互方式。</p>
+
+<p>此示例里nginx以明文的方式在80端口发布gRPC，其中代理的gRPC在后端也是以明文的方式交互。</p>
+
+<p>注意：Nginx是不支持在明文的端口上同时支持http1和http2的（想一想为什么？）。如果要支持这两种的http协议，需要设置为不同的端口。</p>
+
+<p>server {
+  listen 1443 ssl http2;</p>
+
+<p>ssl_certificate ssl/cert.pem;
+  ssl_certificate_key ssl/key.pem;</p>
+
+<p>location / {
+      grpc_pass grpc://localhost:50051;
+  }
+}</p>
+
+<p>代理加密的gRPC
+如果Nginx内部代理的gRPC也需要以加密的方式交互，这种情况就需要把明文代理协议grpc://替换为grpcs://。这首先要gRPC服务器是以加密的方式发布服务的。Nginx层修改如下：</p>
+
+<p>grpc_pass grpcs://localhost:50051;</p>
+
+<p>nginx路由gRPC请求
+如果后端有多个gRPC服务端，其中每个服务端都是提供不同的gRPC服务。这种情况可以使用一个nginx接收客户端请求，然后根据不同的路径分发路由到指定的gRPC服务器。使用location区分：</p>
+
+<p>location /helloworld.Greeter {
+  grpc_pass grpc://192.168.20.11:50051;
+}</p>
+
+<p>location /helloworld.Dispatcher {
+  grpc_pass grpc://192.168.20.21:50052;
+}</p>
+
+<p>location / {
+  root html;
+  index index.html index.htm;
+}</p>
+
+<p>对gRPC请求做负载均衡
+在后端有多个gRPC服务器，它们都是同一个gRPC服务，这种情况可以结合nginx的upstream可以对gRPC的请求做负载均衡。</p>
+
+<p>upstream grpcservers {
+  server 192.168.20.21:50051;
+  server 192.168.20.22:50052;
+}</p>
+
+<p>server {
+  listen 1443 ssl http2;</p>
+
+<p>ssl_certificate   ssl/certificate.pem;
+  ssl_certificate_key ssl/key.pem;</p>
+
+<p>location /helloworld.Greeter {
+    grpc_pass grpc://grpcservers;
+    error_page 502 = /error502grpc;
+  }</p>
+
+<p>location = /error502grpc {
+    internal;
+    default_type application/grpc;
+    add_header grpc-status 14;
+    add_header grpc-message “unavailable”;
+    return 204;
+  }
+}
+其中upstream指定定义了统一gRPC服务的服务器组。在grpc_pass指定的gRPC服务器地址使用upstream定义的服务器组。</p>
+
+<p>https://cloud.tencent.com/developer/article/1375974</p>
+
+<p>查看nginx error错误，发现上传接口报以下错：</p>
+
+<p>2019/10/10 19:58:25 [error] 299784#0: *5967188 readv() failed (104: Connection reset by peer) while reading upstream, client: 59.34.155.7, server: xxxxxxxx, request: “POST /stream/tracking/file HTTP/1.1”, upstream: “http://xxxxxxxx/stream/tracking/file”, host: “xxxxxxxx”</p>
+
+<p>这种错误日志不多，第一感觉就是上传文件过大，传输时间过长，然后连接被中断。</p>
+
+<p>当使用nginx作为反向代理时，为了支持长连接，需要做到两点：</p>
+
+<p>从client到nginx的连接是长连接，对于客户端来说，nginx长连接是默认开启的。
+从nginx到server的连接是长连接，需要自己开启</p>
+
+<p>upstream bigdata {<br />
+    server 10.0.20.xx:18018;<br />
+    server 10.0.20.xx:18018;<br />
+    server 10.0.20.xx:18018;<br />
+    server 10.0.20.xx:18018;<br />
+    keepalive 100;   //根据qps来调整<br />
+}</p>
+
+<p>location ~ / {<br />
+。。。。。。。。。省略。。。。。。。。。。。。。<br />
+    proxy_connect_timeout      120;   //加大120<br />
+    proxy_send_timeout         120;   //加大120<br />
+    proxy_read_timeout         120;   //加大120<br />
+    proxy_http_version 1.1;    //开启后端，长连接<br />
+    proxy_set_header Connection “”;  //开启后端，长连接<br />
+}<br />
+注意：keepalive指定的数值是Nginx每个worker连接后端的最大长连接数，而不是整个Nginx的.</p>
+
+<p>http://blog.51yip.com/apachenginx/2203.html</p>
+
+<p>Nginx proxy_http_version默认值引发的问题
+2021/06/01 15:24:27 [error] 3986#0: *990083 upstream sent invalid chunked response while reading upstream, client: xxx.xxx.xx.x, server: xxx.xxx.xx, request: “GET /api/server/download?fileKey=990aa1bc5e HTTP/1.1”, upstream: “http://xx.xxx.xxx.x:8080/api/server/download?fileKey=990aa1bc5e”, host: “xxxx.xxx.xx”</p>
+
+<p>抓取以下关键错误信息：
+upstream sent invalid chunked response while reading upstream
+HTTP/1.1</p>
+
+<p>通过网上查找发现问题，nginx在代理是默认http版本为1.0，由于文件的下载涉及到使用分块传递，但http1.0是不支持这个特性的。所以服务端为1.1版本无法进行转发</p>
+
+<p>解决方案：
+只要在nginx配置的location模块里面加上proxy_http_version 1.1就可以了
+https://blog.csdn.net/qq_38531706/article/details/117448200</p>
+
+<p>https://chromium.googlesource.com/external/github.com/grpc/grpc/+/refs/heads/chromium-deps/2016-06-09/doc/PROTOCOL-HTTP2.md</p>
+
+<p>NGINX服务器的反向代理PROXY_PASS配置方法讲解
+Nginx的配置还是比较简单的，如：
+location ~ /* 
+{
+proxy_pass http://127.0.0.1:8008;
+}</p>
+
+<p>https://www.cnblogs.com/lianxuan1768/p/8383804.html</p>
+
+<p>nginx反向代理http2
+编译时添加http2，配置加入proxy_http_version 2;
+当前端请求非常大，nginx到后端服务的tcp没有处理完而占用的时候，就会占用一个端口。一台服务器65535个端口，除掉系统占用的。那么也就是说nginx和后端服务最大并发是6W+个请求。</p>
+
+<p>使用http2合并（收敛）tcp请求在一定场景下是非常有必要的。</p>
+
+<p>https://www.zhihu.com/question/268666424/answer/347026835
+http://nginx.org/en/docs/http/ngx_http_proxy_module.html#proxy_http_version</p>
+
+<p>https://www.cnblogs.com/willpower-chen/p/5567223.html</p>
+
+<p>Nginx 负载均衡详解
+在文章Nginx 配置详解中我说啦nginx有哪些中负载均衡算法。这一结我就给如何操作配置的给大家做详细说明下。</p>
+
+<p>首先给大家说下upstream这个配置的，这个配置是写一组被代理的服务器地址，然后配置负载均衡的算法。这里的被代理服务器地址有两种写法。</p>
+
+<p>upstream mysvr { 
+    server 192.168.10.121:3333;
+    server 192.168.10.122:3333;
+}
+server {
+    ….
+    location  ~*^.+$ {       <br />
+        proxy_pass  http://mysvr;  #请求转向mysvr 定义的服务器列表       <br />
+    }
+}</p>
+
+<p>然后，就来点实战的东西。</p>
+
+<p>1、热备：如果你有2台服务器，当一台服务器发生事故时，才启用第二台服务器给提供服务。服务器处理请求的顺序：AAAAAA突然A挂啦，BBBBBBBBBBBBBB…..</p>
+
+<p>upstream mysvr { 
+    server 127.0.0.1:7878; 
+    server 192.168.10.121:3333 backup;  #热备   <br />
+}
+2、轮询：nginx默认就是轮询其权重都默认为1，服务器处理请求的顺序：ABABABABAB….</p>
+
+<p>upstream mysvr { 
+    server 127.0.0.1:7878;
+    server 192.168.10.121:3333;     <br />
+}
+3、加权轮询：跟据配置的权重的大小而分发给不同服务器不同数量的请求。如果不设置，则默认为1。下面服务器的请求顺序为：ABBABBABBABBABB….</p>
+
+<p>upstream mysvr { 
+    server 127.0.0.1:7878 weight=1;
+    server 192.168.10.121:3333 weight=2;
+}
+4、ip_hash:nginx会让相同的客户端ip请求相同的服务器。</p>
+
+<p>upstream mysvr { 
+    server 127.0.0.1:7878; 
+    server 192.168.10.121:3333;
+    ip_hash;
+}</p>
+
+<p>关于nginx负载均衡配置的几个状态参数讲解。</p>
+
+<p>down，表示当前的server暂时不参与负载均衡。</p>
+
+<p>backup，预留的备份机器。当其他所有的非backup机器出现故障或者忙的时候，才会请求backup机器，因此这台机器的压力最轻。</p>
+
+<p>max_fails，允许请求失败的次数，默认为1。当超过最大次数时，返回proxy_next_upstream 模块定义的错误。</p>
+
+<p>fail_timeout，在经历了max_fails次失败后，暂停服务的时间。max_fails可以和fail_timeout一起使用。</p>
+
+<p>upstream mysvr { 
+    server 127.0.0.1:7878 weight=2 max_fails=2 fail_timeout=2;
+    server 192.168.10.121:3333 weight=1 max_fails=2 fail_timeout=1;  <br />
+}</p>
+
+<p>https://www.runoob.com/w3cnote/nginx-proxy-balancing.html</p>
+
+<p>server {
+        listen       443 ssl http2;
+        server_name  localhost;</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    ssl_certificate     server.crt;
+    ssl_certificate_key  server.key;        location / {            #add_header 'Access-Control-Allow-Origin' '*';            add_header 'Access-Control-Allow-Headers' 'X-Requested-With';            add_header 'Access-Control-Allow-Methods' 'GET,POST,OPTIONS';            proxy_pass   http://127.0.0.1:80;       }    }
+</code></pre></div></div>
+
+<p>https://www.cnblogs.com/bugutian/p/6628455.html</p>
+
+<p>看是否安装了with-http_v2_module，这里看到没有安装要安装</p>
+
+<p>http_ssl_module看到已经安装了，若没有安装也要安装下</p>
+
+<p>https://blog.csdn.net/lzxlfly/article/details/90119543</p>
+
+<p>go请求Nginx的Grpc反向代理后，出现 code = Unavailable desc = the connection is draining</p>
+
+<p>The ConfigMap already supports http2-max-field-size and http2-max-header-size, so it should be relatively trivial to add support for http2-max-requests.</p>
+
+<p>https://www.cnblogs.com/gao88/p/12006634.html</p>
+
+<p>‘there is no connection available’ and ‘the connection is draining’ when using nginx #2205</p>
+
+<p>https://github.com/grpc/grpc-go/issues/2205</p>
+
+<p>http://nginx.org/en/docs/http/ngx_http_v2_module.html#http2_max_requests</p>
+
+<p>https://zhuanlan.zhihu.com/p/380121731</p>
+
+<p>TIME_WAIT和CLOSE_WAIT状态区别
+https://www.cnblogs.com/gao88/category/988969.html</p>
+:ET

@@ -1,0 +1,130 @@
+I"� <p>https://github.com/dapr/dapr
+https://www.cnblogs.com/shanyou/p/11873873.html
+<!-- more -->
+构建事件驱动、无状态和有状态的应用
+例如，在构建由多个服务组成的电子商务应用时，你可能希望使用有状态的角色来表示购物车服务，并为支付和配送服务调用无状态函数。编写这个应用可能涉及到使用多种语言、开发框架和基础架构平台，以及与外部服务集成。而理解和管理如此复杂的技术栈，会分散开发人员对构建业务价值的注意力。</p>
+
+<p>Dapr 构建块的 alpha 版本
+在设计和构建微服务应用时需要许多功能。在 Dapr 的第一个开源 alpha 版本中，我们着重于提供一些最常用的构建块。</p>
+
+<p>服务调用： 弹性服务与服务之间（service-to-service）调用可以在远程服务上启用方法调用，包括重试，无论远程服务在受支持的托管环境中运行在何处。
+状态管理： 通过对键 / 值对的状态管理，可以很容易编写长时间运行、高可用性的有状态服务，以及同一个应用中的无状态服务。状态存储是可插入的，并且可以包括 Azure Cosmos 或 Redis，以及组件路线图上的其他组件，如 AWS DynamoDB 等。
+在服务之间发布和订阅消息： 使事件驱动的架构能够简化水平可扩展性，并使其具备故障恢复能力。
+事件驱动的资源绑定： 资源绑定和触发器在事件驱动的架构上进一步构建，通过从任何外部资源（如数据库、队列、文件系统、blob 存储、webhooks 等）接收和发送事件，从而实现可扩展性和弹性。例如，你的代码可以由 Azure EventHub 服务上的消息触发，并将数据写入 Azure CosmosDB。
+虚拟角色： 无状态和有状态对象的模式，通过方法和状态封装使并发变得简单。Dapr 在其虚拟角色（Virtual Actors）运行时提供了许多功能，包括并发、状态、角色激活 / 停用的生命周期管理以及用于唤醒角色的计时器和提醒。
+服务之间的分布式跟踪： 使用 W3C 跟踪上下文（W3C Trace Context）标准，轻松诊断和观察生产中的服务间调用，并将事件推送到跟踪和监视系统。
+用于可移植性和可扩展性的标准 API
+那么，如何使用这些 Dapr 构建块呢？例如，假设你正在已部署到 Kubernetes 集群中的微服务应用中使用 Azure Functions 运行时，你希望利用 pub/sub 模式在服务之间发送消息。现在，Azure Functions 运行时尚未内置这种功能，但通过在 http 上使用 Dapr pub/sub 构建块，你可以轻松添加这个新功能。于是你有了新的开发能力！</p>
+
+<p>此外，Dapr pub/sub 构建块具有可插入的组件模型，这意味着你可以动态选择不同的实现来发送消息，而无需更改任何代码。例如，你可以根据自己的喜好来选择 Redis、Kafka 或 Azure Service Bus pub/sub Dapr 组件。在这两种情况下，代码都保持不变，包括通过使用标准 API 在不同的受支持的基础设施之间进行移植。</p>
+
+<p>为了实现可移植性与现有代码的轻松集成，Dapr 通过 http 或 gRPC 提供标准 API。以 pub/sub 为例，下面的节点代码现实如何使用“http://<myappaddress>/dapr/subscribe”端点订阅名为“A”和“B”的主题，然后在消息发布到这些主题时通知你的应用。</myappaddress></p>
+
+<p>复制代码
+const express = require(‘express’);
+const bodyParser = require(‘body-parser’);
+const app = express();
+app.use(bodyParser.json());
+const port = 3000;
+app.get( ‘/dajgr/subscribe’, (_req, res) =&gt; {
+    res.json([
+        ‘A’,
+        ‘B’
+    ]);
+});
+app.post(‘/A’, (req, res) =&gt; {
+    console.log(“A:”, req.body);
+    res.sendStatus(200);
+});
+app.post(‘/B’, (req, res) =&gt; {
+    console.log(“B:”, req.body);
+    res.sendStatus(200);
+});
+app.listen(port, () =&gt; console.log(‘Node App listening on port ${port}!’))
+为了进行比较，下面是用 C# 编写的相同代码，使用的是从 ASP.NET Core CreateWebHostBuilder() 调用的UseStartup() 处理程序。</p>
+
+<p>复制代码
+using System.Collections.Generic;
+using System.Text.Json;
+using System.Linq;
+using System.Threading.Tasks;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Dependencylnjection;
+using Microsoft.Extensions.Hosting;
+using System.IO;
+namespace DaprPubSub
+{
+    public class Startup
+    {
+        // This method gets called by the runtime. Use this method to configure the HTTP request pipeline.
+        public void Configure(IApplicationBuilder app, IWebHostEnvironment env)
+        {
+            app.UseRouting();
+            app.UseEndpoints(endpoints =&gt;
+            {
+                // Route called by Dapr runtime to get topics this app subscribes to.
+                endpoints.MapGet(“dagr/subscribe”, async context =&gt;
+                {
+                    // Returns list of topics to subscribe to as json in response.
+                    var topicsToSubscribe = new List<string>() { "TopicA", "TopicB" &gt;;
+                    await JsonSerializer.SerializeAsync(context.Response.Body, topicsToSubscribe);
+                });</string></p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>            // Route to handle events published to TopicA
+            endpoints.MapPost("A", async context =&gt;
+            {
+                // Read the event form request body.
+                using (var streamReader = new StreamReader(context.Request.Body))
+                {
+                    var json = await streamReader.ReadToEndAsync();
+                    Console.WriteLine("Received event for TopicA.");
+                    Console.WriteLine($"Event Data: {json}');
+                }
+            });
+            // Route to handle events published to TopicB
+            endpoints.MapPost("B", async context =&gt;
+            {
+                // Read the event form request body.
+                using (var streamReader = new StreamReader(context.Request.Body))
+                {
+                    var json = await streamReader.ReadToEndAsync();
+                    Console.WriteLine("Received event for TopicB.");
+                    Console.WriteLine($"Event Data: {json}");
+                }
+            });
+        });
+    }
+} } 向订阅这些主题的服务发布事件非常简单，只需使用主题和有效负载的名称调用 Dapr 本地 http 发布 API 一样简单。下面的示例节点代码展示了如何使用 Dapr 发布 API（在本地端口 3500 上），这也可以使用 curl 命令来完成：
+</code></pre></div></div>
+
+<p>复制代码
+curl -X POST http://localhost:3500/vl.0/publish/A \ -H “Content-Type: application/json” \ -d ‘{“status”: “completed”}’
+复制代码
+const express = require(‘express’’);
+const path = require(‘path’);
+const request = require(‘request’);
+const bodyParser = require(‘body-parser’);
+const app = express();
+app.use(bodyParser.json());
+const port = 8080;
+const daprllrl = ‘http://localhost:${process.env.DAPR_HTTP_PORT || 3500}/vl.0’;
+app.post(‘/publish’, (req, res) =&gt; {
+    console.log(“Publishing: “, req.body);
+    const publishUrl = ‘${daprUrl}/publish/${req.body.messageType}’;
+    request( { uri: publishUrl, method: ’POST’, json: req.body } );
+    res.sendStatus(200);
+});
+app.listen(process.env.PORT || port, () =&gt; console.log(‘Listening on port ${port}!’));
+如这些示例代码所示，在服务中使用 Dapr 并不需要获取编译时依赖项，只需简单地使用消息体创建 URL 即可。</p>
+
+<p>Sidecar 架构与支持的基础设施
+Dapr 将它的 API 作为 Sidecar 架构予以公开，无论是作为容器还是作为进程，都不需要应用代码包含任何 Dapr 运行时代码。这使得与 Dapr 的集成从其它运行时变得很容易，并且提供了应用逻辑的分离，从而提高了可支持性。</p>
+
+<p>Dapr 作为 Sidecar 进程运行。</p>
+
+<p>https://www.infoq.cn/article/ygNxYaTIxdBjejcyjv8Y</p>
+
+<p>https://www.cnblogs.com/Rmean/p/xstone-monkey-share-dapr-1.html</p>
+:ET

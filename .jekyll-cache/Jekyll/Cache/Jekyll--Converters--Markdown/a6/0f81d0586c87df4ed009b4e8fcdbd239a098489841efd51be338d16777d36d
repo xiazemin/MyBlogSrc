@@ -1,0 +1,339 @@
+I"&5<p>查看opcode
+php是先把源码解析成opcode，然后再把opcode传递给zend_vm进行执行的。</p>
+
+<p>// 一个opcode的结构
+struct _zend_op {
+     const void *handler; // opcode对应的执行函数，每个opcode都有一个对应的执行函数
+     znode_op op1;  // 执行参数的第一个元素
+     znode_op op2;  //  执行参数的第二个元素
+     znode_op result; // 执行结果
+     uint32_t extended_value; // 额外扩展的字段和值
+     uint32_t lineno; // 行数
+     zend_uchar opcode;   // 操作码，具体操作码列表见 http://cn.php.net/manual/zh/internals2.opcodes.php
+     zend_uchar op1_type; // 第一个元素的类型
+     zend_uchar op2_type; // 第二个元素的类型
+     zend_uchar result_type; // 结果的类型
+};
+在php7中，我们能很方便用phpdbg来查看一个文件或者一个函数的opcode了。至于phpdbg的使用，现在网上介绍不多，不过好在有很详细的help文档。下面是一个最简单的opcode代码：</p>
+
+<p>$ bin/phpdbg -f /home/xiaoju/software/php7/demo/echo.php
+prompt&gt; list 100
+00001: &lt;?php
+00002:
+00003: $a = 1;
+00004: $b = $a;
+00005: $b = $b + 1;
+00006: echo $b;
+00007:
+prompt&gt; print exec
+[Context /home/xiaoju/software/php7/demo/echo.php (6 ops)]
+L1-7 {main}() /home/xiaoju/software/php7/demo/echo.php - 0x7fe3fae63300 + 6 ops
+L3    #0     ASSIGN                  $a                   1
+L4    #1     ASSIGN                  $b                   $a
+L5    #2     ADD                     $b                   1                    ~2
+L5    #3     ASSIGN                  $b                   ~2
+L6    #4     ECHO                    $b
+L7    #5     RETURN                  1
+这个php文件就做了一个最简单的加法操作。生成了6个_zend_op。所展示的每一行代表一个_zend_op</p>
+
+<p>_zendop.lineno  op号   _zend_op.opcode       _zend_op.op1          _zend_op.op2          _zend_op.result
+L5              #2     ADD                     $b                   1                    ~2
+这里_zend_op.opcode对应的操作在官网有文档和详细的例子可以查看：http://cn.php.net/manual/zh/internals2.opcodes.php</p>
+
+<p>值得一说的是，phpdbg还有一个远端UI版本，能让我们在近端诊断服务端的php信息
+<!-- more --></p>
+
+<p>gdb
+但是我们的目标还是在于研究php源码，phpdbg只能分析到opcode这层，还是不够的，gdb可能是更好的选择。</p>
+
+<p>gdb的使用和平时使用差不多</p>
+
+<p>比如我现在有个脚本echo.php:</p>
+
+<p>1 &lt;?php
+  2
+  3 $a = 1;
+  4 $b = $a;
+  5 $b = $b + 1;
+  6 echo $b;
+我的php安装路径在：</p>
+
+<p>/home/xiaoju/software/php7/bin/php
+php源码路径在：</p>
+
+<p>/home/xiaoju/webroot/php-src/php-src-master/
+运行gdb</p>
+
+<p>$ gdb /home/xiaoju/software/php7/bin/php
+加载gdbinit:</p>
+
+<p>(gdb) source /home/xiaoju/webroot/php-src/php-src-master/.gdbinit
+设置断点:</p>
+
+<p>(gdb) b zend_execute_scripts
+运行：</p>
+
+<p>(gdb) run -f /home/xiaoju/software/php7/demo/echo.php
+我想在1459这行设置个断点：</p>
+
+<p>1452          for (i = 0; i &lt; file_count; i++) {
+1453               file_handle = va_arg(files, zend_file_handle *);
+1454               if (!file_handle) {
+1455                    continue;
+1456               }
+1457
+1458               op_array = zend_compile_file(file_handle, type);
+1459               if (file_handle-&gt;opened_path) {
+1460                    zend_hash_add_empty_element(&amp;EG(included_files), file_handle-&gt;opened_path);
+1461               }</p>
+
+<p>(gdb) b 1459
+继续跑</p>
+
+<p>(gdb) continue
+(gdb) s
+(gdb) s
+打印出这个时候的op_array</p>
+
+<p>(gdb) p *op_array
+$4 = {type = 2 ‘\002’, arg_flags = “\000\000”, fn_flags = 134217728, function_name = 0x0, scope = 0x0,
+  prototype = 0x0, num_args = 0, required_num_args = 0, arg_info = 0x0, refcount = 0x7ffff6002000, last = 6,
+  opcodes = 0x7ffff6076240, last_var = 2, T = 4, vars = 0x7ffff6079030, last_live_range = 0, last_try_catch = 0,
+  live_range = 0x0, try_catch_array = 0x0, static_variables = 0x0, filename = 0x7ffff605c2d0, line_start = 1,
+  line_end = 7, doc_comment = 0x0, early_binding = 4294967295, last_literal = 3, literals = 0x7ffff60030c0,
+  cache_size = 0, run_time_cache = 0x0, reserved = {0x0, 0x0, 0x0, 0x0}}
+我可以优化输出：</p>
+
+<p>(gdb) set print pretty on
+(gdb) p *op_array
+$5 = {
+  type = 2 ‘\002’,
+  arg_flags = “\000\000”,
+  fn_flags = 134217728,
+  function_name = 0x0,
+  scope = 0x0,
+  prototype = 0x0,
+  num_args = 0,
+  required_num_args = 0,
+  arg_info = 0x0,
+  refcount = 0x7ffff6002000,
+  last = 6,
+  opcodes = 0x7ffff6076240,
+  last_var = 2,
+  T = 4,
+  vars = 0x7ffff6079030,
+  last_live_range = 0,
+  last_try_catch = 0,
+  live_range = 0x0,
+  try_catch_array = 0x0,
+  static_variables = 0x0,
+  filename = 0x7ffff605c2d0,
+  line_start = 1,
+  line_end = 7,
+  doc_comment = 0x0,
+  early_binding = 4294967295,
+  last_literal = 3,
+  literals = 0x7ffff60030c0,
+  cache_size = 0,
+  run_time_cache = 0x0,
+  reserved = {0x0, 0x0, 0x0, 0x0}
+}
+我想打出op_array.filename.val的具体值</p>
+
+<p>(gdb) p (op_array.filename.len)
+$12 = 40
+(gdb) p *(op_array.filename.val)@40
+$13 = “/home/xiaoju/software/php7/demo/echo.php”
+好了，我们可以顺便研究下_zend_op_array这个结构：</p>
+
+<p>// opcode组成的数组，编译的时候就是生成这个结构
+struct _zend_op_array {
+     zend_uchar type;  // op array的类型，比如 ZEND_EVAL_CODE
+     zend_uchar arg_flags[3]; /* bitset of arg_info.pass_by_reference <em>/
+     uint32_t fn_flags;
+     zend_string *function_name;
+     zend_class_entry *scope;
+     zend_function *prototype;
+     uint32_t num_args;  // 脚本的参数
+     uint32_t required_num_args;
+     zend_arg_info *arg_info;
+     /</em> END of common elements */</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code> uint32_t *refcount; // 这个结构的引用次数
+
+ uint32_t last;  // opcode的个数
+ zend_op *opcodes;  // 存储所有的opcode
+
+ int last_var; // php变量的个数
+ uint32_t T;
+ zend_string **vars; // 被编译的php变量的个数
+
+ int last_live_range;
+ int last_try_catch;  // try_catch的个数
+ zend_live_range *live_range;
+ zend_try_catch_element *try_catch_array; //
+
+ /* static variables support */
+ HashTable *static_variables; // 静态变量
+
+ zend_string *filename;  // 执行的脚本的文件
+ uint32_t line_start; // 开始于第几行
+ uint32_t line_end; // 结束于第几行
+ zend_string *doc_comment; // 文档的注释
+ uint32_t early_binding; /* the linked list of delayed declarations */
+
+ int last_literal;
+ zval *literals;
+
+ int  cache_size;
+ void **run_time_cache;
+
+ void *reserved[ZEND_MAX_RESERVED_RESOURCES]; // 保留字段 };
+</code></pre></div></div>
+
+<p>$sudo gdb php
+(gdb)source /Users/didi/PhpstormProjects/c/php-src/.gdbinit
+(gdb) run -f  spl.php
+xzm 2 spl_autoload</p>
+
+<p>Program received signal SIGSEGV, Segmentation fault.
+0x00007fff9a84fd32 in strlen () from /usr/lib/system/libsystem_c.dylib</p>
+
+<p>https://www.cnblogs.com/yjf512/p/6112634.html</p>
+
+<p>发现在自己扩展代码break比较困难
+但是可以在php的src里break，然后走到自己的代码
+(gdb) b my_get_file_class_function_info
+Cannot access memory at address 0x1d20
+(gdb)  b zend_execute_scripts
+Breakpoint 2 at 0x1004eadfc: file Zend/zend.c, line 1434.
+(gdb) b execute_ex
+Breakpoint 4 at 0x10055190c: file Zend/zend_vm_execute.h, line 417.
+(gdb) run -f  spl.php</p>
+
+<p>(gdb) continue
+(gdb) s
+(gdb) s</p>
+
+<p>(gdb)  zbacktrace
+Attempt to extract a component of a value that is not a structure.</p>
+
+<p>➜ gdb -p $PID
+(gdb) source /path/to/php-src/.gdbinit
+(gdb) zbacktrace
+[2018-06-27 Wed]: update
+调试数据库死循环
+shell&gt; mysqladmin -uroot processlist
+或者
+mysql&gt; show processlist;
+结果
++——-+——+———–+—–+———+——+——-+——–+———-+
+| Id    | User | Host      | db  | Command | Time | State | Info   | Progress |
++——-+——+———–+—–+———+——+——-+——–+———-+
+| 12471 | xxx  | IP:60608  | xxx | Sleep   | 49   |       |        | 0.000    |
+| 12491 | xxx  | localhost |     | Sleep   | 69   |       |        | 0.000    |
+可以看到是 IP:60608 这个连接一直占用着数据库，登录到 IP 对应的 host 上，执行 lsof -i tcp:60608 可以看到对应的 pid，再执行下面的 debug 可以看到数据库是在哪里死循环了
+➜ gdb -p $PID
+(gdb) source /path/to/php-src/.gdbinit
+(gdb) zbacktrace</p>
+
+<p>https://sunznx.com/php/php-debug.html</p>
+
+<p>使用 gdb 调试 PHP core</p>
+
+<p>一、开启
+查看是否开启 core dump 输出
+ulimit -a</p>
+
+<p>打开 core dump 文件记录
+ulimit -c unlimited</p>
+
+<p>yum install gdb php-dbg</p>
+
+<p>关闭 core dump 文件记录
+ulimit -c 0</p>
+
+<p>设置内核core dump出来的存放路径（注意目录要有权限给php写）：
+echo “/tmp/core.%e.%p.%t” &gt; /proc/sys/kernel/core_pattern</p>
+
+<p>二、调试
+1、准备 .gdbinit 文件
+获取地址：https://github.com/php/php-src/blob/master/.gdbinit
+保存在服务器上，例如 /root/.gdbinit 备用。</p>
+
+<p>2、用 gdb 打开 core 文件
+gdb php-fpm -c core-php-fpm.920</p>
+
+<p>可以看到类似下边的字样：</p>
+
+<p>Core was generated by `php-fpm: pool www            ‘.
+Program terminated with signal 11, Segmentation fault.
+3、查看 core 发生时刻的堆栈
+(gdb) bt
+#0  zend_mm_alloc_small (size=<value optimized="" out="">) at /usr/src/debug/php-7.0.6/Zend/zend_alloc.c:1295
+#1  zend_mm_alloc_heap (size=<value optimized="" out="">) at /usr/src/debug/php-7.0.6/Zend/zend_alloc.c:1366
+#2  _emalloc (size=<value optimized="" out="">) at /usr/src/debug/php-7.0.6/Zend/zend_alloc.c:2450
+#3  0x00007f7a6fad0511 in apm_sprintf (fmt=0x7f7a6faeff50 "\n %04d-%02d-%02d %02d:%02d:%02d Version %s\n Process %d received signal %2d: %s , bss[%p]\n")
+    at /PHP/64/source/php7.0.0_nzts/ext/apm/apm_common.c:371
+#4  0x00007f7a6facbefd in print_backtrace (sig=11) at /PHP/64/source/php7.0.0_nzts/ext/apm/apm.c:1937
+#5  0x00007f7a6facbfd7 in agent_fatal_signal_handler (sig=11) at /PHP/64/source/php7.0.0_nzts/ext/apm/apm.c:1955
+#6  <signal handler="" called="">
+#7  zend_mm_alloc_small (size=<value optimized="" out="">) at /usr/src/debug/php-7.0.6/Zend/zend_alloc.c:1295
+#8  zend_mm_alloc_heap (size=<value optimized="" out="">) at /usr/src/debug/php-7.0.6/Zend/zend_alloc.c:1366
+4、引入 PHP 源代码中提供的 .gdbinit (gdb 命令编写脚本)
+(gdb) source /root/.gdbinit
+5、查看 backtrace 和变量值
+(gdb) zbacktrace
+[0x7f7a75e138c0] C("DEBUG") /usr/share/nginx/html/smartphp/common.php:28
+[0x7f7a75e137d0] Model-&gt;_connectDb() /usr/share/nginx/html/smartphp/core/Model.class.php:44
+[0x7f7a75e13680] Model-&gt;bindData("SELECT\40tips\40FROM\40keyword_phone\40WHERE\40word=:word", array(1)[0x7f7a75e136f0], "getdata") /usr/share/nginx/html/smartphp/core/Model.class.php:143
+[0x7f7a75e13580] Model-&gt;getData("SELECT\40tips\40FROM\40keyword_phone\40WHERE\40word=:word", array(1)[0x7f7a75e135f0]) /usr/share/nginx/html/smartphp/core/Model.class.php:215
+[0x7f7a75e134c0] Model-&gt;getField("SELECT\40tips\40FROM\40keyword_phone\40WHERE\40word=:word", array(1)[0x7f7a75e13530]) /usr/share/nginx/html/appdata/smartphp/core/Model.class.php:264
+(gdb) print ((zval *)0x7f7a75e13530)
+$1 = (zval *) 0x7f7a75e13530</value></value></signal></value></value></value></p>
+
+<p>(gdb) printzv $1
+[0x7f7a75e13530] (refcount=3) array:     Packed(1)[0x7f7a75e94888]: {
+      [0] 0 =&gt; [0x7f7a75e6ad88] (refcount=4) string: PP红包。
+}
+https://bugs.php.net/bugs-generating-backtrace.php
+http://www.laruence.com/2011/06/23/2057.html
+https://kn007.net/topics/php-fpm-how-to-core-dump/
+http://www.laruence.com/2011/12/06/2381.html</p>
+
+<p>https://segmentfault.com/a/1190000005168629</p>
+
+<p>在zbacktrace时，总是报 No symbol table is loaded. Use the “file” command. 这个符号表是指什么呢？怎么加载进去呢？
+ 看一下屏幕上的提示，会有类似这样的： debuginfo-install php-fpm-7.0.27-1.el6.remi.x86_64 ，执行这个命令安装一下必要的文件就可以了</p>
+
+<p>https://blog.csdn.net/weixin_30387423/article/details/98027448
+ https://www.bbsmax.com/A/KE5QmPM5LG/</p>
+
+<p>https://segmentfault.com/a/1190000002703073
+ http://www.phppan.com/2012/10/php-exception-class/</p>
+
+<p>the most likely root cause of the seg fault event is the string that is being passed to strlen() does not have terminating NUL character within the bounds of the array containing the string</p>
+
+<p>https://stackoverflow.com/questions/42588450/debugging-c-code-with-lldb-osx</p>
+
+<p>https://ivanzz1001.github.io/records/post/cplusplus/2018/11/02/cpluscplus-gdbusage_part3</p>
+
+<p>https://visualgdb.com/gdbreference/commands/break</p>
+
+<p>https://stackoverflow.com/questions/100444/how-to-set-breakpoints-on-future-shared-libraries-with-a-command-flag</p>
+
+<p>https://stackoverflow.com/questions/54161727/make-breakpoint-pending-on-future-shared-library-load-y-or-n</p>
+
+<p>https://blog.csdn.net/leonpengweicn/article/details/43668095</p>
+
+<p>https://www.tfzx.net/index.php/article/8684855.html
+https://sourceware.org/bugzilla/show_bug.cgi?id=11786
+https://stackoverflow.com/questions/23553527/gdb-error-in-re-settings-breakpoint-cannot-access-memory
+https://stackoverflow.com/questions/16009341/gdb-patching-results-in-cannot-access-memory-at-address-0x
+https://blog.csdn.net/nust20/article/details/96493101</p>
+
+<p>https://gywbd.github.io/posts/2016/2/debug-php-source-code.html</p>
+
+<p>https://www.cnblogs.com/breg/p/3831865.html</p>
+
+:ET

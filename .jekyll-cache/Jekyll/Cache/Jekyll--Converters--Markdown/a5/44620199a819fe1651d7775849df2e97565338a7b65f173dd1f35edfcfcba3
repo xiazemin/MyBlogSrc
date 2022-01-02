@@ -1,0 +1,133 @@
+I"o<p>du -sh *
+这个命令用来查看根目录下，所有文件的大小分布
+604K	Applications
+165M	CRClientTools
+1.2M	Desktop
+802M	Documents
+2.0G	Downloads
+216M	GitBook
+du: Library/Python: Permission denied
+ 86G	Library</p>
+
+<p>du -sh Library
+du: Library/Python: Permission denied
+ 86G	Library</p>
+
+<p>cd ~/Library
+du -d 1 -h
+ 16K	./com.lc-tech.licman
+  0B	./Compositions
+ 66G	./Containers</p>
+
+<p>$du -d 1 -h
+280K	./com.apple.WeatherKitService
+ 64G	./com.docker.docker</p>
+
+<p>$cd ./com.docker.docker
+$du -d 1 -h
+ 64G	./Data
+ 64G	.</p>
+
+<p>cd ./Data/</p>
+
+<p>$du -d 1 -h
+ 64G	./com.docker.driver.amd64-linux
+ $cd ./com.docker.driver.amd64-linux</p>
+
+<p>$ls -al
+ -rw-r–r–@  1 didi  staff  68667637760 12 17 17:50 Docker.qcow2</p>
+
+<p>docker for mac 有个bug，删除了容器或者镜像后，docker 占用的电脑硬盘空间不会相应的减少（Docker.qcow2文件）。
+https://blog.mrtrustor.net/post/clean-docker-for-mac/
+https://gist.github.com/MrTrustor/e690ba75cefe844086f5e7da909b35ce#file-clean-docker-for-mac-sh
+这位法国老哥写了个脚本自动把docker镜像保存到本地， 删除Docker.qcow2文件，重启docker ，再把保存下来的镜像 load 到docker 中。
+<!-- more -->
+#!/bin/bash</p>
+
+<h1 id="copyright-2017-théo-chamley">Copyright 2017 Théo Chamley</h1>
+<h1 id="permission-is-hereby-granted-free-of-charge-to-any-person-obtaining-a-copy-of">Permission is hereby granted, free of charge, to any person obtaining a copy of</h1>
+<h1 id="this-software-and-associated-documentation-files-the-software-to-deal-in-the-software">this software and associated documentation files (the “Software”), to deal in the Software</h1>
+<h1 id="without-restriction-including-without-limitation-the-rights-to-use-copy-modify-merge">without restriction, including without limitation the rights to use, copy, modify, merge,</h1>
+<h1 id="publish-distribute-sublicense-andor-sell-copies-of-the-software-and-to-permit-persons">publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons</h1>
+<h1 id="to-whom-the-software-is-furnished-to-do-so-subject-to-the-following-conditions">to whom the Software is furnished to do so, subject to the following conditions:</h1>
+<p>#</p>
+<h1 id="the-above-copyright-notice-and-this-permission-notice-shall-be-included-in-all-copies-or">The above copyright notice and this permission notice shall be included in all copies or</h1>
+<h1 id="substantial-portions-of-the-software">substantial portions of the Software.</h1>
+<p>#</p>
+<h1 id="the-software-is-provided-as-is-without-warranty-of-any-kind-express-or-implied-including">THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING</h1>
+<h1 id="but-not-limited-to-the-warranties-of-merchantability-fitness-for-a-particular-purpose-and">BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND</h1>
+<h1 id="noninfringement-in-no-event-shall-the-authors-or-copyright-holders-be-liable-for-any-claim">NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,</h1>
+<h1 id="damages-or-other-liability-whether-in-an-action-of-contract-tort-or-otherwise-arising-from">DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,</h1>
+
+<p>IMAGES=$@</p>
+
+<p>echo “This will remove all your current containers and images except for:”
+echo ${IMAGES}
+read -p “Are you sure? [yes/NO] “ -n 1 -r
+echo    # (optional) move to a new line
+if [[ ! $REPLY =~ ^[Yy]$ ]]
+then
+    exit 1
+fi</p>
+
+<p>TMP_DIR=$(mktemp -d)</p>
+
+<p>pushd $TMP_DIR &gt;/dev/null</p>
+
+<p>open -a Docker
+echo “=&gt; Saving the specified images”
+for image in ${IMAGES}; do
+	echo “==&gt; Saving ${image}”
+	tar=$(echo -n ${image} | base64)
+	docker save -o ${tar}.tar ${image}
+	echo “==&gt; Done.”
+done</p>
+
+<p>echo “=&gt; Cleaning up”
+echo -n “==&gt; Quiting Docker”
+osascript -e ‘quit app “Docker”’
+while docker info &gt;/dev/null 2&gt;&amp;1; do
+	echo -n “.”
+	sleep 1
+done;
+echo “”</p>
+
+<p>echo “==&gt; Removing Docker.qcow2 file”
+rm ~/Library/Containers/com.docker.docker/Data/com.docker.driver.amd64-linux/Docker.qcow2</p>
+
+<p>echo “==&gt; Launching Docker”
+open -a Docker
+echo -n “==&gt; Waiting for Docker to start”
+until docker info &gt;/dev/null 2&gt;&amp;1; do
+	echo -n “.”
+	sleep 1
+done;
+echo “”</p>
+
+<p>echo “=&gt; Done.”</p>
+
+<p>echo “=&gt; Loading saved images”
+for image in ${IMAGES}; do
+	echo “==&gt; Loading ${image}”
+	tar=$(echo -n ${image} | base64)
+	docker load -q -i ${tar}.tar || exit 1
+	echo “==&gt; Done.”
+done</p>
+
+<p>popd &gt;/dev/null
+rm -r ${TMP_DIR}</p>
+
+<p>$docker images
+REPOSITORY                                             TAG                 IMAGE ID            CREATED             SIZE
+hub.c.163.com/mrjucn/centos6.5-mysql5.1-php5.7-nginx   latest              726cb1dfd4b7        2 years ago         2.78 GB
+hub.c.163.com/public/redis                             2.8.4               4888527e1254        2 years ago         190 MB
+hub.c.163.com/longjuxu/microbox/etcd                   latest              6aef84b9ec5a        3 years ago         17.9 MB</p>
+
+<p>$sh file-clean-docker-for-mac.sh 726cb1dfd4b7 4888527e1254 6aef84b9ec5a
+This will remove all your current containers and images except for:
+726cb1dfd4b7 4888527e1254 6aef84b9ec5a
+Are you sure? [yes/NO] y
+=&gt; Saving the specified images
+==&gt; Saving 726cb1dfd4b7</p>
+
+:ET

@@ -1,0 +1,159 @@
+I"+<p>用HUP信号使Nginx加载新的配置文件 当Nginx接收到HUP信号的时候，它会尝试着去解析并应用这个配置文件，如果没有问题，那么它会创建新的worker进程，并发送信号给旧的 worker进程，让其优雅的退出。 接收到信号的旧的worker进程会关闭监听socket，但是还会处理当前的请求，处理完请求之后，旧的 worker进程退出。
+<!-- more -->
+当你想升级Nginx到一个新的版本，增加或减少module的时候 发送USR2信号给master进程。master进程会把自己的.pid文件重命名为.oldbin（例 如，/usr/local/nginx/logs/nginx.pid.oldbin），然后执行新的二进制文件，从而启动一个新的master进程和新的worker进程.</p>
+
+<p>php-fpm与nginx的使用-USR2/-HUP意义不一样！</p>
+
+<p>Master进程能够接收并处理如下的信号：</p>
+
+<p>TERM, INT（快速退出，当前的请求不执行完成就退出）
+QUIT （优雅退出，执行完当前的请求后退出）
+HUP （重新加载配置文件，用新的配置文件启动新worker进程，并优雅的关闭旧的worker进程, 用于nginx的加载新配置，不能用于php-fpm加载新配置）
+USR1 （重新打开日志文件）
+USR2 （平滑的升级nginx二进制文件/平滑加载php-fpm新配置）
+WINCH （优雅的关闭worker进程）
+于是 可以自己写php-fpm控制脚本</p>
+
+<p>#!/bin/bash
+SED=/bin/sed</p>
+
+<p>NGINX_INIT=”/etc/init.d/nginx”
+NGINX_CONF=”/usr/local/nginx/conf/nginx.conf”</p>
+
+<p>FPM_1=”/etc/init.d/php-fpm”
+FASTCGI_1=”php-fpm.socket”
+FASTCGI_1_PID=”/var/run/php-fpm.pid”</p>
+
+<p>FPM_2=”/etc/init.d/php-fpm2”
+FASTCGI_2=”php-fpm2.socket”
+FASTCGI_2_PID=”/var/run/php-fpm2.pid”</p>
+
+<p>function check_file {
+    if [[ ! -f $1 ]]; then
+        echo “$1 does not exists.”
+        exit -1
+    fi
+}</p>
+
+<p>function start_php_fpm {
+    if [[ -f $1 ]]
+    then
+        echo “$2 stop”
+        $2 stop
+        sleep 1
+    fi
+    echo “$2 start”
+    $2 start
+}</p>
+
+<p>function use_php_fpm {
+    echo “$1 reload”
+    $1 reload
+    sleep 5
+    echo “$2 stop”
+    $2 stop
+}</p>
+
+<p>check_file $FPM_1
+check_file $FPM_2</p>
+
+<p>if [[ <code class="language-plaintext highlighter-rouge">grep ${FASTCGI_1} $NGINX_CONF</code> != ‘’ ]]
+then
+    $SED -i “s/${FASTCGI_1}/${FASTCGI_2}/g” $NGINX_CONF
+    start_php_fpm $FASTCGI_2_PID $FPM_2
+    sleep 1
+    use_php_fpm $NGINX_INIT $FPM_1
+else
+    $SED -i “s/${FASTCGI_2}/${FASTCGI_1}/g” $NGINX_CONF
+    start_php_fpm $FASTCGI_1_PID $FPM_1
+    sleep 1
+    use_php_fpm $NGINX_INIT $FPM_2
+fi</p>
+
+<p>$ cat /etc/init.d/php-fpm-pool1
+#! /bin/sh
+#</p>
+<h1 id="chkconfig---84-16">chkconfig: - 84 16</h1>
+<h1 id="description--php-fastcgi-process-manager-for-pool-pool1">description:  PHP FastCGI Process Manager for pool ‘pool1’</h1>
+<h1 id="processname-php-fpm-pool1">processname: php-fpm-pool1</h1>
+<h1 id="config-etcphp-fpmdpool1conf">config: /etc/php-fpm.d/pool1.conf</h1>
+<h1 id="pidfile-varrunphp-fpmpool1pid">pidfile: /var/run/php-fpm/pool1.pid</h1>
+
+<h1 id="standard-lsb-functions">Standard LSB functions</h1>
+<p>#. /lib/lsb/init-functions</p>
+
+<h1 id="source-function-library">Source function library.</h1>
+<p>. /etc/init.d/functions</p>
+
+<h1 id="check-that-networking-is-up">Check that networking is up.</h1>
+<p>. /etc/sysconfig/network</p>
+
+<p>if [ “$NETWORKING” = “no” ]
+then
+    exit 0
+fi</p>
+
+<p>RETVAL=0
+prog=”php-fpm-pool1”
+pidfile=/var/run/php-fpm/pool1.pid
+lockfile=/var/lock/subsys/php-fpm-pool1
+fpmconfig=/etc/php-fpm.d/pool1</p>
+
+<p>start () {
+    echo -n $”Starting $prog: “
+    daemon –pidfile ${pidfile} php-fpm –fpm-config=${fpmconfig} –daemonize
+    RETVAL=$?
+    echo
+    [ $RETVAL -eq 0 ] &amp;&amp; touch ${lockfile}
+}
+stop () {
+    echo -n $”Stopping $prog: “
+    killproc -p ${pidfile} php-fpm
+    RETVAL=$?
+    echo
+    if [ $RETVAL -eq 0 ] ; then
+        rm -f ${lockfile} ${pidfile}
+    fi
+}</p>
+
+<p>restart () {
+        stop
+        start
+}</p>
+
+<p>reload () {
+    echo -n $”Reloading $prog: “
+    killproc -p ${pidfile} php-fpm -USR2
+    RETVAL=$?
+    echo
+}</p>
+
+<h1 id="see-how-we-were-called">See how we were called.</h1>
+<p>case “$1” in
+  start)
+    start
+    ;;
+  stop)
+    stop
+    ;;
+  status)
+    status -p ${pidfile} php-fpm
+    RETVAL=$?
+    ;;
+  restart)
+    restart
+    ;;
+  reload|force-reload)
+    reload
+    ;;
+  condrestart|try-restart)
+    [ -f ${lockfile} ] &amp;&amp; restart || :
+    ;;
+  *)
+    echo $”Usage: $0 {start|stop|status|restart|reload|force-reload|condrestart|try-restart}”
+    RETVAL=2
+        ;;
+esac</p>
+
+<p>exit $RETVAL</p>
+:ET

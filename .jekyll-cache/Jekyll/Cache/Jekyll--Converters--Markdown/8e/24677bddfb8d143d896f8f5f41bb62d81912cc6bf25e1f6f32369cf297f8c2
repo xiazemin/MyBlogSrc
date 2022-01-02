@@ -1,0 +1,307 @@
+I"�:<p>reflect 包实现具有两个基础 unsafe 操作内存对齐和 runtime 包的变量。</p>
+
+<p>runtime 变量
+runtime 变量是 reflect 的实现基础，基于 unsafe 包操作 runtime 变量实现 reflect 功能。
+https://gocn.vip/topics/10233
+<!-- more -->
+首先我们按照 go 的规则先简单的定义一个变量类型 Value，Value 有两个类型成员属性 typ 和 ptr，typ 是类型表示这个变量是什么对象，ptr 是一个地址指向这个变量的地址。</p>
+
+<p>// 如果看reflect或runtime源码会发现两者相识，只不过被我删了不少属性。
+type Value struct {
+    typ Type
+    ptr uintptr
+}</p>
+
+<p>type Type interface {
+    Name() string         // by all type
+    Index(int) Value      // by Slice Array
+    MapIndex(value) Value // by Map
+    Send(Value)           // By Chan
+}
+当我们去操作一个变量时就按照 Type 类型来操作，而操作对象的数据就在内存的 ptr 位置。</p>
+
+<p>变量类型 Type 定义的是一个接口，因为不同类型有不同的操作方法，例如 Map 的获取/设置值，Slice 和 Array 的获取一个索引，Chan 具有发送和接实一个对象，Struct 可以获得一个结构体属性，属性具有 tag，这样不同的类型就具有不同独特的操作方法，如果 Map 类型调用 Index 方法无法实现就会 panic 了。</p>
+
+<p>理解变量本质就是一个数据地址和一个类型数据组成，然后基于者两个变量来操作就是 reflect。</p>
+
+<p>reflect example
+一个 reflect 简单的例子，reflect.TypeOf和reflect.ValueOf方法将一个 runtime 类型和变量转换成 reflect 类型和变量，依赖 unsafe 操作内存对齐来强制转换，reflect 类型和变量和 runtime 中一样的，就可以实现自由操作了。</p>
+
+<p>最后reflect.Value调用Interface()方法将变量从 reflect 状态转换回来成 runtime 状态了。</p>
+
+<p>package main</p>
+
+<p>import (
+    “fmt”
+    “reflect”
+)</p>
+
+<p>type Student struct {
+    Name string
+    Age  int
+}</p>
+
+<p>func main() {
+    s := new(Student)
+    fmt.Println(reflect.TypeOf(s))
+    fmt.Println(reflect.TypeOf(s).Elem())
+    fmt.Println(reflect.TypeOf(*s))</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>v := reflect.ValueOf(s).Elem()
+v.Field(0).SetString("66")
+fmt.Printf("%#v\n", v.Interface()) } reflect Type 先从 reflect/type.go 简单的抄一点代码来。rtype 对象就是 Type 接口的简化实现，kind 就是这个类型的类型，然后其他组合类型 (Ptr、Slice、Map 等) 就额外添加了一些属性和方法。
+</code></pre></div></div>
+
+<p>type rtype struct {
+    size    uintptr
+    ptrdata uintptr
+    kind    uint8
+    …
+}
+ptrType 是指针类型的定义，属性 rtype 就是指针的类型，elem 就是指针指向的类型，那么一个 Ptr Type 调用 Elem 获得指针的类型就返回了 elem 值。</p>
+
+<p>// ptrType represents a pointer type.
+type ptrType struct {
+    rtype
+    elem *rtype // pointer element (pointed at) type
+}
+structType 是指针类型的定义，rtype 是结构体类型的基础信息，pkgPath 就是结构体的名称，当一个结构体调用 Name 方法时就返回了 pkgPath，如果是结构体指针调用 Name 方法就没有返回数据，因为没有 pkgPath 需要先 Elem 一次转换成结构体类型，而结构体类型的 Field、FieldByIndex、FieldByName、FieldByNameFunc 方法就对象结构体类型 fields 信息进行变量操作了。</p>
+
+<p>而在结构体属性 structField 中，name、typ 分别记录这个属性的名称和类型，offsetEmbed 是属性偏移位置。</p>
+
+<p>// structType represents a struct type.
+type structType struct {
+    rtype
+    pkgPath name
+    fields  []structField // sorted by offset
+}</p>
+
+<p>// Struct field
+type structField struct {
+    name        name    // name is always non-empty
+    typ         *rtype  // type of field
+    offsetEmbed uintptr // byte offset of field«1 | isEmbedded
+}
+chanType 是 chan 类型的 ing 有，rtype 是 chan 本身，elem 是 chan 操作对象的类型和指针指向相识，dir 就是 chan 的反向进、出、进出。</p>
+
+<p>// chanType represents a channel type.
+type chanType struct {
+    rtype
+    elem *rtype  // channel element type
+    dir  uintptr // channel direction (ChanDir)
+}
+sliceType 是切片类型定义，切片类型 rtype 是本身信息，elem 就是切片操作的对象类型。</p>
+
+<p>// sliceType represents a slice type.
+type sliceType struct {
+    rtype
+    elem *rtype // slice element type
+}
+arrayType 是数组类型，在切片上额外多了两个属性，slice 是数组转换成切片的类型，预先静态定义好了，而 len 是数组长度。</p>
+
+<p>// arrayType represents a fixed array type.
+type arrayType struct {
+    rtype
+    elem  *rtype // array element type
+    slice *rtype // slice type
+    len   uintptr
+}
+上述 example 讲述了部分类型的定义，完整查看源码 reflect.type.go。</p>
+
+<p>method、interface、map 暂未完全看完，懂原理后没必要看没有几行使用相关知识。</p>
+
+<p>reflect Kind
+reflect.Kind 是定义反射类型常量，是类型的标识。rtype 的 kind 属性就是指 reflect.Kind。</p>
+
+<p>// A Kind represents the specific kind of type that a Type represents.
+// The zero Kind is not a valid kind.
+type Kind uint</p>
+
+<p>const (
+    Invalid Kind = iota
+    Bool
+    Int
+    Int8
+    Int16
+    Int32
+    Int64
+    Uint
+    Uint8
+    Uint16
+    Uint32
+    Uint64
+    Uintptr
+    Float32
+    Float64
+    Complex64
+    Complex128
+    Array
+    Chan
+    Func
+    Interface
+    Map
+    Ptr
+    Slice
+    String
+    Struct
+    UnsafePointer
+)
+reflect Type method
+Kind 方法注释说明返回 kind 值就是 rtype.kind，类型是 reflect.Kind 是 go 中类型的主要分类,是 iota 定义的类型常量。</p>
+
+<p>// Kind returns the specific kind of this type.
+Kind() Kind
+变量实现的方法定义在类型连续后面的一块内存中，可以 unsafe 读到一个类型的全部方法，就可以实现 Implements 方法判断是否实现了一个接口了。</p>
+
+<p>// Implements reports whether the type implements the interface type u.
+Implements(u Type) bool
+ChanDir 方法很简单就返回 chanType.dir,注释说如果不是 Chan 类型 panic 了，类型不 chan 就没有 dir 这个属性无法处理就 panic 了，在调用前一般都明确了 Kind 是 Chan。</p>
+
+<p>// ChanDir returns a channel type’s direction.
+// It panics if the type’s Kind is not Chan.
+ChanDir() ChanDir
+Elem 方法全称是 element，就是指元素类型也可以叫指向类型，注释要求 Kind 必须是 Array、Chan、Map、Ptr、Slice 类型否在就 panic，和 Chan 的 ChanDir 方法一样，只有这 5 个类型才有 elem 属性。</p>
+
+<p>查看前面定义就可以知道 Arry、Slice、Ptr、Chan 的 elem 就是指向的对象的类型，map 是值的类型，例如以下类型 Elem 后 Kind 都是 Int。</p>
+
+<p>[20]int
+[]int
+*int
+chan int
+map[string]int
+// Elem returns a type’s element type.
+// It panics if the type’s Kind is not Array, Chan, Map, Ptr, or Slice.
+Elem() Type
+Field 和 NumField 方法是获得结构体的指定索引的属性和结构体属性数量，注释一样有说明要求 Kind 是 Struct 类型否在 panic，因为就结构体类型才有 [] StructField 能实现这些方法。</p>
+
+<p>根据前面 structType 定义两个方法的实现思路就是 typ.fields[i] 转换一下和 len(typ.fields).</p>
+
+<p>// Field returns a struct type’s i’th field.
+// It panics if the type’s Kind is not Struct.
+// It panics if i is not in the range [0, NumField()).
+Field(i int) StructField
+// NumField returns a struct type’s field count.
+// It panics if the type’s Kind is not Struct.
+NumField() int
+NumIn 和 In 方法是 Func Kind 独有的方法，NumIn 返回这个 Func 具有多个入参，对于返回参数就是 NumOut；In 方法是获得这个 Func 指定第 i 参数的类型。</p>
+
+<p>// NumIn returns a function type’s input parameter count.
+// It panics if the type’s Kind is not Func.
+NumIn() int
+    // In returns the type of a function type’s i’th input parameter.
+// It panics if the type’s Kind is not Func.
+// It panics if i is not in the range [0, NumIn()).
+In(i int) Type
+Key 方法是 Map Kind 独有方法，返回 map 键的类型。</p>
+
+<p>// Key returns a map type’s key type.
+// It panics if the type’s Kind is not Map.
+Key() Type
+Len 方法是 Array Kind 独有方法，返回 Array 定义的长度。</p>
+
+<p>// Len returns an array type’s length.
+// It panics if the type’s Kind is not Array.
+Len() int
+上述说明 reflect.Type 的部分方法实现原理，剩余方法原理类似，就是操作 rtype 的属性，部分 Kind 类型是具有独有方法可以调用。</p>
+
+<p>reflect.Value Method
+反射 Value 对象定义了三个属性 类型、数据位置、flag，数据内存位置就在 ptr 位置，操作方法就需要依靠 typ 类型来判断数据类型操作了。</p>
+
+<p>Type 是静态数据，而 Value 是动态数据，Value 的很多方法具体值是和数据相关的。</p>
+
+<p>type Value struct {
+    typ *rtype
+    ptr unsafe.Pointer
+    flag
+}
+通用方法
+通用方法是指所有类型具有的方法，仅说明根据 Type 和 Value 定义实现这个方法大概的思路，具体实现代码并不一样,以源码为准。</p>
+
+<p>Type 方法返回这个值的类型，大致思路就是返回 v.typ，具体实现还有一些额外处理。</p>
+
+<p>func (v Value) Type() Type
+Kind 方法实现大致思路就是返回 v.typ.kind。</p>
+
+<p>// Kind returns v’s Kind. If v is the zero Value (IsValid returns false),
+//  Kind returns Invalid.
+func (v Value) Kind() Kind
+Interface 法思路就是返回 v.ptr 值转换成一个 interface{}变量，这样就从 reflect.Value 重新转换会变量了。</p>
+
+<p>// Interface returns v’s current value as an interface{}.
+// It is equivalent to:
+//  var i interface{} = (v’s underlying value)
+// It panics if the Value was obtained by accessing unexported struct fields.
+func (v Value) Interface() (i interface{})
+Convert 方法思路就是 v.ptr 值转换成参数 t 的类型，实现规则是Conversions 语法文档 镜像地址。</p>
+
+<p>// Convert returns the value v converted to type t. If the usual Go conversion rules do not allow conversion of the value v to type t, Convert panics.
+func (v Value) Convert(t Type) Value
+Set 方法实现就是设置 v.ptr=x.ptr，要求 v 和 x 的类型是一样的。</p>
+
+<p>同时要这个 Value 是 CanSet，如果将一个 int 转换成 reflect.Value，函数传递的是一个值的副本，那么再对 int 设置新的值就无效了，CanSet 返回就是 false，需要传递*int 这样的指针类型才能有效设置</p>
+
+<p>// Set assigns x to the value v. It panics if CanSet returns false. As in Go, x’s value must be assignable to v’s type.
+func (v Value) Set(x Value)
+SetBool 方法是设置 bool Kind 的值，前置要求 Kind 是一样的，类型还有 SetInt、SetString 等方法。</p>
+
+<p>// SetBool sets v’s underlying value. It panics if v’s Kind is not Bool or if CanSet() is false.
+func (v Value) SetBool(x bool)
+Method 返回这个值的指定索引方法。</p>
+
+<p>// Method returns a function value corresponding to v’s i’th method.
+// The arguments to a Call on the returned function should not include
+// a receiver; the returned function will always use v as the receiver.
+// Method panics if i is out of range or if v is a nil interface value.
+func (v Value) Method(i int) Value
+独有方法
+Len 方法返回数据数据，注释说明要求是 Array, Chan, Map, Slice, or String，前四个返回就是数据量，而 String Kind 返回字符串长度。</p>
+
+<p>// It panics if v’s Kind is not Array, Chan, Map, Slice, or String.
+func (v Value) Len() int
+IsNil 方法判断指针是否是空,在 go 的实现中 chan、func、interface、map、pointer、slice 底层才是指针类型，才能判断 IsNil 否在 panic，判断这些指针类型的 ptr 是否为 0，在 go 代码编写中也只有这几种类型可以i==nil这样的比较。</p>
+
+<p>在 go1.13 中新增了 IsZero 方法，判断是否是空值，里面这些指针类型会判断 IsNil，其他类型就是判断数据值是不是零值那样。</p>
+
+<p>// IsNil reports whether its argument v is nil. The argument must be
+// a chan, func, interface, map, pointer, or slice value; if it is
+// not, IsNil panics. Note that IsNil is not always equivalent to a
+// regular comparison with nil in Go. For example, if v was created
+// by calling ValueOf with an uninitialized interface variable i,
+// i==nil will be true but v.IsNil will panic as v will be the zero Value.
+func (v Value) IsNil() bool
+Index 方法获取指定类型的索引，就 Array、Slice、String 可以执行，否在 panic，在 ptr 指向的位置进行一个计算得到的偏移位置获得到索引的值。</p>
+
+<p>// Index returns v’s i’th element. It panics if v’s Kind is not Array, Slice, or String or i is out of range.
+func (v Value) Index(i int) Value
+Field 方法是返回结构体指定索引的值，要求 Kind 是 Struct，通过指定索引的偏移来获得这个值的地址，然后类型里面获得到类型，最后返回索引的值。</p>
+
+<p>// Field returns the i’th field of the struct v. It panics if v’s Kind is not Struct or i is out of range.
+func (v Value) Field(i int) Value
+Elem 方法是返回 Ptr 和 Interface Kind 指向值，为了解除引用。</p>
+
+<p>为什么 Value.Elem 方法没有了 Slice、Map 等类型？ 具体额外独立的操作方法 Index、MapIndex 等。</p>
+
+<p>// Elem returns the value that the interface v contains or that the pointer v points to. 
+// It panics if v’s Kind is not Interface or Ptr. It returns the zero Value if v is nil.
+func (v Value) Elem() Value
+MapIndex 和 MapKeys 是 Map Kind 独有的方法，获取到 map 的索引值和全部键，通过 typ 提供的类型和 ptr 地址进行复杂的 map 操作。</p>
+
+<p>// MapIndex returns the value associated with key in the map v.
+// It panics if v’s Kind is not Map.
+// It returns the zero Value if key is not found in the map or if v represents a nil map.
+// As in Go, the key’s value must be assignable to the map’s key type.
+func (v Value) MapIndex(key Value) Value
+// MapKeys returns a slice containing all the keys present in the map,
+// in unspecified order.
+// It panics if v’s Kind is not Map.
+// It returns an empty slice if v represents a nil map.
+func (v Value) MapKeys() []Value</p>
+
+<p>Send 方法是 Chan Kind 独有方法，给 chan 放一个数据进去。</p>
+
+<p>func (v Value) Send(x Value)
+end
+以上讲述了 reflect 库的原理就是操作 runtime 变量，而 runtime 变量就是一个类型加地址。</p>
+
+<p>本文并没有完整分析 reflect 库，通过这些原理就可以大概理解这些方法的作用和操作了，具体请参考源码。</p>
+:ET

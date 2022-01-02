@@ -1,0 +1,414 @@
+I"k><p>结构概览
+defer
+type _defer struct {
+   siz     int32   // 参数的大小
+   started bool    // 是否执行过了
+   sp      uintptr // sp at time of defer
+   pc      uintptr
+   fn      *funcval 
+   _panic  *_panic // defer中的panic
+   link    *_defer // defer链表，函数执行流程中的defer，会通过 link这个 属性进行串联
+}
+panic
+type _panic struct {
+   argp      unsafe.Pointer // pointer to arguments of deferred call run during panic; cannot move - known to liblink
+   arg       interface{}    // argument to panic
+   link      *_panic        // link to earlier panic
+   recovered bool           // whether this panic is over
+   aborted   bool           // the panic was aborted
+}
+g
+因为 defer panic 都是绑定在 运行的g上的，所以这里说明一下g中与 defer panic相关的属性</p>
+
+<p>type g struct {
+   _panic         *_panic // panic组成的链表
+   _defer         *_defer // defer组成的先进后出的链表，同栈
+}
+<!-- more -->
+源码分析
+main
+最开始，还是通过go tool 来分析一下，底层是通过什么函数来实现的吧</p>
+
+<p>func main() {
+	defer func() {
+		recover()
+	}()
+	panic(“error”)
+}
+go build -gcflags=all=”-N -l” main.go</p>
+
+<p>go tool objdump -s “main.main” main</p>
+
+<p>▶ go tool objdump -s “main.main” main | grep CALL
+  main.go:4             0x4548d0                e81b00fdff              CALL runtime.deferproc(SB)            <br />
+  main.go:7             0x4548f2                e8b90cfdff              CALL runtime.gopanic(SB)              <br />
+  main.go:4             0x4548fa                e88108fdff              CALL runtime.deferreturn(SB)          <br />
+  main.go:3             0x454909                e85282ffff              CALL runtime.morestack_noctxt(SB)     <br />
+  main.go:5             0x4549a6                e8d511fdff              CALL runtime.gorecover(SB)            <br />
+  main.go:4             0x4549b5                e8a681ffff              CALL runtime.morestack_noctxt(SB)
+综合反编译结果可以看出，defer 关键字首先会调用 runtime.deferproc 定义一个延迟调用对象，然后再函数结束前，调用 runtime.deferreturn 来完成 defer 定义的函数的调用</p>
+
+<p>panic 函数就会调用 runtime.gopanic 来实现相关的逻辑</p>
+
+<p>recover 则调用 runtime.gorecover 来实现 recover 的功能</p>
+
+<p>deferproc
+根据 defer 关键字后面定义的函数 fn 以及 参数的size，来创建一个延迟执行的 函数，并将这个延迟函数，挂在到当前g的 _defer 的链表上</p>
+
+<p>func deferproc(siz int32, fn <em>funcval) { // arguments of fn follow fn
+   sp := getcallersp()
+   argp := uintptr(unsafe.Pointer(&amp;fn)) + unsafe.Sizeof(fn)
+   callerpc := getcallerpc()
+   // 获取一个_defer对象， 并放入g._defer链表的头部
+   d := newdefer(siz)
+	 // 设置defer的fn pc sp等，后面调用
+   d.fn = fn
+   d.pc = callerpc
+   d.sp = sp
+   switch siz {
+   case 0:
+      // Do nothing.
+   case sys.PtrSize:
+      // _defer 后面的内存 存储 argp的地址信息
+      *(</em>uintptr)(deferArgs(d)) = <em>(</em>uintptr)(unsafe.Pointer(argp))
+   default:
+      // 如果不是指针类型的参数，把参数拷贝到 _defer 的后面的内存空间
+      memmove(deferArgs(d), unsafe.Pointer(argp), uintptr(siz))
+   }
+   return0()
+}
+这个函数看起来比较简答，通过newproc 获取一个 _defer 的对象，并加入到当前g的 _defer 链表的头部，然后再把参数或参数的指针拷贝到 获取到的 _defer对象的 后面的内存空间</p>
+
+<p>newdefer
+newdefer 的作用是获取一个_defer对象， 并推入 g._defer链表的头部</p>
+
+<p>func newdefer(siz int32) <em>_defer {
+   var d *_defer
+   // 根据 size 通过deferclass判断应该分配的 sizeclass，就类似于 内存分配预先确定好几个sizeclass，然后根据size确定sizeclass，找对应的缓存的内存块
+   sc := deferclass(uintptr(siz))
+   gp := getg()
+   // 如果sizeclass在既定的sizeclass范围内，去g绑定的p上找
+   if sc &lt; uintptr(len(p{}.deferpool)) {
+      pp := gp.m.p.ptr()
+      if len(pp.deferpool[sc]) == 0 &amp;&amp; sched.deferpool[sc] != nil {
+         // 当前sizeclass的缓存数量==0，且不为nil，从sched上获取一批缓存
+         systemstack(func() {
+            lock(&amp;sched.deferlock)
+            for len(pp.deferpool[sc]) &lt; cap(pp.deferpool[sc])/2 &amp;&amp; sched.deferpool[sc] != nil {
+               d := sched.deferpool[sc]
+               sched.deferpool[sc] = d.link
+               d.link = nil
+               pp.deferpool[sc] = append(pp.deferpool[sc], d)
+            }
+            unlock(&amp;sched.deferlock)
+         })
+      }
+      // 如果从sched获取之后，sizeclass对应的缓存不为空，分配
+      if n := len(pp.deferpool[sc]); n &gt; 0 {
+         d = pp.deferpool[sc][n-1]
+         pp.deferpool[sc][n-1] = nil
+         pp.deferpool[sc] = pp.deferpool[sc][:n-1]
+      }
+   }
+   // p和sched都没有找到 或者 没有对应的sizeclass，直接分配
+   if d == nil {
+      // Allocate new defer+args.
+      systemstack(func() {
+         total := roundupsize(totaldefersize(uintptr(siz)))
+         d = (</em>_defer)(mallocgc(total, deferType, true))
+      })
+   }
+   d.siz = siz
+   // 插入到g._defer的链表头
+   d.link = gp._defer
+   gp._defer = d
+   return d
+}
+根据size获取sizeclass，对sizeclass进行分类缓存，这是内存分配时的思想</p>
+
+<p>先去p上分配，然后批量从全局 sched上获取到本地缓存，这种二级缓存的思想真的是遍布在go源码的各个部分啊</p>
+
+<p>deferreturn
+func deferreturn(arg0 uintptr) {
+   gp := getg()
+   // 获取g defer链表的第一个defer，也是最后一个声明的defer
+   d := gp._defer
+   // 没有defer，就不需要干什么事了
+   if d == nil {
+      return
+   }
+   sp := getcallersp()
+   // 如果defer的sp与callersp不匹配，说明defer不对应，有可能是调用了其他栈帧的延迟函数
+   if d.sp != sp {
+      return
+   }
+   // 根据d.siz，把原先存储的参数信息获取并存储到arg0里面
+   switch d.siz {
+   case 0:
+      // Do nothing.
+   case sys.PtrSize:
+      <em>(</em>uintptr)(unsafe.Pointer(&amp;arg0)) = <em>(</em>uintptr)(deferArgs(d))
+   default:
+      memmove(unsafe.Pointer(&amp;arg0), deferArgs(d), uintptr(d.siz))
+   }
+   fn := d.fn
+   d.fn = nil
+   // defer用过了就释放了，
+   gp._defer = d.link
+   freedefer(d)
+   // 跳转到执行defer
+   jmpdefer(fn, uintptr(unsafe.Pointer(&amp;arg0)))
+}
+freedefer
+释放defer用到的函数，应该跟调度器、内存分配的思想是一样的</p>
+
+<p>func freedefer(d *_defer) {
+   // 判断defer的sizeclass
+   sc := deferclass(uintptr(d.siz))
+   // 超出既定的sizeclass范围的话，就是直接分配的内存，那就不管了
+   if sc &gt;= uintptr(len(p{}.deferpool)) {
+      return
+   }
+   pp := getg().m.p.ptr()
+   // p本地sizeclass对应的缓冲区满了，批量转移一半到全局sched
+   if len(pp.deferpool[sc]) == cap(pp.deferpool[sc]) {
+      // 使用g0来转移
+      systemstack(func() {
+         var first, last *_defer
+         for len(pp.deferpool[sc]) &gt; cap(pp.deferpool[sc])/2 {
+            n := len(pp.deferpool[sc])
+            d := pp.deferpool[sc][n-1]
+            pp.deferpool[sc][n-1] = nil
+            pp.deferpool[sc] = pp.deferpool[sc][:n-1]
+            // 先将需要转移的那批defer对象串成一个链表
+            if first == nil {
+               first = d
+            } else {
+               last.link = d
+            }
+            last = d
+         }
+         lock(&amp;sched.deferlock)
+         // 把这个链表放到sched.deferpool对应sizeclass的链表头
+         last.link = sched.deferpool[sc]
+         sched.deferpool[sc] = first
+         unlock(&amp;sched.deferlock)
+      })
+   }
+   // 清空当前要释放的defer的属性
+   d.siz = 0
+   d.started = false
+   d.sp = 0
+   d.pc = 0
+   d.link = nil</p>
+
+<p>pp.deferpool[sc] = append(pp.deferpool[sc], d)
+}
+二级缓存的思想，在 深入理解Go-goroutine的实现及Scheduler分析， 深入理解go-channel和select的原理， 深入理解Go-垃圾回收机制 已经分析过了，就不再过多分析了</p>
+
+<p>gopanic
+func gopanic(e interface{}) {
+   gp := getg()</p>
+
+<p>var p _panic
+   p.arg = e
+   p.link = gp._panic
+   gp._panic = (*_panic)(noescape(unsafe.Pointer(&amp;p)))</p>
+
+<p>atomic.Xadd(&amp;runningPanicDefers, 1)
+   // 依次执行 g._defer链表的defer对象
+   for {
+      d := gp._defer
+      if d == nil {
+         break
+      }</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>  // If defer was started by earlier panic or Goexit (and, since we're back here, that triggered a new panic),
+  // take defer off list. The earlier panic or Goexit will not continue running.
+  // 正常情况下，defer执行完成之后都会被移除，既然这个defer没有移除，原因只有两种： 1. 这个defer里面引发了panic 2. 这个defer里面引发了 runtime.Goexit，但是这个defer已经执行过了，需要移除，如果引发这个defer没有被移除是第一个原因，那么这个panic也需要移除，因为这个panic也执行过了，这里给panic增加标志位，以待后续移除
+  if d.started {
+     if d._panic != nil {
+        d._panic.aborted = true
+     }
+     d._panic = nil
+     d.fn = nil
+     gp._defer = d.link
+     freedefer(d)
+     continue
+  }
+  d.started = true
+
+  // Record the panic that is running the defer.
+  // If there is a new panic during the deferred call, that panic
+  // will find d in the list and will mark d._panic (this panic) aborted.
+  // 把当前的panic 绑定到这个defer上面，defer里面有可能panic，这种情况下就会进入到 上面d.started 的逻辑里面，然后把当前的panic终止掉，因为已经执行过了 
+  d._panic = (*_panic)(noescape(unsafe.Pointer(&amp;p)))
+  // 执行defer.fn
+  p.argp = unsafe.Pointer(getargp(0))
+  reflectcall(nil, unsafe.Pointer(d.fn), deferArgs(d), uint32(d.siz), uint32(d.siz))
+  p.argp = nil
+
+  // reflectcall did not panic. Remove d.
+  if gp._defer != d {
+     throw("bad defer entry in panic")
+  }
+  // 解决defer与panic的绑定关系，因为 defer函数已经执行完了，如果有panic或Goexit就不会执行到这里了
+  d._panic = nil
+  d.fn = nil
+  gp._defer = d.link
+
+  // trigger shrinkage to test stack copy. See stack_test.go:TestStackPanic
+  //GC()
+
+  pc := d.pc
+  sp := unsafe.Pointer(d.sp) // must be pointer so it gets adjusted during stack copy
+  freedefer(d)
+  // panic被recover了，就不需要继续panic了，继续执行剩余的代码
+  if p.recovered {
+     atomic.Xadd(&amp;runningPanicDefers, -1)
+
+     gp._panic = p.link
+     // Aborted panics are marked but remain on the g.panic list.
+     // Remove them from the list.
+     // 从panic链表中移除aborted的panic，下面解释
+     for gp._panic != nil &amp;&amp; gp._panic.aborted {
+        gp._panic = gp._panic.link
+     }
+     if gp._panic == nil { // must be done with signal
+        gp.sig = 0
+     }
+     // Pass information about recovering frame to recovery.
+     gp.sigcode0 = uintptr(sp)
+     gp.sigcode1 = pc
+     // 调用recovery， 恢复当前g的调度执行
+     mcall(recovery)
+     throw("recovery failed") // mcall should not return
+  }    }
+ // 打印panic信息    preprintpanics(gp._panic)
+ // panic    fatalpanic(gp._panic) // should not return    *(*int)(nil) = 0      // not reached } 这里解释一下 gp._panic.aborted 的作用，以下面为例
+</code></pre></div></div>
+
+<p>func main() {
+   defer func() { // defer1
+      recover()
+   }()
+   panic1()
+}</p>
+
+<p>func panic1() {
+   defer func() {  // defer2
+      panic(“error1”) // panic2
+   }()
+   panic(“error”)  // panic1
+}
+当执行到 panic(“error”) 时</p>
+
+<p>g._defer链表： g._defer-&gt;defer2-&gt;defer1</p>
+
+<p>g._panic链表：g._panic-&gt;panic1</p>
+
+<p>当执行到 panic(“error1”) 时</p>
+
+<p>g._defer链表： g._defer-&gt;defer2-&gt;defer1</p>
+
+<p>g._panic链表：g._panic-&gt;panic2-&gt;panic1</p>
+
+<p>继续执行到 defer1 函数内部，进行recover()</p>
+
+<p>此时会去恢复 panic2 引起的 panic， panic2.recovered = true，应该顺着g._panic链表继续处理下一个panic了，但是我们可以发现 panic1 已经执行过了，这也就是下面的代码的逻辑了，去掉已经执行过的panic</p>
+
+<p>for gp._panic != nil &amp;&amp; gp._panic.aborted {
+   gp._panic = gp._panic.link
+}
+panic的逻辑可以梳理一下：</p>
+
+<p>程序在遇到panic的时候，就不再继续执行下去了，先把当前panic 挂载到 g._panic 链表上，开始遍历当前g的g._defer链表，然后执行_defer对象定义的函数等，如果 defer函数在调用过程中又发生了 panic，则又执行到了 gopanic函数，最后，循环打印所有panic的信息，并退出当前g。然而，如果调用defer的过程中，遇到了recover，则继续进行调度（mcall(recovery)）。</p>
+
+<p>recovery
+恢复一个被panic的g，重新进入并继续执行调度</p>
+
+<p>func recovery(gp *g) {
+   // Info about defer passed in G struct.
+   sp := gp.sigcode0
+   pc := gp.sigcode1
+   // Make the deferproc for this d return again,
+   // this time returning 1.  The calling function will
+   // jump to the standard return epilogue.
+   // 记录defer返回的sp pc
+   gp.sched.sp = sp
+   gp.sched.pc = pc
+   gp.sched.lr = 0
+   gp.sched.ret = 1
+   // 重新恢复执行调度
+   gogo(&amp;gp.sched)
+}
+gorecover
+gorecovery 仅仅只是设置了 g._panic.recovered 的标志位</p>
+
+<p>func gorecover(argp uintptr) interface{} {
+   gp := getg()
+   p := gp._panic
+   // 需要根据 argp的地址，判断是否在defer函数中被调用
+   if p != nil &amp;&amp; !p.recovered &amp;&amp; argp == uintptr(p.argp) {
+      // 设置标志位，上面gopanic中会对这个标志位做判断
+      p.recovered = true
+      return p.arg
+   }
+   return nil
+}
+goexit
+我们还忽略了一个点，当我们手动调用 runtime.Goexit() 退出的时候，defer函数也会执行，我们分析一下这种情况</p>
+
+<p>func Goexit() {
+	// Run all deferred functions for the current goroutine.
+	// This code is similar to gopanic, see that implementation
+	// for detailed comments.
+	gp := getg()
+  // 遍历defer链表
+	for {
+		d := gp._defer
+		if d == nil {
+			break
+		}
+    // 如果 defer已经执行过了，与defer绑定的panic 终止掉
+		if d.started {
+			if d._panic != nil {
+				d._panic.aborted = true
+				d._panic = nil
+			}
+			d.fn = nil
+      // 从defer链表中移除
+			gp._defer = d.link
+      // 释放defer
+			freedefer(d)
+			continue
+		}
+    // 调用defer内部函数
+		d.started = true
+		reflectcall(nil, unsafe.Pointer(d.fn), deferArgs(d), uint32(d.siz), uint32(d.siz))
+		if gp._defer != d {
+			throw(“bad defer entry in Goexit”)
+		}
+		d._panic = nil
+		d.fn = nil
+		gp._defer = d.link
+		freedefer(d)
+		// Note: we ignore recovers here because Goexit isn’t a panic
+	}
+  // 调用goexit0，清除当前g的属性，重新进入调度
+	goexit1()
+}
+<img src="https://xiazemin.github.io/MyBlog/img/defer_recover.gif" /></p>
+
+<p>步骤解析：</p>
+
+<p>L3: 生成一个defer1，放到g._defer链表上
+L11: 生成一个defer2，挂载到g._defer链表上
+L14: panic1 调用 gopanic，将当前panic放到g._panic链表上
+L14: 因为panic1，从g._defer 链表头部提取到defer2，开始执行
+L12: 执行defer2，又一个panic，挂载到g._panic链表上
+L12: 因为panic2，从g._defer链表头部提取到defer2，发现defer2已经执行过了移出链表，，且defer2是因为panic1而触发的，跳过defer2，并abort panic1
+L12: 继续提取g._defer链表的下一个，提取到defer1
+L5: defer1 执行recover，recover掉panic2，移除链表，判断下一个panic，即panic1，panic1已经被defer2 aborted掉了，移除panic1
+defer1 执行完了，移除defer1</p>
+:ET

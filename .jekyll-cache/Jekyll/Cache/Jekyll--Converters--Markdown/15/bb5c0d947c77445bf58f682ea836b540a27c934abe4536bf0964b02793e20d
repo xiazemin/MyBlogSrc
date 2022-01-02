@@ -1,0 +1,31 @@
+I"J<p>如果缓存失效，瞬间大量请求可能会直接访问数据库，请问如何在代码层面应该怎么处理？
+近有人问我这个问题，我个人没有这方面的实战经验。我个人的想法是，由于访问数据库并写入缓存需要一定的时间。可能导致较早的部分请求直接读取数据库，当这部分数据要写入缓存时，判断缓存是否存在，不存在则写入，存在则不写入，并返回结果。
+if ($cache) {
+return $cache;
+} else {
+$data = read database;
+if (!$cache) write $cache $data;
+return $data;
+}</p>
+
+<p>但思前想后，觉得这样的回答似乎没有正确回答多个请求同时读取数据库的问题，虽然可以屏蔽后期的请求直接访问数据库，但前期还是有多了链接直接访问了数据库
+<!-- more -->
+作者：fleuria
+链接：https://www.zhihu.com/question/39114188/answer/85405032
+来源：知乎
+著作权归作者所有。商业转载请联系作者获得授权，非商业转载请注明出处。</p>
+
+<p>facebook 放过一篇论文《Scaling Memcache at Facebook》有讨论过这个问题：3.2.1 LeasesWe introduce a new mechanism we call leases to address
+two problems: stale sets and thundering herds.其中 “thundering herds” 正是楼主提到的数据库穿透问题，一个热的缓存如果失效，在第一个访问数据库的请求得到结果写入缓存之前，期间的大量请求打穿到数据库；然后 “stale set” 属于数据一致性问题，假如一个实例更新了数据想去刷新缓存，而另一个实例读 miss 尝试读取数据库，这时两次缓存写入顺序不能保证，可能会导致过期数据写入缓存。这两个问题都是 look-aside cache 所固有的，需要提供一个机制来协调缓存的写入，这篇论文给出的方案就是 lease 机制，限制同一时刻一个键只有拥有唯一 lease 的客户端才能有权写入缓存：如果 get 某键读 miss，返回客户端一个 64 位的 lease；然后该键在写入之前如果收到 get 请求，将返回一个 hot miss 报错，客户端依据它判断自己要稍后重试，而不向数据库读取数据；如果该键收到 delete 请求，那么会使 lease 失效；持有失效 lease 的 set 请求仍将成功，但后来的 get 请求将得到 hot miss 报错，并携带一个新的 lease；这里的 hot miss 报错中带有最后的值，但认为它处于 stale 状态，留给客户端去判断是否采用它，在一致性要求不严格的场景中可以进一步减少数据库请求；这一来允许 memcache 服务端协调数据库的访问，从而解决这两个问题。不过 lease 方案并不完美，因为 1. 需要改 memcache；2. 仍泄露逻辑到客户端，要求客户端遵循 lease 和 hot miss 的约定。在 facebook 后面的论文《TAO: Facebook’s Distributed Data Store for the Social Graph》中介绍TAO 系统尝试解决的问题之一提到：Distributed control logic: In a lookaside cache architecture
+the control logic is run on clients that don’t communicate
+with each other. This increases the number of
+failure modes, and makes it difficult to avoid thundering
+herds. Nishtala et al. provide an in-depth discussion of
+the problems and present leases, a general solution [21].
+For objects and associations the fixed API allows us to
+move the control logic into the cache itself, where the
+problem can be solved more efficiently.也就是说，我们并不一定非 look aside cache 不可，如果把缓存的修改入口封装起来，走 write though cache，就不需要分布式地去协调所有客户端，在一个地方排队就够了。
+References 
+Scaling Memcache at FacebookTAO: Facebook’s Distributed Data Store for the Social Graph
+https://link.zhihu.com/?target=https%3A//www.quora.com/How-does-the-lease-token-solve-the-stale-sets-problem-in-Facebooks-memcached-servers</p>
+:ET

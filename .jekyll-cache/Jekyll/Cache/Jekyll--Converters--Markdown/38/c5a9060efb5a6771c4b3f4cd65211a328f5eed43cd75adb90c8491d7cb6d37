@@ -1,0 +1,146 @@
+I"�<p>在PHP扩展里是通过 call_user_function_ex 函数来调用用户空间的函数的。</p>
+
+<p>定义
+它的定义在 Zend/zend_API.h :</p>
+
+<p>#define call_user_function_ex(function_table, object, function_name, retval_ptr, param_count, params, no_separation, symbol_table)</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>_call_user_function_ex(object, function_name, retval_ptr, param_count, params, no_separation) 通过宏定义替换为_call_user_function_ex,其中参数 function_table 被移除了，它之所以在API才存在大概是为了兼容以前的写法 &lt;!-- more --&gt;
+</code></pre></div></div>
+
+<p>函数的真正定义是：</p>
+
+<p>ZEND_API int _call_user_function_ex(
+    zval *object, 
+    zval *function_name, 
+    zval *retval_ptr, 
+    uint32_t param_count, 
+    zval params[], 
+    int no_separation);
+参数分析：</p>
+
+<p>zval *object:这个是用来我们调用类里的某个方法的对象。</p>
+
+<p>zval *function_name:要调用的函数的名字。</p>
+
+<p>zval *retval_ptr：收集回调函数的返回值。</p>
+
+<p>uint32_t param_count：回调函数需要传递参数的个数。</p>
+
+<p>zval params[]: 参数列表。</p>
+
+<p>int no_separation：是否对zval进行分离，如果设为1则直接会出错，分离的作用是为了优化空间。</p>
+
+<p>回调功能的实现
+PHP_FUNCTION(hello_callback)
+{
+    zval *function_name;
+    zval retval;
+    if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, “z”, &amp;function_name) == FAILURE) {
+        return;
+    }
+    if (Z_TYPE_P(function_name) != IS_STRING) {
+        php_printf(“Function require string argumnets!”);
+        return;
+    }
+    //TSRMLS_FETCH();
+    if (call_user_function_ex(EG(function_table), NULL, function_name, &amp;retval, 0, NULL, 0, NULL TSRMLS_CC) != SUCCESS) {
+        php_printf(“Function call failed!”);
+        return;
+    }</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>*return_value = retval;
+zval_copy_ctor(return_value);
+zval_ptr_dtor(&amp;retval);
+</code></pre></div></div>
+
+<p>}
+zval_copy_ctor()原始（zval）的内容拷贝给它。zval_ptr_dtor()释放空间。return_value不是一个函数外的变量，它的由函数声明里的变量。PHP_FUNCTION(hello_callback)这个声明是简写，最终会被预处理宏替换为：</p>
+
+<p>void zif_hello_callback(zend_execute_data *execute_data, zval *return_value)
+return_value变量其实也就是最终返回给调用脚本的，RETURN_STR(s) 等返回函数最终也都是宏替换为对该变量的操作。</p>
+
+<p>测试脚本：</p>
+
+<p>&lt;?php
+function fun1() {
+    for ($i = 0; $i &lt; 5; $i++) {
+        echo ‘fun1:’.$i.”\n”;
+    }
+    return ‘call end’;
+}</p>
+
+<p>echo hello_callback(‘fun1’);
+一个并行扩展
+早期的php不支持多进程多线程的，现在随着发展有很多扩展不断完善它，诸如pthread,swoole等，不仅能多线程，而且能实现异步。</p>
+
+<p>利用c语言多线程pthread库来实现一个简单的并行扩展。</p>
+
+<p>先声明我们一会用到的结构：</p>
+
+<p>struct myarg
+{
+    zval *fun;
+    zval ret;
+};
+线程函数：</p>
+
+<p>static void my_thread(struct myarg *arg) {
+    zval *fun = arg-&gt;fun;
+    zval ret = arg-&gt;ret;
+    if (call_user_function_ex(EG(function_table), NULL, fun, &amp;ret, 0, NULL, 0, NULL TSRMLS_CC) != SUCCESS) {
+        return;
+    }
+}
+函数的实现：</p>
+
+<p>PHP_FUNCTION(hello_thread)
+{
+    pthread_t tid;
+    zval <em>fun1, *fun2;
+    zval ret1, ret2;
+    struct myarg arg;
+    int ret;
+    if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, “zz”, &amp;fun1, &amp;fun2) == FAILURE) {
+        return;
+    }
+    arg.fun = fun1;
+    arg.ret = ret1;
+    ret = pthread_create(&amp;tid, NULL, (void</em>)my_thread, (void*)&amp;arg);
+    if(ret != 0) {
+        php_printf(“Thread Create Error\n”);
+        exit(0);
+    }
+    if (call_user_function_ex(EG(function_table), NULL, fun2, &amp;ret2, 0, NULL, 0, NULL TSRMLS_CC) != SUCCESS) {
+        return;
+    }
+    pthread_join(tid, NULL);
+    RETURN_NULL();</p>
+
+<p>}
+测试脚本：</p>
+
+<p>&lt;?php
+function fun1() {
+    for ($i = 0; $i &lt; 5; $i++) {
+        echo ‘fun1:’.$i.’\n’;
+    }
+}</p>
+
+<p>function fun2() {
+    for ($i = 0; $i &lt; 5; $i++) {
+        echo ‘fun2:’.$i.’\n’;
+    }
+}</p>
+
+<p>hello_thread(‘fun1’, ‘fun2’);
+echo ‘after 多并发’;
+输出：</p>
+
+<p>20161130143035.png</p>
+
+<p>两次的输出结果不一样，并且echo ‘after 多并发’;是在两个函数都运行完后才执行的。</p>
+
+<p>https://segmentfault.com/a/1190000007648157
+https://blog.csdn.net/xing_____/article/details/78481547</p>
+:ET

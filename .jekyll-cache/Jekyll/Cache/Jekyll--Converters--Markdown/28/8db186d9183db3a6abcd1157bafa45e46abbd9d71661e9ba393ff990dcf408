@@ -1,0 +1,1748 @@
+I"�v<p>经典平滑升级方案</p>
+
+<p>服务器开发运维中，平滑升级是一个老生常谈的话题。拿一个http server来说，最常见的方案就是在http server前面加挂一个lvs负载，通过健康检查接口决定负载的导入与摘除。具体来说就是http server 提供一个/status 接口，服务器返回一个status文件，内容为ok，lvs负载定时访问这个接口，判断服务健康状况决定导入流量和切断流量。一般都会定一些策略，比如：访问间隔5秒，健康阈值2，异常阈值2之类的。意思就是每隔5秒访问一次/status接口，2次成功后，确认服务正常，开始导入流量，2次失败确认服务异常切断流量。当服务升级时，修改status文件内容为off，等待lvs健康检查确认服务为异常状态时主动切断流量，此时进行服务器的升级操作，服务重启完毕后，将status文件内容修改回ok，等待lvs健康检查确认服务正常后导入流量，以此步骤逐步完成剩余的机器的发布操作。将以上步骤完善成脚本，拆分为pre（预升级，ok修改为off）、post（发布代码，重启服务）、check（服务检查）、online（上线，off修改为ok）几个动作，与代码发布平台结合基本就实现了一般服务的自动化发版管理。360内部的代码发布平台Furion就是基于此原理工作的。</p>
+
+<p>经典平滑升级方案的问题</p>
+
+<p>一般的web服务使用上述平滑升级方案，基本上已经够用了。那这个方案还有什么问题吗？吹毛求疵的讲，还是有的。</p>
+
+<p>发布过程中，正在发布的机器被摘除，其他机器承压增大。</p>
+
+<p>发布过程仍然花费一些时间，按照上述策略指定的参数，发布一次至少需要20秒，当然我们可以调整参数，但是要面临浪费资源或者网络抖动误判导致切断流量的问题。</p>
+
+<p>切断流量瞬间会导致未完成请求返回不完整。</p>
+
+<p>这些问题一般来说都不算大问题，服务器资源做好冗余就够了，但是当服务器数量很大，服务器QPS很高的情况，小问题也会变大问题。所有寻求完美无缝重启的方案就是解决问题的关键了。
+https://mp.weixin.qq.com/s?__biz=MzU4ODgyMDI0Mg==&amp;mid=2247487071&amp;idx=1&amp;sn=c0098f0ea50f6b1fc5c94ea9e68e8bfb
+<!-- more -->
+优雅重启</p>
+
+<p>golang语言http服务的优雅重启开源库也有一些，我们选择Facebook开源的库进行研究。代码地址https://github.com/facebookarchive/grace.git。网上的开源库的实现或简单或复杂，其实原理都差不多，执行优雅重启的过程基本如下：</p>
+
+<p>发布新的bin文件去覆盖老的bin文件</p>
+
+<p>发送一个信号量，告诉正在运行的进程，进行重启</p>
+
+<p>正在运行的进程收到信号后，会以子进程的方式启动新的bin文件</p>
+
+<p>新进程接受新请求，并处理</p>
+
+<p>老进程不再接受请求，但是要等正在处理的请求处理完成，所有在处理的请求处理完之后，便自动退出
+其实我总结了一下，就两个关键点，一个是子进程继承端口监听启动，接受新请求处理；另一个是父进程优雅关闭。通过以上两个步骤基本上就实现了服务的无缝重启，发布过程中流量无损，发布消耗时间理论上最大也就是一个请求的超时时间，回滚服务也很简单，将旧版本服务重发一次就好了。</p>
+
+<p>源码分析</p>
+
+<p>1</p>
+
+<p>使用方法</p>
+
+<p>示例使用了流行的http库 gin，我们一般用法如下</p>
+
+<p>func main
+()</p>
+
+<p>{</p>
+
+<p>engine 
+:=
+ gin
+.
+New
+()</p>
+
+<p>engine
+.
+Use
+(
+httpserver
+.
+NewAccessLogger
+(),
+ gin
+.
+Recovery
+())</p>
+
+<p>controller
+.
+Regist
+(
+engine
+)</p>
+
+<p>srv 
+:=</p>
+
+<p>&amp;
+http
+.
+Server
+{</p>
+
+<p>Addr
+:</p>
+
+<p>“:80”
+,</p>
+
+<p>Handler
+:
+      engine
+,</p>
+
+<p>ReadTimeout
+:</p>
+
+<p>30</p>
+
+<p>*
+ time
+.
+Second
+,</p>
+
+<p>WriteTimeout
+:</p>
+
+<p>30</p>
+
+<p>*
+ time
+.
+Second
+,</p>
+
+<p>}</p>
+
+<p>monitor
+.
+Init
+()</p>
+
+<p>srvMonitor 
+:=</p>
+
+<p>&amp;
+http
+.
+Server
+{</p>
+
+<p>Addr
+:</p>
+
+<p>“:9900”
+,</p>
+
+<p>Handler
+:</p>
+
+<p>nil
+,</p>
+
+<p>ReadTimeout
+:</p>
+
+<p>30</p>
+
+<p>*
+ time
+.
+Second
+,</p>
+
+<p>WriteTimeout
+:</p>
+
+<p>30</p>
+
+<p>*
+ time
+.
+Second
+,</p>
+
+<p>}</p>
+
+<p>grace
+.
+Serve
+(
+srv
+,
+ srvMonitor
+)</p>
+
+<p>}</p>
+
+<p>grace.Serve函数参数是一个切片，可以处理多个server的端口监听继承与优雅关闭。此外还提供了关闭前的hook，使用方法如下：</p>
+
+<p>gracehttp
+.
+ServeWithOptions
+([]*
+http
+.
+Server
+{
+srv
+,
+ srvMonitor
+},
+ gracehttp
+.
+PreStartProcess
+(
+func
+()
+ error 
+{</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    logger . Info ( "do PreStartProcess\n" )
+</code></pre></div></div>
+
+<p>return</p>
+
+<p>nil</p>
+
+<p>}))</p>
+
+<p>在调研中我发现项目上有错误的使用方法，如下：</p>
+
+<p>func startHttp
+()</p>
+
+<p>{</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>engine  :=  gin . New ()
+
+engine . Use ( httpserver . NewAccessLogger (),  gin . Recovery ())
+
+controller . Regist ( engine )
+
+srv  :=
+</code></pre></div></div>
+
+<p>&amp;
+http
+.
+Server
+{</p>
+
+<p>Addr
+:</p>
+
+<p>“:80”
+,</p>
+
+<p>Handler
+:
+      engine
+,</p>
+
+<p>ReadTimeout
+:</p>
+
+<p>30</p>
+
+<p>*
+ time
+.
+Second
+,</p>
+
+<p>WriteTimeout
+:</p>
+
+<p>30</p>
+
+<p>*
+ time
+.
+Second
+,</p>
+
+<p>}</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>monitor . Init ()
+
+srvMonitor  :=
+</code></pre></div></div>
+
+<p>&amp;
+http
+.
+Server
+{</p>
+
+<p>Addr
+:</p>
+
+<p>“:9900”
+,</p>
+
+<p>Handler
+:</p>
+
+<p>nil
+,</p>
+
+<p>ReadTimeout
+:</p>
+
+<p>30</p>
+
+<p>*
+ time
+.
+Second
+,</p>
+
+<p>WriteTimeout
+:</p>
+
+<p>30</p>
+
+<p>*
+ time
+.
+Second
+,</p>
+
+<p>}</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>grace . Serve ( srv ,  srvMonitor )
+</code></pre></div></div>
+
+<p>}</p>
+
+<p>func main
+()</p>
+
+<p>{</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>go startHttp ()
+</code></pre></div></div>
+
+<p>//注册信号</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>go signalHandler ()
+</code></pre></div></div>
+
+<p>&lt;-
+quiet</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>logger . Info ( "Close Server" )
+</code></pre></div></div>
+
+<p>}</p>
+
+<p>func signalHandler
+()</p>
+
+<p>{</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>c  :=  make ( chan os . Signal )
+
+signal . Notify ( c ,  syscall . SIGHUP ,  syscall . SIGINT ,  syscall . SIGTERM ,  syscall . SIGKILL ,  syscall . SIGQUIT )
+
+s  :=
+</code></pre></div></div>
+
+<p>&lt;-
+c</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>logger . Info ( "get siginal  siginal=%v" ,  s )
+
+quiet  &lt;-
+</code></pre></div></div>
+
+<p>1</p>
+
+<p>}</p>
+
+<p>这里为什么出错了呢，是因为他将grace.Serve(srv,srvMonitor) 放在goroutine里面了，并且自己又监听了一遍信号，这样会导致旧进程优雅关闭前，父进程已经已经退出了，优雅关闭就失效了。</p>
+
+<p>2</p>
+
+<p>关键代码</p>
+
+<p>我们按照程序启动的顺序逻辑来讲，大体如下：</p>
+
+<p>执行启动端口监听，挂载server，判断当前进程如果是子进程就向父进程发送SIGTERM信号。</p>
+
+<p>goroutine 执行wg.Add 和wg.Wait() ，等待所有挂载的server停止工作后执行退出进程。</p>
+
+<p>goroutine 执行 signalHandler，等待SIGTERM和SIGUSR2信号。收到SIGTERM信号执行每个server的优雅关闭，关闭完后执行wg.Done()，wg全部Done之后在2中执行了退出进程操作；收到SIGUSR2信号时，执行启动子进程操作。</p>
+
+<p>子进程启动执行1，会向父进程发送SIGTERM信号，父进程收到SIGTERM信号执行3，进行优雅关闭操作。</p>
+
+<p>总结起来就是执行启动重启时，执行shell命令：</p>
+
+<p>pgrep 
+(你的项目名)</p>
+
+<p>|
+xargs kill 
+-
+SIGUSR2</p>
+
+<p>#(注意：要使用bash)。</p>
+
+<p>你的项目会启动子进程，并继承父进程监听的端口，启动成功后再向父进程发送SIGTERM信号， 旧进程执行优雅关闭。我们看关键的struct</p>
+
+<p>// gracehttp/http.go</p>
+
+<p>type app 
+struct</p>
+
+<p>{</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>servers          []* http . Server
+
+http             * httpdown . HTTP
+
+net              * gracenet . Net
+
+listeners        [] net . Listener
+
+sds              [] httpdown . Server
+
+preStartProcess func ()  error
+
+errors          chan error
+</code></pre></div></div>
+
+<p>}</p>
+
+<p>// httpdown/httpdown.go</p>
+
+<p>type HTTP 
+struct</p>
+
+<p>{</p>
+
+<p>// StopTimeout is the duration before we begin force closing connections.</p>
+
+<p>// Defaults to 1 minute.</p>
+
+<p>StopTimeout
+ time
+.
+Duration</p>
+
+<p>// KillTimeout is the duration before which we completely give up and abort</p>
+
+<p>// even though we still have connected clients. This is useful when a large</p>
+
+<p>// number of client connections exist and closing them can take a long time.</p>
+
+<p>// Note, this is in addition to the StopTimeout. Defaults to 1 minute.</p>
+
+<p>KillTimeout
+ time
+.
+Duration</p>
+
+<p>// Stats is optional. If provided, it will be used to record various metrics.</p>
+
+<p>Stats
+ stats
+.
+Client</p>
+
+<p>// Clock allows for testing timing related functionality. Do not specify this</p>
+
+<p>// in production code.</p>
+
+<p>Clock
+ clock
+.
+Clock</p>
+
+<p>}</p>
+
+<p>// gracenet/net.go</p>
+
+<p>type 
+Net</p>
+
+<p>struct</p>
+
+<p>{</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>inherited    [] net . Listener
+
+active       [] net . Listener
+
+mutex       sync . Mutex
+
+inheritOnce sync . Once
+</code></pre></div></div>
+
+<p>// used in tests to override the default behavior of starting from fd 3.</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>fdStart  int
+</code></pre></div></div>
+
+<p>}</p>
+
+<p>我们知道函数调用是从grace.Serve(srv, srvMonitor)开始的,Serve函数会new一个app，一路执行下去关键函数如下：a.run()、a.listen()、a.serve()、 a.wait()、a.signalHandler()、 a.term()、a.net.StartProcess()。</p>
+
+<p>a.run() 大体逻辑如下：</p>
+
+<p>var</p>
+
+<p>(</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>didInherit  =  os . Getenv ( "LISTEN_FDS" )
+</code></pre></div></div>
+
+<p>!=</p>
+
+<p>””</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>ppid        =  os . Getppid ()
+</code></pre></div></div>
+
+<p>)</p>
+
+<p>func 
+(
+a 
+*
+app
+)
+ run
+()
+ error 
+{</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>a . listen ()
+
+a . serve ()
+</code></pre></div></div>
+
+<p>if
+ didInherit 
+&amp;&amp;
+ ppid 
+!=</p>
+
+<p>1</p>
+
+<p>{</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>syscall . Kill ( ppid ,  syscall . SIGTERM )
+</code></pre></div></div>
+
+<p>}</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>waitdone  :=  make ( chan  struct {})
+
+go func ()
+</code></pre></div></div>
+
+<p>{</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>defer close ( waitdone )
+
+a . wait ()
+</code></pre></div></div>
+
+<p>}()</p>
+
+<p>select</p>
+
+<p>{</p>
+
+<p>case
+ err 
+:=</p>
+
+<p>&lt;-
+a
+.
+errors
+:</p>
+
+<p>…</p>
+
+<p>case</p>
+
+<p>&lt;-
+waitdone
+:</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    logger . Printf ( "Exiting pid %d." ,  os . Getpid ())
+</code></pre></div></div>
+
+<p>return</p>
+
+<p>nil</p>
+
+<p>}</p>
+
+<p>}</p>
+
+<p>启动监听、挂载server，通过环境变量LISTEN_FDS判断当前进程是否为子进程，如果是就发送信号杀父进程。goroutine中执行wait()函数等待优雅关闭或者平滑启动子进程。</p>
+
+<p>a.listen() 关键逻辑如下：</p>
+
+<p>func 
+(
+a 
+*
+app
+)
+ listen
+()
+ error 
+{</p>
+
+<p>for
+ _
+,
+ s 
+:=
+ range a
+.
+servers 
+{</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    l ,  err  :=  a . net . Listen ( "tcp" ,  s . Addr )
+</code></pre></div></div>
+
+<p>……</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    a . listeners  =  append ( a . listeners ,  l )
+</code></pre></div></div>
+
+<p>}</p>
+
+<p>return</p>
+
+<p>nil</p>
+
+<p>}</p>
+
+<p>这里看出app struct 中listeners用来存储监听的net.Listener的数组 ，net就是Net，封装了net.ListenTCP等逻辑（这里我只关注了TCP逻辑），inherited 和 active 两个数组分别用来存储继承自父进程的net.Listener 和 启动的net.Listener，这块父进程启动，即首次启动时逻辑很简单，略过，子进程启动，即非首次启动在介绍a.net.StartProccess时细讲。</p>
+
+<p>a.serve() 关键逻辑如下：</p>
+
+<p>func 
+(
+a 
+*
+app
+)
+ serve
+()</p>
+
+<p>{</p>
+
+<p>for
+ i
+,
+ s 
+:=
+ range a
+.
+servers 
+{</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    a . sds  =  append ( a . sds ,  a . http . Serve ( s ,  a . listeners [ i ]))
+</code></pre></div></div>
+
+<p>}</p>
+
+<p>}</p>
+
+<p>这里涉及了app struct里面的两个字段，http和sds。http即 HTTP struct， 这里面封装了http server优雅关闭相关的逻辑，具体的细节很繁琐，我用一个简单的模型来说明一下吧。a.http.Serve(srv,l) 函数封装执行了srv.Serve(l)，即挂载srv， 并返回了一个httpdown.server的实例， 这个实例实现了httpdown.Server 接口，如下：</p>
+
+<p>// httpdown/httpdown.go</p>
+
+<p>type 
+Server</p>
+
+<p>interface</p>
+
+<p>{</p>
+
+<p>// Wait waits for the serving loop to finish. This will happen when Stop is</p>
+
+<p>// called, at which point it returns no error, or if there is an error in the</p>
+
+<p>// serving loop. You must call Wait after calling Serve or ListenAndServe.</p>
+
+<p>Wait
+()
+ error</p>
+
+<p>// Stop stops the listener. It will block until all connections have been</p>
+
+<p>// closed.</p>
+
+<p>Stop
+()
+ error</p>
+
+<p>}</p>
+
+<p>精简后实现的模型如下：</p>
+
+<p>func 
+(
+s 
+*
+server
+)
+ serve
+()</p>
+
+<p>{</p>
+
+<p>// 即前面提到的 srv.Serve(l)，被封装的挂载srv的代码</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>s . serveErr  &lt;-  s . server . Serve ( s . listener )
+
+close ( s . serveDone )
+
+close ( s . serveErr )
+</code></pre></div></div>
+
+<p>}</p>
+
+<p>func 
+(
+s 
+*
+server
+)</p>
+
+<p>Wait
+()
+ error 
+{</p>
+
+<p>if
+ err 
+:=</p>
+
+<p>&lt;-
+s
+.
+serveErr
+;</p>
+
+<p>!
+isUseOfClosedError
+(
+err
+)</p>
+
+<p>{</p>
+
+<p>return
+ err</p>
+
+<p>}</p>
+
+<p>return</p>
+
+<p>nil</p>
+
+<p>}</p>
+
+<p>func 
+(
+s 
+*
+server
+)</p>
+
+<p>Stop
+()
+ error 
+{</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>s . stopOnce . Do ( func ()
+</code></pre></div></div>
+
+<p>{</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    closeErr  :=  s . listener . Close ()
+</code></pre></div></div>
+
+<p>&lt;-
+s
+.
+serveDone</p>
+
+<p>……</p>
+
+<p>// 等待连接关闭或者超时后强杀连接等复杂逻辑</p>
+
+<p>……</p>
+
+<p>if
+ closeErr 
+!=</p>
+
+<p>nil</p>
+
+<p>&amp;&amp;</p>
+
+<p>!
+isUseOfClosedError
+(
+closeErr
+)</p>
+
+<p>{</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>        s . stopErr  =  closeErr
+</code></pre></div></div>
+
+<p>}</p>
+
+<p>})</p>
+
+<p>return
+ s
+.
+stopErr</p>
+
+<p>}</p>
+
+<p>s.serveErr &lt;- s.server.Serve(s.listener) 启动成功后会在这里挂住，失败直接返回错误，Wait() 函数提供给a.wait()调用，正常情况也是挂住，等Stop() 里面 closeErr := s.listener.Close() 执行后返回。这块的逻辑要结合 a.wait()、 a.signalHandler()、 a.term() 一起来分析</p>
+
+<p>a.wait() 和 a.term() 的代码</p>
+
+<p>func 
+(
+a 
+*
+app
+)
+ wait
+()</p>
+
+<p>{</p>
+
+<p>var
+ wg sync
+.
+WaitGroup</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>wg . Add ( len ( a . sds )
+</code></pre></div></div>
+
+<p>*</p>
+
+<p>2
+)</p>
+
+<p>// Wait &amp; Stop</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>go a . signalHandler (&amp; wg )
+</code></pre></div></div>
+
+<p>for
+ _
+,
+ s 
+:=
+ range a
+.
+sds 
+{</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    go func ( s httpdown . Server )
+</code></pre></div></div>
+
+<p>{</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>        defer wg . Done ()
+</code></pre></div></div>
+
+<p>if
+ err 
+:=
+ s
+.
+Wait
+();
+ err 
+!=</p>
+
+<p>nil</p>
+
+<p>{</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>            a . errors  &lt;-  err
+</code></pre></div></div>
+
+<p>}</p>
+
+<p>}(
+s
+)</p>
+
+<p>}</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>wg . Wait ()
+</code></pre></div></div>
+
+<p>}</p>
+
+<p>func 
+(
+a 
+*
+app
+)
+ term
+(
+wg 
+*
+sync
+.
+WaitGroup
+)</p>
+
+<p>{</p>
+
+<p>for
+ _
+,
+ s 
+:=
+ range a
+.
+sds 
+{</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    go func ( s httpdown . Server )
+</code></pre></div></div>
+
+<p>{</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>        defer wg . Done ()
+</code></pre></div></div>
+
+<p>if
+ err 
+:=
+ s
+.
+Stop
+();
+ err 
+!=</p>
+
+<p>nil</p>
+
+<p>{</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>            a . errors  &lt;-  err
+</code></pre></div></div>
+
+<p>}</p>
+
+<p>}(
+s
+)</p>
+
+<p>}</p>
+
+<p>}</p>
+
+<p>a.run() 函数里面会goroutine 执行 a.wait()，它会goroutine执行信号处理 a.signalHandler() 函数，创建一个WaitGroup 等待所有的httpdown.server执行s.Wait()函数返回。a.signalHandler() 函数基本上逻辑就是监听signal.Notify信号，收到SIGTERM信号执行a.term() ，收到SIGUSR2信号执行a.net.StartProcess()。a.term() 函数就是遍历执行所有httpdown.server的s.Stop()，进行优雅关闭，结合上面的代码来看，每一个s.Stop() 会导致s.Wait() 返回，即执行了两次wg.Done()， 所有httpdown.server 优雅关闭后导致a.wait()返回，进而waitdone关闭， 进程最后退出。下面是a.signalHandler()函数的代码</p>
+
+<p>func 
+(
+a 
+*
+app
+)
+ signalHandler
+(
+wg 
+*
+sync
+.
+WaitGroup
+)</p>
+
+<p>{</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>ch  :=  make ( chan os . Signal ,
+</code></pre></div></div>
+
+<p>10
+)</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>signal . Notify ( ch ,  syscall . SIGINT ,  syscall . SIGTERM ,  syscall . SIGUSR2 )
+</code></pre></div></div>
+
+<p>for</p>
+
+<p>{</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    sig  :=
+</code></pre></div></div>
+
+<p>&lt;-
+ch</p>
+
+<p>switch
+ sig 
+{</p>
+
+<p>case
+ syscall
+.
+SIGINT
+,
+ syscall
+.
+SIGTERM
+:</p>
+
+<p>// this ensures a subsequent INT/TERM will trigger standard go behaviour of</p>
+
+<p>// terminating.</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>        signal . Stop ( ch )
+
+        a . term ( wg )
+</code></pre></div></div>
+
+<p>return</p>
+
+<p>case
+ syscall
+.
+SIGUSR2
+:</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>        err  :=  a . preStartProcess ()
+</code></pre></div></div>
+
+<p>if
+ err 
+!=</p>
+
+<p>nil</p>
+
+<p>{</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>            a . errors  &lt;-  err
+</code></pre></div></div>
+
+<p>}</p>
+
+<p>// we only return here if there’s an error, otherwise the new process</p>
+
+<p>// will send us a TERM when it’s ready to trigger the actual shutdown.</p>
+
+<p>if
+ _
+,
+ err 
+:=
+ a
+.
+net
+.
+StartProcess
+();
+ err 
+!=</p>
+
+<p>nil</p>
+
+<p>{</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>            a . errors  &lt;-  err
+</code></pre></div></div>
+
+<p>}</p>
+
+<p>}</p>
+
+<p>}</p>
+
+<p>}</p>
+
+<p>a.net.StartProcess() 函数是启动子进程的逻辑，这里需要详细介绍一下</p>
+
+<p>const</p>
+
+<p>(</p>
+
+<p>// Used to indicate a graceful restart in the new process.</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>envCountKey        =
+</code></pre></div></div>
+
+<p>“LISTEN_FDS”</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>envCountKeyPrefix  =  envCountKey  +
+</code></pre></div></div>
+
+<p>”=”</p>
+
+<p>)</p>
+
+<p>type filer 
+interface</p>
+
+<p>{</p>
+
+<p>File
+()</p>
+
+<p>(*
+os
+.
+File
+,
+ error
+)</p>
+
+<p>}</p>
+
+<p>func 
+(
+n 
+*
+Net
+)</p>
+
+<p>StartProcess
+()</p>
+
+<p>(
+int
+,
+ error
+)</p>
+
+<p>{</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>listeners ,  err  :=  n . activeListeners ()
+</code></pre></div></div>
+
+<p>if
+ err 
+!=</p>
+
+<p>nil</p>
+
+<p>{</p>
+
+<p>return</p>
+
+<p>0
+,
+ err</p>
+
+<p>}</p>
+
+<p>// Extract the fds from the listeners.</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>files  :=  make ([]* os . File ,  len ( listeners ))
+</code></pre></div></div>
+
+<p>for
+ i
+,
+ l 
+:=
+ range listeners 
+{</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    files [ i ],  err  =  l .( filer ). File ()
+</code></pre></div></div>
+
+<p>if
+ err 
+!=</p>
+
+<p>nil</p>
+
+<p>{</p>
+
+<p>return</p>
+
+<p>0
+,
+ err</p>
+
+<p>}</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    defer files [ i ]. Close ()
+</code></pre></div></div>
+
+<p>}</p>
+
+<p>// Use the original binary location. This works with symlinks such that if</p>
+
+<p>// the file it points to has been changed we will use the updated symlink.</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>argv0 ,  err  :=
+</code></pre></div></div>
+
+<p>exec
+.
+LookPath
+(
+os
+.
+Args
+[
+0
+])</p>
+
+<p>if
+ err 
+!=</p>
+
+<p>nil</p>
+
+<p>{</p>
+
+<p>return</p>
+
+<p>0
+,
+ err</p>
+
+<p>}</p>
+
+<p>// Pass on the environment and replace the old count key with the new one.</p>
+
+<p>var
+ env 
+[]
+string</p>
+
+<p>for
+ _
+,
+ v 
+:=
+ range os
+.
+Environ
+()</p>
+
+<p>{</p>
+
+<p>if</p>
+
+<p>!
+strings
+.
+HasPrefix
+(
+v
+,
+ envCountKeyPrefix
+)</p>
+
+<p>{</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>        env  =  append ( env ,  v )
+</code></pre></div></div>
+
+<p>}</p>
+
+<p>}</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>env  =  append ( env ,  fmt . Sprintf ( "%s%d" ,  envCountKeyPrefix ,  len ( listeners )))
+
+
+
+allFiles  :=  append ([]* os . File { os . Stdin ,  os . Stdout ,  os . Stderr },  files ...)
+
+process ,  err  :=  os . StartProcess ( argv0 ,  os . Args ,
+</code></pre></div></div>
+
+<p>&amp;
+os
+.
+ProcAttr
+{</p>
+
+<p>Dir
+:
+   originalWD
+,</p>
+
+<p>Env
+:
+   env
+,</p>
+
+<p>Files
+:
+ allFiles
+,</p>
+
+<p>})</p>
+
+<p>if
+ err 
+!=</p>
+
+<p>nil</p>
+
+<p>{</p>
+
+<p>return</p>
+
+<p>0
+,
+ err</p>
+
+<p>}</p>
+
+<p>return
+ process
+.
+Pid
+,</p>
+
+<p>nil</p>
+
+<p>}</p>
+
+<p>n.activeListeners()返回 n.active中的net.Listener 数组的副本，files是从中提取出的fd列表。注意allFiles在files前面拼接了3个标准输入输出，记住这个数字。env 中修改了环境变量LISTEN_FDS等于listener的数量。这里的启动子进程的方法是os.StartProcess()，我看了其他的开源库都用syscall.ForkExec</p>
+
+<p>fork
+,
+ err 
+:=
+ syscall
+.
+ForkExec
+(
+os
+.
+Args
+[
+0
+],
+ os
+.
+Args
+,</p>
+
+<p>&amp;
+os
+.
+ProcAttr
+{</p>
+
+<p>Dir
+:
+   originalWD
+,</p>
+
+<p>Env
+:
+   env
+,</p>
+
+<p>Files
+:
+ allFiles
+,</p>
+
+<p>})</p>
+
+<p>两种的区别后续还有待研究。还记得前面没有展开的Net中的inherited 和 active么，这里我们细讲一下。</p>
+
+<p>func 
+(
+n 
+*
+Net
+)</p>
+
+<p>Listen
+(
+nett
+,
+ laddr 
+string
+)</p>
+
+<p>(
+net
+.
+Listener
+,
+ error
+)</p>
+
+<p>{</p>
+
+<p>……</p>
+
+<p>// 仅关注tcp逻辑</p>
+
+<p>return
+ n
+.
+ListenTCP
+(
+nett
+,
+ addr
+)</p>
+
+<p>}</p>
+
+<p>func 
+(
+n 
+*
+Net
+)</p>
+
+<p>ListenTCP
+(
+nett 
+string
+,
+ laddr 
+*
+net
+.
+TCPAddr
+)</p>
+
+<p>(*
+net
+.
+TCPListener
+,
+ error
+)</p>
+
+<p>{</p>
+
+<p>if
+ err 
+:=
+ n
+.
+inherit
+();
+ err 
+!=</p>
+
+<p>nil</p>
+
+<p>{</p>
+
+<p>return</p>
+
+<p>nil
+,
+ err</p>
+
+<p>}</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>n . mutex . Lock ()
+
+defer n . mutex . Unlock ()
+</code></pre></div></div>
+
+<p>// look for an inherited listener</p>
+
+<p>for
+ i
+,
+ l 
+:=
+ range n
+.
+inherited 
+{</p>
+
+<p>if
+ l 
+==</p>
+
+<p>nil</p>
+
+<p>{</p>
+
+<p>// we nil used inherited listeners</p>
+
+<p>continue</p>
+
+<p>}</p>
+
+<p>if
+ isSameAddr
+(
+l
+.
+Addr
+(),
+ laddr
+)</p>
+
+<p>{</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>        n . inherited [ i ]
+</code></pre></div></div>
+
+<p>=</p>
+
+<p>nil</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>        n . active  =  append ( n . active ,  l )
+</code></pre></div></div>
+
+<p>return
+ l
+.(*
+net
+.
+TCPListener
+),</p>
+
+<p>nil</p>
+
+<p>}</p>
+
+<p>}</p>
+
+<p>// make a fresh listener</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>l ,  err  :=  net . ListenTCP ( nett ,  laddr )
+</code></pre></div></div>
+
+<p>if
+ err 
+!=</p>
+
+<p>nil</p>
+
+<p>{</p>
+
+<p>return</p>
+
+<p>nil
+,
+ err</p>
+
+<p>}</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>n . active  =  append ( n . active ,  l )
+</code></pre></div></div>
+
+<p>return
+ l
+,</p>
+
+<p>nil</p>
+
+<p>}</p>
+
+<p>func 
+(
+n 
+*
+Net
+)
+ inherit
+()
+ error 
+{</p>
+
+<p>var
+ retErr error</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>n . inheritOnce . Do ( func ()
+</code></pre></div></div>
+
+<p>{</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    n . mutex . Lock ()
+
+    defer n . mutex . Unlock ()
+
+    countStr  :=  os . Getenv ( envCountKey )
+</code></pre></div></div>
+
+<p>if
+ countStr 
+==</p>
+
+<p>””</p>
+
+<p>{</p>
+
+<p>return</p>
+
+<p>}</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    count ,  err  :=  strconv . Atoi ( countStr )
+</code></pre></div></div>
+
+<p>// In tests this may be overridden.</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    fdStart  :=  n . fdStart
+</code></pre></div></div>
+
+<p>if
+ fdStart 
+==</p>
+
+<p>0</p>
+
+<p>{</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>        fdStart  =
+</code></pre></div></div>
+
+<p>3</p>
+
+<p>}</p>
+
+<p>for
+ i 
+:=
+ fdStart
+;
+ i 
+&lt;
+ fdStart
++
+count
+;
+ i
+++</p>
+
+<p>{</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>        file  :=  os . NewFile ( uintptr ( i ),
+</code></pre></div></div>
+
+<p>“listener”
+)</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>        l ,  err  :=  net . FileListener ( file )
+</code></pre></div></div>
+
+<p>if
+ err 
+!=</p>
+
+<p>nil</p>
+
+<p>{</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>            file . Close ()
+
+            retErr  =  fmt . Errorf ( "error inheriting socket fd %d: %s" ,  i ,  err )
+</code></pre></div></div>
+
+<p>return</p>
+
+<p>}</p>
+
+<p>if
+ err 
+:=
+ file
+.
+Close
+();
+ err 
+!=</p>
+
+<p>nil</p>
+
+<p>{</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>            retErr  =  fmt . Errorf ( "error closing inherited socket fd %d: %s" ,  i ,  err )
+</code></pre></div></div>
+
+<p>return</p>
+
+<p>}</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>        n . inherited  =  append ( n . inherited ,  l )
+</code></pre></div></div>
+
+<p>}</p>
+
+<p>})</p>
+
+<p>return
+ retErr</p>
+
+<p>}</p>
+
+<p>这里ListenTCP 先执行inherit() 将继承来的net.Listener 保存在n.inherited里面，启动时判断是否是继承的listener，没有才 make a fresh listener呢，这里的fdStart 初始值设置为3，就是前面提到的那个数字3 （三个标准输入输出占了3位）。</p>
+
+<p>总结起来启动子进程流程如下：</p>
+
+<p>1、提取listener的fd，修改LISTENFDS环境变量为listener的数量，os.StartProcess启动子进程.</p>
+
+<p>files
+[
+i
+],
+ err 
+=
+ l
+.(
+filer
+).
+File
+()</p>
+
+<p>2、子进程启动执行a.net.Listen()时，根据环境变量LISTENFDS和fdStart 变量取出listener</p>
+
+<p>file 
+:=
+ os
+.
+NewFile
+(
+uintptr
+(
+i
+),</p>
+
+<p>“listener”
+)</p>
+
+<p>l
+,
+ err 
+:=
+ net
+.
+FileListener
+(
+file
+)</p>
+
+<p>file
+.
+Close
+()</p>
+
+<p>根据fd创建一个文件，通过文件拿到listener的副本，然后关闭文件。最终a.net.Listen()的逻辑是如果是继承端口就返回一个listener副本，如果不是就启动一个新的listener。3、后续执行a.serve() 挂载server，然后通知父进程优雅关闭等逻辑。</p>
+:ET

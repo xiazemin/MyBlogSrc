@@ -1,0 +1,92 @@
+I"<p>问题出现的表象：</p>
+<ol>
+  <li>所有客户端都无法登陆服务器，正常游戏的玩家退出后重新登陆也失败.</li>
+  <li>查看日志，出现大量socket加入队列失败的情况。</li>
+</ol>
+
+<p>查看进程允许最大打开文件描述符数为1000000，服务器内部代码限制队列最大fd为32767.所以socket还是能创建成功，只是入队列限制报错，说明服务器已经创建3W+ socket。</p>
+
+<ol>
+  <li>但实际情况呢？查看当前服务器网络连接状态的统计情况：</li>
+</ol>
+
+<p>上图12001是服务器连接端口，只有24个连接。整个服务器连接数也不超过60.</p>
+<ol>
+  <li>进一步验证当前进程下socket数量问题</li>
+</ol>
+
+<p>上图26802是当前服务器进程ID。说明进程26802下已经打开的socket fd数量到达3W+</p>
+
+<ol>
+  <li>检查玩家之前的登陆日志，文件描述符（fd）加剧上涨，没有重用的迹象。</li>
+</ol>
+
+<p>至此：基本可以判断是服务器大量创建socket，并且没有close掉，导致socket fd泄露。
+Socket fd问题分析：</p>
+<ol>
+  <li>当前进程持有的socket fd数量（/proc/$pid/fd下统计的socket类型的fd数量）和netstat 统计出的有状态的fd数量进行匹配：
+$1: 如果统计出来的两者数量基本相同:
+常见的可能出现大量TIME_WAIT占用导致socket耗尽，无法发起新的连接。
+命令：netstat -nat | awk ‘FNR&gt;2{print $NF}’ | sort | uniq –c统计出来的异常情况可能类似：
+FIN_WAIT2 30
+CLOSING 33
+TIME_WAIT 31348
+ESTABLISHED 34
+这个在潮爆三国刚开服的时候出现过，主要是由于客户端多次连接服务器并且未释放之前的socket，解决思路：</li>
+  <li>
+    <p>打开socket重用</p>
+  </li>
+  <li>客户端socket保持单件，避免重复登录发起多次连接未释放之前连接。（上次事故主要修改这条）</li>
+  <li>服务器及时close fd（心跳，和严格逻辑）保证socket健康。（避免短期大量客户端造成）
+具体参考http://blog.csdn.net/gzh0222/article/details/8491178
+$2: 如果统计出来的两者数量反差过大:</li>
+  <li>首先需要知道/proc/$pid/fd 下统计的socket类型的fd数量和netstat统计出的socket数量差异在哪里： netstat会统计/proc/$pid/fd和/proc/net的交集，所以socket被创建出来后如果没有发生bind或者connect就不会被统计到。
+比如：</li>
+</ol>
+
+<p>比如：上图进程下socket【610774】在/proc/net/tcp 下可以查到一条翻译成10进制就是： 54:192.168.103.222:52383 192.168.100.11:3306  表示服务器192.168.103.222连接到192.168.100.11 端口 3306。。应该是数据库的一条连接。</p>
+
+<ol>
+  <li>根据以上推断出可能是服务器泄露fd。确定服务器可能会泄露socket fd的类型：
+2.1     listen socket（一般不会泄露）。
+2.2     accept socket（主要是客户端连接上来的fd）
+2.3     服务器接入的sdk（一般是作为客户端需要连接某服务器上传数据，大多为短连接）
+2.4     服务器rpc，mysql等功能性client。会发生connect行为的socket。</li>
+</ol>
+
+<p>查证行为：</p>
+<ol>
+  <li>根据上述分析，只需要针对2.1-2.4各个模块socket创建和销毁添加日志查证即可。</li>
+  <li>2.1和2.2 只需要添加日志查证日志new，delete的匹配程度就行。（越南版本通过日志排除此项）
+2.3和2.4归类为一种，理论上只需要用抓包工具tcpdump查找由服务器发出的包即可：tcpdump -i eth0 src host 192.168.1.1
+   tcpdump ‘tcp[tcpflags] &amp; (tcp-syn|tcp-fin) != 0’ 抓取sync包和fin包。
+tcpdump相关链接：http://www.cnblogs.com/ggjucheng/archive/2012/01/14/2322659.html
+这里是最后一个怀疑点，本以为事情会顺利结束，然而：</li>
+</ol>
+
+<p>上图是客户端一次登陆和登出的情况，只有客户端的记录，也就是accept创建的socket，这里已经由之前“new delete”日志的匹配排除掉，然而/proc/$pid/fd 下的socket数量还是无情的增加了2个（一次正常的accpet-&gt;socket创建（客户端退出后销毁）， 一次泄露）。</p>
+<ol>
+  <li>接下去的查证过程是比较繁琐和不人性的（欢迎提供更一针见血的查证方法）。
+我们分批排除服务器每次收包来查证包与包之间服务器做了哪些操作使得/proc/$pid/fd的socket增加2（一次正常的accpet-&gt;socket创建，一次泄露）。通过日志和开关比对最后确定如下：</li>
+</ol>
+
+<p>服务器并没有配置statsd相关的ip和端口，所以每次玩家登陆触发statsd初始化是会失败，但是每次失败86行创建的sock在所有return的地方都没有close(d-&gt;sock); 添加即可。</p>
+
+<p>最后：
+主要是总结在碰到类似问题查证的方法1,2,3….然后针对每个方法对应的怀疑点1,2,3…不能做出合理解释的地方进行相关过程1,2,3..的处理。最后缩小范围找出问题症结。</p>
+
+<!-- more -->
+<p>https://www.cnblogs.com/switchland/articles/5581929.html</p>
+
+<p>https://blog.csdn.net/blankti/article/details/100808475</p>
+
+<p>https://blog.csdn.net/libinjlu/article/details/76153086</p>
+
+<p>https://www.jianshu.com/p/382c5b62f693</p>
+
+<p>干掉泄漏的进程
+$ lsof |grep myFile |awk ‘{print $2}’ |grep -v grep |xargs -I{} kill -9 {}</p>
+
+<p>$ lsof |grep myFile |wc -l
+38</p>
+:ET

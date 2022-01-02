@@ -1,0 +1,149 @@
+I"�<p>参考：
+https://github.com/howeyc/fsnotify
+https://beego.me/docs/install/bee.md
+<!-- more -->
+bee 使用fsnotify包，使用kqueue检查文件变化，根据修改时间戳，每s检查一次，如果有变化就重新编译，调用路径如下：
+beego/bee/bee.go
+var commands = []*Command{
+	cmdNew,
+	cmdRun,
+	…
+	}
+func main() {
+  …
+  for _, cmd := range commands {
+		…
+		os.Exit(cmd.Run(cmd, args))
+		…
+}</p>
+
+<p>beego/bee/run.go
+   var cmdRun = &amp;Command{
+   …
+   }
+   func init() {
+	cmdRun.Run = runApp
+	…
+	}
+	func runApp(cmd *Command, args []string) int {
+	…
+	crupath, _ := os.Getwd()
+	…
+	gps := GetGOPATHs()
+	…
+	NewWatcher(paths, files, true)
+	Autobuild(files, true)
+	…
+	}</p>
+
+<p>beego/bee/watch.go	
+    func NewWatcher(paths []string, files []string, isgenerate bool) {
+	 watcher, err := fsnotify.NewWatcher()
+	 select {
+				case e := &lt;-watcher.Event:
+				mt := getFileModTime(e.Name)	          …
+	          Autobuild(files, isgenerate)
+	          }
+	  }
+	 func Autobuild(files []string, isgenerate bool) {
+       appName := appname
+		if runtime.GOOS == “windows” {
+			appName += “.exe”
+		}
+		args := []string{“build”}
+		args = append(args, “-o”, appName)
+		if buildTags != “” {
+			args = append(args, “-tags”, buildTags)
+		}
+		args = append(args, files…)
+		bcmd := exec.Command(cmdName, args…)
+		bcmd.Env = append(os.Environ(), “GOGC=off”)
+		bcmd.Stdout = os.Stdout
+		bcmd.Stderr = os.Stderr
+		err = bcmd.Run()
+    }</p>
+
+<p>howeyc/fsnotify/fsnotify_bsd.go	 
+func NewWatcher() (*Watcher, error) {
+	fd, errno := syscall.Kqueue()
+	if fd == -1 {
+		return nil, os.NewSyscallError(“kqueue”, errno)
+	}
+	w := &amp;Watcher{
+		kq:              fd,
+		watches:         make(map[string]int),
+		fsnFlags:        make(map[string]uint32),
+		enFlags:         make(map[string]uint32),
+		paths:           make(map[int]string),
+		finfo:           make(map[int]os.FileInfo),
+		fileExists:      make(map[string]bool),
+		externalWatches: make(map[string]bool),
+		internalEvent:   make(chan *FileEvent),
+		Event:           make(chan *FileEvent),
+		Error:           make(chan error),
+		done:            make(chan bool, 1),
+	}
+   go w.readEvents()
+	go w.purgeEvents()
+	return w, nil
+}
+说明几个概念, struct event, kevent()和kqueue。</p>
+
+<p>struct event就是kevent()操作的最基本的事件结构。
+kevent() 是一个系统调用syscall，而kqueue是freebsd内核中的一个事件队列kernel queue。
+kevent()是kqueue的用户界面，是对kqueue进行添加，删除操作的用户态的界面。
+ ===</p>
+
+<p>下面就重点介绍一下struct event和kevent()这两个开发者必须要了解的参数和API。</p>
+<ol>
+  <li>struct event 结构体中主要成员介绍
+ident     – 标记事件的描述符, socketfd, filefd, signal
+filter      – 事件的类型, 读事件:EVFILT_READ, 写事件:EVFILT_WRITE, 信号:EVFILT_SIGNAL
+flags     – 事件的行为, 对kqueue的操作:
+添加到kqueue中:EV_ADD, 从kqueue中删除:EV_DELETE, 这两种是主要的行为
+一次性事件:EV_ONESHOT, 此事件是或操作, 指定了该事件, kevent()返回后, 事件会从kqueue中删除
+更新事件: EV_CLEAR,此事件是或操作, 手册上的解释是，当事件通知给用户后，事件的状态会被重置。可以用在类似于epoll的ET模式，也可以用在描述符有时会出错的情况。
+其他事件: EOF事件:EV_EOF, 错误事件:EV_ERROR(返回值)
+fflags    -
+data     -
+udata   – 用户指定的数据</li>
+  <li>kevent() 各参数的说明
+kq               - kqueue() 返回的唯一描述符, 标记着一个内核队列
+changes       – 需要对kqueue进行修改的事件集合, 此参数就是kevent()对目前kqueue中的事件的操作，比如删除kqueue中已经存在的事件，或者向kqueue中添加新的事件，也就是说，kevent()通过此参数对kqueue的修改
+nchanges     – 需要修改的事件的个数
+events         – kevent()会把所有事件存储在events中
+nevents       – kevent()需要知道存储空间有多大, == 0 : kevent()会立即返回
+timeout        – 超时控制, = NULL:kevent()会一直等到有关注的事件发生; != NULL:kevent()会等待指定的时间
+ ===
+有几点需要说明的是 ：
+1) 指定EV_ADD|EV_ONESHOT或者EV_DELETE|EV_ONESHOT的行为, kevent()返回后, 会把事件从kqueue中删除;
+2) 当事件类型指定为EVFILT_SIGNAL的时候, struct event 中data会返回此时信号发生了多少次
+3) 如果 nevents == 0, kevent()会立即返回, 不会理会timeout指定的超时时间, 这是一种直接注册事件的方法.</li>
+</ol>
+
+<p>常见的I/O模型：
+blocking I/O
+nonblocking I/O
+I/O multiplexing (select and poll)
+signal driven I/O (SIGIO)
+asynchronous I/O (the POSIX aio_functions)—————异步IO模型最大的特点是 完成后发回通知。</p>
+
+<p>阻塞与否，取决于实现IO交换的方式。
+  异步阻塞是基于select，select函数本身的实现方式是阻塞的，而采用select函数有个好处就是它可以同时监听多个文件句柄.
+  异步非阻塞直接在完成后通知，用户进程只需要发起一个IO操作然后立即返回，等IO操作真正的完成以后，应用程序会得到IO操作完成的通知，此时用户进程只需要对数据进行处理就好了，不需要进行实际的IO读写操作，因为真正的IO读取或者写入操作已经由内核完成了。</p>
+
+<p>select和iocp分别对应第3种与第5种模型，那么epoll与kqueue呢？其实也于select属于同一种模型，只是更高级一些，可以看作有了第4种模型的某些特性，如callback机制。</p>
+
+<p>为什么epoll,kqueue比select高级？ 
+答案是，他们无轮询。因为他们用callback取代了。想想看，当套接字比较多的时候，每次select()都要通过遍历FD_SETSIZE个Socket来完成调度,不管哪个Socket是活跃的,都遍历一遍。这会浪费很多CPU时间。如果能给套接字注册某个回调函数，当他们活跃时，自动完成相关操作，那就避免了轮询，这正是epoll与kqueue做的。</p>
+
+<p>windows or *nix （IOCP or kqueue/epoll）？
+ 诚然，Windows的IOCP非常出色，目前很少有支持asynchronous I/O的系统，但是由于其系统本身的局限性，大型服务器还是在UNIX下。而且正如上面所述，kqueue/epoll 与 IOCP相比，就是多了一层从内核copy数据到应用层的阻塞，从而不能算作asynchronous I/O类。但是，这层小小的阻塞无足轻重，kqueue与epoll已经做得很优秀了。
+提供一致的接口，IO Design Patterns
+实际上，不管是哪种模型，都可以抽象一层出来，提供一致的接口，广为人知的有ACE,Libevent（基于reactor模式）这些，他们都是跨平台的，而且他们自动选择最优的I/O复用机制，用户只需调用接口即可。说到这里又得说说2个设计模式，Reactor and Proactor。见：Reactor模式–VS–Proactor模式。Libevent是Reactor模型，ACE提供Proactor模型。实际都是对各种I/O复用机制的封装。</p>
+
+<p>只有IOCP是asynchronous I/O，其他机制或多或少都会有一点阻塞。
+select低效是因为每次它都需要轮询。但低效也是相对的，视情况而定，也可通过良好的设计改善
+epoll, kqueue、select是Reacor模式，IOCP是Proactor模式。</p>
+
+:ET

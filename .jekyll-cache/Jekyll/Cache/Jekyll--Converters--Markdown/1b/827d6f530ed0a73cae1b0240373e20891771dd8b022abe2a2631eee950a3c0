@@ -1,0 +1,244 @@
+I"6*<p>加速并发访问
+避免高额的GC开销</p>
+
+<p>BigCache 是一个快速，支持并发访问，自淘汰的内存型缓存，可以在存储大量元素时依然保持高性能。BigCache将元素保存在堆上却避免了GC的开销。</p>
+
+<p>// BigCache README 中的简单使用示例</p>
+
+<p>import “github.com/allegro/bigcache”</p>
+
+<p>cache, _ := bigcache.NewBigCache(bigcache.DefaultConfig(10 * time.Minute))</p>
+
+<p>cache.Set(“my-unique-key”, []byte(“value”))</p>
+
+<p>entry, _ := cache.Get(“my-unique-key”)
+fmt.Println(string(entry))
+https://github.com/allegro/bigcache
+<!-- more -->
+并发访问
+一个缓存，支持并发访问是必须的，无论是程序使用了协程，还是 HTTP 服务器为每个请求分配的协程，都可能并发访问缓存。最常见的解决方案是使用读写锁(sync.RWMutex)来保证在一个时间点只允许一个协程修改缓存内容。但是如果这样做，锁可能会阻塞后续的操作，导致缓存性能下降。</p>
+
+<p>为了解决这个问题，BigCache使用了shards（译者yoko注：单词意思为碎片，可以理解为桶或分片或分区），shard是什么？一个shard是一个结构体，它包含了一个带锁的cache实例。</p>
+
+<p>BigCache使用了一个元素个数为N的shard数组，然后将数据打散到不同的shard中，所以当你从缓存中读写数据时，缓存会选取其中的一个shard使用（选取策略下文会说）。使用这种方式，锁粒度被大幅度减小，因为锁范围从全局缓存缩小到了单个shard中。（译者yoko注：对shard数组的访问是不需要加锁的，因为该数组在初始化时创建，后续大小就不会变了，即后续对数组的访问只有读，当然，对数组中的元素shard是有读有写的，但是这已经和数组没关系了）</p>
+
+<p>高额GC开销
+var map[string]Item
+Go中实现缓存最简单最常见的方式是使用一个map来存储元素，但是如果使用map，GC（垃圾回收器）会在标记阶段访问map中的每一个元素，当map非常大时这会对程序性能带来非常大的开销。</p>
+
+<p>go 1.5版本之后，如果你使用的map的key和value中都不包含指针，那么GC会忽略这个map。</p>
+
+<p>var map[int]int
+为避免这个问题，BigCache使用了一个key和value都不包含指针的map，这样，GC就会忽略掉这个map。具体做法为：</p>
+
+<p>map的key为存入缓存中的key经过hash函数后得到的值。</p>
+
+<p>map的value比较值得一说，BigCache并不是直接把存入缓存的value作为map的value，而是将存入缓存的value序列化成二进制的[]byte，然后将序列化后的[]byte追加到一个全局的[]byte中（一个shard包含一个全局[]byte）。map中存储的是该序列化后数据在全局[]byte中的下标。</p>
+
+<p>使用全局的[]byte是非常聪明的做法，因为这样做，只会给GC增加了一个额外对象，由于字节切片除了自身对象并不包含其他指针数据，所以GC对于整个对象的标记时间是O(1)的。</p>
+
+<p>译者yoko注</p>
+
+<p>英文原文写到这，基本上关于优化方面的思想已经说明白了。大致是以下两点：</p>
+
+<p>第一，将元素非常多的容器通过hash打散到各个桶（子容器）中。这是一种比较常见通用的减小锁粒度，提高性能的手段。</p>
+
+<p>第二，就是把map的key和value都弄成了无指针类型，具体做法上面已经说了。这种做法说白了是针对Go GC的特性所做的针对性优化。</p>
+
+<p>另外，值得一提的是，关于第二点，由于桶中的全局的[]byte使用的是数组类型，那么显然从中间删除元素的开销是很大的。我去看了看BigCache的实现，它也确实没有提供删除指定key的接口。这种缓存，一般来说，删除元素靠的是全局过期时间（注意，是先进先出的过期，并不能为每个key单独指定不同的过期时间）或缓存总大小达到一定阈值后删除，也即把数组当队列用。所以，这种实现的前提是，缓存是自淘汰类型，而非可手动删除指定元素类型的。</p>
+
+<p>英文原文的后续部分，是英文作者在BigCache的基础上自己写了一个简单版本的cache，然后通过代码来说明上面原理。如果你看到这觉得ok了，后面的内容就不用看了。</p>
+
+<p>看代码
+以下是我写的一个cache的简单实现，我去掉了关于过期淘汰，容量等功能，只为了更好的演示我上面所说的内容。</p>
+
+<p>首先，哈希函数是从BigCache中抄的，这个哈希实现是零堆内存申请的。</p>
+
+<p>hasher.go</p>
+
+<p>package main</p>
+
+<p>// newDefaultHasher returns a new 64-bit FNV-1a Hasher which makes no memory allocations.
+// Its Sum64 method will lay the value out in big-endian byte order.
+// See https://en.wikipedia.org/wiki/Fowler–Noll–Vo_hash_function
+func newDefaultHasher() fnv64a {
+    return fnv64a{}
+}</p>
+
+<p>type fnv64a struct{}</p>
+
+<p>const (
+    // offset64 FNVa offset basis. See https://en.wikipedia.org/wiki/Fowler–Noll–Vo_hash_function#FNV-1a_hash
+    offset64 = 14695981039346656037
+    // prime64 FNVa prime value. See https://en.wikipedia.org/wiki/Fowler–Noll–Vo_hash_function#FNV-1a_hash
+    prime64 = 1099511628211
+)</p>
+
+<p>// Sum64 gets the string and returns its uint64 hash value.
+func (f fnv64a) Sum64(key string) uint64 {
+    var hash uint64 = offset64
+    for i := 0; i &lt; len(key); i++ {
+        hash ^= uint64(key[i])
+        hash *= prime64
+    }</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>return hash } 然后，cache结构体包含了获取shard的逻辑，以及get和set方法。
+</code></pre></div></div>
+
+<p>在前文并发访问小节中，提到了为数据选取特定shard的函数，该函数的实现是首先通过前面的哈希函数将key转换成一个hash值，然后用hash值与shard的数量计算出shard数组的下标。值得一提的是，这里不是用取余运算得到结果，而是通过按位与计算的。</p>
+
+<p>hashedkey&amp;mask</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>0111 AND 1101  (mask)   = 0101 cache.go
+</code></pre></div></div>
+
+<p>package main</p>
+
+<p>var minShards = 1024</p>
+
+<p>type cache struct {
+    shards []*cacheShard
+    hash   fnv64a
+}</p>
+
+<p>func newCache() <em>cache {
+    cache := &amp;cache{
+        hash:   newDefaultHasher(),
+        shards: make([]</em>cacheShard, minShards),
+    }
+    for i := 0; i &lt; minShards; i++ {
+        cache.shards[i] = initNewShard()
+    }</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>return cache }
+</code></pre></div></div>
+
+<p>func (c *cache) getShard(hashedKey uint64) (shard *cacheShard) {
+    return c.shards[hashedKey&amp;uint64(minShards-1)]
+}</p>
+
+<p>func (c *cache) set(key string, value []byte) {
+    hashedKey := c.hash.Sum64(key)
+    shard := c.getShard(hashedKey)
+    shard.set(hashedKey, value)
+}</p>
+
+<p>func (c *cache) get(key string) ([]byte, error) {
+    hashedKey := c.hash.Sum64(key)
+    shard := c.getShard(hashedKey)
+    return shard.get(key, hashedKey)
+}
+最后，也就是最赞的地方，在每个shard中有一个字符数组[]byte和一个map[uint64]uint32。在map中，存储每个键值对的值在全局字符数组中的下标，在字符数组中存储键值对的值。</p>
+
+<p>使用tail变量来保存字符数组的尾部下标。</p>
+
+<p>shard.go</p>
+
+<p>package main</p>
+
+<p>import (
+    “encoding/binary”
+    “errors”
+    “sync”
+)</p>
+
+<p>const (
+    headerEntrySize = 4
+    defaultValue    = 1024 // For this example we use 1024 like default value.
+)</p>
+
+<p>type cacheShard struct {
+    items        map[uint64]uint32
+    lock         sync.RWMutex
+    array        []byte
+    tail         int
+    headerBuffer []byte
+}</p>
+
+<p>func initNewShard() *cacheShard {
+    return &amp;cacheShard{
+        items:        make(map[uint64]uint32, defaultValue),
+        array:        make([]byte, defaultValue),
+        tail:         1,
+        headerBuffer: make([]byte, headerEntrySize),
+    }
+}</p>
+
+<p>func (s *cacheShard) set(hashedKey uint64, entry []byte) {
+    w := wrapEntry(entry)
+    s.lock.Lock()
+    index := s.push(w)
+    s.items[hashedKey] = uint32(index)
+    s.lock.Unlock()
+}</p>
+
+<p>func (s *cacheShard) push(data []byte) int {
+    dataLen := len(data)
+    index := s.tail
+    s.save(data, dataLen)
+    return index
+}</p>
+
+<p>func (s *cacheShard) save(data []byte, len int) {
+    // Put in the first 4 bytes the size of the value
+    binary.LittleEndian.PutUint32(s.headerBuffer, uint32(len))
+    s.copy(s.headerBuffer, headerEntrySize)
+    s.copy(data, len)
+}</p>
+
+<p>func (s *cacheShard) copy(data []byte, len int) {
+    // Using the tail to keep the order to write in the array
+    s.tail += copy(s.array[s.tail:], data[:len])
+}</p>
+
+<p>func (s *cacheShard) get(key string, hashedKey uint64) ([]byte, error) {
+    s.lock.RLock()
+    itemIndex := int(s.items[hashedKey])
+    if itemIndex == 0 {
+        s.lock.RUnlock()
+        return nil, errors.New(“key not found”)
+    }</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>// Read the first 4 bytes after the index, remember these 4 bytes have the size of the value, so
+// you can use this to get the size and get the value in the array using index+blockSize to know until what point
+// you need to read
+blockSize := int(binary.LittleEndian.Uint32(s.array[itemIndex : itemIndex+headerEntrySize]))
+entry := s.array[itemIndex+headerEntrySize : itemIndex+headerEntrySize+blockSize]
+s.lock.RUnlock()
+return readEntry(entry), nil }
+</code></pre></div></div>
+
+<p>func readEntry(data []byte) []byte {
+    dst := make([]byte, len(data))
+    copy(dst, data)</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>return dst }
+</code></pre></div></div>
+
+<p>func wrapEntry(entry []byte) []byte {
+    // You can put more information like a timestamp if you want.
+    blobLength := len(entry)
+    blob := make([]byte, blobLength)
+    copy(blob, entry)
+    return blob
+}
+main.go</p>
+
+<p>package main</p>
+
+<p>import “fmt”</p>
+
+<p>func main() {
+    cache := newCache()
+    cache.set(“key”, []byte(“the value”))</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>value, err := cache.get("key")
+if err != nil {
+    fmt.Println(err)
+}
+
+fmt.Println(string(value))
+// OUTPUT:
+// the value } 英文原文地址： How BigCache avoids expensive GC cycles and speeds up concurrent access in Go
+</code></pre></div></div>
+:ET

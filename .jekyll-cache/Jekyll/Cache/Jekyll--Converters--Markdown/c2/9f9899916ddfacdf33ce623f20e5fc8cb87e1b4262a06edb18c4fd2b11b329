@@ -1,0 +1,38 @@
+I"><p>Elasticsearch、Solr中的高亮显示是均来源于lucene的高亮模块，luncene允许在一个或者多个字段上突出显示搜索内容，在中高亮方式上，lucene支持三种高亮显示方式highlighter, fast-vector-highlighter， postings-highlighter，  在Solr、ElasticSearch，highlighter 高亮是缺省配置高亮方式。
+<!-- more -->
+highlighter：</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code> highlighter 高亮也叫plain高亮，highlighter方式高亮是个实时分析处理高亮器。即用户在查询的时候，搜索引擎查询到了目标数据docid后，将需要高亮的字段数据提取到内存，再调用该字段的分析器进行处理，分析器对文本进行分析处理，分析完成后采用相似度算法计算得分最高的前n组并高亮段返回数据。以ansj分析器为例，官方给出的性能在60-80万字/每秒，但实际上中服务器运行效率会小于该值（服务器主频都比较低），在生产环境下，ansj分词效率大多在 40-50万字/秒。假设用户搜索的都是比较大的文档同时需要进行高亮。按照一页查询40条（每条数据20k）的方式进行显示，即使相似度计算以及搜索排序不耗时，整个查询也会被高亮拖累到接近两秒。highlighter高亮器是实时分析高亮器，这种实时分析机制会让ES占用较少的IO资源同时也占用较少的存储空间（词库较全的话相比fvh方式能节省一半的存储空间），其实时计算高亮是采用cpu资源来缓解io压力，在高亮字段较短（比如高亮文章的标题）时候速度较快，同时因io访问的次数少，io压力较小，有利于提高系统吞吐量。
+</code></pre></div></div>
+
+<p>fast-vector-highlighter :
+      为解决 highlighter 高亮器质大文本字段上高亮速度跟不上的问题，lucene高亮模块提供了基于向量的高亮方式 fast-vector-highlighter（也称为fvh）。fast-vector-highlighter（fvh）高亮器利用建索引时候保存好的词向量来直接计算高亮段落，在高亮过程中比plain高亮方式少了实时分析过程，取而代之的是直接从磁盘中将分词结果直接读取到内存中进行计算。故要使用fvh的前置条件就是在建索引时候，需要配置存储词向量，词向量需要包含词位置信息、词偏移量信息。</p>
+
+<p>fvh在高亮时候的逻辑如下：</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>1.分析高亮查询语法，提取表达式中的高亮词集合
+2.从磁盘上读取该文档字段下的词向量集合
+3.遍历词向量集合，提取自表达式中出现的词向量
+4.根据提取到目标词向量读取词频信息，根据词频获取每个位置信息、偏移量
+5.通过相似度算法获取得分较高的前n组高亮信息
+6.读取字段内容（多字段用空格隔开），根据提取的词向量直接定位截取高亮字段
+
+
+
+  由此可见，fvh 省去了实时分析过程，但是多了词条向量信息存储和读取，在词库丰富的系统中，存储词向量往往要比不存储词向量多占用一倍的空间，同时在高亮时候会比plain高亮多出至少一倍的io操作次数，读取的字节大小也多出至少一倍，大量的io请求会让搜索引擎并发能力降低。
+
+中实际的使用过程中，当实时分词速度小于磁盘读随机取速度的时候，从磁盘读取词词条向量结果的的fast-vector-highlighter高亮有明显优势，例如： ansj分词器处理1百万字的文档耗时约两秒，而当前企业硬盘一分钟转速约为一万转，即一秒钟有160次的寻址能力，单次寻址并读取20k耗时约为7-10ms。分40次从磁盘总共读取2M内容耗时约为300毫秒，重复读取数据时候io上存在缓存，速度较快，与plain方式相比，fvh高亮在文档字段内容较大的情况下具有较大优势，特别是在使用ssd的情况下。
+</code></pre></div></div>
+
+<p>postings-highlighter ：</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>     默认plain高亮方式占用空间小，但是对大字段高亮慢，fvh对大字段高亮快，但占用空间过大，为此，lucene还提供了一占用空间不是太大，高亮速度不是太慢的的折中方案-postings-highlighter（也称postings）。postings 高亮方式与fvh相似，采用词量向量的方式进行高亮，与fvh高亮不同的是postings高亮只存储了词向量的位置信息，并未存储词向量的偏移量，故中大字段存储中，postings其比fvh节省约20-30%的存储空间，速度与fvh基本相当。
+
+  在实际使用中，postings高亮的优点和缺点都不突出，故建议开发者在做高亮需求时候，可对小字段采用highlighter高亮方式，大字段采用fast-vector-highlighter即可满足需求。
+</code></pre></div></div>
+
+<p>https://blog.csdn.net/kjsoftware/article/details/76293204</p>
+
+<p>https://blog.csdn.net/LXWalaz1s1s/article/details/108975817</p>
+
+:ET

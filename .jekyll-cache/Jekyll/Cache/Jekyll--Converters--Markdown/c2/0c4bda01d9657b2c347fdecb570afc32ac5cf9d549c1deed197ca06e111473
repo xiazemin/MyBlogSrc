@@ -1,0 +1,1249 @@
+I"�<p>sync.Pool是一个可以存或取的临时对象池。对外提供New、Get、Put等API，利用mutex支持多线程并发。</p>
+
+<p>目标
+sync.Pool解决以下问题：</p>
+
+<p>增加临时对象的用复用率，减少GC负担
+通过对象的复用，减少内存申请开销，有利于提高一部分性能
+<!-- more -->
+实现
+这一部分回答如何实现的问题。</p>
+
+<p>关于了解实现，最好的办法就是看代码。</p>
+
+<p>描述
+type Pool struct {
+    noCopy noCopy</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>local     unsafe.Pointer // local fixed-size per-P pool, actual type is [P]poolLocal
+localSize uintptr        // size of the local array
+
+// New optionally specifies a function to generate
+// a value when Get would otherwise return nil.
+// It may not be changed concurrently with calls to Get.
+New func() interface{} } 各个成员含义如下：
+</code></pre></div></div>
+
+<p>noCopy： 防止sync.Pool被复制</p>
+
+<p>local： poolLocal数组的指针</p>
+
+<p>localSize： poolLocal数组大小</p>
+
+<p>New： 函数指针申请具体的对象，便于用户定制各种类型的对象</p>
+
+<p>// Local per-P Pool appendix.
+type poolLocalInternal struct {
+    private interface{}   // Can be used only by the respective P.
+    shared  []interface{} // Can be used by any P.
+    Mutex                 // Protects shared.
+}</p>
+
+<p>type poolLocal struct {
+    poolLocalInternal</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>// Prevents false sharing on widespread platforms with
+// 128 mod (cache line size) = 0 .
+pad [128 - unsafe.Sizeof(poolLocalInternal{})%128]byte } private：private私有池，只能被对应P使用（说明：P是指goroutine执行所占用的处理器，下同）
+</code></pre></div></div>
+
+<p>shared： shared共享池，能被任何P使用</p>
+
+<p>Mutex： 保护shared共享池</p>
+
+<p>pad：poolLocal结构体中特别增加了pad成员，这是为了防止false sharing。</p>
+
+<p>操作
+操作分为四种类型：</p>
+
+<p>New
+Get
+Put
+CleanUp
+New
+这部分主要解决问题：如何创建一个具体对象池？</p>
+
+<p>具体参考代码如下：</p>
+
+<p>// Object Object
+type Object struct {
+    a int
+    b int
+}</p>
+
+<p>var pool = sync.Pool{
+    New: func() interface{} { return new(Object) },
+}
+Get
+Get解决了如何从具体sync.Pool中获取对象的问题。</p>
+
+<p>获取对象有三个来源：</p>
+
+<p>private池
+shared池
+系统的Heap内存
+获取对象顺序是先从private池获取，如果不成功则从shared池获取，如果继续不成功，则从Heap中申请一个对象。这是不是有熟悉的味道？在两级cache的情况下，CPU获取数据，先从L1 cache开始，再是L2 cache， 是内存。</p>
+
+<p>具体代码实现如下：</p>
+
+<p>func (p *Pool) Get() interface{} {
+    if race.Enabled {
+        race.Disable()
+    }
+    l := p.pin() // 绑定private池和P
+    x := l.private
+    l.private = nil
+    runtime_procUnpin() // 去绑定private池和P
+    if x == nil { //  private池获取失败
+        l.Lock()
+        last := len(l.shared) - 1
+        if last &gt;= 0 {
+            x = l.shared[last] // 从shared池获取最后一个对象 
+            l.shared = l.shared[:last] // 从shared池删除最后一个对象
+        }
+        l.Unlock()
+        if x == nil { 
+            x = p.getSlow() // pid对应poolLocal没有获取成功，开始遍历整个poolLocal数组
+        }
+    }
+    if race.Enabled {
+        race.Enable()
+        if x != nil {
+            race.Acquire(poolRaceAddr(x))
+        }
+    }
+    if x == nil &amp;&amp; p.New != nil {
+        x = p.New() // 从heap申请对象
+    }
+    return x
+}</p>
+
+<p>func (p *Pool) getSlow() (x interface{}) {
+    // See the comment in pin regarding ordering of the loads.
+    size := atomic.LoadUintptr(&amp;p.localSize) // load-acquire
+    local := p.local                         // load-consume
+    // Try to steal one element from other procs.
+    pid := runtime_procPin()
+    runtime_procUnpin()
+    for i := 0; i &lt; int(size); i++ { // 遍历poolLocal数组
+        l := indexLocal(local, (pid+i+1)%int(size)) // 注意pid+i+1 这样可以从pid+1位置开始整个遍历
+        l.Lock()
+        last := len(l.shared) - 1
+        if last &gt;= 0 {
+            x = l.shared[last]
+            l.shared = l.shared[:last]
+            l.Unlock()
+            break
+        }
+        l.Unlock()
+    }
+    return x
+}</p>
+
+<p>// pin pins the current goroutine to P, disables preemption and returns poolLocal pool for the P.
+// Caller must call runtime_procUnpin() when done with the pool.
+func (p *Pool) pin() *poolLocal {
+    pid := runtime_procPin()
+    // In pinSlow we store to localSize and then to local, here we load in opposite order.
+    // Since we’ve disabled preemption, GC cannot happen in between.
+    // Thus here we must observe local at least as large localSize.
+    // We can observe a newer/larger local, it is fine (we must observe its zero-initialized-ness).
+    s := atomic.LoadUintptr(&amp;p.localSize) // load-acquire
+    l := p.local                          // load-consume
+    if uintptr(pid) &lt; s {
+        return indexLocal(l, pid)
+    }
+    return p.pinSlow() // 没有对应poolLocal，进入慢路径处理
+}</p>
+
+<p>func (p *Pool) pinSlow() *poolLocal {
+    // Retry under the mutex.
+    // Can not lock the mutex while pinned.
+    runtime_procUnpin()
+    allPoolsMu.Lock()
+    defer allPoolsMu.Unlock()
+    pid := runtime_procPin()
+    // poolCleanup won’t be called while we are pinned.
+    s := p.localSize
+    l := p.local
+    if uintptr(pid) &lt; s { // 根据pid获取poolLocal
+        return indexLocal(l, pid) 
+    }
+    if p.local == nil {
+        allPools = append(allPools, p)
+    }
+    // If GOMAXPROCS changes between GCs, we re-allocate the array and lose the old one.
+    size := runtime.GOMAXPROCS(0)
+    local := make([]poolLocal, size) // 重新分配poolLocal
+    atomic.StorePointer(&amp;p.local, unsafe.Pointer(&amp;local[0])) // store-release
+    atomic.StoreUintptr(&amp;p.localSize, uintptr(size))         // store-release
+    return &amp;local[pid] // 返回新的poolLocal
+}</p>
+
+<p>总结Get主要要点如下：</p>
+
+<p>先从本P绑定的poolLocal获取对象：先从本poolLocal的private池获取对象，再从本poolLocal的shared池获取对象
+上一步没有成功获取对象，再从其他P的shared池获取对象
+上一步没有成功获取对象，则从Heap申请对象
+Put
+Put完成将对象放回对象池。</p>
+
+<p>// Put adds x to the pool.
+func (p *Pool) Put(x interface{}) {
+    if x == nil {
+        return
+    }
+    if race.Enabled {
+        if fastrand()%4 == 0 {
+            // Randomly drop x on floor.
+            return
+        }
+        race.ReleaseMerge(poolRaceAddr(x))
+        race.Disable()
+    }
+    l := p.pin() // 绑定private池和P
+    if l.private == nil {
+        l.private = x   // 放回private池中
+        x = nil
+    }
+    runtime_procUnpin() // 去绑定private池和P
+    if x != nil {
+        l.Lock()
+        l.shared = append(l.shared, x)  // 放回shared池
+        l.Unlock()
+    }
+    if race.Enabled {
+        race.Enable()
+    }
+}
+上面的代码总结如下：</p>
+
+<p>如果poolLocalInternal的private为空，则将回收的对象放到private池中
+如果poolLocalInternal的private非空，则将回收的对象放到shared池中
+CleanUp
+CleanUp实现
+注册poolCleanup函数。</p>
+
+<p>func init() {
+   runtime_registerPoolCleanup(poolCleanup)
+}</p>
+
+<p>poolCleanup函数具体实现，</p>
+
+<p>func poolCleanup() {
+    // This function is called with the world stopped, at the beginning of a garbage collection.
+    // It must not allocate and probably should not call any runtime functions.
+    // Defensively zero out everything, 2 reasons:
+    // 1. To prevent false retention of whole Pools.
+    // 2. If GC happens while a goroutine works with l.shared in Put/Get,
+    //    it will retain whole Pool. So next cycle memory consumption would be doubled.
+    for i, p := range allPools {
+        allPools[i] = nil
+        for i := 0; i &lt; int(p.localSize); i++ {
+            l := indexLocal(p.local, i)
+            l.private = nil
+            for j := range l.shared {
+                l.shared[j] = nil
+            }
+            l.shared = nil
+        }
+        p.local = nil
+        p.localSize = 0
+    }
+    allPools = []*Pool{}
+}
+CleanUp时机
+什么时候进行CleanUp回收对象池？在gc开始前。</p>
+
+<p>具体代码(代码文件为runtime/mgc.go)如下：</p>
+
+<p>func gcStart(trigger gcTrigger) {
+    … 
+    // clearpools before we start the GC. If we wait they memory will not be
+    // reclaimed until the next GC cycle.
+    clearpools() // 在这里清理sync.Pool</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>work.cycles++
+
+gcController.startCycle()
+work.heapGoal = memstats.next_gc
+
+// In STW mode, disable scheduling of user Gs. This may also
+// disable scheduling of this goroutine, so it may block as
+// soon as we start the world again.
+if mode != gcBackgroundMode {
+    schedEnableUser(false)
+}
+... } func clearpools() {
+// clear sync.Pools
+if poolcleanup != nil {
+    poolcleanup() // 如果poolcleanup不为空，调用poolcleanup函数
+}
+
+// Clear central sudog cache.
+// Leave per-P caches alone, they have strictly bounded size.
+// Disconnect cached list before dropping it on the floor,
+// so that a dangling ref to one entry does not pin all of them.
+lock(&amp;sched.sudoglock)
+var sg, sgnext *sudog
+for sg = sched.sudogcache; sg != nil; sg = sgnext {
+    sgnext = sg.next
+    sg.next = nil
+}
+sched.sudogcache = nil
+unlock(&amp;sched.sudoglock)
+
+// Clear central defer pools.
+// Leave per-P pools alone, they have strictly bounded size.
+lock(&amp;sched.deferlock)
+for i := range sched.deferpool {
+    // disconnect cached list before dropping it on the floor,
+    // so that a dangling ref to one entry does not pin all of them.
+    var d, dlink *_defer
+    for d = sched.deferpool[i]; d != nil; d = dlink {
+        dlink = d.link
+        d.link = nil
+    }
+    sched.deferpool[i] = nil
+}
+unlock(&amp;sched.deferlock) } 总结 总结一下sync.Pool的实现，要点如下：
+</code></pre></div></div>
+
+<p>提供New定义实现用户自定义对象
+需要使用对象调用Get从对象池获取临时对象，Get优先级首先是本P绑定的poolLocal, 其次是其他P绑定的poolLocal，最后是Heap内存
+对象使用完毕调用Put将临时对象放回对象池
+未被使用的对象会定时GC回收
+对象没有类似于linux cache object对应的free函数
+应用
+sync.Pool并不是万能药。要根据具体情境而定是否使用sync.Pool。</p>
+
+<p>总结不适合使用sync.Pool的情境，具体如下：</p>
+
+<p>对象中分配的系统资源如socket，buffer
+对象需要进行异步处理
+对象是组合对象，如存在指针指向其他的对象
+批量对象需要并发处理
+复用对象大小存在的波动，如对象结构成员存在slice
+在排除上面情境下，适合使用的sync.Pool应满足以下条件，具体如下：</p>
+
+<p>对象是buffer或非组合类型如buffer reader, json decode, bufio writer
+对象内存可以重复使用
+同时在使用应该注意问题：</p>
+
+<p>Put对象之前完成初始化，避免数据污染带来问题, 这可能带来各种各样的问题
+写代码时要满足one Get， one Put的要求
+注意获取对象后是否存在修改对象内存存局的代码
+关注应用场景是否容易出现Pool竞争的情况
+sync.Pool不是万能药，不要拿着锤子，看什么都是钉子</p>
+
+<p>https://github.com/golang/go/issues/23199</p>
+
+<p>Go 1.13持续对 sync.Pool进行了改进，这里我们有两个简单的灵魂拷问：</p>
+
+<p>1、做了哪些改进？
+2、如何做的改进？</p>
+
+<p>首先回答第一个问题：</p>
+
+<p>对STW暂停时间做了优化, 避免大的sync.Pool严重影响STW时间
+第二个优化是GC时入股对sync.Pool进行回收，不会一次将池化对象全部回收，这就避免了sync.Pool释放对象和重建对象导致的性能尖刺，造福于sync.Pool重度用户。
+第三个就是对性能的优化。
+对以上的改进主要是两次提交：: sync: use lock-free structure for Pool stealing和sync: use lock-free structure for Pool stealing。</p>
+
+<p>两次提交都不同程度的对性能有所提升，依据不同的场景，提升0.7% ～ 92%不同。 Go开发者有一个很好的习惯，或者叫做约定，或者是他们的开发规范，对于标准库的修改都会执行性能的比较，代码的修改不应该带来性能的降低。这两次提交的注释文档都详细的介绍了性能的比较结果。</p>
+
+<p>知道了第一个问题的答案可以让我们对sync.Pool有信心，在一些场景下可以考虑使用sync.Pool，以便减少对象的创建和回收对GC的影响。</p>
+
+<p>了解第二个问题可以让我们学到Go开发者的优化手段，或许在我们自己的项目中也使用这些优化手段来优化我们自己的代码。</p>
+
+<p>sync: use lock-free structure for Pool stealing
+第一次提交提升用来提高sync.Pool的性能，减少STW时间。</p>
+
+<p>Go 1.13之前，Pool使用一个Mutex保护的slice来存储每个shard的overflow对象。(sync.Pool使用shard方式存储池化对象，减少竞争。 每个P对应一个shard。如果需要创建多于一个池化对象，这些对象就叫做overflow)。</p>
+
+<p>1
+2
+3
+4
+5
+type poolLocalInternal struct {		 type poolLocalInternal struct {
+ 	private interface{}   // Can be used only by the respective P.	by the respective P.
+ 	shared  []interface{} // Can be used by any P.
+ 	Mutex                 // Protects shared.		
+ }
+那么在Go 1.13中，使用是以 lock-free的数据结构代替slice + Mutex的方式：</p>
+
+<p>1
+2
+3
+4
+type poolLocalInternal struct {
+	private interface{} // Can be used only by the respective P.
+	shared  poolChain   // Local P can pushHead/popHead; any P can popTail.
+}
+这个lock-free的数据结构的实现很特别。</p>
+
+<p>我们知道，实现lock-free的数据结构一般采用atomic的方式实现，通过CAS避免操作block住。sync.Pool也是采用这种方式，它定义了一个lock-free的双向链表:</p>
+
+<p>1
+2
+3
+4
+type poolDequeue struct {
+	headTail uint64
+	vals []eface
+}
+poolDequeue是一个特别的队列，有以下特点：</p>
+
+<p>lock-free
+固定大小，ring形结构(底层存储使用数组,使用两个指针标记ehead、tail)
+单生产者
+多消费者
+生产者可以从head进行pushHead、popHead
+消费者可以从tail进行popTail
+它的head和tail是采用一个uint64数值来表示的，好处就是我们可以通过atomic对这两个值整体进行CAS。它提供了unpack、pack可以从headTail中解析初独立的head和tail, 以及执行相反的操作。</p>
+
+<p>数组存储在vals数组中，它采用interface的结构进行存储。</p>
+
+<p>如果你看它的pushHead、popHead和popTail代码，可以看到它主要使用atomic来实现lock-free。lock-free代码比较简单，本文就不进行详细解读了，阅读的时候注意head和tail的边界问题。因为它是使用一个数组(准确的说是slice)实现一个ringbuffer的数据结构，这样能充分利用分配的空间。</p>
+
+<p>sync.Pool还不是直接使用poolDequeue这样一个数据结构，原因在于poolDequeue是一个固定大小的队列，这个大小取什么值才合理呢？取的太小，以后可能不得不grow, 取的太大，又可能浪费。</p>
+
+<p>解决这个问题就是采用动态增长的方式。它定义了一个队列链表池,可以实现动态的上述队列的增减:
+type poolChain struct {
+	head <em>poolChainElt //只会被生产者使用
+	tail *poolChainElt //只会被消费者使用
+}
+一开始，它会使用长度为8的poolDequeue做存储，一旦这个队列满了，就会再创建一个长度为16的队列，以此类推，只要当前的队列满了，就会新创建一 2</em>n的poolDequeue做存储。如果当前的poolDequeue消费完，就会丢弃。</p>
+
+<p>这样一个动态可变的lock-free队列正是sync.Pool所要的,当然为了CPU缓存优化还进行了缓存行的对齐：
+type poolLocalInternal struct {
+	private interface{} // Can be used only by the respective P.
+	shared  poolChain   // Local P can pushHead/popHead; any P can popTail.
+}
+type poolLocal struct {
+	poolLocalInternal
+	pad [128 - unsafe.Sizeof(poolLocalInternal{})%128]byte
+}
+type Pool struct {
+	noCopy noCopy
+	local     unsafe.Pointer // local fixed-size per-P pool, actual type is [P]poolLocal
+	localSize uintptr        // size of the local array
+	New func() interface{}
+}
+Pool使用shard的方式实现池(local实际上是[P]poolLocal, 这里采用指针的方式)，它的Get、Put移除了Mutex的加锁控制，而是采用lock-free数据结构poolChain实现。</p>
+
+<p>当然有人可能提出质疑: lock-free真的比Mutex性能好吗？在一定的竞争条件下，确实lock-free的性能要好于Mutex, 如果你举极端的例子，比如竞争非常激烈的情况，或许会有不同的结果，但是绝大部分情况下，lock-free性能还是要好一些。</p>
+
+<p>注意Pool的实现中使用了runtime_procPin()方法，它可以将一个goroutine死死占用当前使用的P(P-M-G中的processor)，不允许其它goroutine/M抢占,这样它就可以自由的使用shard中和这个P相关的local，不必担心竞争的问题。释放pin的方法是runtime_procUnpin。</p>
+
+<p>此时的poolCleanup (GC的时候对池化对象的释放)还是全部清空，进一步的优化在下一个提交中。</p>
+
+<p>sync: smooth out Pool behavior over GC with a victim cache
+上一节提到每次Pool清理的时候都是把所有的池化对象都释放掉，这会带来两个问题：</p>
+
+<p>浪费: 池化对象全部释放后等需要的时候又不得不重新创建
+GC尖峰:突然释放大量的池化对象会导致GC耗时增加
+所以这次提交引入了victim cache的机制。victim cache原是CPU硬件处理缓存的一种技术,</p>
+
+<p>所谓受害者缓存（Victim Cache），是一个与直接匹配或低相联缓存并用的、容量很小的全相联缓存。当一个数据块被逐出缓存时，并不直接丢弃，而是暂先进入受害者缓存。如果受害者缓存已满，就替换掉其中一项。当进行缓存标签匹配时，在与索引指向标签匹配的同时，并行查看受害者缓存，如果在受害者缓存发现匹配，就将其此数据块与缓存中的不匹配数据块做交换，同时返回给处理器。</p>
+
+<p>from wikipedia</p>
+
+<p>相比较先前的直接清除Pool, 这次修改后是清除victim cache，然后将primary cache转移给victim cache。如果sync.Pool的获取释放速度稳定，那么就不会又新的池对象进行分配。如果获取的速度下降了，那么对象可能会在两个GC周期内被释放，而不是以前的一个GC周期。</p>
+
+<p>同时，victim cache的设计也间接的提升GC的性能，因为稳定的sync.Pool使用导致池化的对象都是long-live的对象，而GC的主要对象是short-live的对象，所以会减少GC的执行。</p>
+
+<p>相对于以前的实现，现在的sync.Pool的实现增加了victim相关的两个字段:
+type Pool struct {
+	noCopy noCopy
+	local     unsafe.Pointer // local fixed-size per-P pool, actual type is [P]poolLocal
+	localSize uintptr        // size of the local array
+	victim     unsafe.Pointer // local from previous cycle
+	victimSize uintptr        // size of victims array
+	New func() interface{}
+}
+它主要影响两个方法的实现: getSlow和poolCleanup。</p>
+
+<p>当前goroutine从自己的P对应的本地获取不到free的池化对象的话，就会调用getSlow, 尝试从其它shard中”偷取”。</p>
+
+<p>如果不幸的是其它shard也没有free的池化对象的话，那么就就尝试从victim中找一个，寻找的方法和从本地中寻找是一样一样的。</p>
+
+<p>找到的话就返回，找不到的话如果定义New创建函数，就创建一个，如果没定义New返回空。</p>
+
+<p>清理的时候就是把每一个sync.Pool的victim都清空,然后再把本地local的池化对象赋值给victim， 本地对象都清空。</p>
+
+<p>sync.Pool 整体 Get/Put 逻辑
+Vincent Blanchon曾在他的Go: Understand the Design of Sync.Pool一文中给出了sync.Pool go 1.12版本的Get/Put的流程图。这里我画了一个go 1.13版本的流程图，可以很好的理解sync.Pool处理的过程。
+https://colobu.com/2019/10/08/how-is-sync-Pool-improved-in-Go-1-13/
+Sync包提供了强大的可被重复利用实例池，为了降低垃圾回收的压力。在使用这个包之前，需要将你的应用跑出使用pool之前与之后的benchmark数据，因为在一些情况下使用如果你不清楚pool内部原理的话，反而会让应用的性能下降。
+pool的局限性
+我们先来看看一些基础的例子，来看看他在一个相当简单情况下（分配1K内存）是如何工作的：
+type Small struct {
+   a int
+}</p>
+
+<p>var pool = sync.Pool{
+   New: func() interface{} { return new(Small) },
+}</p>
+
+<p>//go:noinline
+func inc(s *Small) { s.a++ }</p>
+
+<p>func BenchmarkWithoutPool(b *testing.B) {
+   var s *Small
+   for i := 0; i &lt; b.N; i++ {
+      for j := 0; j &lt; 10000; j++ {
+         s = &amp;Small{ a: 1, }
+         b.StopTimer(); inc(s); b.StartTimer()
+      }
+   }
+}</p>
+
+<p>func BenchmarkWithPool(b <em>testing.B) {
+   var s *Small
+   for i := 0; i &lt; b.N; i++ {
+      for j := 0; j &lt; 10000; j++ {
+         s = pool.Get().(</em>Small)
+         s.a = 1
+         b.StopTimer(); inc(s); b.StartTimer()
+         pool.Put(s)
+      }
+   }
+}
+复制代码下面是两个benchmarks，一个是使用了sync.pool一个没有使用
+name           time/op        alloc/op        allocs/op
+WithoutPool-8  3.02ms ± 1%    160kB ± 0%      1.05kB ± 1%
+WithPool-8     1.36ms ± 6%   1.05kB ± 0%        3.00 ± 0%
+复制代码由于这个遍历有10k的迭代，那个没有使用pool的benchmark显示在堆上创建了10k的内存分配，而使用了pool的只使用了3. 3个分配由pool进行的，但只有一个结构体的实例被分配到内存。到目前为止可以看到使用pool对于内存的处理以及内存消耗上面更加友善。
+但是，在实际例子里面，当你使用pool，你的应用将会有很多新在堆上的内存分配。这种情况下，当内存升高了，就会触发垃圾回收。
+我们可以强制垃圾回收的发生通过使用runtime.GC()来模拟这种情形
+name           time/op        alloc/op        allocs/op
+WithoutPool-8  993ms ± 1%    249kB ± 2%      10.9k ± 0%
+WithPool-8     1.03s ± 4%    10.6MB ± 0%     31.0k ± 0%
+复制代码我们现在可以看到使用了pool的情况反而内存分配比不使用pool的时候高了。我们来深入地看一下这个包的源码来理解为什么会这样。
+内部工作流
+看一下sync/pool.go文件会给我们展示一个初始化函数，这个函数里面的内容能解释我们刚刚的情景：
+func init() {
+   runtime_registerPoolCleanup(poolCleanup)
+}
+复制代码这里在运行时注册成了一个方法去清理pools。并且同样的方法在垃圾回收里面也会触发，在文件runtime/mgc.go里面
+func gcStart(trigger gcTrigger) {
+   […]
+   // clearpools before we start the GC
+   clearpools()
+复制代码这就解释了为什么当调用垃圾回收时，性能会下降。pools在每次垃圾回收启动时都会被清理。这个文档其实已经有警告我们
+Any item stored in the Pool may be removed automatically at any time without notification
+复制代码接下来让我们创建一个工作流来理解一下这里面是如何管理的</p>
+
+<p>sync.Pool workflow in Go 1.12</p>
+
+<p>我们创建的每一个sync.Pool，go都会生成一个内部池poolLocal连接着各个processer（GMP中的P）。这些内部的池由两个属性组成private和shared。前者只是他的所有者可以访问(push以及pop操作，也因此不需要锁)，而`shared可以被任何processer读取并且是需要自己维持并发安全。而实际上，pool不是一个简单的本地缓存，他有可能在我们的程序中被用于任何的协程或者goroutines
+Go的1.13版将改善对shared的访问，还将带来一个新的缓存，该缓存解决与垃圾回收器和清除池有关的问题。
+新的无需锁pool和victim cache
+Go 1.13版本使用了一个新的双向链表作为shared pool，去除了锁，提高了shared的访问效率。这个改造主要是为了提高缓存性能。这里是一个访问shared的流程</p>
+
+<p>new shared pools in Go 1.13</p>
+
+<p>在这个新的链式pool里面，每一个processpr都可以在链表的头进行push与pop，然后访问shared可以从链表的尾pop出子块。结构体的大小在扩容的时候会变成原来的两倍，然后结构体之间使用next/prev指针进行连接。结构体默认大小是可以放下8个子项。这意味着第二个结构体可以容纳16个子项，第三个是32个子项以此类推。同样地，我们现在不再需要锁，代码执行具有原子性。
+关于新缓存，新策略非常简单。 现在有2组池：活动池和已归档池。 当垃圾收集器运行时，它将保留每个池对该池内新属性的引用，然后在清理当前池之前将池的集合复制到归档池中：
+// Drop victim caches from all pools.
+for _, p := range oldPools {
+   p.victim = nil
+   p.victimSize = 0
+}</p>
+
+<p>// Move primary cache to victim cache.
+for _, p := range allPools {
+   p.victim = p.local
+   p.victimSize = p.localSize
+   p.local = nil
+   p.localSize = 0
+}</p>
+
+<p>// The pools with non-empty primary caches now have non-empty
+// victim caches and no pools have primary caches.
+oldPools, allPools = allPools, nil
+复制代码通过这种策略，由于受害者缓存，该应用程序现在将有一个更多的垃圾收集器周期来创建/收集带有备份的新项目。 在工作流中，将在共享池之后在过程结束时请求牺牲者缓存。</p>
+
+<p>一般 sync.Pool 用作小对像池，比如前公司同事，在 thrift golang lib 增加了 sync.Pool 实现 []byte 等对象的复用。网上也有很多 objectPool 的轮子，但总体实现都不如 sync.Pool 高效。</p>
+
+<p>基本原理与演进初探
+想象一下如果我们自己实现，该怎么做呢？用一个定长的 channel 保存对象，拿到了就用，拿不到就 new 创建一个，伪代码大致如下：</p>
+
+<p>type ObjectPool struct {
+    ch chan {}interface
+    newFunc func() {}interface
+}</p>
+
+<p>func (o *ObjectPool) Get() {}interface {
+    select {
+        v := &lt;-o.ch:
+          return v
+        default:
+    }
+    return o.newFunc()
+}</p>
+
+<p>func (o *ObjectPool) Put(v {}interface) {
+    select {
+        o.ch &lt;- v:
+        default:
+    }
+}
+代码很简洁，利用 select default 语法实现无阻塞操作。这里最大的问题就是 channel 也是有代价的，一把大锁让性能会变得很低，参考我之前的关 dpvs 性能优化。那怎么优化呢？多核 cpu 高并发编程，就是要每个 cpu 拥有自己的本地数据，这样就避免了锁争用的开销。而事实上 sync.Pool 也是这么做的。</p>
+
+<p>看了下提交记录，从增加该功能后实现的大方现基本没变：</p>
+
+<p>每个 P (逻辑并发模型，参考 GMP) 拥有本地缓存队列，如果本地获取不到对象，再从其它 P 去偷一个，其它 P 也没的话，调 new factory 创建新的返回。
+Pool 里的对象不是永生的，老的实现，对象如果仅由 Pool 引用，那么会在下次 GC 之间被销毁。但是最新优化 22950 里，为了优化 GC 后 Pool 为空导致的冷启动性能抖动，增加了 victim cache, 用来保存上一次 GC 本应被销毁的对象，也就是说，对象至少存活两次 GC 间隔。
+性能优化，将本地队列变成无锁队列( 单生产者，多消费者模型，严格来讲不通用)，还有一些 fix bug…
+数据结构及演进
+type Pool struct {
+    local     unsafe.Pointer // local fixed-size per-P pool, actual type is [P]poolLocal
+    localSize uintptr        // size of the local array</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>// New optionally specifies a function to generate
+// a value when Get would otherwise return nil.
+// It may not be changed concurrently with calls to Get.
+New func() interface{} }
+</code></pre></div></div>
+
+<p>// Local per-P Pool appendix.
+type poolLocal struct {
+    private interface{}   // Can be used only by the respective P.
+    shared  []interface{} // Can be used by any P.
+    Mutex                 // Protects shared.
+    pad     [128]byte     // Prevents false sharing.
+}
+对象是存储在 poolLocal 里的，private 字段表示最新生成的单个对象，只能由本地 P 访问，shared 是一个 slice, 可以被任意 P 访问，Mutex 用来保护 shared. pad 用来对齐，作用参考我之前的 cpu cache</p>
+
+<p>再加头看 Pool 结构体，New 是创建对象的工厂方法。local 是一个指向 []poolLocal 的指针(准确说，是 slice 底层数组的首地址)，localSize 是 slice 的长度，由于 P 的个数是可以在线调整的，所以 localSize 运行时可能会变化。访问时，P 的 id 对应 []poolLocal 下标索引。</p>
+
+<p>type Pool struct {
+    noCopy noCopy</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>local     unsafe.Pointer // local fixed-size per-P pool, actual type is [P]poolLocal
+localSize uintptr        // size of the local array
+
+victim     unsafe.Pointer // local from previous cycle
+victimSize uintptr        // size of victims array
+
+// New optionally specifies a function to generate
+// a value when Get would otherwise return nil.
+// It may not be changed concurrently with calls to Get.
+New func() interface{} }
+</code></pre></div></div>
+
+<p>// Local per-P Pool appendix.
+type poolLocalInternal struct {
+    private interface{} // Can be used only by the respective P.
+    shared  poolChain   // Local P can pushHead/popHead; any P can popTail.
+}</p>
+
+<p>type poolLocal struct {
+    poolLocalInternal</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>// Prevents false sharing on widespread platforms with
+// 128 mod (cache line size) = 0 .
+pad [128 - unsafe.Sizeof(poolLocalInternal{})%128]byte } Pool 增加了 noCopy 字段，Pool 默认创建后禁止拷贝，必须使用指针。noCopy 用来编绎时 go vet 检查，静态语言就是爽，编绎期干了好多脏活累活。参考 issue 8005 , 里面有很多讨论，关于禁止拷贝如何实现。 增加 victim cache, 以减少 GC 后冷启动导致的性能抖动。 poolLocal 拆成了两个结构体，pad 实现也稍微变了下，为了兼容更多硬件 cache line size. 另外最重要的优化，就是 shared slice 变成了无锁队列。 第一版本实现 对象 put // Put adds x to the pool. func (p *Pool) Put(x interface{}) {
+if raceenabled {
+    // Under race detector the Pool degenerates into no-op.
+    // It's conforming, simple and does not introduce excessive
+    // happens-before edges between unrelated goroutines.
+    return
+}
+if x == nil {
+    return
+}
+l := p.pin()
+if l.private == nil {
+    l.private = x
+    x = nil
+}
+runtime_procUnpin()
+if x == nil {
+    return
+}
+l.Lock()
+l.shared = append(l.shared, x)
+l.Unlock() } 逻辑很简单，先 pin 住，如果 private 字段为空，将对象放到 private 字段，否则添加到 share 池里。
+</code></pre></div></div>
+
+<p>对象 get
+func (p *Pool) Get() interface{} {
+    if raceenabled { // race 检测时禁用 Pool 功能，后续去掉了这个
+        if p.New != nil {
+            return p.New()
+        }
+        return nil
+    }
+    l := p.pin() // pin 会禁止 P 被抢占，并返回本地 P 对应的 poolLocal 信息。
+    x := l.private
+    l.private = nil
+    runtime_procUnpin()
+    if x != nil { // 如果 private 有了，就不用去看 share 直接返回就好
+        return x
+    }
+    l.Lock() // 上锁保护 share
+    last := len(l.shared) - 1
+    if last &gt;= 0 {
+        x = l.shared[last]
+        l.shared = l.shared[:last]
+    }
+    l.Unlock()
+    if x != nil { // 此时从 share 中拿到了对象，返回即可
+        return x
+    }
+    return p.getSlow() // 走慢的逻辑：从其它 P 偷或是调用 new 工厂方法创建
+}</p>
+
+<p>func (p *Pool) getSlow() (x interface{}) {
+    // See the comment in pin regarding ordering of the loads.
+    size := atomic.LoadUintptr(&amp;p.localSize) // load-acquire
+    local := p.local                         // load-consume
+    // Try to steal one element from other procs.
+    pid := runtime_procPin()
+    runtime_procUnpin()
+    for i := 0; i &lt; int(size); i++ { // 轮循从下一个 P 本地队列偷数据
+        l := indexLocal(local, (pid+i+1)%int(size))
+        l.Lock()
+        last := len(l.shared) - 1
+        if last &gt;= 0 {
+            x = l.shared[last]
+            l.shared = l.shared[:last]
+            l.Unlock()
+            break
+        }
+        l.Unlock()
+    }</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>if x == nil &amp;&amp; p.New != nil { // 其它 P 中也没偷到，New 一个
+    x = p.New()
+}
+return x } 从这里，可以看到大体逻辑，和之前描述基本一致，那具体 pin 如何实现的呢？有什么作用呢？接着看源码
+</code></pre></div></div>
+
+<p>func sync·runtime_procPin() (p int) {
+    M *mp;</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>mp = m;
+// Disable preemption.
+mp-&gt;locks++;
+p = mp-&gt;p-&gt;id; }
+</code></pre></div></div>
+
+<p>func sync·runtime_procUnpin() {
+    m-&gt;locks–;
+}
+实际上 sync·runtime_procPin 和 sync·runtime_procUnpin 就是针对 M 进行加锁，防止被 runtime 抢占而己。Pin 除了上锁，会返回 P 的 id</p>
+
+<p>// pin pins the current goroutine to P, disables preemption and returns poolLocal pool for the P.
+// Caller must call runtime_procUnpin() when done with the pool.
+func (p *Pool) pin() *poolLocal {
+    pid := runtime_procPin()
+    // In pinSlow we store to localSize and then to local, here we load in opposite order.
+    // Since we’ve disabled preemption, GC can not happen in between.
+    // Thus here we must observe local at least as large localSize.
+    // We can observe a newer/larger local, it is fine (we must observe its zero-initialized-ness).
+    s := atomic.LoadUintptr(&amp;p.localSize) // load-acquire 获取 []poolLocal slice 长度
+    l := p.local                          // load-consume 获取 []poolLocal 首地址
+    if uintptr(pid) &lt; s { // 由于 P 的 id 就是 []poolLocal 下标
+        return indexLocal(l, pid)
+    }
+    return p.pinSlow()
+}</p>
+
+<p>func (p <em>Pool) pinSlow() *poolLocal {
+    // Retry under the mutex.
+    // Can not lock the mutex while pinned.
+    runtime_procUnpin()
+    allPoolsMu.Lock()
+    defer allPoolsMu.Unlock()
+    pid := runtime_procPin()
+    // poolCleanup won’t be called while we are pinned.
+    s := p.localSize
+    l := p.local
+    if uintptr(pid) &lt; s { // pid 就是 slice 的下村，所以如果 pid 小于 s 就查找 slice
+        return indexLocal(l, pid)
+    }
+    if p.local == nil { // 第一次使用，把 Pool 添加到全局 allPools 
+        allPools = append(allPools, p)
+    }
+    // If GOMAXPROCS changes between GCs, we re-allocate the array and lose the old one. 走扩容逻辑
+    size := runtime.GOMAXPROCS(0)
+    local := make([]poolLocal, size)
+    atomic.StorePointer((</em>unsafe.Pointer)(&amp;p.local), unsafe.Pointer(&amp;local[0])) // store-release
+    atomic.StoreUintptr(&amp;p.localSize, uintptr(size))                            // store-release
+    return &amp;local[pid]
+}
+    // l 是指针地地，做类型转换，然后返回下标 i 的 poolLocal
+func indexLocal(l unsafe.Pointer, i int) <em>poolLocal {
+    return &amp;(</em>[1000000]poolLocal)(l)[i]
+}
+pin 的作用将当前 goroutine 和 P 进行绑定，禁止抢占，然后返回当前 P 所对应的 poolLocal 结构体。</p>
+
+<p>localSize 是 []poolLocal slice 长度，由于是用 pid 做下标索引，所以如果 pid 小于 localSize，直接返回，否则走 pinSlow 逻辑
+pinSlow 触发有两点：Pool 第一次被使用，GOMAXPROCS 运行时个改。这时可以看到 p.local 直接用一个新的 slice 覆盖了，旧的对象池会被丢弃。
+可以看到，整体实现不是很复杂，最新版本与第一版变化不太大。</p>
+
+<p>对象 cleanup
+func poolCleanup() {
+    // This function is called with the world stopped, at the beginning of a garbage collection.
+    // It must not allocate and probably should not call any runtime functions.
+    // Defensively zero out everything, 2 reasons:
+    // 1. To prevent false retention of whole Pools.
+    // 2. If GC happens while a goroutine works with l.shared in Put/Get,
+    //    it will retain whole Pool. So next cycle memory consumption would be doubled.
+    for i, p := range allPools {
+        allPools[i] = nil
+        for i := 0; i &lt; int(p.localSize); i++ {
+            l := indexLocal(p.local, i)
+            l.private = nil
+            for j := range l.shared {
+                l.shared[j] = nil
+            }
+            l.shared = nil
+        }
+    }
+    allPools = []*Pool{}
+}</p>
+
+<p>var (
+    allPoolsMu Mutex
+    allPools   []*Pool
+)</p>
+
+<p>func init() {
+    runtime_registerPoolCleanup(poolCleanup)
+}
+代码很简单，init 函数会将 poolCleanup 注册到 runtime, 在 GC 开始，STW 后执行，遍历 poolLocal 然后解引用即可。</p>
+
+<p>indexLocal 性能优化
+参见官方 commit，修改如下</p>
+
+<p>func indexLocal(l unsafe.Pointer, i int) *poolLocal {</p>
+<ul>
+  <li>return &amp;(*[1000000]poolLocal)(l)[i]</li>
+  <li>lp := unsafe.Pointer(uintptr(l) + uintptr(i)*unsafe.Sizeof(poolLocal{}))</li>
+  <li>return (*poolLocal)(lp)
+ }
+    Performance results on linux/amd64:</li>
+</ul>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>name            old time/op  new time/op  delta
+Pool-4          19.1ns ± 2%  10.1ns ± 1%  -47.15%  (p=0.000 n=10+8)
+PoolOverflow-4  3.11µs ± 1%  2.10µs ± 2%  -32.66%  (p=0.000 n=10+10)
+
+Performance results on linux/386:
+
+name            old time/op  new time/op  delta
+Pool-4          20.0ns ± 2%  13.1ns ± 1%  -34.59%  (p=0.000 n=10+9)
+PoolOverflow-4  3.51µs ± 1%  2.49µs ± 0%  -28.99%  (p=0.000 n=10+8) 可以看到，修改后性能大幅提升，那么这次性能优化的原理是什么呢？？？原版本是转化成 [1000000]poolLocal 定长数组后寻址，一个是直接根据 offset 定位到指定内存，然后做 poolLocal 类型转换。先看下汇编实现
+</code></pre></div></div>
+
+<p>”“.indexLocal STEXT nosplit size=20 args=0x18 locals=0x0
+    0x0000 00000 (test.go:11)   TEXT    ““.indexLocal(SB), NOSPLIT|ABIInternal, $0-24
+    0x0000 00000 (test.go:11)   FUNCDATA    $0, gclocals·9fad110d66c97cf0b58d28cccea80b12(SB)
+    0x0000 00000 (test.go:11)   FUNCDATA    $1, gclocals·7d2d5fca80364273fb07d5820a76fef4(SB)
+    0x0000 00000 (test.go:11)   FUNCDATA    $3, gclocals·9a26515dfaeddd28bcbc040f1199f48d(SB)
+    0x0000 00000 (test.go:12)   PCDATA  $2, $0
+    0x0000 00000 (test.go:12)   PCDATA  $0, $0
+    0x0000 00000 (test.go:12)   MOVQ    ““.i+16(SP), AX
+    0x0005 00005 (test.go:12)   PCDATA  $2, $1
+    0x0005 00005 (test.go:12)   PCDATA  $0, $1
+    0x0005 00005 (test.go:12)   MOVQ    ““.l+8(SP), CX
+    0x000a 00010 (test.go:12)   PCDATA  $2, $2
+    0x000a 00010 (test.go:12)   LEAQ    (CX)(AX<em>8), AX
+    0x000e 00014 (test.go:13)   PCDATA  $2, $0
+    0x000e 00014 (test.go:13)   PCDATA  $0, $2
+    0x000e 00014 (test.go:13)   MOVQ    AX, “”.~r2+24(SP)
+    0x0013 00019 (test.go:13)   RET
+    0x0000 48 8b 44 24 10 48 8b 4c 24 08 48 8d 04 c1 48 89  H.D$.H.L$.H…H.
+    0x0010 44 24 18 c3                                      D$..
+““.indexLocal2 STEXT nosplit size=58 args=0x18 locals=0x8
+    0x0000 00000 (test.go:16)   TEXT    ““.indexLocal2(SB), NOSPLIT|ABIInternal, $8-24
+    0x0000 00000 (test.go:16)   SUBQ    $8, SP
+    0x0004 00004 (test.go:16)   MOVQ    BP, (SP)
+    0x0008 00008 (test.go:16)   LEAQ    (SP), BP
+    0x000c 00012 (test.go:16)   FUNCDATA    $0, gclocals·9fad110d66c97cf0b58d28cccea80b12(SB)
+    0x000c 00012 (test.go:16)   FUNCDATA    $1, gclocals·7d2d5fca80364273fb07d5820a76fef4(SB)
+    0x000c 00012 (test.go:16)   FUNCDATA    $3, gclocals·9fb7f0986f647f17cb53dda1484e0f7a(SB)
+    0x000c 00012 (test.go:17)   PCDATA  $2, $1
+    0x000c 00012 (test.go:17)   PCDATA  $0, $1
+    0x000c 00012 (test.go:17)   MOVQ    ““.l+16(SP), AX
+    0x0011 00017 (test.go:17)   TESTB   AL, (AX)
+    0x0013 00019 (test.go:17)   MOVQ    ““.i+24(SP), CX
+    0x0018 00024 (test.go:17)   CMPQ    CX, $1000000
+    0x001f 00031 (test.go:17)   JCC 51
+    0x0021 00033 (test.go:17)   LEAQ    (AX)(CX</em>8), AX
+    0x0025 00037 (test.go:17)   PCDATA  $2, $0
+    0x0025 00037 (test.go:17)   PCDATA  $0, $2
+    0x0025 00037 (test.go:17)   MOVQ    AX, “”.~r2+32(SP)
+    0x002a 00042 (test.go:17)   MOVQ    (SP), BP
+    0x002e 00046 (test.go:17)   ADDQ    $8, SP
+    0x0032 00050 (test.go:17)   RET
+    0x0033 00051 (test.go:17)   PCDATA  $0, $1
+    0x0033 00051 (test.go:17)   CALL    runtime.panicindex(SB)
+    0x0038 00056 (test.go:17)   UNDEF
+indexLocal 是优化之后的，indexLocal2 是优化前的代码。可以看多，老版本多了个 CMPQ, 也就是查看是否数组越界的检查，多了层分支预测的逻辑。想不到吧，两种转换方式还有性能差距。</p>
+
+<p>增加无锁队列
+poolLocal.share 字段由 []interface{} 变成了 poolChain, 这个队列专为 Pool 而设计，单生产者多消费者，多消费者消费时使用 CAS 实现无锁，参见 commit. 个人觉得不如 dpdk ring 实现的好。</p>
+
+<p>Currently, Pool stores each per-P shard’s overflow in a slice
+protected by a Mutex. In order to store to the overflow or steal from
+another shard, a P must lock that shard’s Mutex. This allows for
+simple synchronization between Put and Get, but has unfortunate
+consequences for clearing pools.</p>
+
+<p>Pools are cleared during STW sweep termination, and hence rely on
+pinning a goroutine to its P to synchronize between Get/Put and
+clearing. This makes the Get/Put fast path extremely fast because it
+can rely on quiescence-style coordination, which doesn’t even require
+atomic writes, much less locking.</p>
+
+<p>The catch is that a goroutine cannot acquire a Mutex while pinned to
+its P (as this could deadlock). Hence, it must drop the pin on the
+slow path. But this means the slow path is not synchronized with
+clearing. As a result,</p>
+
+<p>1) It’s difficult to reason about races between clearing and the slow
+path. Furthermore, this reasoning often depends on unspecified nuances
+of where preemption points can occur.</p>
+
+<p>2) Clearing must zero out the pointer to every object in every Pool to
+prevent a concurrent slow path from causing all objects to be
+retained. Since this happens during STW, this has an O(# objects in
+Pools) effect on STW time.</p>
+
+<p>3) We can’t implement a victim cache without making clearing even
+slower.</p>
+
+<p>This CL solves these problems by replacing the locked overflow slice
+with a lock-free structure. This allows Gets and Puts to be pinned the
+whole time they’re manipulating the shards slice (Pool.local), which
+eliminates the races between Get/Put and clearing. This, in turn,
+eliminates the need to zero all object pointers, reducing clearing to
+O(# of Pools) during STW.</p>
+
+<p>In addition to significantly reducing STW impact, this also happens to
+speed up the Get/Put fast-path and the slow path. It somewhat
+increases the cost of PoolExpensiveNew, but we’ll fix that in the next
+CL.</p>
+
+<p>name                 old time/op     new time/op     delta
+Pool-12                 3.00ns ± 0%     2.21ns ±36%  -26.32%  (p=0.000 n=18+19)
+PoolOverflow-12          600ns ± 1%      587ns ± 1%   -2.21%  (p=0.000 n=16+18)
+PoolSTW-12              71.0µs ± 2%      5.6µs ± 3%  -92.15%  (p=0.000 n=20+20)
+PoolExpensiveNew-12     3.14ms ± 5%     3.69ms ± 7%  +17.67%  (p=0.000 n=19+20)</p>
+
+<p>name                 old p50-ns/STW  new p50-ns/STW  delta
+PoolSTW-12               70.7k ± 1%       5.5k ± 2%  -92.25%  (p=0.000 n=20+20)</p>
+
+<p>name                 old p95-ns/STW  new p95-ns/STW  delta
+PoolSTW-12               73.1k ± 2%       6.7k ± 4%  -90.86%  (p=0.000 n=18+19)</p>
+
+<p>name                 old GCs/op      new GCs/op      delta
+PoolExpensiveNew-12       0.38 ± 1%       0.39 ± 1%   +2.07%  (p=0.000 n=20+18)</p>
+
+<p>name                 old New/op      new New/op      delta
+PoolExpensiveNew-12       33.9 ± 6%       40.0 ± 6%  +17.97%  (p=0.000 n=19+20)
+完整的看下 Get 代码实现：</p>
+
+<p>func (p *Pool) Get() interface{} {
+    if race.Enabled {
+        race.Disable()
+    }
+    l, pid := p.pin()
+    x := l.private
+    l.private = nil
+    if x == nil {
+        // Try to pop the head of the local shard. We prefer
+        // the head over the tail for temporal locality of
+        // reuse.
+        x, _ = l.shared.popHead()
+        if x == nil {
+            x = p.getSlow(pid)
+        }
+    }
+    runtime_procUnpin()
+    if race.Enabled {
+        race.Enable()
+        if x != nil {
+            race.Acquire(poolRaceAddr(x))
+        }
+    }
+    if x == nil &amp;&amp; p.New != nil {
+        x = p.New()
+    }
+    return x
+}</p>
+
+<p>func (p *Pool) getSlow(pid int) interface{} {
+    // See the comment in pin regarding ordering of the loads.
+    size := atomic.LoadUintptr(&amp;p.localSize) // load-acquire
+    local := p.local                         // load-consume
+    // Try to steal one element from other procs.
+    for i := 0; i &lt; int(size); i++ {
+        l := indexLocal(local, (pid+i+1)%int(size))
+        if x, _ := l.shared.popTail(); x != nil {
+            return x
+        }
+    }
+    return nil
+}
+具体无锁队列怎么实现的，就不贴了，各种 CAS… 没啥特别的。</p>
+
+<p>增加 victim cache
+为什么要增加 victim cache 看这个 22950，说白了，就是要减少 GC 清除所有 Pool 后的冷启动问题，让分配对象更平滑。参见 commit.</p>
+
+<p>Currently, every Pool is cleared completely at the start of each GC.
+This is a problem for heavy users of Pool because it causes an
+allocation spike immediately after Pools are clear, which impacts both
+throughput and latency.</p>
+
+<p>This CL fixes this by introducing a victim cache mechanism. Instead of
+clearing Pools, the victim cache is dropped and the primary cache is
+moved to the victim cache. As a result, in steady-state, there are
+(roughly) no new allocations, but if Pool usage drops, objects will
+still be collected within two GCs (as opposed to one).</p>
+
+<p>This victim cache approach also improves Pool’s impact on GC dynamics.
+The current approach causes all objects in Pools to be short lived.
+However, if an application is in steady state and is just going to
+repopulate its Pools, then these objects impact the live heap size <em>as
+if</em> they were long lived. Since Pooled objects count as short lived
+when computing the GC trigger and goal, but act as long lived objects
+in the live heap, this causes GC to trigger too frequently. If Pooled
+objects are a non-trivial portion of an application’s heap, this
+increases the CPU overhead of GC. The victim cache lets Pooled objects
+affect the GC trigger and goal as long-lived objects.</p>
+
+<p>This has no impact on Get/Put performance, but substantially reduces
+the impact to the Pool user when a GC happens. PoolExpensiveNew
+demonstrates this in the substantially reduction in the rate at which
+the “New” function is called.</p>
+
+<p>name                 old time/op     new time/op     delta
+Pool-12                 2.21ns ±36%     2.00ns ± 0%     ~     (p=0.070 n=19+16)
+PoolOverflow-12          587ns ± 1%      583ns ± 1%   -0.77%  (p=0.000 n=18+18)
+PoolSTW-12              5.57µs ± 3%     4.52µs ± 4%  -18.82%  (p=0.000 n=20+19)
+PoolExpensiveNew-12     3.69ms ± 7%     1.25ms ± 5%  -66.25%  (p=0.000 n=20+19)</p>
+
+<p>name                 old p50-ns/STW  new p50-ns/STW  delta
+PoolSTW-12               5.48k ± 2%      4.53k ± 2%  -17.32%  (p=0.000 n=20+20)</p>
+
+<p>name                 old p95-ns/STW  new p95-ns/STW  delta
+PoolSTW-12               6.69k ± 4%      5.13k ± 3%  -23.31%  (p=0.000 n=19+18)</p>
+
+<p>name                 old GCs/op      new GCs/op      delta
+PoolExpensiveNew-12       0.39 ± 1%       0.32 ± 2%  -17.95%  (p=0.000 n=18+20)</p>
+
+<p>name                 old New/op      new New/op      delta
+PoolExpensiveNew-12       40.0 ± 6%       12.4 ± 6%  -68.91%  (p=0.000 n=20+19)
+重点在注释的第一段，以前 Pool 的原理：如果对象在 GC 时只有 Pool 引用这个对象，那么会在 GC 时被释放掉。但是对于 Pool 重度用户来讲，GC 后会有大量的对象分配创建，影响吞吐和性能。这个 patch 就是为了让更平滑，变成了对象至少存活两个 GC 区间。</p>
+
+<p>func poolCleanup() {
+    // This function is called with the world stopped, at the beginning of a garbage collection.
+    // It must not allocate and probably should not call any runtime functions.</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>// Because the world is stopped, no pool user can be in a
+// pinned section (in effect, this has all Ps pinned).
+
+// Drop victim caches from all pools.
+for _, p := range oldPools {
+    p.victim = nil
+    p.victimSize = 0
+}
+
+// Move primary cache to victim cache.
+for _, p := range allPools {
+    p.victim = p.local
+    p.victimSize = p.localSize
+    p.local = nil
+    p.localSize = 0
+}
+
+// The pools with non-empty primary caches now have non-empty
+// victim caches and no pools have primary caches.
+oldPools, allPools = allPools, nil } 可以看下新版 poolCleanup 函数最后一行。使用时 Get 会在 slow path 逻辑里调用 victim cache.
+</code></pre></div></div>
+
+<p>总结
+衡量一个基础组件，不仅要看他的性能，还要考滤稳定性，尤其是这种语言标准库。</p>
+
+<p>最近golang的1.13版本发布了，有很多新特性与改进合入。这里主要分析sync.pool的优化。</p>
+
+<p>本文主要解答以下几个问题：</p>
+
+<p>sync.pool优化体现在哪里？
+优化是如何实现？
+优化的好处有哪些？
+优化
+具体优化项如下：</p>
+
+<p>无锁化
+GC策略
+无锁化
+sync.pool实现了无锁化，具体如下：</p>
+
+<p>go1.12.1版本实现</p>
+
+<p>// Local per-P Pool appendix.
+type poolLocalInternal struct {
+    private interface{}   // Can be used only by the respective P.
+    shared  []interface{} // Can be used by any P.
+    Mutex                 // Protects shared.
+}
+go1.13版本</p>
+
+<p>// Local per-P Pool appendix.
+type poolLocalInternal struct {
+    private interface{} // Can be used only by the respective P.
+    shared  poolChain   // Local P can pushHead/popHead; any P can popTail.
+}
+通过上面对比发现了go1.12版本的Mutex删除了。那么go1.13版本又是如何实现无锁化的呢？</p>
+
+<p>先回答问题：go1.13通过poolChain实现SPMC的无锁队列来实现无锁化。</p>
+
+<p>poolChain是什么东东呢？</p>
+
+<p>别急，代码面前无秘密。 我们具体看一下代码就可以了。</p>
+
+<p>// poolChain is a dynamically-sized version of poolDequeue.
+//
+// This is implemented as a doubly-linked list queue of poolDequeues
+// where each dequeue is double the size of the previous one. Once a
+// dequeue fills up, this allocates a new one and only ever pushes to
+// the latest dequeue. Pops happen from the other end of the list and
+// once a dequeue is exhausted, it gets removed from the list.
+type poolChain struct {
+    // head is the poolDequeue to push to. This is only accessed
+    // by the producer, so doesn’t need to be synchronized.
+    head *poolChainElt</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>// tail is the poolDequeue to popTail from. This is accessed
+// by consumers, so reads and writes must be atomic.
+tail *poolChainElt }
+</code></pre></div></div>
+
+<p>type poolChainElt struct {
+    poolDequeue</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>// next and prev link to the adjacent poolChainElts in this
+// poolChain.
+//
+// next is written atomically by the producer and read
+// atomically by the consumer. It only transitions from nil to
+// non-nil.
+//
+// prev is written atomically by the consumer and read
+// atomically by the producer. It only transitions from
+// non-nil to nil.
+next, prev *poolChainElt } 关于poolChain是如何实现SPMC无锁队列？具体可以分析poolqueue.go的代码。 这一部分不展开说明，要点如下：
+</code></pre></div></div>
+
+<p>无锁队列是SPMC
+无锁队列是可以灵活调整大小，调整大小的方法：slice+double-list实现（根据这个思路来阅读代码也是容易理解 ）
+无锁队列的实现基础是CAS
+好处
+避免锁的开销，mutex变成atomic
+GC策略
+相比较于go1.12版本，go1.13版本中增加了victim cache。具体作法是：</p>
+
+<p>GC处理过程直接回收oldPools的对象
+GC处理并不直接将allPools的object直接进行GC处理，而是保存到oldPools，等到下一个GC周期到了再处理
+具体代码如下：</p>
+
+<p>var (
+    allPoolsMu Mutex
+    allPools   []*Pool
+)
+var (
+    allPoolsMu Mutex</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>// allPools is the set of pools that have non-empty primary
+// caches. Protected by either 1) allPoolsMu and pinning or 2)
+// STW.
+allPools []*Pool
+
+// oldPools is the set of pools that may have non-empty victim
+// caches. Protected by STW.
+oldPools []*Pool ) func poolCleanup() {
+// This function is called with the world stopped, at the beginning of a garbage collection.
+// It must not allocate and probably should not call any runtime functions.
+
+// Because the world is stopped, no pool user can be in a
+// pinned section (in effect, this has all Ps pinned).
+
+// Drop victim caches from all pools.
+for _, p := range oldPools {
+    p.victim = nil
+    p.victimSize = 0
+}
+
+// Move primary cache to victim cache.
+for _, p := range allPools {
+    p.victim = p.local
+    p.victimSize = p.localSize
+    p.local = nil
+    p.localSize = 0
+}
+
+// The pools with non-empty primary caches now have non-empty
+// victim caches and no pools have primary caches.
+oldPools, allPools = allPools, nil } 这样可导致Get的实现有变化，原来的实现是：
+</code></pre></div></div>
+
+<p>先从本P绑定的poolLocal获取对象：先从本poolLocal的private池获取对象，再从本poolLocal的shared池获取对象
+上一步没有成功获取对象，再从其他P的shared池获取对象
+上一步没有成功获取对象，则从Heap申请对象
+引入victim cache，Get实现变成如下：</p>
+
+<p>先从本P绑定的poolLocal获取对象：先从本poolLocal的private池获取对象，再从本poolLocal的shared池获取对象
+上一步没有成功获取对象，再从其他P的shared池获取对象
+上一步没有成功，则从victim cache获取对象
+上一步没有成功获取对象，则从Heap申请对象
+具体代码如下：</p>
+
+<p>func (p *Pool) getSlow(pid int) interface{} {
+    // See the comment in pin regarding ordering of the loads.
+    size := atomic.LoadUintptr(&amp;p.localSize) // load-acquire
+    locals := p.local                        // load-consume
+    // Try to steal one element from other procs.
+    for i := 0; i &lt; int(size); i++ {
+        l := indexLocal(locals, (pid+i+1)%int(size))
+        if x, _ := l.shared.popTail(); x != nil {
+            return x
+        }
+    }</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>// Try the victim cache. We do this after attempting to steal
+// from all primary caches because we want objects in the
+// victim cache to age out if at all possible.
+// 尝试从victim cache获取
+size = atomic.LoadUintptr(&amp;p.victimSize)
+if uintptr(pid) &gt;= size {
+    return nil
+}
+locals = p.victim
+l := indexLocal(locals, pid)
+if x := l.private; x != nil {
+    l.private = nil
+    return x
+}
+for i := 0; i &lt; int(size); i++ {
+    l := indexLocal(locals, (pid+i)%int(size))
+    if x, _ := l.shared.popTail(); x != nil {
+        return x
+    }
+}
+
+// Mark the victim cache as empty for future gets don't bother
+// with it.
+atomic.StoreUintptr(&amp;p.victimSize, 0)
+
+return nil } 好处 空间上通过引入victim cache增加了Get获取内存的选项，增加了对象复用的概率 时间上通过延迟GC，增加了对象复用的时间长度 上面这个两个方面降低了GC开销，增加了对象使用效率
+</code></pre></div></div>
+:ET

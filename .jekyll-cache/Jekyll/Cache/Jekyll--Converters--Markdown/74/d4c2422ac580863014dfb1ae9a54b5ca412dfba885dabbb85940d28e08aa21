@@ -1,0 +1,135 @@
+I"�<p>https://github.com/uber-go/fx
+https://blog.huyage.dev/posts/simple-dependency-injection-in-go/
+<!-- more -->
+At Uber, it is a breeze to scaffold new Go applications. A simple-to-use dependency injection framework called Fx makes this possible. I will briefly discuss why you may want to use dependency injection in your Go application, introduce the Fx framework, and present an example application that takes advantage of Fx.</p>
+
+<p>Why you may want to use dependency injection in Go?
+What is dependency injection (DI)? From a great quote I found in a Stack Overflow answer:</p>
+
+<p>“Dependency Injection” is a 25-dollar term for a 5-cent concept, […] Dependency injection means giving an object its instance variables. […]</p>
+
+<p>Simply put, DI is the technique of providing the dependencies that an object needs. There are tons of resource on the internet about DI that explains the concept better than I will, so I’ll keep it concise by demonstrating one of the most important benefits of using DI: it makes testing dramatically easier.</p>
+
+<p>Consider the following function that queries a SQL database and returns the result.</p>
+
+<p>func query() (email string) {
+    db, err := sql.Open(“postgres”, “user=postgres dbname=test …”)
+    if err != nil {
+        panic(err)
+    }
+    err = db.QueryRow(<code class="language-plaintext highlighter-rouge">SELECT email FROM "user" WHERE id = $1</code>, 1).Scan(&amp;email)
+    if err != nil {
+        panic(err)
+    }
+    return email
+}
+This function does not use DI. The function constructs its dependency—the database handle *sql.DB—instead of accepting it as an input. This makes unit testing it a problem. How can we mock the database? DI solves the testability problem. The following code uses DI and can be tested much easier.</p>
+
+<p>func query(db *sql.DB) (email string) {
+    err = db.QueryRow(<code class="language-plaintext highlighter-rouge">SELECT email FROM "user" WHERE id = $1</code>, 1).Scan(&amp;email)
+    if err != nil {
+        panic(err)
+    }
+    return email
+}</p>
+
+<p>func TestQuery(t *testing.T) {
+    db := mockDB()
+    defer db.Close()</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>email := query(db)
+assert.Equal(t, email, "email@example.com") } The same testability improvement applies not only to database connections, but also to any custom structs you may define. If you define interfaces for your domain-specific entities, your functions can accept interfaces, allowing mocks to be provided to the functions during test time.
+</code></pre></div></div>
+
+<p>Introducting Fx: a Go dependency injection framework.
+Fx is Uber’s solution for easy DI in Go. According to Fx’s GoDoc:</p>
+
+<p>Package fx is a framework that makes it easy to build applications out of reusable, composable modules.</p>
+
+<p>Many gophers will read this and convulse. Surely we don’t want to bring Spring and all its complexities to Go, a language that emphasizes simplicity and maintainability. My goal is to show you that Fx is lightweight and easy to learn. This section presents the few types and functions that Fx exposes.</p>
+
+<p>All Fx applications start with an fx.App that can be constructed from fx.New(). A minimal Fx app that does nothing can be initialized and run with:</p>
+
+<p>func main() {
+    fx.New().Run()
+}
+Fx has the concept of lifecycle for its applications. Lifecycle allows you to register functions that will be executed at application’s start and stop time. A common use case is to register handler function for routes.</p>
+
+<p>func main() {
+    fx.New(
+        fx.Invoke(register),
+    ).Run()
+}</p>
+
+<p>func register(lifecycle fx.Lifecycle) {
+    mux := http.NewServeMux()
+    server := http.Server{
+        Addr: “:8080”,
+        Handler: mux,
+    }
+    mux.HandleFunc(“/”, func(w http.ResponseWriter, r *http.Request) {
+        w.WriteHeader(http.StatusOK)
+    })</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>lifecycle.Append(
+    fx.Hook{
+        OnStart: func(context.Context) error {
+            go server.ListenAndServe()
+            return nil
+        },
+        OnStop: func(ctx context.Context) error {
+            return server.Shutdown(ctx)
+        }
+    }
+) } In the previous example, you get a taste of Fx’s DI capability. register is invoked by the app using fx.Invoke(). Upon app start, lifecycle will be automatically provided to register as a parameter. This example will start a HTTP server using Go’s standard library.
+</code></pre></div></div>
+
+<p>You can also provide arbitrary custom object constructors to the Fx app.</p>
+
+<p>func newObject() *object {
+    return &amp;object{}
+}</p>
+
+<p>func main() {
+    fx.New(
+        fx.Provide(newObject),
+        fx.Invoke(doStuff),
+    ).Run()
+}</p>
+
+<p>func doStuff(obj *object) {
+    // Do stuff with obj
+}
+Fx provide many other advanced DI features. Its GoDoc provides example usage.</p>
+
+<p>An example modular Fx application.
+I’ve created a sample Fx app that runs an HTTP server. It uses some common patterns found in Fx apps. For example, the app is made up of small, reusable modules like loggerfx which provides a *zap.Logger.</p>
+
+<p>var Module = fx.Provide(New)</p>
+
+<p>// –snip–</p>
+
+<p>func New() (*zap.Logger, error) {
+    // –snip–
+}
+Fx enables you to structure your code nicely. Handlers can reside in internal/handler/ subdirectories like the hello handler in the sample app. All the handlers can then be provided to the Fx app by defining a handler module in internal/handler/module.go like so:</p>
+
+<p>package handler</p>
+
+<p>// –snip–</p>
+
+<p>var Module = fx.Options(
+    hello.Module,
+    user.Module,
+    // …
+)</p>
+
+<p>// In main.go
+fx.New(
+    handler.Module, // this provides all the handlers registered previously
+)
+To run the example, simply clone the repository and go run main.go.</p>
+
+<p>Conclusion
+As you can see, Fx is a very lightweight DI framework that promotes good code structure. I’ve used it to build multiple MVCS style apps. Although at first glance using Fx seems to result in slightly more boilerplate code, in practice this makes the codebase much easier to navigate and your packages easier to test.</p>
+:ET

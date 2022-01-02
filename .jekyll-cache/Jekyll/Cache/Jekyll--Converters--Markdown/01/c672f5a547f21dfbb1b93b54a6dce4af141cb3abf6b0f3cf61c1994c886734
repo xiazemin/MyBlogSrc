@@ -1,0 +1,221 @@
+I"�#<p>https://github.com/go-delve/delve
+　Devle是一个非常棒的golang 调试工具，支持多种调试方式，直接运行调试，或者attach到一个正在运行中的golang程序，进行调试。</p>
+
+<p>　　线上golang服务出现问题时，Devle是必不少的在线调试工具，如果使用docker，也可以把Devle打进docker镜像里，调试代码。</p>
+
+<p>　　安装Devle
+　　安装Devle非常简单，直接运行go  get 即可：</p>
+
+<p>go get -u github.com/derekparker/delve/cmd/dlv
+　　如果你的go版本为1.5请先设置环境变量GO15VENDOREXPERIMENT=1再运行go get。我的go版本为1.10，不用设置。
+<!-- more -->
+使用Devle调试golang服务
+　　先写一个简单的web服务，然后使用Devle来进行调试。</p>
+
+<p>　　在$GOPATH/src/github.com/mytest 文件夹下创建main.go
+　　package main</p>
+
+<p>import (
+    “fmt”
+    “log”
+    “net/http”
+    “os”
+)</p>
+
+<p>const port  = “8000”</p>
+
+<p>func main() {
+    http.HandleFunc(“/hi”, hi)</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>fmt.Println("runing on port: " + port)
+log.Fatal(http.ListenAndServe(":" + port, nil)) }
+</code></pre></div></div>
+
+<p>func hi(w http.ResponseWriter, r *http.Request) {
+    hostName, _ := os.Hostname()
+    fmt.Fprintf(w, “HostName: %s”, hostName)
+}</p>
+
+<p>一个运行在8000端口上的web服务，访问 hi会返回机器的名称。上面代码的行号是很有用的，等会我们打断点的时候会用到。</p>
+
+<p>　  使用Delve运行我们的main.go</p>
+
+<p>dlv debug ./main.go</p>
+
+<p>很简单的一些命令</p>
+
+<p>　　我们先打在main方法上打一个断点：</p>
+
+<p>b main.main</p>
+
+<p>然后运行c 来运行到断点，</p>
+
+<p>在func li  里打一个断点，我们可以使用</p>
+
+<p>b main.hi
+或者使用   “文件:行号”来打断点</p>
+
+<p>b /home/goworkspace/src/github.com/mytest/main.go:20</p>
+
+<p>现在执行continue 让服务跑起来。访问一下我们的服务，看hi方法会不会停下来。</p>
+
+<p>curl localhost:8000/hi</p>
+
+<p>　　输入 n 回车，执行到下一行</p>
+
+<p>　　输入s 回车，单步执行</p>
+
+<p>　　输入 print（别名p）输出变量信息　　</p>
+
+<p>　　输入 args 打印出所有的方法参数信息</p>
+
+<p>　　输入 locals 打印所有的本地变量
+　　
+其他的命令我就不在这里给大家演示了，自己动动手试一下。</p>
+
+<p>　　使用Delve附加到运行的golang服务进行调试
+ 　　先编译一下我们的main.go然后去行main</p>
+
+<p>go build main.go</p>
+
+<p>./main</p>
+
+<p>然后使用Delve附加到我们的项目上，先看一下我们的项目的pid</p>
+
+<p>ps aux|grep main
+dlv attach 29260</p>
+
+<p>在hi方法里打断点，然后执行c来等待断点的执行。</p>
+
+<p>b /home/goworkspace/src/github.com/mytest/main.go:20
+　　</p>
+
+<p>　　访问我们的服务器，看一下断点会不会被执行</p>
+
+<p>curl localhost:8000/hi</p>
+
+<p>在windows系统下开发Linux环境下的分布式系统组件时，往往因为组件之间的相互依赖调用需要进行服务端调试,delve是一款开源的go语言调试器，常用的go语言IDE，如goland vscode等都是依靠delve来进行调试操作的.</p>
+
+<p>使用goland远程调试
+使用goland来进行远程调试最好使用goland的 2019.1版本,原因是在goland 2019.1之前的版本中，因为调试路径映射的问题，必需保证本地和远程代码目录都在GOPATH下的src目录，且文件夹必需同名才可以正常进行远程的断点调试，否则在本地ide开启远程调试后就会显示 error “could not find “</p>
+
+<p>delve的issues里详细的说明了这个问题:https://github.com/go-delve/delve/issues/1163</p>
+
+<p>将本地代码拷贝到远程调试机上,可以通过goland插件Remote Hosts Access来完成，也可以手动上传或者git clone</p>
+
+<p>在远程调试机器上安装调试工具delve，安装方法 详见作者Github.</p>
+
+<p>使用delve启动调试,这里有2中方式，一种是将代码手动编译成可执行程序调试，一种是直接使用dlv自动编译启动代码调试.</p>
+
+<p>手动编译方式调试(使用了module特性的推荐使用此方式)</p>
+
+<p>编译</p>
+
+<h1 id="go-110以上版本">Go 1.10以上版本</h1>
+<p>go build -gcflags “all=-N -l” cmd/agent/main.go</p>
+<h1 id="使用module离线打包">使用module离线打包</h1>
+<p>go build -gcflags “all=-N -l” -o bin/agent -mod=vendor cmd/agent/main.go</p>
+<h1 id="go-19及以前">Go 1.9及以前</h1>
+<p>go build -gcflags “-N -l” cmd/agent/main.go
+运行</p>
+
+<p>dlv –listen=:2345 –headless=true –api-version=2 exec bin/agent
+1
+直接debug自动编译运行</p>
+
+<p>dlv debug –headless –listen=:2345 –api-version=2 cmd/agent/main.go
+1
+在本地goland添加远程调试配置</p>
+
+<p>通过goland的菜单栏Run–&gt;Edit Configurations来添加远程调试的配置
+<img src="https://xiazemin.github.io/MyBlog/img/godelve_r.png" /></p>
+
+<p>然后选择IDE右上角的远程调试选项,点击小虫子按钮开始远程调试就可以开心的在本地下断点远程调试服务端的程序啦！</p>
+
+<p>tips
+可以使用docker来降低调试环境复杂度,将dlv和go sdk封装到docker里面,挂载代码工程目录到docker里GOPATH下的src目录里.</p>
+
+<p>拉取调试镜像</p>
+
+<p>docker pull robolwq/golang-debug:1.10.3
+1
+挂载本地工程启动docker</p>
+
+<h1 id="rootproject-为工程目录">/root/project 为工程目录</h1>
+
+<h1 id="启动用于调试的容器并把目标代码目录挂载到容器内">启动用于调试的容器，并把目标代码目录挂载到容器内</h1>
+<h1 id="特别注意这个参数security-opt-seccompunconfined">特别注意这个参数“–security-opt seccomp:unconfined”</h1>
+<h1 id="它的作用是禁用linux内核层面的secure-computing-mode">它的作用是禁用Linux内核层面的Secure computing mode</h1>
+<h1 id="目的是为了能够正确使用dlv相关命令">目的是为了能够正确使用dlv相关命令</h1>
+<h1 id="具体可以参见httpsdocsdockercomenginesecurityseccomp">具体可以参见：https://docs.docker.com/engine/security/seccomp/</h1>
+<p>docker container run -ti –rm –security-opt seccomp:unconfined –net=host -v /root/project:/root/go/src/project robolwq/golang-debug:1.10.3  bash</p>
+<blockquote>
+  <p>cd $GOPATH/src/project
+dlv debug –headless –listen=:2345 –api-version=2 cmd/agent/main.go</p>
+</blockquote>
+
+<p>如果使用goland 2019.1以下的版本则需要配置本地目录和远程目录都在环境变量GOPATH中，且相对路径一致</p>
+
+<h1 id="windows-本地目录">windows 本地目录</h1>
+<p>echo %GOPATH%
+D:\workspace\go</p>
+
+<h1 id="远程服务器docker-里的环境">远程服务器docker 里的环境</h1>
+<p>echo $GOPATH
+/root/go</p>
+
+<h1 id="工程代码必需名称一致且都在各自的gopath目录下的src目录里面才可以正常下断点调试">工程代码必需名称一致且都在各自的GOPATH目录下的src目录里面才可以正常下断点调试</h1>
+<p>cd /root/go/src/project
+dlv debug –headless –listen=:2345 –api-version=2 cmd/agent/main.go</p>
+
+<p>https://github.com/go-delve/delve/issues/1163</p>
+
+<p>https://youtrack.jetbrains.com/issue/GO-3988</p>
+
+<p>step1 远程主机
+安装delve，项目地址：https://github.com/derekparker/delve
+按照官方的提示安装即可（注意因为GFW等你懂得的原因，网络下载可能较慢或不可用，请自行使用某高科技软件，如ss+proxychains等工具）。</p>
+
+<p>下载并安装完成后输入dlv就会看到帮助信息：</p>
+
+<p>image.png
+step2 本地
+本地进入IDE，在要调试的地方打上断点，然后
+run–debug–eidit configurations–&gt;添加remote主机信息。</p>
+
+<p>image.png
+点debug 确认后，就会等待远端传回的debug信息。切远端：</p>
+
+<p>step3 远端
+如我要对 main.go 这个项目debug，对main进行编译后，可以直接运行
+dlv –listen=:2345 –headless=true –api-version=2 exec ./main
+然后本地就收到了调试信息。</p>
+
+<p>https://davidlovezoe.wordpress.com/2019/01/24/golang-debug-intermediate/</p>
+
+<p>https://baijiahao.baidu.com/s?id=1615101405775143768&amp;wfr=spider&amp;for=pc</p>
+
+<p>https://github.com/go-delve/delve</p>
+
+<table>
+  <tbody>
+    <tr>
+      <td>在服务器上 ps x</td>
+      <td>grep game 查找到gameserver的进程pid</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>然后服务器命令行输入：
+dlv attach $PID –headless –api-version=2 –log –listen=:8181</p>
+
+<p>本机只要输入：</p>
+
+<p>dlv connect www.example.com:8181 连接到服务器上的dlv进程，就可以在本机远程调试了。</p>
+
+<p>需要注意的是</p>
+
+<p>本机quit 以后，远程dlv进程也会结束。
+本机没有dlv connect，远程dlv直接关闭会导致 远程调试进程PID直接退出（很是忧伤）
+本机dlv输入quit以后，会让你选择是否关闭调试进程，这个有时候也方便，不过大多数都是选择N 不关闭调试进程PID</p>
+:ET

@@ -1,0 +1,1009 @@
+I"�<p>Kernel提供了一组内核态的socket API，基本上在用户态的sockt API在内核中都有对应的API。 在net/socket.c中可以看到如下导出符号：</p>
+
+<p>EXPORT_SYMBOL(kernel_sendmsg);<br />
+EXPORT_SYMBOL(kernel_recvmsg);<br />
+EXPORT_SYMBOL(sock_create_kern);<br />
+EXPORT_SYMBOL(sock_release);<br />
+EXPORT_SYMBOL(kernel_bind);<br />
+EXPORT_SYMBOL(kernel_listen);<br />
+EXPORT_SYMBOL(kernel_accept);<br />
+EXPORT_SYMBOL(kernel_connect);<br />
+EXPORT_SYMBOL(kernel_getsockname);<br />
+EXPORT_SYMBOL(kernel_getpeername);<br />
+EXPORT_SYMBOL(kernel_getsockopt);<br />
+EXPORT_SYMBOL(kernel_setsockopt);<br />
+EXPORT_SYMBOL(kernel_sendpage);<br />
+EXPORT_SYMBOL(kernel_sock_ioctl);<br />
+EXPORT_SYMBOL(kernel_sock_shutdown);
+<!-- more -->
+struct socket
+{
+     socket_state  state; // socket state</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code> short   type ; // socket type
+ 
+ unsigned long  flags; // socket flags
+ 
+ struct fasync_struct  *fasync_list;
+ 
+ wait_queue_head_t wait;
+ 
+ struct file *file;
+ 
+ struct sock *sock;  // socket在网络层的表示；
+ 
+ const struct proto_ops *ops;
+</code></pre></div></div>
+
+<p>}</p>
+
+<p>struct socket结构体的类型
+enum sock_type
+{
+   SOCK_STREAM = 1, // 用于与TCP层中的tcp协议数据的struct socket</p>
+
+<p>SOCK_DGRAM  = 2, //用于与TCP层中的udp协议数据的struct socket</p>
+
+<p>SOCK_RAW    = 3, // raw struct socket</p>
+
+<p>SOCK_RDM    = 4, //可靠传输消息的struct socket</p>
+
+<p>SOCK_SEQPACKET = 5,// sequential packet socket</p>
+
+<p>SOCK_DCCP   = 6,</p>
+
+<p>SOCK_PACKET = 10, //从dev level中获取数据包的socket
+};</p>
+
+<p>struct socket 中的flags字段取值：
+  #define SOCK_ASYNC_NOSPACE  0
+  #define SOCK_ASYNC_WAITDATA 1
+  #define SOCK_NOSPACE        2
+  #define SOCK_PASSCRED       3
+  #define SOCK_PASSSEC        4</p>
+
+<p>源码剖析：</p>
+
+<p>为方便大家理清思路，先介绍几个中间函数。建议：像这些大型软件项目，函数内通常还会调用一些公用的基础类的工具函数，我们在阅读源码时，应该先弄清楚这些函数，这样当阅读对应函数时，能很好地把握该函数的内部细节。</p>
+
+<p>/<em>下面两个函数实现地址用户空间和内核空间地址之间的相互移动</em>/
+//从uaddr拷贝ulen大小的数据到kaddr
+static int move_addr_to_kernel(void *uaddr, int ulen, void *kaddr)
+{
+	int err;
+	if(ulen&lt;0||ulen&gt;MAX_SOCK_ADDR)
+		return -EINVAL;
+	if(ulen==0)
+		return 0;
+	//检查用户空间的指针所指的指定大小存储块是否可读
+	if((err=verify_area(VERIFY_READ,uaddr,ulen))&lt;0)
+		return err;
+	memcpy_fromfs(kaddr,uaddr,ulen);//实质是memcpy函数
+	return 0;
+}
+//注意的是，从内核拷贝数据到用户空间是值-结果参数
+//ulen这个指向某个整数变量的指针，当函数被调用的时候，它告诉内核需要拷贝多少
+//函数返回时，该参数作为一个结果，告诉进程，内核实际拷贝了多少信息
+static int move_addr_to_user(void *kaddr, int klen, void *uaddr, int *ulen)
+{
+	int err;
+	int len;</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>//判断ulen指向的存储块是否可写，就是判断ulen是否可作为左值	
+if((err=verify_area(VERIFY_WRITE,ulen,sizeof(*ulen)))&lt;0)
+	return err;
+len=get_fs_long(ulen);//len = *ulen，ulen作为值传入，告诉要拷贝多少数据
+if(len&gt;klen)
+	len=klen;//供不应求，按供的算。实际拷贝的数据
+if(len&lt;0 || len&gt; MAX_SOCK_ADDR)
+	return -EINVAL;
+if(len)
+{
+//判断uaddr用户空间所指的存储块是否可写
+	if((err=verify_area(VERIFY_WRITE,uaddr,len))&lt;0)
+		return err;
+	memcpy_tofs(uaddr,kaddr,len);//实质是调用memcpy
+}
+ 	put_fs_long(len,ulen);//*ulen = len，作为结果返回，即实际拷贝了多少数据
+ 	return 0; } 下面这个函数一看就知道什么意思 static inline unsigned long get_user_long(const int *addr) {
+return *addr; }
+</code></pre></div></div>
+
+<p>#define get_fs_long(addr) get_user_long((int *)(addr))</p>
+
+<p>为套接字分配文件描述符，套接字其实同普通的文件描述符差不多，分配文件描述符的同时需要一个file结构，file结构中f_inode字段指向inode(这里的形参)
+/*</p>
+<ul>
+  <li>为网络套接字分配一个文件描述符 
+ */</li>
+</ul>
+
+<p>static int get_fd(struct inode *inode)
+{
+	int fd;
+	struct file *file;</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>/*
+ *	Find a file descriptor suitable for return to the user. 
+ */
+ 
+file = get_empty_filp();//分配文件对象，文件描述符对应实体，file结构体指示一个打开的文件，filp:file pointer
+if (!file) 
+	return(-1);
+//找到可用的文件描述符
+for (fd = 0; fd &lt; NR_OPEN; ++fd)
+	if (!current-&gt;files-&gt;fd[fd]) 
+		break;
+//没有空闲可用的文件描述符，则退出
+if (fd == NR_OPEN) 
+{
+	file-&gt;f_count = 0;
+	return(-1);
+}
+//在文件描述符集合中删除一个新的文件描述符
+FD_CLR(fd, ¤t-&gt;files-&gt;close_on_exec);
+	current-&gt;files-&gt;fd[fd] = file;//赋值，挂钩
+file-&gt;f_op = &amp;socket_file_ops;//指定操作函数集，实现了网络操作的普通文件接口
+file-&gt;f_mode = 3;//权限
+file-&gt;f_flags = O_RDWR;//标志，可读可写
+file-&gt;f_count = 1;//引用计数
+file-&gt;f_inode = inode;//与文件inode建立联系,inode为对文件的索引
+if (inode) 
+	inode-&gt;i_count++;//inode的引用计数也要增1
+file-&gt;f_pos = 0;//偏移值
+return(fd); }
+</code></pre></div></div>
+
+<p>每个文件描述符都与对应的inode结构关联，通过文件描述符可以找到file结构，通过file结构可以找到inode，而socket结构又是作为inode结构中的一个变量，反过来，inode也是作为socket结构的一个变量，分配套接字时，两者之间需要建立关联，见sock_alloc()。
+/*</p>
+<ul>
+  <li>通过inode结构查找对应的socket结构
+ */
+inline struct socket *socki_lookup(struct inode *inode)
+{
+return &amp;inode-&gt;u.socket_i;//socket结构是作为inode结构中的一个变量
+}</li>
+</ul>
+
+<p>/*</p>
+<ul>
+  <li>给定文件描述符返回socket结构以及file结构指针
+ */</li>
+</ul>
+
+<p>static inline struct socket *sockfd_lookup(int fd, struct file **pfile)
+{
+	struct file *file;
+	struct inode *inode;
+	//有效性检查，并从文件描述符中得到对应的file结构
+	if (fd &lt; 0 || fd &gt;= NR_OPEN || !(file = current-&gt;files-&gt;fd[fd])) 
+		return NULL;
+	//得到对应inode结构
+	inode = file-&gt;f_inode;
+	if (!inode || !inode-&gt;i_sock)
+		return NULL;</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>if (pfile) 
+	*pfile = file;//参数返回file结构指针
+//返回inode对应的socket结构
+return socki_lookup(inode); }  下面开始socket结构的处理了 分配一个socket结构
+</code></pre></div></div>
+
+<p>/*</p>
+<ul>
+  <li>分配一个socket结构
+ */</li>
+</ul>
+
+<p>struct socket *sock_alloc(void)
+{
+	struct inode * inode;
+	struct socket * sock;</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>inode = get_empty_inode();//分配一个inode对象
+if (!inode)
+	return NULL;
+//获得的inode结构的初始化
+inode-&gt;i_mode = S_IFSOCK;
+inode-&gt;i_sock = 1;
+inode-&gt;i_uid = current-&gt;uid;
+inode-&gt;i_gid = current-&gt;gid;
+ 
+sock = &amp;inode-&gt;u.socket_i;
+sock-&gt;state = SS_UNCONNECTED;
+sock-&gt;flags = 0;
+sock-&gt;ops = NULL;
+sock-&gt;data = NULL;
+sock-&gt;conn = NULL;
+sock-&gt;iconn = NULL;
+sock-&gt;next = NULL;
+sock-&gt;wait = &amp;inode-&gt;i_wait;
+sock-&gt;inode = inode;//回绑
+sock-&gt;fasync_list = NULL;
+sockets_in_use++;//系统当前使用的套接字数量加1
+return sock; }
+</code></pre></div></div>
+
+<p>释放（关闭）套接字
+/*</p>
+<ul>
+  <li>Release a socket.
+ */
+//释放对端的套接字
+static inline void sock_release_peer(struct socket *peer)
+{
+peer-&gt;state = SS_DISCONNECTING;//状态切换到正在处理关闭连接
+wake_up_interruptible(peer-&gt;wait);//唤醒指定的注册在等待队列上的进程
+sock_wake_async(peer, 1);//异步唤醒，涉及到套接字状态的改变，需要通知相应进程进行某种处理
+}</li>
+</ul>
+
+<p>/*</p>
+<ul>
+  <li>释放(关闭)一个套接字
+ */</li>
+</ul>
+
+<p>void sock_release(struct socket *sock)
+{
+	int oldstate;
+	struct socket *peersock, *nextsock;</p>
+
+<p>//只要套接字不是出于未连接状态，就将其置为正在处理关闭连接状态
+	if ((oldstate = sock-&gt;state) != SS_UNCONNECTED)
+		sock-&gt;state = SS_DISCONNECTING;</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>/*
+ *	Wake up anyone waiting for connections. 
+ */ //iconn只用于服务器端，表示等待连接但尚未完成连接的客户端socket结构链表
+for (peersock = sock-&gt;iconn; peersock; peersock = nextsock) 
+{
+	nextsock = peersock-&gt;next;
+	sock_release_peer(peersock);
+}
+ 
+/*
+ * Wake up anyone we're connected to. First, we release the
+ * protocol, to give it a chance to flush data, etc.
+ */
+//如果该套接字已连接，peersock指向其连接的服务器端套接字
+peersock = (oldstate == SS_CONNECTED) ? sock-&gt;conn : NULL;
+//转调用release函数
+if (sock-&gt;ops) 
+	sock-&gt;ops-&gt;release(sock, peersock);
+//释放对端套接字
+if (peersock)
+	sock_release_peer(peersock);
+--sockets_in_use;	/* 数量减1 */
+iput(SOCK_INODE(sock)); } socket 结构 /*  * Internal representation of a socket. not all the fields are used by  * all configurations:  *  *		server			client  * conn		client connected to	server connected to  * iconn	list of clients		-unused-  *		 awaiting connections  * wait		sleep for clients,	sleep for connection,  *		sleep for i/o		sleep for i/o  */  //该结构表示一个网络套接字 struct socket {   short			type;		/* 套接字所用的流类型*/   socket_state		state;//套接字所处状态   long			flags;//标识字段，目前尚无明确作用   struct proto_ops	*ops;		/* 操作函数集指针	*/
+/* data保存指向‘私有'数据结构指针，在不同的域指向不同的数据结构		*/   //在INET域，指向sock结构，UNIX域指向unix_proto_data结构   void			*data;	   //下面两个字段只用于UNIX域   struct socket		*conn;		/* 指向客户端连接的服务器端套接字	*/   struct socket		*iconn;		/* 指向正等待连接的客户端	*/   struct socket		*next;//链表   struct wait_queue	**wait;		/* 等待队列	*/   struct inode		*inode;//inode结构指针   struct fasync_struct  *fasync_list;	/* 异步唤醒链表结构	*/ };
+</code></pre></div></div>
+
+<p>创建套接字socket，socket
+/*</p>
+<ul>
+  <li>系统调用，创建套接字socket。涉及到socket结构的创建.
+ */</li>
+</ul>
+
+<p>static int sock_socket(int family, int type, int protocol)
+{
+	int i, fd;
+	struct socket *sock;
+	struct proto_ops *ops;</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>/* 匹配应用程序调用socket()函数时指定的协议 */
+for (i = 0; i &lt; NPROTO; ++i) 
+{
+	if (pops[i] == NULL) continue;
+	if (pops[i]-&gt;family == family) 
+		break;
+}
+//没有匹配的协议，则出错退出
+if (i == NPROTO) 
+{
+  		return -EINVAL;
+}
+ 
+ops = pops[i];
+</code></pre></div></div>
+
+<p>/*</p>
+<ul>
+  <li>Check that this is a type that we know how to manipulate and</li>
+  <li>the protocol makes sense here. The family can still reject the</li>
+  <li>protocol later.
+ */
+  //套接字类型检查
+if ((type != SOCK_STREAM &amp;&amp; type != SOCK_DGRAM &amp;&amp;
+    type != SOCK_SEQPACKET &amp;&amp; type != SOCK_RAW &amp;&amp;
+    type != SOCK_PACKET) || protocol &lt; 0)
+        return(-EINVAL);</li>
+</ul>
+
+<p>/*</p>
+<ul>
+  <li>Allocate the socket and allow the family to set things up. if</li>
+  <li>the protocol is 0, the family is instructed to select an appropriate</li>
+  <li>
+    <p>default.
+ <em>/
+//分配套接字结构
+if (!(sock = sock_alloc())) 
+{
+    printk(“NET: sock_socket: no more sockets\n”);
+    return(-ENOSR);	/</em> Was: EAGAIN, but we are out of
+               system resources! */
+}
+//指定对应类型，协议，以及操作函数集
+sock-&gt;type = type;
+sock-&gt;ops = ops;
+//分配下层sock结构，sock结构是比socket结构更底层的表示一个套接字的结构
+//前面博文有说明:http://blog.csdn.net/wenqian1991/article/details/21740945
+//socket是通用的套接字结构体，而sock与具体使用的协议相关
+if ((i = sock-&gt;ops-&gt;create(sock, protocol)) &lt; 0) 
+{
+    sock_release(sock);
+    return(i);
+}
+//分配一个文件描述符并在后面返回给应用层序作为以后的操作句柄
+if ((fd = get_fd(SOCK_INODE(sock))) &lt; 0) 
+{
+    sock_release(sock);
+    return(-EINVAL);
+}</p>
+
+    <p>return(fd);
+}</p>
+  </li>
+</ul>
+
+<p>给socket绑定一个端口，bind
+/*</p>
+<ul>
+  <li>Bind a name to a socket. Nothing much to do here since it’s</li>
+  <li>the protocol’s responsibility to handle the local address.
+ *</li>
+  <li>We move the socket address to kernel space before we call</li>
+  <li>the protocol layer (having also checked the address is ok).
+ */
+ //建议对于理解这类系统调用函数，先看看应用层的对应函数，如bind，listen等
+ //bind函数对应的BSD层函数，用于绑定一个本地地址，服务器端
+ //umyaddr表示需要绑定的地址结构，addrlen表示改地址结构的长度
+static int sock_bind(int fd, struct sockaddr *umyaddr, int addrlen)
+{
+struct socket *sock;
+int i;
+char address[MAX_SOCK_ADDR];
+int err;
+//套接字参数有效性检查
+if (fd &lt; 0 || fd &gt;= NR_OPEN || current-&gt;files-&gt;fd[fd] == NULL)
+    return(-EBADF);
+//获取fd对应的socket结构
+if (!(sock = sockfd_lookup(fd, NULL))) 
+    return(-ENOTSOCK);
+//将地址从用户缓冲区复制到内核缓冲区
+if((err=move_addr_to_kernel(umyaddr,addrlen,address))&lt;0)
+  	return err;
+//转调用bind指向的函数
+if ((i = sock-&gt;ops-&gt;bind(sock, (struct sockaddr *)address, addrlen)) &lt; 0) 
+{
+    return(i);
+}
+return(0);
+}</li>
+</ul>
+
+<p>监听客户端请求，listen
+/*</p>
+<ul>
+  <li>Perform a listen. Basically, we allow the protocol to do anything</li>
+  <li>necessary for a listen, and if that works, we mark the socket as</li>
+  <li>ready for listening.
+ */
+//服务器端监听客户端的连接请求
+//fd表示bind后的套接字，backlog表示排队的最大连接个数
+//listen函数把一个未连接的套接字转换为一个被动套接字，
+//指示内核应接受该套接字的连接请求</li>
+</ul>
+
+<p>static int sock_listen(int fd, int backlog)
+{
+	struct socket *sock;</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>if (fd &lt; 0 || fd &gt;= NR_OPEN || current-&gt;files-&gt;fd[fd] == NULL)
+	return(-EBADF);
+if (!(sock = sockfd_lookup(fd, NULL))) 
+	return(-ENOTSOCK);
+//前提是没有建立连接
+if (sock-&gt;state != SS_UNCONNECTED) 
+{
+	return(-EINVAL);
+}
+//调用底层实现函数
+if (sock-&gt;ops &amp;&amp; sock-&gt;ops-&gt;listen)
+	sock-&gt;ops-&gt;listen(sock, backlog);
+sock-&gt;flags |= SO_ACCEPTCON;//设置标识字段
+return(0); }
+</code></pre></div></div>
+
+<p>服务器接收请求，accept
+/*</p>
+<ul>
+  <li>For accept, we attempt to create a new socket, set up the link</li>
+  <li>with the client, wake up the client, then return the new</li>
+  <li>connected fd. We collect the address of the connector in kernel</li>
+  <li>space and move it to user at the very end. This is buggy because</li>
+  <li>
+    <p>we open the socket then return an error.
+ */
+//用于服务器接收一个客户端的连接请求，这里是值-结果参数，之前有说到
+//fd 为监听后套接字。最后返回一个记录了本地与目的端信息的套接字
+//upeer_sockaddr用来返回已连接客户的协议地址，如果对协议地址不感兴趣就NULL
+static int sock_accept(int fd, struct sockaddr *upeer_sockaddr, int *upeer_addrlen)
+{
+struct file *file;
+struct socket *sock, *newsock;
+int i;
+char address[MAX_SOCK_ADDR];
+int len;</p>
+
+    <p>if (fd &lt; 0 || fd &gt;= NR_OPEN || ((file = current-&gt;files-&gt;fd[fd]) == NULL))
+    return(-EBADF);
+  	if (!(sock = sockfd_lookup(fd, &amp;file))) 
+    return(-ENOTSOCK);
+if (sock-&gt;state != SS_UNCONNECTED)//socket各个状态的演变是一步一步来的 
+{
+    return(-EINVAL);
+}
+//这是tcp连接，得按步骤来
+if (!(sock-&gt;flags &amp; SO_ACCEPTCON))//没有listen
+{
+    return(-EINVAL);
+}
+//分配一个新的套接字，用于表示后面可进行通信的套接字
+if (!(newsock = sock_alloc())) 
+{
+    printk(“NET: sock_accept: no more sockets\n”);
+    return(-ENOSR);	/* Was: EAGAIN, but we are out of system
+               resources! */
+}
+newsock-&gt;type = sock-&gt;type;
+newsock-&gt;ops = sock-&gt;ops;
+//套接字重定向，目的是初始化新的用于数据传送的套接字
+//继承了第一参数传来的服务器的IP和端口号信息
+if ((i = sock-&gt;ops-&gt;dup(newsock, sock)) &lt; 0) 
+{
+    sock_release(newsock);
+    return(i);
+}
+//转调用inet_accept函数
+i = newsock-&gt;ops-&gt;accept(sock, newsock, file-&gt;f_flags);
+if ( i &lt; 0) 
+{
+    sock_release(newsock);
+    return(i);
+}
+//分配一个文件描述符，用于以后的数据传送
+if ((fd = get_fd(SOCK_INODE(newsock))) &lt; 0) 
+{
+    sock_release(newsock);
+    return(-EINVAL);
+}
+//返回通信远端的地址
+if (upeer_sockaddr)
+{//得到客户端地址，并复制到用户空间
+    newsock-&gt;ops-&gt;getname(newsock, (struct sockaddr *)address, &amp;len, 1);
+    move_addr_to_user(address,len, upeer_sockaddr, upeer_addrlen);
+}
+return(fd);
+}</p>
+  </li>
+</ul>
+
+<p>客户端主动发起连接请求，connect
+/*</p>
+<ul>
+  <li>首先将要连接的源端地址从用户缓冲区复制到内核缓冲区，之后根据套接字目前所处状态</li>
+  <li>
+    <p>采取对应措施，如果状态有效，转调用connect函数
+ */
+ //这是客户端，表示客户端向服务器端发送连接请求
+static int sock_connect(int fd, struct sockaddr *uservaddr, int addrlen)
+{
+struct socket *sock;
+struct file *file;
+int i;
+char address[MAX_SOCK_ADDR];
+int err;</p>
+
+    <p>if (fd &lt; 0 || fd &gt;= NR_OPEN || (file=current-&gt;files-&gt;fd[fd]) == NULL)
+    return(-EBADF);
+if (!(sock = sockfd_lookup(fd, &amp;file)))
+    return(-ENOTSOCK);</p>
+
+    <p>if((err=move_addr_to_kernel(uservaddr,addrlen,address))&lt;0)
+  	return err;
+//根据状态采取对应措施
+switch(sock-&gt;state) 
+{
+    case SS_UNCONNECTED:
+        /* This is ok… continue with connect <em>/
+        break;
+    case SS_CONNECTED:
+        /</em> Socket is already connected <em>/
+        if(sock-&gt;type == SOCK_DGRAM) /</em> Hack for now - move this all into the protocol <em>/
+            break;
+        return -EISCONN;
+    case SS_CONNECTING:
+        /</em> Not yet connected… we will check this. */</p>
+
+    <div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    /*
+     *	FIXME:  for all protocols what happens if you start
+     *	an async connect fork and both children connect. Clean
+     *	this up in the protocols!
+     */
+    break;
+default:
+    return(-EINVAL); } i = sock-&gt;ops-&gt;connect(sock, (struct sockaddr *)address, addrlen, file-&gt;f_flags); if (i &lt; 0)  {
+return(i); } return(0); } 上面几个函数则是我们应用编程是socket、bind、listen、accept、connect 函数对应的内核的系统调用函数，可以看出，对应的sock_ 函数内部也是转调用了下一层的函数。 所有网络调用函数都具有共同的入口函数 sys_socket /*
+</code></pre></div>    </div>
+  </li>
+  <li>System call vectors. Since I (RIB) want to rewrite sockets as streams,</li>
+  <li>we have this level of indirection. Not a lot of overhead, since more of</li>
+  <li>the work is done via read/write/select directly.
+ *</li>
+  <li>I’m now expanding this up to a higher level to separate the assorted</li>
+  <li>kernel/user space manipulations and global assumptions from the protocol</li>
+  <li>layers proper - AC.
+ <em>/
+//本函数是网络栈专用操作函数集的总入口函数，主要是将请求分配，调用具体的底层函数进行处理
+asmlinkage int sys_socketcall(int call, unsigned long *args)
+{
+int er;
+switch(call) 
+{
+    case SYS_SOCKET://socket函数
+        er=verify_area(VERIFY_READ, args, 3 * sizeof(long));
+        if(er)
+            return er;
+        return(sock_socket(get_fs_long(args+0),
+            get_fs_long(args+1),//返回地址上的值
+            get_fs_long(args+2)));
+    case SYS_BIND://bind函数
+        er=verify_area(VERIFY_READ, args, 3 * sizeof(long));
+        if(er)
+            return er;
+        return(sock_bind(get_fs_long(args+0),
+            (struct sockaddr *)get_fs_long(args+1),
+            get_fs_long(args+2)));
+    case SYS_CONNECT://connect函数
+        er=verify_area(VERIFY_READ, args, 3 * sizeof(long));
+        if(er)
+            return er;
+        return(sock_connect(get_fs_long(args+0),
+            (struct sockaddr *)get_fs_long(args+1),
+            get_fs_long(args+2)));
+    case SYS_LISTEN://listen函数
+        er=verify_area(VERIFY_READ, args, 2 * sizeof(long));
+        if(er)
+            return er;
+        return(sock_listen(get_fs_long(args+0),
+            get_fs_long(args+1)));
+    case SYS_ACCEPT://accept函数
+        er=verify_area(VERIFY_READ, args, 3 * sizeof(long));
+        if(er)
+            return er;
+        return(sock_accept(get_fs_long(args+0),
+            (struct sockaddr *)get_fs_long(args+1),
+            (int *)get_fs_long(args+2)));
+    case SYS_GETSOCKNAME://getsockname函数
+        er=verify_area(VERIFY_READ, args, 3 * sizeof(long));
+        if(er)
+            return er;
+        return(sock_getsockname(get_fs_long(args+0),
+            (struct sockaddr *)get_fs_long(args+1),
+            (int *)get_fs_long(args+2)));
+    case SYS_GETPEERNAME://getpeername函数
+        er=verify_area(VERIFY_READ, args, 3 * sizeof(long));
+        if(er)
+            return er;
+        return(sock_getpeername(get_fs_long(args+0),
+            (struct sockaddr *)get_fs_long(args+1),
+            (int *)get_fs_long(args+2)));
+    case SYS_SOCKETPAIR://socketpair函数
+        er=verify_area(VERIFY_READ, args, 4 * sizeof(long));
+        if(er)
+            return er;
+        return(sock_socketpair(get_fs_long(args+0),
+            get_fs_long(args+1),
+            get_fs_long(args+2),
+            (unsigned long *)get_fs_long(args+3)));
+    case SYS_SEND://send函数
+        er=verify_area(VERIFY_READ, args, 4 * sizeof(unsigned long));
+        if(er)
+            return er;
+        return(sock_send(get_fs_long(args+0),
+            (void *)get_fs_long(args+1),
+            get_fs_long(args+2),
+            get_fs_long(args+3)));
+    case SYS_SENDTO://sendto函数
+        er=verify_area(VERIFY_READ, args, 6 * sizeof(unsigned long));
+        if(er)
+            return er;
+        return(sock_sendto(get_fs_long(args+0),
+            (void *)get_fs_long(args+1),
+            get_fs_long(args+2),
+            get_fs_long(args+3),
+            (struct sockaddr *)get_fs_long(args+4),
+            get_fs_long(args+5)));
+    case SYS_RECV://recv函数
+        er=verify_area(VERIFY_READ, args, 4 * sizeof(unsigned long));
+        if(er)
+            return er;
+        return(sock_recv(get_fs_long(args+0),
+            (void *)get_fs_long(args+1),
+            get_fs_long(args+2),
+            get_fs_long(args+3)));
+    case SYS_RECVFROM://recvfrom函数
+        er=verify_area(VERIFY_READ, args, 6 * sizeof(unsigned long));
+        if(er)
+            return er;
+        return(sock_recvfrom(get_fs_long(args+0),
+            (void *)get_fs_long(args+1),
+            get_fs_long(args+2),
+            get_fs_long(args+3),
+            (struct sockaddr *)get_fs_long(args+4),
+            (int *)get_fs_long(args+5)));
+    case SYS_SHUTDOWN://shutdown函数
+        er=verify_area(VERIFY_READ, args, 2</em> sizeof(unsigned long));
+        if(er)
+            return er;
+        return(sock_shutdown(get_fs_long(args+0),
+            get_fs_long(args+1)));
+    case SYS_SETSOCKOPT://setsockopt函数
+        er=verify_area(VERIFY_READ, args, 5<em>sizeof(unsigned long));
+        if(er)
+            return er;
+        return(sock_setsockopt(get_fs_long(args+0),
+            get_fs_long(args+1),
+            get_fs_long(args+2),
+            (char *)get_fs_long(args+3),
+            get_fs_long(args+4)));
+    case SYS_GETSOCKOPT://getsockopt函数
+        er=verify_area(VERIFY_READ, args, 5</em>sizeof(unsigned long));
+        if(er)
+            return er;
+        return(sock_getsockopt(get_fs_long(args+0),
+            get_fs_long(args+1),
+            get_fs_long(args+2),
+            (char *)get_fs_long(args+3),
+            (int *)get_fs_long(args+4)));
+    default:
+        return(-EINVAL);
+}
+}</li>
+</ul>
+
+<p>下面再看看socket.c 即BSD socket层中的其余函数
+/*</p>
+<ul>
+  <li>Sockets are not seekable.
+ */</li>
+</ul>
+
+<p>static int sock_lseek(struct inode *inode, struct file *file, off_t offset, int whence)
+{
+	return(-ESPIPE);
+}</p>
+
+<p>/*</p>
+<ul>
+  <li>Read data from a socket. ubuf is a user mode pointer. We make sure the user</li>
+  <li>area ubuf…ubuf+size-1 is writable before asking the protocol.
+ */</li>
+</ul>
+
+<p>static int sock_read(struct inode *inode, struct file *file, char *ubuf, int size)
+{
+	struct socket *sock;
+	int err;</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>if (!(sock = socki_lookup(inode))) 
+{
+	printk("NET: sock_read: can't find socket for inode!\n");
+	return(-EBADF);
+}
+if (sock-&gt;flags &amp; SO_ACCEPTCON) 
+	return(-EINVAL);
+ 
+if(size&lt;0)
+	return -EINVAL;
+if(size==0)
+	return 0;
+if ((err=verify_area(VERIFY_WRITE,ubuf,size))&lt;0)
+  	return err;
+return(sock-&gt;ops-&gt;read(sock, ubuf, size, (file-&gt;f_flags &amp; O_NONBLOCK))); }
+</code></pre></div></div>
+
+<p>/*</p>
+<ul>
+  <li>Write data to a socket. We verify that the user area ubuf..ubuf+size-1 is</li>
+  <li>readable by the user process.
+ */</li>
+</ul>
+
+<p>static int sock_write(struct inode *inode, struct file *file, char *ubuf, int size)
+{
+	struct socket *sock;
+	int err;</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>if (!(sock = socki_lookup(inode))) 
+{
+	printk("NET: sock_write: can't find socket for inode!\n");
+	return(-EBADF);
+}
+ 
+if (sock-&gt;flags &amp; SO_ACCEPTCON) 
+	return(-EINVAL);
+
+if(size&lt;0)
+	return -EINVAL;
+if(size==0)
+	return 0;
+	
+if ((err=verify_area(VERIFY_READ,ubuf,size))&lt;0)
+  	return err;
+return(sock-&gt;ops-&gt;write(sock, ubuf, size,(file-&gt;f_flags &amp; O_NONBLOCK))); }
+</code></pre></div></div>
+
+<p>/*</p>
+<ul>
+  <li>You can’t read directories from a socket!
+ */</li>
+</ul>
+
+<p>static int sock_readdir(struct inode *inode, struct file *file, struct dirent *dirent,
+	     int count)
+{
+	return(-EBADF);
+}</p>
+
+<p>/*</p>
+<ul>
+  <li>With an ioctl arg may well be a user mode pointer, but we don’t know what to do</li>
+  <li>with it - thats up to the protocol still.
+ */</li>
+</ul>
+
+<p>int sock_ioctl(struct inode *inode, struct file *file, unsigned int cmd,
+	   unsigned long arg)
+{
+	struct socket *sock;</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>if (!(sock = socki_lookup(inode))) 
+{
+	printk("NET: sock_ioctl: can't find socket for inode!\n");
+	return(-EBADF);
+}
+  	return(sock-&gt;ops-&gt;ioctl(sock, cmd, arg)); }
+</code></pre></div></div>
+
+<p>static int sock_select(struct inode *inode, struct file *file, int sel_type, select_table * wait)
+{
+	struct socket *sock;</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>if (!(sock = socki_lookup(inode))) 
+{
+	printk("NET: sock_select: can't find socket for inode!\n");
+	return(0);
+}
+ 
+/*
+ *	We can't return errors to select, so it's either yes or no. 
+ */
+ 
+if (sock-&gt;ops &amp;&amp; sock-&gt;ops-&gt;select)
+	return(sock-&gt;ops-&gt;select(sock, sel_type, wait));
+return(0); }
+</code></pre></div></div>
+
+<p>void sock_close(struct inode *inode, struct file *filp)
+{
+	struct socket *sock;</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>/*
+ *	It's possible the inode is NULL if we're closing an unfinished socket. 
+ */
+ 
+if (!inode) 
+	return; //找对inode对应的socket结构
+if (!(sock = socki_lookup(inode))) 
+{
+	printk("NET: sock_close: can't find socket for inode!\n");
+	return;
+}
+sock_fasync(inode, filp, 0);//更新异步通知列表
+sock_release(sock);//释放套接字 }
+</code></pre></div></div>
+
+<p>/*</p>
+<ul>
+  <li>
+    <p>Update the socket async list
+ */
+//输入参数on的取值决定是分配还是释放一个fasync_struct结构，该结构用于异步唤醒
+static int sock_fasync(struct inode *inode, struct file *filp, int on)
+{
+struct fasync_struct *fa, *fna=NULL, **prev;
+struct socket *sock;
+unsigned long flags;</p>
+
+    <p>if (on)//分配
+{
+    fna=(struct fasync_struct *)kmalloc(sizeof(struct fasync_struct), GFP_KERNEL);
+    if(fna==NULL)
+        return -ENOMEM;
+}</p>
+
+    <p>sock = socki_lookup(inode);</p>
+
+    <p>prev=&amp;(sock-&gt;fasync_list);</p>
+
+    <p>save_flags(flags);//保存当前状态
+cli();</p>
+
+    <p>//从链表中找到与file结构对应的fasync_struct
+for(fa=<em>prev; fa!=NULL; prev=&amp;fa-&gt;fa_next,fa=</em>prev)
+    if(fa-&gt;fa_file==filp)
+        break;</p>
+
+    <p>if(on)//分配后的建立联系
+{
+    //如果已经有对应的file结构，则释放之前创建的
+    if(fa!=NULL)
+    {
+        kfree_s(fna,sizeof(struct fasync_struct));
+        restore_flags(flags);
+        return 0;
+    }
+    //如果没有，则挂载这个新创建的结构
+    fna-&gt;fa_file=filp;
+    fna-&gt;magic=FASYNC_MAGIC;
+    fna-&gt;fa_next=sock-&gt;fasync_list;
+    sock-&gt;fasync_list=fna;
+}
+//释放
+else
+{
+    if(fa!=NULL)
+    {
+        *prev=fa-&gt;fa_next;
+        kfree_s(fa,sizeof(struct fasync_struct));
+    }
+}
+restore_flags(flags);//恢复状态
+return 0;
+}</p>
+  </li>
+</ul>
+
+<p>/*</p>
+<ul>
+  <li>异步唤醒函数，通过遍历socket结构中fasync_list变量指向的队列，</li>
+  <li>对队列中每个元素调用kill_fasync函数
+ */
+int sock_wake_async(struct socket *sock, int how)
+{
+ if (!sock || !sock-&gt;fasync_list)
+     return -1;
+ switch (how)
+ {
+     case 0:
+         //kill_fasync函数即通过相应的进程发送信号。这就是异步唤醒功能
+         kill_fasync(sock-&gt;fasync_list, SIGIO);
+         break;
+     case 1:
+         if (!(sock-&gt;flags &amp; SO_WAITDATA))
+             kill_fasync(sock-&gt;fasync_list, SIGIO);
+         break;
+     case 2:
+         if (sock-&gt;flags &amp; SO_NOSPACE)
+         {
+             kill_fasync(sock-&gt;fasync_list, SIGIO);
+             sock-&gt;flags &amp;= ~SO_NOSPACE;
+         }
+         break;
+ }
+ return 0;
+}</li>
+</ul>
+
+<p>/*</p>
+<ul>
+  <li>只用于UNIX域名(iconn,conn只用于UNIX域)，用于处理一个客户端连接请求
+ */</li>
+</ul>
+
+<p>int sock_awaitconn(struct socket *mysock, struct socket *servsock, int flags)
+{
+	struct socket *last;</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>/*
+ *	We must be listening
+ */
+ //检查服务器端是否是处于监听状态，即可以进行连接
+if (!(servsock-&gt;flags &amp; SO_ACCEPTCON)) 
+{
+	return(-EINVAL);
+}
+</code></pre></div></div>
+
+  	/*
+  	 *	Put ourselves on the server’s incomplete connection queue. 
+  	 */
+  	 //将本次客户端连接的套接字插入服务器端，socket结构iconn字段指向的链表
+  	 //表示客户端正等待连接
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>mysock-&gt;next = NULL;
+cli();
+if (!(last = servsock-&gt;iconn)) 
+	servsock-&gt;iconn = mysock;
+else 
+{
+	while (last-&gt;next) 
+		last = last-&gt;next;
+	last-&gt;next = mysock;
+}
+mysock-&gt;state = SS_CONNECTING;//正在处理连接
+mysock-&gt;conn = servsock;//客户端连接的服务器端套接字
+sti();
+ 
+/*
+ * Wake up server, then await connection. server will set state to
+ * SS_CONNECTED if we're connected.
+ */
+ //唤醒服务器端进程，以处理本地客户端连接
+wake_up_interruptible(servsock-&gt;wait);
+sock_wake_async(servsock, 0);
+ 
+//检查连接状态
+if (mysock-&gt;state != SS_CONNECTED) 
+{
+	if (flags &amp; O_NONBLOCK)
+		return -EINPROGRESS;
+	//等待服务器端处理本次连接
+	interruptible_sleep_on(mysock-&gt;wait);
+	
+	//检查连接状态，如果仍然没有建立连接
+	if (mysock-&gt;state != SS_CONNECTED &amp;&amp;
+	    mysock-&gt;state != SS_DISCONNECTING) 
+	{
+	/*原因如下
+	 * if we're not connected we could have been
+	 * 1) interrupted, so we need to remove ourselves
+	 *    from the server list
+	 * 2) rejected (mysock-&gt;conn == NULL), and have
+	 *    already been removed from the list
+	 */
+	 //如果被其他中断，需要主动将本地socket从对方服务器中iconn中删除
+		if (mysock-&gt;conn == servsock) 
+		{
+			cli();
+			//找到iconn中的本地socket结构
+			if ((last = servsock-&gt;iconn) == mysock)
+				servsock-&gt;iconn = mysock-&gt;next;
+			else 
+			{
+				while (last-&gt;next != mysock) 
+					last = last-&gt;next;
+				last-&gt;next = mysock-&gt;next;
+			}
+			sti();
+		}
+		//被服务器拒绝，本地socket已经被删除，无需手动删除
+		return(mysock-&gt;conn ? -EINTR : -EACCES);//两种原因情况的返回
+	}
+}
+return(0); } 其余没有贴出的函数，也基本上是这么个流程。 socket.c 文件中函数的实现绝大多数都是简单调用下层函数，而这些下层函数就是af_inet.c 文件中定义的函数。socket.c 对应 BSD socket层，文件af_inet.c 则对应的是INET socket层。这些上下层次的表示从函数的嵌套调用关系上体现出来。
+</code></pre></div></div>
+:ET

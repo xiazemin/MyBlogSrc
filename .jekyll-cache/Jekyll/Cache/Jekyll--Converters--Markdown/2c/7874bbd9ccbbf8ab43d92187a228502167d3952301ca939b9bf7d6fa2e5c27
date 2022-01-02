@@ -1,0 +1,69 @@
+I"�<p>https://github.com/google/sanitizers/wiki/AddressSanitizer
+ThreadSanitizer又叫TSan，是一个检查线程Data Race的C/C++工具。它集成在新版的gcc和clang中，通过编译时加-fsanitize=thread，可以在运行时检测出Data Race的问题。</p>
+
+<p>ThreadSanitizer官网：https://code.google.com/p/thread-sanitizer</p>
+
+<p>Data Race
+Data Race是指多个线程在没有正确加锁的情况下，同时访问同一块数据，并且至少有一个线程是写操作，对数据的读取和修改产生了竞争，从而导致各种不可预计的问题。</p>
+
+<p>Data Race的问题非常难查，Data Race一旦发生，结果是不可预期的，也许直接就Crash了，也许导致执行流程错乱了，也许把内存破坏导致之后某个时刻突然Crash了
+<!-- more -->
+$ g++ simple_race.cc -fsanitize=thread -fPIE -pie -g
+$ ./a.out
+==================
+WARNING: ThreadSanitizer: data race (pid=26327)
+  Write of size 4 at 0x7f89554701d0 by thread T1:</p>
+
+<p>除了加-fsanitize=thread外，一定要加-fPIE -pie。
+-g 是为了能显示文件名和行号。
+如果分生成obj(-c)和link两个步骤，每一步都加：thread -fPIE -pie -g，并且在link的时候加-ltsan
+只支持64位，最好指定编译64位(-m64)
+如果依赖其他静态库，其他静态库编译时必须指定-fPIC（如果不是请重编）</p>
+
+<p>ThreadSanitizer（TSAN）是一种C/C++数据竞争检测工具。数据竞争是多线程系统中最常见和最难调试的问题。数据竞争发生在多个线程访问相同数据，并且至少一个为写线程。在数据库系统中，涉及大量读写数据的并发操作，引入TSAN有利于发现线程调配间的不合理性，从而增强数据库的稳定性。</p>
+
+<p>官方文档：</p>
+
+<p>    https://github.com/google/sanitizers/wiki/ThreadSanitizerCppManual</p>
+
+<p>    官方常见错误文档如下：https://github.com/google/sanitizers/wiki/ThreadSanitizerPopularDataRaces</p>
+
+<p>    官方文档，发现错误，但是因为种种原因改不了如下： https://github.com/google/sanitizers/wiki/ThreadSanitizerSuppressions</p>
+
+<p>    官方常见警告解释如下：https://github.com/google/sanitizers/wiki/ThreadSanitizerReportFormat</p>
+
+<p>    以上就是所有的官方文档，其实细心的同学都会发现只要记住第一个文档即可。</p>
+
+<p>使用：</p>
+
+<p>    该工具需要连接库，指定好LD_LIBRARY_PATH后，在编译参数上加入-ltsan -fsanitize=thread即可。然后运行，就会以warning的形式报告有问题的地方。</p>
+
+<p>    一般我们都是写好了工程之后才会使用这个工具检测是否有问题。第一次对工程使用tsan检测的时候，一般都会出现大量奇奇怪怪的警告。这个时候我们就需要按层级改。所以改之前，需要熟读压制警告：</p>
+
+<p>    其实也很简单就是设置环境变量：export TSAN_OPTIONS=”suppressions=压制警告文件目录”，然后在压制警告文件中写入：</p>
+
+<p>    简单规则，#开头的都是注释。race:namespace::className::functionName即可，不用带括号。这样可以屏蔽一些特别复杂的问题。以后再改。</p>
+
+<p>主要问题：</p>
+
+<p>data race：</p>
+
+<p>    报告会告诉你read线程的函数栈，在栈顶的哪个函数的哪个地址被读了多少个字节，write函数的函数栈，在栈顶的哪个函数的哪个地址被读了多少个字节，并且告诉你两个线程都是由哪些线程创建的。总结会告诉你到底是哪里有data race的问题。</p>
+
+<p>   大体上的问题就是1. 两个线程同时对一个变量写或者读写，2. 线程1还在用这个变量，但这个变量属于线程2，线程2析构掉了。</p>
+
+<p>        对于问题1，只需要想办法把变量改成原子变量即可；对于问题2，是线程同步的问题，想办法让线程2等待线程1用完了再退出掉。</p>
+
+<p>destroy a locked mutex：</p>
+
+<p>        一般这种问题不会引人注意，但是这样做确实是不对的。更好的做法是在设计上改掉这种摧毁加锁的锁这种情况。我的做法是在锁析构之前判断该锁是否BUSY，如果BUSY则解锁，如果空闲，c++11之前的trylock会直接加锁，而11之后包括11版本不会对trylock进行加锁。</p>
+
+<p>unlock an unlocked mutex：</p>
+
+<p>         二次解锁问题。正常情况下这种解锁一个已经解锁的锁并不会出错，但是这种行为是未定义的，所以不同的c++会有不同的做法，所以还得尽量的避免这种情况。</p>
+
+<p>函数栈提示：failed to restore stack.</p>
+
+<p>        这种情况一般可以用history_size=7搞定，这个东西也设置在TSAN_OPTIONS里，如果TSAN_OPTIONS里需要设置两种，中间用空格隔开。</p>
+
+:ET

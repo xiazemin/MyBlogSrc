@@ -1,0 +1,143 @@
+I"L<p>package main</p>
+
+<p>import “fmt”</p>
+
+<p>type A int</p>
+
+<p>func (a A) String() string {
+	return fmt.Sprintf(“%v”, a)
+	//return fmt.Sprintf(“%d”, int(a))
+}
+func (a A) Error() string {
+	return fmt.Sprintf(“failed to login(%x)”, a)
+	//死循环的原因在于：fmt.Sprintf会通过接口查询知道a是一个接口类型，所以就会调用a的Error函数，但这个fmt.Sprintf本身就是在Error函数里调用的，所以就构成循环调用了。</p>
+
+<p>}
+func main() {
+	var a A
+	fmt.Println(“this will never print”, a)
+}</p>
+
+<p>//runtime: goroutine stack exceeds 1000000000-byte limit
+//fatal error: stack overflow
+<!-- more -->
+golang的接口使用非常广泛，几乎每一个包都会用到接口，fmt包的使用率最多之一。在实际开发中，要定义结构体的标准输出用String()，定义标准错误输出Error()，定义格式化输出Format()，还有比较特殊的GoString()。</p>
+
+<p>String()
+type TestString struct {}
+func (t TestString) String() string {
+	return “我是String”
+}
+func main() {
+    fmt.Println(TestString{})
+}</p>
+
+<p>使用起来比较简单，只要结构体里面有String() string就可以输出。
+fmt包里面会判断有没有fmt.Stringer的接口，然后再调用。
+通常用于结构体的默认输出</p>
+
+<p>Error
+type TestError struct {}
+func (t TestError) Error() string {
+	return “我是Error”
+}
+func main() {
+    fmt.Println(TestString{})
+}</p>
+
+<p>使用方式跟String()一样，但是设计代码时不能互相替换实现。
+最常用的用法是独立封装type XXXError struct{}</p>
+
+<p>Format
+type TestFormat struct {}
+func (t TestFormat) Format(s fmt.State, c rune) {
+	switch c {
+	case ‘c’:
+		switch {
+		case s.Flag(‘+’):
+			fmt.Printf(“我是+c\n”)
+		default:
+			fmt.Fprint(s, “我是c\n”)
+		}
+	default:
+		fmt.Print(“我是Format”)
+	}
+}
+func main() {
+    t := TestFormat{}
+    fmt.Println(t)
+    fmt.Printf(“%c\n”, t)
+    fmt.Printf(“%+c\n”, t)
+    fmt.Printf(“%s\n”, t)
+}</p>
+
+<p>我是Format
+我是c
+我是+c
+我是Format</p>
+
+<p>fmt.Println也会调用Format的接口，所以String() Format()不能同一个结构体里面。 通常使用跟Error()类似，可以参考一下github.com/pkg/errors里的stack.go的func (f Frame) Format(s fmt.State, verb rune)</p>
+
+<p>GoString
+type TestGoString struct {}
+func (t TestGoString) GoString() string {
+	return “我是GoString”
+}
+func main() {
+    t := TestGoString{}
+    fmt.Println(TestGoString{})
+    fmt.Printf(“%s %#v\n”, t, t)
+}</p>
+
+<p>{}
+{} 我是GoString</p>
+
+<p>fmt.Println并没调用GoString方法，只能通过格式化%#+标记输出。
+在没有实现接口的情况下，通常用来输出默认相应值</p>
+
+<p>mt/print.go的pp.handleMethods(verb rune) (handled bool)
+func (p *pp) handleMethods(verb rune) (handled bool) {
+	…
+	// 判断Formatter
+	if formatter, ok := p.arg.(Formatter); ok {
+	    …
+	    formatter.Format(p, verb)
+	    return
+	}</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    // 判断是否含有#标识符
+if p.fmt.sharpV {
+        // 判断GoStriner
+	if stringer, ok := p.arg.(GoStringer); ok {
+                    ...
+		p.fmt.fmtS(stringer.GoString())
+		return
+	}
+} else {
+	switch verb {
+	case 'v', 's', 'x', 'X', 'q':
+		switch v := p.arg.(type) {
+		// 符合error接口
+		case error:
+                            ...
+			p.fmtString(v.Error(), verb)
+			return
+                    // 符合Stringer接口
+		case Stringer:
+                            ...
+			p.fmtString(v.String(), verb)
+			return
+		}
+	}
+}
+return false }
+</code></pre></div></div>
+
+<p>Format -&gt; (#)GoString -&gt; ((v,s,x,X,q)Error -&gt; String) 源码四个接口都在handlerMethods方法调用控制，都不是互相独立，根据优先顺序调用。所以接口的设计，尽可能独立封装，避免混淆。</p>
+
+<p>小结
+String() 用于对结构体的标准输出等。
+Error() 封装error的方法，可以改一些错误上传到日志系统或者打印Stack。
+Format() 对于String()的高级用法，用于多种类型或者格式使用。
+GoString() 常用于相对值。</p>
+:ET

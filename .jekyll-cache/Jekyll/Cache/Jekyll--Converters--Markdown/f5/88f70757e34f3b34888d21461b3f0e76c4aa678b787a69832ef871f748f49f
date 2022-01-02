@@ -1,0 +1,269 @@
+I"�4<p>关于etcd编译，官方说不需要配置GOPATH的步骤是这样的：</p>
+
+<p>$ git clone https://github.com/etcd-io/etcd.git
+$ cd etcd
+$ ./build
+实际上呢，是扯淡，etcd自己的main函数是这样写的：</p>
+
+<p>package main</p>
+
+<p>import “go.etcd.io/etcd/v3/etcdmain”</p>
+
+<p>func main() {
+	etcdmain.Main()
+}
+问题来了，这个v3从哪里来，在一些旧的依赖上，也有这个问题，这个v3莫名其妙啊。而且v2和v3貌似不兼容。。。</p>
+
+<p>所以，正确的方式是下面这样：</p>
+
+<p>$ cd $GOPATH/src/go.etcd.io/etcd
+$ git clone https://github.com/etcd-io/etcd.git
+$ mv etcd v3
+$ ./build
+v3 就是这么来的，拍了脑瓜就给目录改了。。。</p>
+
+<p>依赖etcd的其它库编译
+因为etcd库改了位置了，然后产生了一系列的依赖找不到。。。一些不用go vendor的go项目注意了，说的就是你们！</p>
+
+<p>下面以编译chartmuseum来说说中间的坑：</p>
+
+<p>cannot use auth.callOpts (type []”github.com/coreos/etcd/vendor/google.golang.org/grpc”.CallOption) as type []”go.etcd.io/etcd/v3/vendor/google.golang.org/grpc”.CallOption in argument to auth.remote.AuthEnable :</p>
+
+<p>俩文件的类型不匹配，网上说，需要更改 “github.com/coreos” 为 “go.etcd.io/etcd“ ，改了以后呢，出现另外错误</p>
+
+<p>按照上面更改以后，出现啥各种包找不到，</p>
+
+<p>先是cannot find package “go.etcd.io/etcd/clientv3” in any of, 然后按照官方client说的：“go get go.etcd.io/etcd/clientv3”
+然后cannot find package “go.etcd.io/etcd/clientv3” in any of, 然后按照搜索所得：”go get go.etcd.io/etcd”
+运行3以后，报错cannot find package “go.etcd.io/etcd/v3/etcdmain” in any of, 这个是etcd的main函数。。。
+绕了一大圈，终极改的方法是，将github.com/coreos 更改为 go.etcd.io/etcd/v3，然后：
+rm -rf $GOPATH/src/go.etcd.io/etcd
+mkdir $GOPATH/src/go.etcd.io/etcd
+cd $GOPATH/src/go.etcd.io/etcd
+git clone https://github.com/etcd-io/etcd.git
+mv etcd v3
+照着1/2更改以后，再重新make build，出错。。。。unknown field ‘CAFile’ in struct literal of type “go.etcd.io/etcd/v3/pkg/transport”.TLSInfo
+这个原因是：etcd把TLSInfo的字段CAFile名字给更改了,改成了TrustedCAFile，彻底无语了
+解决方法：到使用到的etcd文件中CAFile字段给改成TrustedCAFile.
+自此问题解决。</p>
+
+<p>总结来看：还是用vendor吧。。。
+<!-- more -->
+I am using etcd’s wal package (https://godoc.org/github.com/coreos/etcd/wal) to do write-ahead logging. wal has go.uber.org/zap in its vendor packages. In wal’s create function func Create(lg <em>zap.Logger, dirpath string, metadata []byte) (</em>WAL, error), I need to pass in zap.Logger.</p>
+
+<p>I have tried to import go.uber.org/zap but go compiler complains “type mismatch” when I pass in zap.Logger.</p>
+
+<p>package main</p>
+
+<p>import (
+“github.com/coreos/etcd/wal”
+)</p>
+
+<p>func check(e error) {
+if e != nil {
+        panic(e)
+    }
+}</p>
+
+<p>func main() {</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>metadata := []byte{}
+w, err := wal.Create(zap.NewExample(), "/tmp/hello", metadata)
+
+// err := w.Save(s, ents)
+</code></pre></div></div>
+
+<p>}
+How should I use zap.Logger in my project?</p>
+
+<p>It seems like the package github.com/coreos/etcd/wal is not meant to be used outside of the etcd project. If you really need to use it, please, follow the steps below.</p>
+
+<p>Place the following code in the $GOPATH/src/yourpackage/main.go file.</p>
+
+<p>package main</p>
+
+<p>import (
+    “fmt”</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>"go.etcd.io/etcd/wal"
+"go.uber.org/zap" )
+</code></pre></div></div>
+
+<p>func main() {
+    metadata := []byte{}
+    w, err := wal.Create(zap.NewExample(), “/tmp/hello”, metadata)
+    fmt.Println(w, err)
+}
+mkdir $GOPATH/src/yourpackage/vendor</p>
+
+<p>cp -r $GOPATH/src/go.etcd.io $GOPATH/src/yourpackage/vendor/
+mv $GOPATH/src/yourpackage/vendor/go.etcd.io/etcd/vendor/go.uber.org $GOPATH/src/yourpackage/vendor/
+go build yourpackage</p>
+
+<p>go get -u -v github.com/coreos/etcd/clientv3
+完成之后，在开发环境中会增加两个文件夹：</p>
+
+<ol>
+  <li>src\go.etcd.io</li>
+  <li>src\github.com\coreos
+客户端测试程序（go语言，命名为main.go，注意etcd server端的ip地址换成你自己的）：</li>
+</ol>
+
+<p>测试程序
+在该文件夹下执行，报错如下：</p>
+
+<p>go run main.go
+复制代码
+F:\Go\project\src\go_dev_yuanma\go_dev\day12\etcd_conn&gt;go run main.go</p>
+<h1 id="githubcomcoreosetcdclientv3">github.com/coreos/etcd/clientv3</h1>
+<p>........\github.com\coreos\etcd\clientv3\auth.go:116:72: cannot use auth.call Opts (type  []”github.com/coreos/etcd/vendor/google.golang.org/grpc”.CallOption)
+as type []”go.etcd.io/etcd/vendor/google.golang.org/grpc”.CallOption in argument to auth.remote.AuthEnable
+........\github.com\coreos\etcd\clientv3\auth.go:121:74: cannot use auth.call Opts (type []”github.com/coreos/etcd/vendor/google.golang.org/grpc”.CallOption)
+as type []”go.etcd.io/etcd/vendor/google.golang.org/grpc”.CallOption in argument to auth.remote.AuthDisable
+........\github.com\coreos\etcd\clientv3\auth.go:126:100: cannot use auth.cal lOpts (type []”github.com/coreos/etcd/vendor/google.golang.org/grpc”.CallOption)
+ as type []”go.etcd.io/etcd/vendor/google.golang.org/grpc”.CallOption in argument to auth.remote.UserAdd
+........\github.com\coreos\etcd\clientv3\auth.go:131:86: cannot use auth.call Opts (type []”github.com/coreos/etcd/vendor/google.golang.org/grpc”.CallOption)
+as type []”go.etcd.io/etcd/vendor/google.golang.org/grpc”.CallOption in argument to auth.remote.UserDelete
+........\github.com\coreos\etcd\clientv3\auth.go:136:122: cannot use auth.cal
+lOpts (type []”github.com/coreos/etcd/vendor/google.golang.org/grpc”.CallOption)  as type []”go.etcd.io/etcd/vendor/google.golang.org/grpc”.CallOption in argumen
+t to auth.remote.UserChangePassword
+........\github.com\coreos\etcd\clientv3\auth.go:141:104: cannot use auth.cal lOpts (type []”github.com/coreos/etcd/vendor/google.golang.org/grpc”.CallOption)
+ as type []”go.etcd.io/etcd/vendor/google.golang.org/grpc”.CallOption in argumen
+t to auth.remote.UserGrantRole
+........\github.com\coreos\etcd\clientv3\auth.go:146:80: cannot use auth.call Opts (type []”github.com/coreos/etcd/vendor/google.golang.org/grpc”.CallOption)
+as type []”go.etcd.io/etcd/vendor/google.golang.org/grpc”.CallOption in argument
+ to auth.remote.UserGet
+........\github.com\coreos\etcd\clientv3\auth.go:151:72: cannot use auth.call Opts (type []”github.com/coreos/etcd/vendor/google.golang.org/grpc”.CallOption)
+as type []”go.etcd.io/etcd/vendor/google.golang.org/grpc”.CallOption in argument
+ to auth.remote.UserList
+........\github.com\coreos\etcd\clientv3\auth.go:156:106: cannot use auth.cal lOpts (type []”github.com/coreos/etcd/vendor/google.golang.org/grpc”.CallOption)
+ as type []”go.etcd.io/etcd/vendor/google.golang.org/grpc”.CallOption in argumen
+t to auth.remote.UserRevokeRole
+........\github.com\coreos\etcd\clientv3\auth.go:161:80: cannot use auth.call Opts (type []”github.com/coreos/etcd/vendor/google.golang.org/grpc”.CallOption)
+as type []”go.etcd.io/etcd/vendor/google.golang.org/grpc”.CallOption in argument
+ to auth.remote.RoleAdd
+........\github.com\coreos\etcd\clientv3\auth.go:161:80: too many errors
+复制代码
+这样的错误原因可以参考：</p>
+
+<p>https://blog.csdn.net/zhangyexinaisurui/article/details/87001028</p>
+
+<p>解决的办法：</p>
+
+<ol>
+  <li>在 import 的时候，不要引用 “github.com/coreos/etcd/clientv3”，而是 “go.etcd.io/etcd/clientv3”，原因已在上面的链接有所说明：</li>
+</ol>
+
+<p>//”github.com/coreos/etcd/clientv3”
+“go.etcd.io/etcd/clientv3”
+然后使用上面的测试程序测试，如果还有问题，再使用下面的 2 方法试下。</p>
+
+<ol>
+  <li>可以到 github.com/coreos/etcd 地址下载所有的包，然后解压缩到 src\github.com\coreos 路径下，如果没有该目录则创建，并将解压后的文件夹命名为 etcd（原来为etcd-master），再将前面改名后的 etcd文件夹拷贝到 src\go.etcd.io 目录下，再使用测试程序测试下（测试前记着启动etcd的server端，同时测试程序 import “go.etcd.io/etcd/clientv3”）。</li>
+</ol>
+
+<p>很多此在github上面下载失败的原因是下面这个链接所说到的
+https://github.com/etcd-io/etcd/pull/10044#issuecomment-417125341
+可以自己打开翻译看一下
+我最终是通过go get github.com/coreos/etcd/clientv3 下载的
+我把大神的解释google翻译了一下</p>
+
+<p>github自动为项目移动创建重定向，所以github.com/coreos/etcd现在重定向到github.com/etcd-io/etcd，这意味着如果你依赖于github.com/coreos/etcdmaster，或者这个PR或更新的git哈希，你是依赖管理器（或go get）将从中提取代码github.com/coreos/etcd（在重定向之后）github.com/etcd-io/etcd并下载包含导入到go.etcd.io/etcd包的etcd源，但它会认为代码是针对的github.com/coreos/etcd，因此它会认为github.com/etcd-io/etcd导入是针对不同的项目。我相信依赖管理器（或go get）也将go.etcd.io/etcd引入该项目，因为它看到了它的import语句，这意味着你的依赖项中有两个etcd的副本，它们之间有import语句，导致像你这样的错误消息所示。</p>
+
+<p>可能的修复：</p>
+
+<p>取决于发布的etcd版本（git标签，如v3.3.9）而不是master，因为所有发布的版本都coreos/etcd在引用中引用，并且可以正常工作。
+如果需要依赖master，则显式更新所有import语句go.etcd.io/etcd并验证没有直接或传递依赖性github.com/coreos/etcd。
+传递依赖案例：
+如果某些golang项目对etcd既有直接依赖也有间接依赖，那么它们可能具有以下内容：</p>
+
+<project1> dependsOn &lt;github.com/coreos/etcd @ v3.2.1&gt;
+<project1> dependsOn <project2>
+<project2> dependsOn &lt;github.com/coreos/etcd @ v3.2.0&gt;
+
+这通常很好。依赖管理器（glide，godep，…）将执行版本冲突解决并决定使用“github.com/coreos/etcd @ v3.2.1”作为etcd版本，因为根据semver，它应该与v3兼容。 2.0从传递依赖到project2。最后你得到一个像这样的项目列表传递给go编译器：
+
+<project1>
+<project2>
+&lt;github.com/coreos/etcd @ v3.2.1&gt;
+
+但是如果将project1更新为使用go.etcd.io/etcd而不是coreos/etcd？然后你可以像一个依赖树：
+
+<project1> dependsOn &lt;go.etcd.io/etcd @ master&gt;
+<project1> dependsOn <project2>
+<project2> dependsOn &lt;github.com/coreos/etcd @ master&gt;
+
+对于这样的情况下，依赖关系管理已没有意识到，go.etcd.io/etcd并coreos/etcd在概念上是一样的东西，它甚至不不管他们是哪个版本。所以它导入了两个依赖项。并且go编译器会认为定义的所有类型都与类型go.etcd.io/etcd不同coreos/etcd，这会导致您显示的错误类型。传递给go编译器的项目列表将是：
+
+<project1>
+<project2>
+&lt;go.etcd.io/etcd @ master&gt;
+&lt;github.com/coreos/etcd @ master&gt;
+
+对于master遇到此问题的etcd的项目，最明显的快速修复是依赖于已发布的etcd版本（git标签，如v3.3.9）而不是master，因为所有已发布的版本都coreos/etcd在引用中引用，并且可以正常工作。
+
+打算使用的项目go.etcd.io/etcd（因为它们依赖于master，来自此PR或更新的git哈希，或者etcd v3.4 +）：
+
+必须显式更新其import语句go.etcd.io/etcd。
+必须解决其传递依赖性的问题。如果任何依赖关系使用etcd 3.3-首选的解决方案是与项目所有者合作以引入依赖的新版本go.etcd.io/etcd。
+当etcd v3.4.0发布时，它与v3.3.0之间将存在不兼容性，遗憾的是，依赖管理器将无法检测到（因为3.4+将来自go.etcd.io/etcd和3.3将来自coreos/etcd）。我有点担心这将如何影响生态系统，所以你可以提供一个确切的项目和依赖性的任何细节可能会有所帮助。但从根本上说，这是etd社区必须要解决的问题。
+
+在import的时候 应该import “go.etcd.io/etcd/clientv3” 而不是 "github.com/coreos/etcd/clientv3"
+
+#初始化vendor目录
+
+govendor init
+
+
+
+
+
+#将GOPATH中本工程使用到的依赖包自动移动到vendor目录中
+
+#说明：如果本地GOPATH没有依赖包，先go get相应的依赖包
+
+govendor add +external
+
+或使用缩写： govendor add +e
+
+
+
+新增/更新依赖包 github拉取
+
+# Update a package to latest, given any prior version constraint
+
+govendor fetch golang.org/x/net/context
+
+
+
+
+
+#使用HTTP协议
+
+govendor fetch -insecure [url]
+
+
+
+# Specify a specific version or revision to fetch
+
+govendor fetch golang.org/x/net/context@a4bbce9fcae005b22ae5443f6af064d80a6f5a55
+
+govendor fetch golang.org/x/net/context@v1   # Get latest v1.*.* tag or branch.
+
+govendor fetch golang.org/x/net/context@=v1  # Get the tag or branch named "v1".
+
+
+
+更新/新增依赖包  本地GOPATH拷贝
+
+# Update packages from $GOPATH.
+
+govendor update golang.org/x/net/context
+
+删除依赖包
+
+govendor remove [pkg]
+
+
+</project2></project1></project2></project2></project1></project1></project2></project1></project2></project2></project1></project1>
+:ET

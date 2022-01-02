@@ -1,0 +1,103 @@
+I"�<p>https://github.com/alibaba/LVS</p>
+
+<p>服务器为了提高性能，通常会选择横向扩展，一般有2种做法：</p>
+
+<p>前置DNS服务器，同一个域名（Virtual Service）对应不同的真实服务器（Real Server），解析域名的时候，DNS服务器会轮询返回不同的服务器，这样真正提供服务的，就是不同的机器，达到负载分担的目的。
+前置负载分担（LB）设备。可以是专业的LB设备，也可以是linux服务器开启LVS（4层）或者Nginx（7层）</p>
+
+<p>DR 模式</p>
+
+<p>LVS - RS 间必须在同一个 VLAN/网段 内
+RS 绑定 VIP，风险大
+RS 都要公网 IP
+NAT 模式</p>
+
+<p>RS 的 默认网关必须要指向 LVS
+LVS - RS 间必须在同一个 VLAN/网段 内
+TUN 模式</p>
+
+<p>配置隧道模块 （IPIP 等），配置复杂
+RS 绑定 VIP，风险大
+当集群规模较小时，使用 NAT、DR 模式都是没有问题的，当集群内有几十台以上时，那么这些服务器通常都不在同一个 VLAN/网段 内了。这时，必须再研发出一种能支持跨 VLAN/网段 通信的模式，FULLNAT 模式就是为了解决这个问题而生的。
+<!-- more -->
+在 FULLNAT 模式中，LVS 会同时修改源 IP 和目标 IP。</p>
+
+<p>与 NAT 模式不同之处：</p>
+
+<p>NAT 模式</p>
+
+<p>目标 IP -&gt; RIP
+源 IP -&gt; 客户端 IP
+FULLNAT 模式</p>
+
+<p>目标 IP -&gt; RIP
+源 IP -&gt; LVS IP
+这一修改，使得 RS 和 LVS 可以不在同一个 VLAN/网段 下。</p>
+
+<p>同时，也带来了一个问题，源 IP 改成了 LVS 的 IP了，RS 怎么获取客户端的真实 IP 呢？</p>
+
+<p>为了使 RS 能获得客户端的真实 IP，LVS 团队采用了修改内核网络栈的实现，扩展了网络栈，加了一个 TOA 字段。把客户端真实 IP 写到了 TOA 字段中，这样，RS 就能取得客户端的真实 IP 了。</p>
+
+<p>这样，意味着每台 RS 都需要安装打了 TOA 补丁的内核。并且，也要配套使用 FULLNAT 专用的 keepalived 和 ipvsadm。</p>
+
+<p>目前的发行版，内核默认会集成LVS module，可以自检下：</p>
+
+<p>[root@lvs ~]# lsmod |grep ip_vs
+ip_vs_wrr               2275  4 
+ip_vs                 161155  8 ip_vs_wrr
+ipv6                  323428  60 ip_vs,ip6t_REJECT,nf_conntrack_ipv6,nf_defrag_ipv6
+社区的linux发行版的LVS提供的报文转发模式有三种：NAT/DR/TUNNEL。阿里云SLB在NAT基础上还支持了FULLNAT模式，该模式在一般的开源版本中不提供，需要打补丁重新编译内核。</p>
+
+<p>一般来说，我们不需要使用FULLNAT，但是有一种场景，必须使用FULLNAT（或者类似的技术）： 通常LVS是为了解决外部访问集群内部的问题，但是在我们的一个生产环境上，我们遇到了必须在集群内部的server1，向server2/server3（提供sysdb）写log的场景。 server2/server3对外提供了VIP，用户可以从集群外部通过LVS来访问，但是server1访问sysdb的时候，会有路由问题。server1发出的syn报文，经由LVS转发给了server2，而server2应答的syn+ack报文，由于syn报文的源地址是server1，而server1跟server2在同一局域网内，所以server1会直接将该报文转发给server1，而不经过LVS。 所以就会不通。</p>
+
+<p>有了fullnat，syn报文经过LVS的处理以后，源地址改为LVS的LIP(Local IP)、目的地址改为了server2的地址，所以，对于server2来说，该syn请求就是LVS发起的，所以syn+ack报文还是会应答给LVS服务器；而应答报文再经过LVS处理，源地址改为LVS的EIP(External IP)，目的地址改为server1的地址，所以对于server1来说，请求得到了正确的应答，连接可以建立。</p>
+
+<p>fullnat解决了集群内部互相访问的问题。在阿里内部，应该还有更广阔的应用（例如虚机之间通信）。不过，据说青云曾经指出fullnat的一个弊端，即对于Real Server来说，无法审计真实的客户端，只能向LVS（阿里叫做SLB）请求</p>
+
+<p>lvs中nat和fullnat的区别
+NAT模式下报文变化
+发送接收</p>
+
+<p>cip —&gt; vip</p>
+
+<p>cip —&gt; rip（DNAT）</p>
+
+<p>rip —&gt; cip</p>
+
+<p>vip —&gt; cip（SNAT
+<img src="https://xiazemin.github.io/MyBlog/img/Nat_vip.png" />
+fullnat模式下报文变化：
+发送       接收</p>
+
+<p>cip —&gt; vip</p>
+
+<p>lip —&gt; rip ( SNAT + DNAT )</p>
+
+<p>rip —&gt; lip</p>
+
+<p>vip —&gt; cip ( SNAT + DNAT )
+<img src="https://xiazemin.github.io/MyBlog/img/fullNat.png" />
+注释：</p>
+
+<p>cip为客户端的地址
+vip为虚拟地址
+rip为真实的服务器
+lip为本地地址
+SNAT为来源地址转换
+DNAT为目的地址转换</p>
+
+<p>FULLNAT一个最大的问题是：RealServer无法获得用户IP；为了解决这个问题我们提出了TOA的概念，主要原理是：将client address放到了TCP Option里面带给后端RealServer，RealServer上通过toa内核模块hack了getname函数，给用户态返回TCP Option中的client ip。</p>
+
+<p>TOA (address of tcp option)-插入 client ip</p>
+
+<ol>
+  <li>该功能只有 fullnat 才会用</li>
+  <li>和 tcp 协议相关</li>
+</ol>
+
+<p>LVS可以防御DDOS 4层标志位攻击，其中，synproxy是用于防御synflood攻击的模块</p>
+
+<p>各大互联网公司都在对LVS进行修改和使用，因此产生了不通的LVS变种，比如百度的BIG-NAT,淘宝的FullNAT,腾讯的TGW(目前我还不太了解)。其基本原理都是在netfilter层，对数据包进行过滤、修改和伪装。</p>
+
+<p>https://tls.ulfheim.net/</p>
+:ET

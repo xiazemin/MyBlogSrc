@@ -1,0 +1,979 @@
+I"��<p>在 runtime.main() 函数中，执行 runtime_init() 前，会启动一个 sysmon 的监控线程，执行后台监控任务：</p>
+
+<p>systemstack(func() { // 创建监控线程，该线程独立于调度器，不需要跟 p 关联即可运行    newm(sysmon, nil)})
+sysmon 函数不依赖 P 直接执行，通过 newm 函数创建一个工作线程：</p>
+
+<p>func newm(fn func(), <em>p</em> *p) {</p>
+
+<p>// 创建 m 对象</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>mp := allocm(_p_, fn)
+</code></pre></div></div>
+
+<p>// 暂存 m</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>mp.nextp.set(_p_)
+
+mp.sigmask = initSigmask
+</code></pre></div></div>
+
+<p>// ……………………</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>execLock.rlock() // Prevent process clone.
+</code></pre></div></div>
+
+<p>// 创建系统线程</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>newosproc(mp, unsafe.Pointer(mp.g0.stack.hi))
+
+execLock.runlock()
+</code></pre></div></div>
+
+<p>}
+http://www.imooc.com/article/292206
+<!-- more -->
+先调用 allocm 在堆上创建一个 m，接着调用 newosproc 函数启动一个工作线程：</p>
+
+<p>// src/runtime/os_linux.go</p>
+
+<p>//go:nowritebarrier</p>
+
+<p>func newosproc(mp *m, stk unsafe.Pointer) {</p>
+
+<p>// ……………………</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>ret := clone(cloneFlags, stk, unsafe.Pointer(mp), unsafe.Pointer(mp.g0), unsafe.Pointer(funcPC(mstart)))
+</code></pre></div></div>
+
+<p>// ……………………</p>
+
+<p>}</p>
+
+<p>核心就是调用 clone 函数创建系统线程，新线程从 mstart 函数开始执行。clone 函数由汇编语言实现：</p>
+
+<p>// int32 clone(int32 flags, void <em>stk, M *mp, G *gp, void (</em>fn)(void));</p>
+
+<p>TEXT runtime·clone(SB),NOSPLIT,$0</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>// 准备系统调用的参数
+
+MOVL  flags+0(FP), DI
+
+MOVQ  stk+8(FP), SI
+
+MOVQ  $0, DX
+</code></pre></div></div>
+
+<p>MOVQ  $0, R10</p>
+
+<p>// 将 mp，gp，fn 拷贝到寄存器，对子线程可见</p>
+
+<p>MOVQ  mp+16(FP), R8</p>
+
+<p>MOVQ  gp+24(FP), R9</p>
+
+<p>MOVQ  fn+32(FP), R12</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>// 系统调用 clone
+</code></pre></div></div>
+
+<p>MOVL  $56, AX</p>
+
+<p>SYSCALL</p>
+
+<p>// In parent, return.</p>
+
+<p>CMPQ  AX, $0</p>
+
+<p>JEQ  3(PC)</p>
+
+<p>// 父线程，返回</p>
+
+<p>MOVL  AX, ret+40(FP)</p>
+
+<p>RET</p>
+
+<p>// In child, on new stack.</p>
+
+<p>// 在子线程中。设置 CPU 栈顶寄存器指向子线程的栈顶</p>
+
+<p>MOVQ  SI, SP</p>
+
+<p>// If g or m are nil, skip Go-related setup.</p>
+
+<p>CMPQ  R8, $0    // m</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>JEQ  nog
+
+CMPQ  R9, $0    // g
+</code></pre></div></div>
+
+<p>JEQ  nog</p>
+
+<p>// Initialize m-&gt;procid to Linux tid</p>
+
+<p>// 通过 gettid 系统调用获取线程 ID（tid）</p>
+
+<p>MOVL  $186, AX  // gettid</p>
+
+<p>SYSCALL</p>
+
+<p>// 设置 m.procid = tid</p>
+
+<p>MOVQ  AX, m_procid(R8)</p>
+
+<p>// Set FS to point at m-&gt;tls.</p>
+
+<p>// 新线程刚刚创建出来，还未设置线程本地存储，即 m 结构体对象还未与工作线程关联起来，</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>// 下面的指令负责设置新线程的 TLS，把 m 对象和工作线程关联起来
+</code></pre></div></div>
+
+<p>LEAQ  m_tls(R8), DI</p>
+
+<p>CALL  runtime·settls(SB)</p>
+
+<p>// In child, set up new stack</p>
+
+<p>get_tls(CX)</p>
+
+<p>MOVQ  R8, g_m(R9) // g.m = m</p>
+
+<p>MOVQ  R9, g(CX) // tls.g = &amp;m.g0</p>
+
+<p>CALL  runtime·stackcheck(SB)</p>
+
+<p>nog:</p>
+
+<p>// Call fn</p>
+
+<p>// 调用 mstart 函数。永不返回</p>
+
+<p>CALL  R12</p>
+
+<p>// It shouldn’t return. If it does, exit that thread.</p>
+
+<p>MOVL  $111, DI</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>MOVL  $60, AX
+</code></pre></div></div>
+
+<p>SYSCALL</p>
+
+<p>JMP  -3(PC)  // keep exiting</p>
+
+<p>先是为 clone 系统调用准备参数，参数通过寄存器传递。第一个参数指定内核创建线程时的选项，第二个参数指定新线程应该使用的栈，这两个参数都是通过 newosproc 函数传递进来的。</p>
+
+<p>接着将 m, g0, fn 分别保存到寄存器中，待子线程创建好后再拿出来使用。因为这些参数此时是在父线程的栈上，若不保存到寄存器中，子线程就取不出来了。</p>
+
+<p>这个几个参数保存在父线程的寄存器中，创建子线程时，操作系统内核会把父线程所有的寄存器帮我们复制一份给子线程，所以当子线程开始运行时就能拿到父线程保存在寄存器中的值，从而拿到这几个参数。</p>
+
+<p>之后，调用 clone 系统调用，内核帮我们创建出了一个子线程。相当于原来的一个执行分支现在变成了两个执行分支，于是会有两个返回。这和著名的 fork 系统调用类似，根据返回值来判断现在是处于父线程还是子线程。</p>
+
+<p>如果是父线程，就直接返回了。如果是子线程，接着还要执行一堆操作，例如设置 tls，设置 m.procid 等等。</p>
+
+<p>最后执行 mstart 函数，这是在 newosproc 函数传递进来的。mstart 函数再调用 mstart1，在 mstart1 里会执行这一行：</p>
+
+<p>// 执行启动函数。初始化过程中，fn == nilif fn := <em>g</em>.m.mstartfn; fn != nil {    fn()}
+之前我们在讲初始化的时候，这里的 fn 是空，会跳过的。但在这里，fn 就是最开始在 runtime.main 里设置的 sysmon 函数，因此这里会执行 sysmon，而它又是一个无限循环，永不返回。</p>
+
+<p>所以，这里不会执行到 mstart1 函数后面的 schedule 函数，也就不会进入 schedule 循环。因此这是一个不用和 p 结合的 m，它直接在后台执行，默默地执行监控任务。</p>
+
+<p>接下来，我们就来看 sysmon 函数到底做了什么？</p>
+
+<p>sysmon 执行一个无限循环，一开始每次循环休眠 20us，之后（1 ms 后）每次休眠时间倍增，最终每一轮都会休眠 10ms。</p>
+
+<p>sysmon 中会进行 netpool（获取 fd 事件）、retake（抢占）、forcegc（按时间强制执行 gc），scavenge heap（释放自由列表中多余的项减少内存占用）等处理。</p>
+
+<p>和调度相关的，我们只关心 retake 函数：</p>
+
+<p>func retake(now int64) uint32 {</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>n := 0
+</code></pre></div></div>
+
+<p>// 遍历所有的 p</p>
+
+<p>for i := int32(0); i &lt; gomaxprocs; i++ {</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    _p_ := allp[i]
+</code></pre></div></div>
+
+<p>if <em>p</em> == nil {</p>
+
+<p>continue</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    }
+</code></pre></div></div>
+
+<p>// 用于 sysmon 线程记录被监控 p 的系统调用时间和运行时间</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    pd := &amp;_p_.sysmontick
+</code></pre></div></div>
+
+<p>// p 的状态</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    s := _p_.status
+</code></pre></div></div>
+
+<p>if s == _Psyscall {</p>
+
+<p>// P 处于系统调用之中，需要检查是否需要抢占</p>
+
+<p>// Retake P from syscall if it’s there for more than 1 sysmon tick (at least 20us).</p>
+
+<p>// <em>p</em>.syscalltick 用于记录系统调用的次数，在完成系统调用之后加 1</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>        t := int64(_p_.syscalltick)
+</code></pre></div></div>
+
+<p>if int64(pd.syscalltick) != t {</p>
+
+<p>// pd.syscalltick != <em>p</em>.syscalltick，说明已经不是上次观察到的系统调用了，</p>
+
+<p>// 而是另外一次系统调用，所以需要重新记录 tick 和 when 值</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>            pd.syscalltick = uint32(t)
+
+            pd.syscallwhen = now
+</code></pre></div></div>
+
+<p>continue</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>        }
+</code></pre></div></div>
+
+<p>// 只要满足下面三个条件中的任意一个，则抢占该 p，否则不抢占</p>
+
+<p>// 1. p 的运行队列里面有等待运行的 goroutine</p>
+
+<p>// 2. 没有无所事事的 p</p>
+
+<p>// 3. 从上一次监控线程观察到 p 对应的 m 处于系统调用之中到现在已经超过 10 毫秒</p>
+
+<p>if runqempty(<em>p</em>) &amp;&amp; atomic.Load(&amp;sched.nmspinning)+atomic.Load(&amp;sched.npidle) &gt; 0 &amp;&amp; pd.syscallwhen+10<em>1000</em>1000 &gt; now {</p>
+
+<p>continue</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>        }
+
+
+
+        incidlelocked(-1)
+</code></pre></div></div>
+
+<p>if atomic.Cas(&amp;<em>p</em>.status, s, _Pidle) {</p>
+
+<p>// ……………………</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>            n++
+
+            _p_.syscalltick++
+</code></pre></div></div>
+
+<p>// 寻找一新的 m 接管 p</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>            handoffp(_p_)
+
+        }
+
+        incidlelocked(1)
+
+    } else if s == _Prunning {
+</code></pre></div></div>
+
+<p>// P 处于运行状态，检查是否运行得太久了</p>
+
+<p>// Preempt G if it’s running for too long.</p>
+
+<p>// 每发生一次调度，调度器 ++ 该值</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>        t := int64(_p_.schedtick)
+</code></pre></div></div>
+
+<p>if int64(pd.schedtick) != t {</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>            pd.schedtick = uint32(t)
+
+            pd.schedwhen = now
+</code></pre></div></div>
+
+<p>continue</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>        }
+</code></pre></div></div>
+
+<p>//pd.schedtick == t 说明(pd.schedwhen ～ now)这段时间未发生过调度</p>
+
+<p>// 这段时间是同一个goroutine一直在运行，检查是否连续运行超过了 10 毫秒</p>
+
+<p>if pd.schedwhen+forcePreemptNS &gt; now {</p>
+
+<p>continue</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>        }
+</code></pre></div></div>
+
+<p>// 连续运行超过 10 毫秒了，发起抢占请求</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>        preemptone(_p_)
+
+    }
+
+}
+</code></pre></div></div>
+
+<p>return uint32(n)</p>
+
+<p>}</p>
+
+<p>从代码来看，主要会对处于 _Psyscall 和 _Prunning 状态的 p 进行抢占。</p>
+
+<p>抢占进行系统调用的 P
+当 P 处于 _Psyscall 状态时，表明对应的 goroutine 正在进行系统调用。如果抢占 p，需要满足几个条件：</p>
+
+<p>p 的本地运行队列里面有等待运行的 goroutine。这时 p 绑定的 g 正在进行系统调用，无法去执行其他的 g，因此需要接管 p 来执行其他的 g。</p>
+
+<p>没有“无所事事”的 p。sched.nmspinning 和 sched.npidle 都为 0，这就意味着没有“找工作”的 m，也没有空闲的 p，大家都在“忙”，可能有很多工作要做。因此要抢占当前的 p，让它来承担一部分工作。</p>
+
+<p>从上一次监控线程观察到 p 对应的 m 处于系统调用之中到现在已经超过 10 毫秒。这说明系统调用所花费的时间较长，需要对其进行抢占，以此来使得 retake 函数返回值不为 0，这样，会保持 sysmon 线程 20 us 的检查周期，提高 sysmon 监控的实时性。</p>
+
+<p>注意，原代码是用的三个与条件，三者都要满足才会执行下面的 continue，也就是不进行抢占。因此要想进行抢占的话，只需要三个条件有一个不满足就行了。于是就有了上述三种情况。</p>
+
+<p>确定要抢占当前 p 后，先使用原子操作将 p 的状态修改为 _Pidle，最后调用 handoffp 进行抢占。</p>
+
+<p>func handoffp(<em>p</em> *p) {</p>
+
+<p>// 如果 p 本地有工作或者全局有工作，需要绑定一个 m</p>
+
+<table>
+  <tbody>
+    <tr>
+      <td>if !runqempty(<em>p</em>)</td>
+      <td> </td>
+      <td>sched.runqsize != 0 {</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    startm(_p_, false)
+</code></pre></div></div>
+
+<p>return</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>}
+</code></pre></div></div>
+
+<p>// ……………………</p>
+
+<p>// 所有其它 p 都在运行 goroutine，说明系统比较忙，需要启动 m</p>
+
+<p>if atomic.Load(&amp;sched.nmspinning)+atomic.Load(&amp;sched.npidle) == 0 &amp;&amp; atomic.Cas(&amp;sched.nmspinning, 0, 1) { // TODO: fast atomic</p>
+
+<p>// p 没有本地工作，启动一个自旋 m 来找工作</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    startm(_p_, true)
+</code></pre></div></div>
+
+<p>return</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>}
+</code></pre></div></div>
+
+<p>lock(&amp;sched.lock)</p>
+
+<p>// ……………………</p>
+
+<p>// 全局队列有工作</p>
+
+<p>if sched.runqsize != 0 {</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    unlock(&amp;sched.lock)
+
+    startm(_p_, false)
+</code></pre></div></div>
+
+<p>return</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>}
+</code></pre></div></div>
+
+<p>// ……………………</p>
+
+<p>// 没有工作要处理，把 p 放入全局空闲队列</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>pidleput(_p_)
+
+unlock(&amp;sched.lock)
+</code></pre></div></div>
+
+<p>}</p>
+
+<p>handoffp 再次进行场景判断，以调用 startm 启动一个工作线程来绑定 p，使得整体工作继续推进。</p>
+
+<p>当 p 的本地运行队列或全局运行队列里面有待运行的 goroutine，说明还有很多工作要做，调用 startm(<em>p</em>,false) 启动一个 m 来结合 p，继续工作。</p>
+
+<p>当除了当前的 p 外，其他所有的 p 都在运行 goroutine，说明天下太平，每个人都有自己的事做，唯独自己没有。为了全局更快地完成工作，需要启动一个 m，且要使得 m 处于自旋状态，和 p 结合之后，尽快找到工作。</p>
+
+<p>最后，如果实在没有工作要处理，就将 p 放入全局空闲队列里。</p>
+
+<p>我们接着来看 startm 函数都做了些什么：</p>
+
+<p>// runtime/proc.go</p>
+
+<p>//</p>
+
+<p>// 调用 m 来绑定 p，如果没有 m，那就新建一个</p>
+
+<p>// 如果 p 为空，那就尝试获取一个处于空闲状态的 p，如果找到 p，那就什么都不做</p>
+
+<p>func startm(<em>p</em> *p, spinning bool) {</p>
+
+<p>lock(&amp;sched.lock)</p>
+
+<p>if <em>p</em> == nil {</p>
+
+<p>// 没有指定 p 则需要从全局空闲队列中获取一个 p</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    _p_ = pidleget()
+</code></pre></div></div>
+
+<p>if <em>p</em> == nil {</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>        unlock(&amp;sched.lock)
+</code></pre></div></div>
+
+<p>if spinning {</p>
+
+<p>// 如果找到 p，放弃。还原全局处于自旋状态的 m 的数量</p>
+
+<p>if int32(atomic.Xadd(&amp;sched.nmspinning, -1)) &lt; 0 {</p>
+
+<p>throw(“startm: negative nmspinning”)</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>            }
+
+        }
+</code></pre></div></div>
+
+<p>// 没有空闲的 p，直接返回</p>
+
+<p>return</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    }
+
+}
+</code></pre></div></div>
+
+<p>// 从 m 空闲队列中获取正处于睡眠之中的工作线程，</p>
+
+<p>// 所有处于睡眠状态的 m 都在此队列中</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>mp := mget()
+
+unlock(&amp;sched.lock)
+</code></pre></div></div>
+
+<p>if mp == nil {</p>
+
+<p>// 如果没有找到 m</p>
+
+<p>var fn func()</p>
+
+<p>if spinning {</p>
+
+<p>// The caller incremented nmspinning, so set m.spinning in the new M.</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>        fn = mspinning
+
+    }
+</code></pre></div></div>
+
+<p>// 创建新的工作线程</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    newm(fn, _p_)
+</code></pre></div></div>
+
+<p>return</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>}
+</code></pre></div></div>
+
+<p>if mp.spinning {</p>
+
+<p>throw(“startm: m is spinning”)</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>}
+</code></pre></div></div>
+
+<p>if mp.nextp != 0 {</p>
+
+<p>throw(“startm: m has p”)</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>}
+</code></pre></div></div>
+
+<p>if spinning &amp;&amp; !runqempty(<em>p</em>) {</p>
+
+<p>throw(“startm: p has runnable gs”)</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>}
+</code></pre></div></div>
+
+<p>// The caller incremented nmspinning, so set m.spinning in the new M.</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>mp.spinning = spinning
+</code></pre></div></div>
+
+<p>// 设置 m 马上要结合的 p</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>mp.nextp.set(_p_)
+</code></pre></div></div>
+
+<p>// 唤醒 m</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>notewakeup(&amp;mp.park)
+</code></pre></div></div>
+
+<p>}</p>
+
+<p>首先处理 p 为空的情况，直接从全局空闲 p 队列里找，如果没找到，则直接返回。如果设置了 spinning 为 true 的话，还需要还原全局的处于自旋状态的 m 的数值：&amp;sched.nmspinning 。</p>
+
+<p>搞定了 p，接下来看 m。先调用 mget 函数从全局空闲的 m 队列里获取一个 m，如果没找到 m，则要调用 newm 新创建一个 m，并且如果设置了 spinning 为 true 的话，先要设置好 mstartfn：</p>
+
+<p>func mspinning() { // startm’s caller incremented nmspinning. Set the new M’s spinning.    getg().m.spinning = true}
+这样，启动 m 后，在 mstart1 函数里，进入 schedule 循环前，执行 mstartfn 函数，使得 m 处于自旋状态。</p>
+
+<p>接下来是正常情况下（找到了 p 和 m）的处理：</p>
+
+<p>mp.spinning = spinning// 设置 m 马上要结合的 pmp.nextp.set(<em>p</em>)// 唤醒 mnotewakeup(&amp;mp.park)
+设置 nextp 为找到的 p，调用 notewakeup 唤醒 m。之前我们讲 findrunnable 函数的时候，对于最后没有找到工作的 m，我们调用 notesleep(&amp;<em>g</em>.m.park)，使得 m 进入睡眠状态。现在终于有工作了，需要老将出山，将其唤醒：</p>
+
+<p>// src/runtime/lock_futex.gofunc notewakeup(n *note) { // 设置 n.key = 1, 被唤醒的线程通过查看该值是否等于 1 // 来确定是被其它线程唤醒还是意外从睡眠中苏醒    old := atomic.Xchg(key32(&amp;n.key), 1) if old != 0 { print(“notewakeup - double wakeup (“, old, “)\n”) throw(“notewakeup - double wakeup”)    }    futexwakeup(key32(&amp;n.key), 1)}
+notewakeup 函数首先使用 atomic.Xchg 设置 note.key 值为 1，这是为了使被唤醒的线程可以通过查看该值是否等于 1 来确定是被其它线程唤醒还是意外从睡眠中苏醒了过来。</p>
+
+<p>如果该值为 1 则表示是被唤醒的，可以继续工作，但如果该值为 0 则表示是意外苏醒，需要再次进入睡眠。</p>
+
+<p>调用 futexwakeup 来唤醒工作线程，它和 futexsleep 是相对的。</p>
+
+<p>func futexwakeup(addr *uint32, cnt uint32) {</p>
+
+<p>// 调用 futex 函数唤醒工作线程</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>ret := futex(unsafe.Pointer(addr), _FUTEX_WAKE, cnt, nil, nil, 0)
+</code></pre></div></div>
+
+<p>if ret &gt;= 0 {</p>
+
+<p>return</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>}
+</code></pre></div></div>
+
+<p>// ……………………</p>
+
+<p>}</p>
+
+<p>futex 由汇编语言实现，前面已经分析过，这里就不重复了。主要内容就是先准备好参数，然后进行系统调用，由内核唤醒线程。</p>
+
+<p>内核在完成唤醒工作之后当前工作线程从内核返回到 futex 函数继续执行 SYSCALL 指令之后的代码并按函数调用链原路返回，继续执行其它代码。</p>
+
+<p>而被唤醒的工作线程则由内核负责在适当的时候调度到 CPU 上运行。</p>
+
+<p>抢占长时间运行的 P
+我们知道，Go scheduler 采用的是一种称为协作式的抢占式调度，就是说并不强制调度，大家保持协作关系，互相信任。对于长时间运行的 P，或者说绑定在 P 上的长时间运行的 goroutine，sysmon 会检测到这种情况，然后设置一些标志，表示 goroutine 自己让出 CPU 的执行权，给其他 goroutine 一些机会。</p>
+
+<p>接下来我们就来分析当 P 处于 _Prunning 状态的情况。sysmon 扫描每个 p 时，都会记录下当前调度器调度的次数和当前时间，数据记录在结构体：</p>
+
+<p>type sysmontick struct {    schedtick   uint32    schedwhen   int64    syscalltick uint32    syscallwhen int64}
+前面两个字段记录调度器调度的次数和时间，后面两个字段记录系统调用的次数和时间。</p>
+
+<p>在下一次扫描时，对比 sysmon 记录下的 p 的调度次数和时间，与当前 p 自己记录下的调度次数和时间对比，如果一致。说明 P 在这一段时间内一直在运行同一个 goroutine。那就来计算一下运行时间是否太长了。</p>
+
+<p>如果发现运行时间超过了 10 ms，则要调用 preemptone(<em>p</em>) 发起抢占的请求：</p>
+
+<p>func preemptone(<em>p</em> *p) bool {</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>mp := _p_.m.ptr()
+</code></pre></div></div>
+
+<table>
+  <tbody>
+    <tr>
+      <td>if mp == nil</td>
+      <td> </td>
+      <td>mp == getg().m {</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>return false</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>}
+</code></pre></div></div>
+
+<p>// 被抢占的 goroutine</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>gp := mp.curg
+</code></pre></div></div>
+
+<table>
+  <tbody>
+    <tr>
+      <td>if gp == nil</td>
+      <td> </td>
+      <td>gp == mp.g0 {</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>return false</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>}
+</code></pre></div></div>
+
+<p>// 设置抢占标志</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>gp.preempt = true
+</code></pre></div></div>
+
+<p>// 在 goroutine 内部的每次调用都会比较栈顶指针和 g.stackguard0，</p>
+
+<p>// 来判断是否发生了栈溢出。stackPreempt 非常大的一个数，比任何栈都大</p>
+
+<p>// stackPreempt = 0xfffffade</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>gp.stackguard0 = stackPreempt
+</code></pre></div></div>
+
+<p>return true</p>
+
+<p>}</p>
+
+<p>基本上只是将 stackguard0 设置了一个很大的值，而检查 stackguard0 的地方在函数调用前的一段汇编代码里进行。</p>
+
+<p>举一个简单的例子：</p>
+
+<p>package main</p>
+
+<p>import “fmt”</p>
+
+<p>func main() {</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>fmt.Println("hello qcrao.com!")
+</code></pre></div></div>
+
+<p>}</p>
+
+<p>执行命令：</p>
+
+<p>go tool compile -S main.go
+得到汇编代码：</p>
+
+<p>”“.main STEXT size=120 args=0x0 locals=0x48 0x0000 00000 (test26.go:5)  TEXT    ““.main(SB), $72-0 0x0000 00000 (test26.go:5)    MOVQ    (TLS), CX 0x0009 00009 (test26.go:5)    CMPQ    SP, 16(CX) 0x000d 00013 (test26.go:5)    JLS 113 0x000f 00015 (test26.go:5)    SUBQ    $72, SP 0x0013 00019 (test26.go:5)  MOVQ    BP, 64(SP) 0x0018 00024 (test26.go:5)  LEAQ    64(SP), BP 0x001d 00029 (test26.go:5)    FUNCDATA    $0, gclocals·69c1753bd5f81501d95132d08af04464(SB) 0x001d 00029 (test26.go:5)    FUNCDATA    $1, gclocals·e226d4ae4a7cad8835311c6a4683c14f(SB) 0x001d 00029 (test26.go:6)  MOVQ    $0, “”..autotmp_0+48(SP) 0x0026 00038 (test26.go:6)    MOVQ    $0, “”..autotmp_0+56(SP) 0x002f 00047 (test26.go:6)  LEAQ    type.string(SB), AX 0x0036 00054 (test26.go:6)  MOVQ    AX, “”..autotmp_0+48(SP) 0x003b 00059 (test26.go:6)  LEAQ    ““.statictmp_0(SB), AX 0x0042 00066 (test26.go:6)  MOVQ    AX, “”..autotmp_0+56(SP) 0x0047 00071 (test26.go:6)  LEAQ    “”..autotmp_0+48(SP), AX 0x004c 00076 (test26.go:6)  MOVQ    AX, (SP) 0x0050 00080 (test26.go:6)  MOVQ    $1, 8(SP) 0x0059 00089 (test26.go:6)    MOVQ    $1, 16(SP) 0x0062 00098 (test26.go:6)  PCDATA  $0, $1 0x0062 00098 (test26.go:6)  CALL    fmt.Println(SB) 0x0067 00103 (test26.go:7)  MOVQ    64(SP), BP 0x006c 00108 (test26.go:7)  ADDQ    $72, SP 0x0070 00112 (test26.go:7)    RET 0x0071 00113 (test26.go:7)    NOP 0x0071 00113 (test26.go:5)    PCDATA  $0, $-1 0x0071 00113 (test26.go:5)  CALL    runtime.morestack_noctxt(SB) 0x0076 00118 (test26.go:5)  JMP 0
+以前看这段代码的时候会直接跳过前面的几行代码，看不懂。这次能看懂了！所以，那些暂时看不懂的，先放一放，没关系，让子弹飞一会儿，很多东西回过头再来看就会豁然开朗，这就是一个很好的例子。</p>
+
+<p>0x0000 00000 (test26.go:5)    MOVQ    (TLS), CX
+将本地存储 tls 保存到 CX 寄存器中，（TLS）表示它所关联的 g，这里就是前面所讲到的 main gouroutine。</p>
+
+<p>0x0009 00009 (test26.go:5)    CMPQ    SP, 16(CX)
+比较 SP 寄存器（代表当前 main goroutine 的栈顶寄存器）和 16(CX)，我们看下 g 结构体：</p>
+
+<p>type g struct { // goroutine 使用的栈    stack       stack   // offset known to runtime/cgo // 用于栈的扩张和收缩检查    stackguard0 uintptr // offset known to liblink // ……………………}
+对象 g 的第一个字段是 stack 结构体：</p>
+
+<p>type stack struct {    lo uintptr    hi uintptr}
+共 16 字节。而 16(CX) 表示 g 对象的第 16 个字节，跳过了 g 的第一个字段，也就是 g.stackguard0 字段。</p>
+
+<p>如果 SP 小于 g.stackguard0，这是必然的，因为前面已经把 g.stackguard0 设置成了一个非常大的值，因此跳转到了 113 行。</p>
+
+<p>0x0071 00113 (test26.go:7)    NOP0x0071 00113 (test26.go:5)    PCDATA  $0, $-10x0071 00113 (test26.go:5)    CALL    runtime.morestack_noctxt(SB)0x0076 00118 (test26.go:5)    JMP 0
+调用 runtime.morestack_noctxt 函数：</p>
+
+<p>// src/runtime/asm_amd64.sTEXT runtime·morestack_noctxt(SB),NOSPLIT,$0    MOVL    $0, DX    JMP runtime·morestack(SB)
+直接跳转到 morestack 函数：</p>
+
+<p>TEXT runtime·morestack(SB),NOSPLIT,$0-0</p>
+
+<p>// Cannot grow scheduler stack (m-&gt;g0).</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>get_tls(CX)
+</code></pre></div></div>
+
+<p>// BX = g，g 表示 main goroutine</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>MOVQ    g(CX), BX
+</code></pre></div></div>
+
+<p>// BX = g.m</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>MOVQ    g_m(BX), BX
+</code></pre></div></div>
+
+<p>// SI = g.m.g0</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>MOVQ    m_g0(BX), SI
+
+CMPQ    g(CX), SI
+
+JNE    3(PC)
+
+CALL    runtime·badmorestackg0(SB)
+
+INT    $3
+</code></pre></div></div>
+
+<p>// ……………………</p>
+
+<p>// Set g-&gt;sched to context in f.</p>
+
+<p>// 将函数的返回地址保存到 AX 寄存器</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>MOVQ    0(SP), AX // f's PC
+</code></pre></div></div>
+
+<p>// 将函数的返回地址保存到 g.sched.pc</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>MOVQ    AX, (g_sched+gobuf_pc)(SI)
+</code></pre></div></div>
+
+<p>// g.sched.g = g</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>MOVQ    SI, (g_sched+gobuf_g)(SI)
+</code></pre></div></div>
+
+<p>// 取地址操作符，调用 morestack_noctxt 之前的 rsp</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>LEAQ    8(SP), AX // f's SP
+</code></pre></div></div>
+
+<p>// 将 main 函数的栈顶地址保存到 g.sched.sp</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>MOVQ    AX, (g_sched+gobuf_sp)(SI)
+</code></pre></div></div>
+
+<p>// 将 BP 寄存器保存到 g.sched.bp</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>MOVQ    BP, (g_sched+gobuf_bp)(SI)
+</code></pre></div></div>
+
+<p>// newstack will fill gobuf.ctxt.</p>
+
+<p>// Call newstack on m-&gt;g0’s stack.</p>
+
+<p>// BX = g.m.g0</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>MOVQ    m_g0(BX), BX
+</code></pre></div></div>
+
+<p>// 将 g0 保存到本地存储 tls</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>MOVQ    BX, g(CX)
+</code></pre></div></div>
+
+<p>// 把 g0 栈的栈顶寄存器的值恢复到 CPU 的寄存器 SP，达到切换栈的目的，下面这一条指令执行之前，</p>
+
+<p>// CPU 还是使用的调用此函数的 g 的栈，执行之后 CPU 就开始使用 g0 的栈了</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>MOVQ    (g_sched+gobuf_sp)(BX), SP
+</code></pre></div></div>
+
+<p>// 准备参数</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>PUSHQ   DX  // ctxt argument
+</code></pre></div></div>
+
+<p>// 不返回</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>CALL    runtime·newstack(SB)
+
+MOVQ    $0, 0x1003 // crash if newstack returns
+
+POPQ    DX  // keep balance check happy
+
+RET
+</code></pre></div></div>
+
+<p>主要做的工作就是将当前 goroutine，也就是 main goroutine 的和调度相关的信息保存到 g.sched 中，以便在调度到它执行时，可以恢复。</p>
+
+<p>最后，将 g0 的地址保存到 tls 本地存储，并且切到 g0 栈执行之后的代码。继续调用 newstack 函数：</p>
+
+<p>func newstack(ctxt unsafe.Pointer) {</p>
+
+<p>// thisg = g0</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>thisg := getg()
+</code></pre></div></div>
+
+<p>// ……………………</p>
+
+<p>// gp = main goroutine</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>gp := thisg.m.curg
+</code></pre></div></div>
+
+<p>// Write ctxt to gp.sched. We do this here instead of in</p>
+
+<p>// morestack so it has the necessary write barrier.</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>gp.sched.ctxt = ctxt
+</code></pre></div></div>
+
+<p>// ……………………</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>morebuf := thisg.m.morebuf
+
+thisg.m.morebuf.pc = 0
+
+thisg.m.morebuf.lr = 0
+
+thisg.m.morebuf.sp = 0
+
+thisg.m.morebuf.g = 0
+</code></pre></div></div>
+
+<p>// 检查 g.stackguard0 是否被设置成抢占标志</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>preempt := atomic.Loaduintptr(&amp;gp.stackguard0) == stackPreempt
+</code></pre></div></div>
+
+<p>if preempt {</p>
+
+<table>
+  <tbody>
+    <tr>
+      <td>if thisg.m.locks != 0</td>
+      <td> </td>
+      <td>thisg.m.mallocing != 0</td>
+      <td> </td>
+      <td>thisg.m.preemptoff != “”</td>
+      <td> </td>
+      <td>thisg.m.p.ptr().status != _Prunning {</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>// 还原 stackguard0 为正常值，表示我们已经处理过抢占请求了</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>        gp.stackguard0 = gp.stack.lo + _StackGuard
+</code></pre></div></div>
+
+<p>// 不抢占，调用 gogo 继续运行当前这个 g，不需要调用 schedule 函数去挑选另一个 goroutine</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>        gogo(&amp;gp.sched) // never return
+
+    }
+
+}
+</code></pre></div></div>
+
+<p>// ……………………</p>
+
+<p>if preempt {</p>
+
+<p>if gp == thisg.m.g0 {</p>
+
+<p>throw(“runtime: preempt g0”)</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    }
+</code></pre></div></div>
+
+<p>if thisg.m.p == 0 &amp;&amp; thisg.m.locks == 0 {</p>
+
+<p>throw(“runtime: g is running but p is not”)</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    }
+</code></pre></div></div>
+
+<p>// Synchronize with scang.</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    casgstatus(gp, _Grunning, _Gwaiting)
+</code></pre></div></div>
+
+<p>// ……………………</p>
+
+<p>// Act like goroutine called runtime.Gosched.</p>
+
+<p>// 修改为 running，调度起来运行</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    casgstatus(gp, _Gwaiting, _Grunning)
+</code></pre></div></div>
+
+<p>// 调用 gopreempt_m 把 gp 切换出去</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    gopreempt_m(gp) // never return
+
+}
+</code></pre></div></div>
+
+<p>// ……………………</p>
+
+<p>}</p>
+
+<p>去掉了很多暂时还看不懂的地方，留到后面再研究。只关注有关抢占相关的。第一次判断 preempt 标志是 true 时，检查了 g 的状态，发现不能抢占，例如它所绑定的 P 的状态不是_Prunning，那就恢复它的 stackguard0 字段，下次就不会走这一套流程了。然后，调用 gogo(&amp;gp.sched) 继续执行当前的 goroutine。</p>
+
+<p>中间又处理了很多判断流程，再次判断 preempt 标志是 true 时，调用 gopreempt_m(gp) 将 gp 切换出去。</p>
+
+<p>func gopreempt_m(gp *g) { if trace.enabled {        traceGoPreempt()    }    goschedImpl(gp)}
+最终调用 goschedImpl 函数：</p>
+
+<p>func goschedImpl(gp *g) {</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>status := readgstatus(gp)
+</code></pre></div></div>
+
+<p>if status&amp;^_Gscan != _Grunning {</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    dumpgstatus(gp)
+</code></pre></div></div>
+
+<p>throw(“bad g status”)</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>}
+</code></pre></div></div>
+
+<p>// 更改 gp 的状态</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>casgstatus(gp, _Grunning, _Grunnable)
+</code></pre></div></div>
+
+<p>// 解除 m 和 g 的关系</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>dropg()
+</code></pre></div></div>
+
+<p>lock(&amp;sched.lock)</p>
+
+<p>// 将 gp 放入全局可运行队列</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>globrunqput(gp)
+
+unlock(&amp;sched.lock)
+</code></pre></div></div>
+
+<p>// 进入新一轮的调度循环</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>schedule()
+</code></pre></div></div>
+
+<p>}</p>
+
+<p>将 gp 的状态改为 _Grunnable，放入全局可运行队列，等待下次有 m 来全局队列找工作时才能继续运行，毕竟你已经运行这么长时间了，给别人一点机会嘛。</p>
+
+<p>最后，调用 schedule() 函数进入新一轮的调度循环，会找出一个 goroutine 来运行，永不返回。</p>
+
+<p>这样，关于 sysmon 线程在关于调度这块到底做了啥，我们已经回答完了。总结一下：</p>
+
+<p>抢占处于系统调用的 P，让其他 m 接管它，以运行其他的 goroutine。</p>
+
+<p>将运行时间过长的 goroutine 调度出去，给其他 goroutine 运行的机会。</p>
+
+<p>深入Golang之goroutine】http://www.opscoder.info/golang_goroutine.html
+【阿波张 工作线程的唤醒及创建】https://mp.weixin.qq.com/s/T9CDaNF5KUFjE_Z6YW7mRw</p>
+
+<p>http://www.imooc.com/article/292206
+https://xargin.com/go-scheduler/
+https://blog.csdn.net/u010853261/article/details/84901386
+https://blog.csdn.net/u010853261/article/details/84790392</p>
+
+:ET

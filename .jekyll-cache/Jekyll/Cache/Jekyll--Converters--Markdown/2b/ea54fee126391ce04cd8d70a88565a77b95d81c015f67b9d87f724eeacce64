@@ -1,0 +1,157 @@
+I"�<p>这次，我们将演示如何在PHP扩展中如何对数组进行处理。要实现的PHP代码如下：</p>
+
+<p>&lt;?php
+function array_concat ($arr, $prefix) {
+    foreach($arr as $key =&gt; $val) {
+        if (isset($prefix[$key]) 
+                &amp;&amp; is_string($val) 
+                &amp;&amp; is_string($prefix[$key])) {
+            $arr[$key] = $prefix[$key].$val;
+        } <br />
+    } <br />
+    return $arr;
+}</p>
+
+<p>$arr = array(
+    0 =&gt; ‘0’,
+    1 =&gt; ‘123’,
+    ‘a’ =&gt; ‘abc’,
+);<br />
+$prefix = array(
+    1 =&gt; ‘456’,
+    ‘a’ =&gt; ‘def’,
+);<br />
+var_dump(array_concat($arr, $prefix));
+?&gt;</p>
+
+<p>把两个数组，相同key的字符串值拼接。</p>
+
+<p>代码
+基础代码
+这个扩展，我们将在say扩展上增加 array_concat 方法。say扩展相关代码大家请看这篇博文。PHP7扩展开发之hello word 文中已经详细介绍了如何创建一个扩展和提供了源码下载。</p>
+
+<p>实现array_concat方法
+array_concat方法的PHP扩展源码：</p>
+
+<p>PHP_FUNCTION(array_concat)
+{
+    zval *arr, *prefix, *entry, *prefix_entry, value;
+    zend_string *string_key, *result;
+    zend_ulong num_key;</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>if (zend_parse_parameters(ZEND_NUM_ARGS(), "aa", &amp;arr, &amp;prefix) == FAILURE) {
+    return;
+}
+
+array_init_size(return_value, zend_hash_num_elements(Z_ARRVAL_P(arr)));
+
+ZEND_HASH_FOREACH_KEY_VAL(Z_ARRVAL_P(arr), num_key, string_key, entry) {
+    if (string_key &amp;&amp; zend_hash_exists(Z_ARRVAL_P(prefix), string_key)) {
+        prefix_entry = zend_hash_find(Z_ARRVAL_P(prefix), string_key);
+        if (Z_TYPE_P(entry) == IS_STRING &amp;&amp; prefix_entry != NULL &amp;&amp; Z_TYPE_P(prefix_entry) == IS_STRING) {
+            result = strpprintf(0, "%s%s", Z_STRVAL_P(prefix_entry), Z_STRVAL_P(entry));
+            ZVAL_STR(&amp;value, result);
+            zend_hash_update(Z_ARRVAL_P(return_value), string_key, &amp;value);
+        }   
+    } else if (string_key == NULL &amp;&amp; zend_hash_index_exists(Z_ARRVAL_P(prefix), num_key)){
+        prefix_entry = zend_hash_index_find(Z_ARRVAL_P(prefix), num_key);
+        if (Z_TYPE_P(entry) == IS_STRING &amp;&amp; prefix_entry != NULL &amp;&amp; Z_TYPE_P(prefix_entry) == IS_STRING) {
+            result = strpprintf(0, "%s%s", Z_STRVAL_P(prefix_entry), Z_STRVAL_P(entry));
+            ZVAL_STR(&amp;value, result);
+            zend_hash_index_update(Z_ARRVAL_P(return_value), num_key, &amp;value);
+        }
+    } else if (string_key) {
+        zend_hash_update(Z_ARRVAL_P(return_value), string_key, entry);
+        zval_add_ref(entry);
+    } else  {
+        zend_hash_index_update(Z_ARRVAL_P(return_value), num_key, entry);
+        zval_add_ref(entry);
+    }
+}ZEND_HASH_FOREACH_END();
+</code></pre></div></div>
+
+<p>}</p>
+
+<p>代码说明
+PHP中的数组本质上就是一个哈希。
+对于哈希处理的方法主要集中在Zend/zend_hash.h中。
+对于数组的操作方法主要集中在Zend/API.h。数组的方法其实就是对哈希处理方法的一层包装。
+数组操作的方法主要是以add_assoc_ 和 add_index_开头的一些列方法。</p>
+
+<p>下面是代码中涉及的一些方法。
+zend_hash_num_elements获取数组的元素个数。</p>
+
+<p>array_init_size(return_value, zend_hash_num_elements(Z_ARRVAL_P(arr))); 初始化一个数组。在PHP扩展中，我们是通过return_value这个变量设置方法的返回值。因此，我们直接修改这个return_value变量即可。感兴趣的话，可以把宏方法PHP_FUNCTION展开看下。</p>
+
+<p>PHP7提供了一套宏方法用于遍历哈希和对哈希进行操作。这些宏方法主要放在Zend/zend_hash.h文件中。如，代码中的ZEND_HASH_FOREACH_KEY_VAL就是一个变量哈希的宏。是不是和PHP代码中的foreach有点像？</p>
+
+<p>在这里我们把代码中用到的哈希相关的方法做下整理说明：
+ZEND_HASH_FOREACH_KEY_VAL 和 ZEND_HASH_FOREACH_END 配合使用，实现foreach的效果。
+zend_hash_exists 检测指定的key在哈希中是否存在。key为字符串。
+zend_hash_index_exists 检测指定的key在哈希中是否存在。key为数字。
+zend_hash_find 根据key查找指定的值。key为字符串。
+zend_hash_index_find 根据key查找指定的值。key为数字。
+zend_hash_update 更新指定key的值。key为字符串。
+zend_hash_index_update 更新指定key的值。key为数字。
+基本上有这些方法，你就可以对数组进行一些基本操作了。方法命名也很有规律，key为字符串和数字提供了两套。</p>
+
+<p>zval_add_ref(entry); 给数组的值，增加一次引用计数。zend_hash_update方法只自动给string_key自动增加了一次引用计数。数组return_value共用数组arr的值。因此，我们需要手动增加一次引用计数
+<!-- more -->
+https://blog.csdn.net/u013474436/article/details/53485140</p>
+
+<p>1、zend_hash_num_elements 获取数组元素个数。宏定义如下：
+1 #define zend_hash_num_elements(ht) <br />
+2     (ht)-&gt;nNumOfElements
+2、ZEND_HASH_FOREACH_KEY_VAL 遍历数组键值。使用方法：
+1 ZEND_HASH_FOREACH_KEY_VAL(Z_ARRVAL_P(array), num_key, string_key, entry) {
+2             // code
+3 } ZEND_HASH_FOREACH_END();
+　ZEND_HASH_FOREACH_KEY_VAL是个宏函数：
+1 #define ZEND_HASH_FOREACH_KEY_VAL(ht, _h, _key, _val) <br />
+2     ZEND_HASH_FOREACH(ht, 0); <br />
+3     _h = _p-&gt;h; <br />
+4     _key = _p-&gt;key; <br />
+5     _val = _z;
+　  继续展开 ZEND_HASH_FOREACH：</p>
+
+<p>复制代码
+1 #define ZEND_HASH_FOREACH(_ht, indirect) do { <br />
+2         Bucket *_p = (_ht)-&gt;arData; <br />
+3         Bucket *_end = _p + (_ht)-&gt;nNumUsed; <br />
+4         for (; _p != _end; _p++) { <br />
+5             zval *_z = &amp;_p-&gt;val; <br />
+6             if (indirect &amp;&amp; Z_TYPE_P(_z) == IS_INDIRECT) { <br />
+7                 _z = Z_INDIRECT_P(_z); <br />
+8             } <br />
+9             if (UNEXPECTED(Z_TYPE_P(_z) == IS_UNDEF)) continue;
+复制代码
+ZEND_HASH_FOREACH_END展开：
+1 #define ZEND_HASH_FOREACH_END() <br />
+2         } <br />
+3     } while (0)</p>
+
+<p>ZEND_HASH_FOREACH_KEY_VAL(Z_ARRVAL_P(array), num_key, string_key, entry) {
+             // code
+} ZEND_HASH_FOREACH_END();
+完全展开：
+复制代码
+ 1 do { 
+ 2     Bucket *_p = (_ht)-&gt;arData;  // Z_ARRVAL_P(array) —&gt; ht —&gt; _ht
+ 3     Bucket *_end = _p + (_ht)-&gt;nNumUsed;  // 起始地址+偏移地址
+ 4     for (; _p != _end; _p++) { 
+ 5         zval *_z = &amp;_p-&gt;val; 
+ 6         if (indirect &amp;&amp; Z_TYPE_P(_z) == IS_INDIRECT) { 
+ 7             _z = Z_INDIRECT_P(_z); 
+ 8         } 
+ 9         if (UNEXPECTED(Z_TYPE_P(_z) == IS_UNDEF)) continue;
+10         _h = _p-&gt;h;  // zend_ulong num_key —&gt; _h
+11         _key = _p-&gt;key; // zend_string *string_key —&gt; _key
+12         _val = _z; // zval *entry —&gt; _val
+13         {
+14            //code
+15         } 
+16     } 
+17 } while (0)</p>
+
+<p>https://www.cnblogs.com/natian-ws/p/9105338.html</p>
+:ET

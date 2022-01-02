@@ -1,0 +1,178 @@
+I",)<p>It’s been a while since my last post, so I thought I would write about a pattern that I’ve come to like for handling errors in HTTP Handlers in Go.</p>
+
+<p>I’ve always enjoyed the simplicity of writing web services in Go. You create your http.HandlerFuncs, add them to your router or server, and you’re done. There’s no magic.</p>
+
+<p>With this simplicity however also comes with some downsides.</p>
+
+<p>One thing I’ve never liked is how you are forced to handle errors in your http.Handler s and http.HandlerFunc s. Any error handling has to be done in your handler code, since the signatures require you to conform to handling a http.ResponseWriter and *http.Request without returning anything.
+<!-- more -->
+// http.Handler interface
+ServeHTTP(w http.ResponseWriter, r *http.Request)</p>
+
+<p>// http.HandlerFunc type
+func(http.ResponseWriter, *http.Request)
+This is typically fine for small web services/APIs that don’t have a large surface area, but I’ve found this approach breaks down when building APIs with a lot of functionality. It also makes it very difficult to conform to an API specification that has well defined error codes and responses.</p>
+
+<p>Let me elaborate with a somewhat contrived example.</p>
+
+<p>Implementing a Docker Registry API Endpoint
+Let’s say you want to implement the Docker Registry HTTP API V2 specification. This is the same API that Docker Hub implements which the Docker client communicates with when you do a docker pull or docker push.</p>
+
+<p>Luckily for us, Docker did a great job when writing this spec and gives overviews of what your registry needs to implement in order to work with the Docker client. Heck, they even provided the appropriate Error Codes that you should return when something goes wrong, along with a description of when it’s appropriate to return these errors.</p>
+
+<p>Back to our example. For the sake of terseness, let’s see what it would look like to implement a single endpoint for Pulling an Image Manifest, which is one of the first endpoints that the Docker client calls when you do a docker pull.</p>
+
+<p>The spec defines that this endpoint should resolve requests that match:</p>
+
+<p>GET /v2/<name>/manifests/<reference>
+Let's implement this endpoint in pseudo-code, conforming to the http.HandlerFunc type.</reference></name></p>
+
+<p>func (a *API) GetImageManifest(w http.ResponseWriter, *r http.Request) {
+    // TODO: do your auth here, handle unauthorized errors (1)</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>// get the `name` and `reference` path variables using your favorite routing library (or stdlib if you are a masochist)
+var (
+  vars = mux.Vars(r)
+  name = vars["name"]
+  ref = vars["reference"]
+)
+
+// TODO: do some validation on those path variables, return errors if invalid (2/3)
+
+// get the image manifest from your database that matches that name/reference
+
+manifest, err := a.DB.GetManifest(name, ref)
+if err != nil {
+  // TODO: handle errors (4/5/6)
+}
+
+// encode your manifest to JSON, assume your manifest type has JSON struct tags added already or implements the json.Marshaller interface
+
+if err := json.NewEncoder(w).Encode(manifest); err != nil {
+  // TODO: handle error (7)
+}
+
+w.Header().Set("Content-Length", contentLength)
+w.Header().Set("Docker-Content-Digest", digest)
+w.WriteHeader(http.StatusOK) } Now that doesn't look too bad at first glance does it? But lets look a bit deeper and see all of the places that we have TODOs to handle errors.
+</code></pre></div></div>
+
+<p>What Can Go Wrong?
+Here are some of the un-happy paths that we need to handle:</p>
+
+<p>Authorization/Authentication fails: The user making the request is not authenticated in the case of a private image, or has invalid permissions
+The name variable from the request does not pass validation
+The ref variable from the request does not pass validation
+The manifest requested is not found
+The manifest found is somehow invalid
+The DB that you are retrieving the manifest from is not available or has some other error retrieving the results
+Encoding the retrieved manifest to JSON fails
+This list doesn’t even include the myriad of other networking related errors that can occur in the lifetime of your request, such as requests being cancelled or timing out.</p>
+
+<p>Remember that for each of these error cases, we need to interpret the error and return the appropriate error response so that the Docker client can determine what to do.</p>
+
+<p>This will lead to a lot of repetitive, boilerplate error handling across all of your http.Handlers such as:</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>if err == ErrNameInvalid {
+  // set correct HTTP Status code
+  // return `NAME_INVALID` error code in JSON response along with description
+}
+
+if err == ErrDigestInvalid {
+  // set correct HTTP Status code
+  // return `DIGEST_INVALID` error code in JSON response along with description
+} Not to mention what the error handling will look like for calls to lower level code that can return multiple error types such as:
+
+manifest, err := a.DB.GetManifest(name, ref)
+
+if err != nil {
+  switch t := err.(type) {
+    case NotFoundError:
+      // set 404 HTTP Status code
+      // return `MANIFEST_UNKNOWN` error code in JSON response along with description
+    case InvalidManifestError:
+      // set 400 HTTP Status code
+      // return `MANIFEST_INVALID` error code in JSON response along with description
+    case DBTimeoutError:
+      // set correct HTTP Status Code? Probably 500?
+      // return some appropriate error code in the JSON response?
+    case ...
+  }
+} You'll have to repeat this error handling code across your application whenever you call out to lower level code that do things like interacting with your database or authenticating requests.
+</code></pre></div></div>
+
+<p>Also, think about what happens when someone adds a new error type that can be returned from this underlying code in the future? You’d have to go update all of your error handling code across your application!</p>
+
+<p>A Different (Better?) Way
+What if you didn’t have to do all this repetitive error handling at all?</p>
+
+<p>What if you could delegate this error handling to a single place in your application, that would allow you to more easily test your HTTP handlers as well as reduce the surface area of code that needs to change when new error types pop up?</p>
+
+<p>Let’s change our http.HandlerFuncs to return an error:</p>
+
+<p>// blasphemy!
+type handlerFunc func(w http.ResponseWriter, r *http.Request) error
+Obviously this no longer matches http.HandlerFuncs signature, so we can’t plug it in directly. However, we can adapt our new handlerFunc to match that which Go expects in one of two ways:</p>
+
+<p>We can create a helper func to adapt our handlerFunc to a http.HandlerFunc:
+func handle(f handlerFunc) http.HandlerFunc {
+  return http.HandlerFunc(w http.ResponseWriter, r *http.Request) {
+    if err := f(w, r); err != nil {
+      // do all your error switching/handling here in one place!
+    }
+  }
+}
+We can also make our handlerFunc implement http.Handler:
+func (f handlerFunc) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+    if err := f(w, r); err != nil {
+      // do all your error switching/handling here in one place!
+    }
+}
+How does this change our API code (boilerplate excluded)?</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>manifest, err := a.DB.GetManifest(name, ref)
+if err != nil {
+  return err
+}
+
+if err := json.NewEncoder(w).Encode(manifest); err != nil {
+  return err
+}
+
+w.Header().Set("Content-Length", contentLength)
+w.Header().Set("Docker-Content-Digest", digest)
+w.WriteHeader(http.StatusOK)
+
+return nil Then, when mounting our http.Handlers in our router we can do:
+</code></pre></div></div>
+
+<p>// create a new <code class="language-plaintext highlighter-rouge">handlerFunc</code> from <code class="language-plaintext highlighter-rouge">a.GetImageManifest</code> which implements <code class="language-plaintext highlighter-rouge">http.Handler</code>
+r.Handle(handlerFunc(a.GetImageManifest))</p>
+
+<p>// or, return a <code class="language-plaintext highlighter-rouge">http.HandlerFunc</code> by calling our <code class="language-plaintext highlighter-rouge">handle</code> helper func
+r.HandleFunc(handle(a.GetImageManifest))
+Assumptions/Derivations
+Now, this pattern does come with some baked in assumptions that I should probably make explicit:</p>
+
+<p>If the error returned from your handlerFunc is nil, then it’s expected that you already called w.Write and w.WriteHeader in your handler
+If the error returned from your handlerFunc is non-nil, then it’s expected that you haven’t called either, and will let the error handling code do that for you
+Of course you could make your own handlerFunc with any signature you wanted, and define your own ‘rules’. For example you could return an (status int, err error) to allow specifying the HTTP status code in the handlers themselves. Or you could even create and return your own type to include any metadata you want.</p>
+
+<p>You can even create different adapter funcs/types to handle areas in your code that have different types of errors they can return.</p>
+
+<p>The point is that you aren’t limited to the http.Handler or http.HandlerFunc signatures when implementing your handlers.</p>
+
+<p>Testing
+Another major benefit that I’ve found when using this pattern is that it makes testing your handler code much easier when testing error conditions, which IMO are where you should spend the most time unit testing anyways.</p>
+
+<p>Instead of inspecting the status code and body of the returned httptest.ResponseRecorder to assert that your errors were handled correctly, you can simply assert the errors returned from your handler code directly such as:</p>
+
+<p>err := myHandler(w, r)</p>
+
+<p>// using the wonderful https://github.com/stretchr/testify assert library
+assert.EqualError(t, err, “unauthorized”)
+Then you can test your error handling code in isolation as well, allowing you to have more complete test coverage!</p>
+
+<p>Wrap Up
+I know that I didn’t invent this pattern, nor is it earth shattering. But I haven’t read much about it’s use in the past, so I thought I would write this post in case someone was looking for an alternative way to handle errors while reducing repetition when writing their HTTP handlers in Go.</p>
+:ET

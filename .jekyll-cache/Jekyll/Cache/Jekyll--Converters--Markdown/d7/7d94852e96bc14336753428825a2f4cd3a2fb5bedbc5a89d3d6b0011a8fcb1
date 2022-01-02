@@ -1,0 +1,427 @@
+I"F<p>Go 内置的生态提供了大量的 API 及工具用于诊断程序的逻辑及性能问题。它们大致可以被分为以下几类：</p>
+
+<p>Profiling：Profiling 工具（如 pprof）用于分析程序中的复杂度与开销，如内存使用及函数调用频率等，并通过它们来标识程序中开销最大的部分。
+Tracing：Tracing 用于分析某次调用或用户请求的整个流程中的延迟。其支持跨进程，并展示整个系统中每个组件所花费的时间。
+Debugging：Debugging 能够检验程序状态及执行流，能够暂停程序并检验其执行。
+Runtime statistics and events：收集分析运行时统计及事件并提供程序健康状况的高级综述。尖峰/度的倾角能够帮助我们确定吞吐量，利用率和性能的变化。
+<!-- more -->
+本文来自 GopherCon 2019 的一个演讲，首先从一个计算文本字数的 go 程序与 wc 对比，通过 profile CPU 与内存逐步优化性能，涉及 Go 的并发模型及逃逸分析。然后由一个绘制曼德勃罗分形图的程序，讨论并发程序的执行追踪（trace）及并发程序能带来的性能提升的边界。
+pprof &amp; trace
+Go 内置的生态提供了大量的 API 及工具用于诊断程序的逻辑及性能问题。它们大致可以被分为以下几类：</p>
+
+<p>Profiling：Profiling 工具（如 pprof）用于分析程序中的复杂度与开销，如内存使用及函数调用频率等，并通过它们来标识程序中开销最大的部分。
+Tracing：Tracing 用于分析某次调用或用户请求的整个流程中的延迟。其支持跨进程，并展示整个系统中每个组件所花费的时间。
+Debugging：Debugging 能够检验程序状态及执行流，能够暂停程序并检验其执行。
+Runtime statistics and events：收集分析运行时统计及事件并提供程序健康状况的高级综述。尖峰/度的倾角能够帮助我们确定吞吐量，利用率和性能的变化。</p>
+
+<p>更多关于 pprof 与 trace 的信息见：golang.org/doc/diagnos…</p>
+
+<p>使用 pprof 分析 CPU 或内存使用
+如下是一个文本字数计算程序，带着几分 Code smells，我们将通过 pprof 逐步分析程序中到底有哪些问题。
+package main</p>
+
+<p>import (
+	“fmt”
+	“io”
+	“log”
+	“os”
+	“unicode”
+)</p>
+
+<p>func readbyte(r io.Reader) (rune, error) {
+	var buf [1]byte
+	_, err := r.Read(buf[:])
+	return rune(buf[0]), err
+}</p>
+
+<p>func main() {
+	f, err := os.Open(os.Args[1])
+	if err != nil {
+		log.Fatalf(“could not open file %q: %v”, os.Args[1], err)
+	}</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>words := 0
+inword := false
+for {
+	r, err := readbyte(f)
+	if err == io.EOF {
+		break
+	}
+	if err != nil {
+		log.Fatalf("could not read file %q: %v", os.Args[1], err)
+	}
+	if unicode.IsSpace(r) &amp;&amp; inword {
+		words++
+		inword = false
+	}
+	inword = unicode.IsLetter(r)
+}
+fmt.Printf("%q: %d words\n", os.Args[1], words) } 复制代码这里我们有一份用于测试程序的文本文件，1.2 M 大小。 $ ls -lh moby.txt -rw-r--r--  1 f1renze  staff   1.2M Jan 19 16:32 moby.txt 复制代码我们跑一下程序看看，读取 + 单词计数一共花了 2 秒钟，这好像不太行。 $ time go run main.go moby.txt "moby.txt": 181275 words
+    2.13 real         1.41 user         1.81 sys 复制代码我们先 profile 一下 CPU，如下在代码中加上生成 profile 文件的代码段： func main() {   # 添加以下代码
+cpuProfile, _ := os.Create("cpu_profile")
+pprof.StartCPUProfile(cpuProfile)
+defer pprof.StopCPUProfile()
+
+.... 复制代码重新执行程序然后以 web 形式启动 pprof（需要先安装 Graphviz）： go tool pprof -http=:8081 cpu_profile 复制代码默认界面就是一个详细的函数调用关系、耗时图。这里主要有三个分支。
+</code></pre></div></div>
+
+<p>先来看最右边，syscall.syscall 共占用 cpu 0.93s，为啥在 syscall 上花了这么多时间嘞？我们带着问题看一下原始代码，看到在 for 循环中程序不断调用 readbyte 方法读取文件：
+…
+for {
+		r, err := readbyte(f)
+		if err == io.EOF {
+			break
+		}
+…
+复制代码而在此方法中，每次都只读取一个字节：
+func readbyte(r io.Reader) (rune, error) {
+	var buf [1]byte
+	_, err := r.Read(buf[:])
+	return rune(buf[0]), err
+}
+复制代码问题就出在这！</p>
+
+<p>正是未缓冲的频繁读取导致了长时间的 syscall 占用，这还会导致另外一个问题，看调用栈的左边，runtime.pthread_cond_signal 与 runtime.pthread_cond_wait 分别花费了 0.58s 与 1s。
+由于 go 的协程由内置的调度器进行调度，即 GMP 模型，每个 P 分配一个 M （实际 OS 线程）执行 G，当执行 G 的 M 陷入同步阻塞系统调用（如 文件 IO）时，P 会被转移到新的 M （新建的 OS 线程或线程缓存）上。如下图：</p>
+
+<p>M1 执行 G 时陷入系统调用，调度器将 M1 与 P 分离（G1 仍与 M1 连接），并为 P 分配 M2 ，然后从 P 的 Local Run Queue 选择 G2 执行（此时在 M2 上进行上下文切换）。</p>
+
+<p>当 G1 发起的同步阻塞调用执行完时，G1 会被移回 P 的  Local Run Queue 。而 M1 加入线程缓存中。</p>
+
+<p>所以真正的原因是：多次系统调用带来的开销，加上陷入系统调用的 M 导致 P 的转移，使得程序性能非常差。
+查明原因后我们优化一下代码：
+words := 0
+inword := false</p>
+<h1 id="返回带缓冲的-ioreader">返回带缓冲的 io.Reader</h1>
+<p>b := bufio.NewReader(f)
+for {
+  # 由 buffer 中读取
+  r, err := readbyte(b)
+  if err == io.EOF {
+    break
+  }
+复制代码查看运行时间，仅为之前的执行时间的零头：
+$ time go run main.go moby.txt
+“moby.txt”: 181275 words
+        0.63 real         0.29 user         0.25 sys
+复制代码再次查看 CPU profile ，发现只剩下一个分支了，因为程序中只有一次系统调用，耗时几乎可以忽略不计：</p>
+
+<p>显然针对 CPU 的 profile 不能提供给我们更多信息了，接下来我们 profile 一下程序内存使用。</p>
+
+<p>为了演示此处将采样率修改为 1，profiler 会收集全部内存分配信息。（一般不推荐这么做，因为这会拖慢程序运行效率）</p>
+
+<p>func main() {</p>
+<h1 id="将之前-profile-cpu-的代码注释掉后添加以下代码">将之前 profile CPU 的代码注释掉后添加以下代码</h1>
+<p>memProfile, _ := os.Create(“mem_profile”)
+runtime.MemProfileRate = 1</p>
+
+<p>defer func() {
+  pprof.WriteHeapProfile(memProfile)
+  memProfile.Close()
+}()
+…
+复制代码查看调用栈及内存分配展示</p>
+
+<p>可以看到 main.readbyte 分配了 1.2 m 的内存，与 moby.txt 文件大小相同，点击 source 查看内存分配具体位置：</p>
+
+<p>对比一下 main 函数与 readbyte 函数，可以看到 bufio 返回的 reader 仅占 4kb 内存而 readbyte 中的 buf 数组却分配了 1.2 mb 的内存！</p>
+
+<p>由于 buf 这个数组在函数中声明，理论上应该被分配函数栈空间上，随着函数返回直接释放。然而 profile 结果似乎不是这样，我们来看下编译器的逃逸分析日志：
+$ go build -gcflags=-m main.go</p>
+<h1 id="command-line-arguments">command-line-arguments</h1>
+<p>…
+./main.go:15:6: moved to heap: buf
+./main.go:43:21: moved to heap: buf
+….
+复制代码省略无关信息，此处可以看到编译器将本是函数中局部变量的 buf 分配到堆上。由于变量被分配到堆或栈上是由 go 编译器决定的，每次进入 readbyte 函数时声明的 buf 都被分配到堆上，加起来的内存大小即为文件本身的大小。
+我们将 buf 改为全局变量再次 profile，问题解决：</p>
+
+<p>使用 Trace 分析 Groutine 执行过程
+pprof 足够强大，但通常 Go 程序中包含了大量的并发操作，此时 profile CPU 或内存或许已经不能提供更多有用的信息。而官方提供了超级好用的 trace 帮助我们进一步分析高并发程序的性能。
+这是一个支持多种工作模式的绘制曼德勃罗分形图（Mandelbrot set）的程序，其主要工作是根据每个像素的坐标计算出值并填充颜色，无需了解具体细节因为本文的重点是 trace：
+// mandelbrot example code adapted from Francesc Campoy’s mandelbrot package.
+// https://github.com/campoy/mandelbrot
+package main</p>
+
+<p>import (
+	“flag”
+	“image”
+	“image/color”
+	“image/png”
+	“log”
+	“os”
+	“sync”
+)</p>
+
+<p>func main() {
+	var (
+		height  = flag.Int(“h”, 1024, “height of the output image in pixels”)
+		width   = flag.Int(“w”, 1024, “width of the output image in pixels”)
+		mode    = flag.String(“mode”, “seq”, “mode: seq, px, row, workers”)
+		workers = flag.Int(“workers”, 1, “number of workers to use”)
+	)
+	flag.Parse()</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>const output = "mandelbrot.png"
+
+// open a new file
+f, err := os.Create(output)
+if err != nil {
+	log.Fatal(err)
+}
+
+// create the image
+c := make([][]color.RGBA, *height)
+for i := range c {
+	c[i] = make([]color.RGBA, *width)
+}
+
+img := &amp;img{
+	h: *height,
+	w: *width,
+	m: c,
+}
+
+switch *mode {
+case "seq":
+	seqFillImg(img)
+case "px":
+	oneToOneFillImg(img)
+case "row":
+	onePerRowFillImg(img)
+case "workers":
+	nWorkersPerRowFillImg(img, *workers)
+default:
+	panic("unknown mode")
+}
+
+// and encoding it
+if err := png.Encode(f, img); err != nil {
+	log.Fatal(err)
+} }
+</code></pre></div></div>
+
+<p>type img struct {
+	h, w int
+	m    [][]color.RGBA
+}</p>
+
+<p>func (m *img) At(x, y int) color.Color { return m.m[x][y] }
+func (m *img) ColorModel() color.Model { return color.RGBAModel }
+func (m *img) Bounds() image.Rectangle { return image.Rect(0, 0, m.h, m.w) }</p>
+
+<p>// SEQSTART OMIT
+func seqFillImg(m *img) {
+	for i, row := range m.m {
+		for j := range row {
+			fillPixel(m, i, j)
+		}
+	}
+}</p>
+
+<p>// SEQEND OMIT</p>
+
+<p>func oneToOneFillImg(m *img) {
+	var wg sync.WaitGroup
+	wg.Add(m.h * m.w)
+	for i, row := range m.m {
+		for j := range row {
+			go func(i, j int) {
+				fillPixel(m, i, j)
+				wg.Done()
+			}(i, j)
+		}
+	}
+	wg.Wait()
+}</p>
+
+<p>func onePerRowFillImg(m *img) {
+	var wg sync.WaitGroup
+	wg.Add(m.h)
+	for i := range m.m {
+		go func(i int) {
+			for j := range m.m[i] {
+				fillPixel(m, i, j)
+			}
+			wg.Done()
+		}(i)
+	}
+	wg.Wait()
+}</p>
+
+<p>func nWorkersFillImg(m *img, workers int) {
+	c := make(chan struct{ i, j int })
+	for i := 0; i &lt; workers; i++ {
+		go func() {
+			for t := range c {
+				fillPixel(m, t.i, t.j)
+			}
+		}()
+	}</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>for i, row := range m.m {
+	for j := range row {
+		c &lt;- struct{ i, j int }{i, j}
+	}
+}
+close(c) }
+</code></pre></div></div>
+
+<p>func nWorkersPerRowFillImg(m *img, workers int) {
+	c := make(chan int, m.h)
+	var wg sync.WaitGroup
+	wg.Add(workers)
+	for i := 0; i &lt; workers; i++ {
+		go func() {
+			for row := range c {
+				for col := range m.m[row] {
+					fillPixel(m, row, col)
+				}
+			}
+			wg.Done()
+		}()
+	}</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>for row := range m.m {
+	c &lt;- row
+}
+close(c)
+wg.Wait() }
+</code></pre></div></div>
+
+<p>func fillPixel(m <em>img, x, y int) {
+	const n = 1000
+	const Limit = 2.0
+	Zr, Zi, Tr, Ti := 0.0, 0.0, 0.0, 0.0
+	Cr := (2</em>float64(x)/float64(n) - 1.5)
+	Ci := (2*float64(y)/float64(n) - 1.0)</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>for i := 0; i &lt; n &amp;&amp; (Tr+Ti &lt;= Limit*Limit); i++ {
+	Zi = 2*Zr*Zi + Ci
+	Zr = Tr - Ti + Cr
+	Tr = Zr * Zr
+	Ti = Zi * Zi
+}
+paint(&amp;m.m[x][y], Tr, Ti) }
+</code></pre></div></div>
+
+<p>func paint(c *color.RGBA, x, y float64) {
+	n := byte(x * y * 2)
+	c.R, c.G, c.B, c.A = n, n, n, 255
+}
+复制代码我们跑一下看看，有点慢：
+$ time go run mandelbrot.go 
+        1.93 real         1.70 user         0.27 sys
+复制代码由于默认工作模式是顺序执行计算，程序本身除了创建文件及图片编码操作也没有其他额外的 IO 操作，代码上进一步优化的空间有限。这里我们直接使用 trace 看一下分析结果，首先加入生成 trace 代码段：
+func main() {
+	var (
+		height  = flag.Int(“h”, 1024, “height of the output image in pixels”)
+		width   = flag.Int(“w”, 1024, “width of the output image in pixels”)
+		mode    = flag.String(“mode”, “seq”, “mode: seq, px, row, workers”)
+		workers = flag.Int(“workers”, 1, “number of workers to use”)
+	)
+	flag.Parse()</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code># 加入以下代码段
+var fn string
+switch *mode {
+case "seq":
+	fn = "trace.seq"
+case "px":
+	fn = "trace.px"
+case "row":
+	fn = "trace.row"
+case "workers":
+	fn = "trace.workers"
+}
+traceFile, _ := os.Create(fn)
+if err := trace.Start(traceFile); err != nil {
+	log.Fatal(err)
+}
+defer trace.Stop()
+
+.... 复制代码运行程序后使用 go tool trace trace.seq 在 Chrome 中查看：
+</code></pre></div></div>
+
+<p>Tips: Shift + ? 查看命令帮助，w/s 放大 / 缩小</p>
+
+<p>细心的同学可能会发现，只有 Proc 0 一直在工作，其他几乎都处于闲置状态，由于不同像素的计算任务彼此独立，据此可以将计算任务交由不同的 Goroutine 来完成。
+既然如此，我们换个工作模式，直接并行化计算每个像素，程序中已经给出了实现：
+func oneToOneFillImg(m *img) {
+	var wg sync.WaitGroup
+	wg.Add(m.h * m.w)
+	for i, row := range m.m {
+		for j := range row {
+			go func(i, j int) {
+				fillPixel(m, i, j)
+				wg.Done()
+			}(i, j)
+		}
+	}
+	wg.Wait()
+}
+复制代码我们切换到对应的 px 工作模式看看：
+$ time go run mandelbrot.go -mode px
+        2.01 real         7.26 user         2.90 sys
+复制代码好吧，非常奇怪的是程序居然更慢了，我们使用 go tool trace trace.seq 看一下究竟是怎么一回事。</p>
+
+<p>生成的 trace 文件大小取决于 Goroutine 数量，运行这条命令会比较慢</p>
+
+<p>由于 Goroutine 数量过多，可以看到 trace 文件被分为许多片段，查看其中一个片段：</p>
+
+<p>这回没有空闲的 Proc 了，但执行流似乎断断续续的，放大后看非常明显：</p>
+
+<p>所以问题就出在这，并发粒度太小了，每个 Goroutine 的工作量太小，甚至抵不上启动及调度的开销。天下没有免费的午餐，过多的 Groutine 也会带来额外的负担。
+接下来我们调整一下并发粒度，将每一行的计算任务分配到不同的 Goroutine 上，对应的模式及源码如下：
+time go run mandelbrot.go -mode row
+        0.85 real         1.85 user         0.32 sys
+复制代码func onePerRowFillImg(m *img) {
+	var wg sync.WaitGroup
+	wg.Add(m.h)
+	for i := range m.m {
+		go func(i int) {
+			for j := range m.m[i] {
+				fillPixel(m, i, j)
+			}
+			wg.Done()
+		}(i)
+	}
+	wg.Wait()
+}
+复制代码可以看到明显比之前两个模式要快上许多，看下 trace 如何：</p>
+
+<p>像素计算部分执行流看起来极度舒适，并且充分利用了 CPU 资源，12 个线程全部跑满（超线程的 6 核 CPU）。放大后可以看到 Goroutine 之间几乎没有空隙，不禁赞叹 Go 才是世界上最好的语言😆。</p>
+
+<p>当然，这种模式依然有其缺点，注意到 trace 界面最上方 Groutine 一栏中有一个明显的波动，尽管我们调整了并发粒度其依然会在短时间内产生大量 Goroutine 然后依次执行它们。实际上由于 CPU 核数是固定的，同一时间并行执行 Goroutine 的 OS 线程数也是固定的，由此我们可以将 Goroutine 池化复用，节省资源，其通常被称为 Worker Pool。
+Worker Pool 有非常多种实现，但是却大同小异，首先启动一定的 Goroutine 作为 Worker，然后 Worker 通过 Channel 消费需要执行的 Task。程序中给出了一个简单实现如下：
+func nWorkersPerRowFillImg(m *img, workers int) {
+	c := make(chan int, m.h)
+	var wg sync.WaitGroup
+	wg.Add(workers)
+	for i := 0; i &lt; workers; i++ {
+		go func() {
+			for row := range c {
+				for col := range m.m[row] {
+					fillPixel(m, row, col)
+				}
+			}
+			wg.Done()
+		}()
+	}</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>for row := range m.m {
+	c &lt;- row
+}
+close(c)
+wg.Wait() } 复制代码我们看一下执行时间，比 row  模式要快一些。这里要注意的是需要手动指定 Worker 的数量，等同于当前硬件最大支持的线程数，可以在 Go 中使用 fmt.Println(runtime.NumCPU()) 查看。 time go run mandelbrot.go -mode workers -workers 12
+    0.74 real         1.86 user         0.26 sys 复制代码查看 trace 可以看到计算阶段始终保持着等同于 Worker 数量的 Groutine 在运行
+</code></pre></div></div>
+
+<p>Worker Pool 非常好用但也不是银弹，不同方案适用于不同场景，此处不过多讨论。回到当前程序本身，这几种方案最终加速的都是计算任务部分，要想加速图像编码部分难度无疑会提升几个档次。
+Amdahl’s law</p>
+
+<p>而并行化能够带来的加速也不是无限的。如上图，阿姆达尔定律（Amdahl’s law）表示了并行处理器数量与效率提升的关系，加速程序的关键取决于其中必须串行执行的部分（比如 mandelbrot 这个程序最快时也需要花费约 50% 的时间用于编码图片）。当程序中 95% 的执行都可以并行化时，即使将 CPU 数量提升到数千个，加速效率也只能限制在 20 倍。</p>
+
+<p>https://juejin.im/post/5e2c45d65188254db85f0657
+https://golang.org/doc/diagnostics.html</p>
+:ET

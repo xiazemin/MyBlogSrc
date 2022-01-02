@@ -1,0 +1,36 @@
+I"e
+<p>SET KEY VALUE [EX seconds] [PX milliseconds] [NX|XX]
+Shell</p>
+
+<p>EX seconds − 设置指定的到期时间(以秒为单位)。PX milliseconds - 设置指定的到期时间(以毫秒为单位)。NX - 仅在键不存在时设置键。XX - 只有在键已存在时才设置。
+<!-- more -->
+某个查询数据库的接口，因为调用量比较大，所以加了缓存，并设定缓存过期后刷新，问题是当并发量比较大的时候，如果没有锁机制，那么缓存过期的瞬间，大量并发请求会穿透缓存直接查询数据库，造成雪崩效应，如果有锁机制，那么就可以控制只有一个请求去更新缓存，其它的请求视情况要么等待，要么使用过期的缓存</p>
+
+<p>缓存过期时，通过 SetNX  获取锁，如果成功了，那么更新缓存，然后删除锁。看上去逻辑非常简单，可惜有问题：如果请求执行因为某些原因意外退出了，导致创建了锁但是没有删除锁，那么这个锁将一直存在，以至于以后缓存再也得不到更新。</p>
+
+<p>因为 SetNX 不具备设置过期时间的功能，所以我们需要借助 Expire 来设置，同时我们需要把两者用 Multi/Exec 包裹起来以确保请求的原子性，以免 SetNX 成功了 Expire 却失败了。 可惜还有问题：当多个请求到达时，虽然只有一个请求的 SetNX 可以成功，但是任何一个请求的 Expire 却都可以成功，如此就意味着即便获取不到锁，也可以刷新过期时间，如果请求比较密集的话，那么过期时间会一直被刷新，导致锁一直有效。于是乎我们需要在保证原子性的同时，有条件的执行 Expire，接着便有了如下 Lua 代码：</p>
+
+<p>local key   = KEYS[1]
+local value = KEYS[2]
+local ttl   = KEYS[3]</p>
+
+<p>local ok = redis.call(‘setnx’, key, value)</p>
+
+<p>if ok == 1 then
+  redis.call(‘expire’, key, ttl)
+end</p>
+
+<p>return ok</p>
+
+<p>如果一个请求更新缓存的时间比较长，甚至比锁的有效期还要长，导致在缓存更新过程中，锁就失效了，此时另一个请求会获取锁，但前一个请求在缓存更新完毕的时候，如果不加以判断直接删除锁，就会出现误删除其它请求创建的锁的情况，所以我们在创建锁的时候需要引入一个随机值：</p>
+
+<p>$ok = $redis-&gt;set($key, $random, array(‘nx’, ‘ex’ =&gt; $ttl));</p>
+
+<p>if ($ok) {
+    $cache-&gt;update();</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>if ($redis-&gt;get($key) == $random) {
+    $redis-&gt;del($key);
+}
+</code></pre></div></div>
+:ET

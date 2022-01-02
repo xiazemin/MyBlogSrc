@@ -1,0 +1,639 @@
+I"=�<p>Linux基数树（radix tree）是将指针与long整数键值相关联的机制，它存储有效率，并且可快速查询，用于指针与整数值的映射（如：IDR机制）、内存管理等。
+IDR（ID Radix）机制是将对象的身份鉴别号整数值ID与对象指针建立关联表，完成从ID与指针之间的相互转换。IDR机制使用radix树状结构作为由id进行索引获取指针的稀疏数组，通过使用位图可以快速分配新的ID，IDR机制避免了使用固定尺寸的数组存放指针。IDR机制的API函数在lib/idr.c中实现，这里不加分析。
+Linux radix树最广泛的用途是用于内存管理，结构address_space通过radix树跟踪绑定到地址映射上的核心页，该radix树允许内存管理代码快速查找标识为dirty或writeback的页。Linux radix树的API函数在lib/radix-tree.c中实现。
+<!-- more -->
+radix树是通用的字典类型数据结构，radix树又称为PAT位树（Patricia Trie or crit bit tree）。Linux内核使用了数据类型unsigned long的固定长度输入的版本。每级代表了输入空间固定位数。
+radix tree是一种多叉搜索树，树的叶子结点是实际的数据条目。每个结点有一个固定的、2^n指针指向子结点（每个指针称为槽slot），并有一个指针指向父结点。</p>
+
+<p>Linux内核利用radix树在文件内偏移快速定位文件缓存页
+	<img src="https://xiazemin.github.io/MyBlog/img/radixtree.jpg" />
+一个radix树样例，该radix树的分叉为4(22)，树高为4，树的每个叶子结点用来快速定位8位文件内偏移，可以定位4x4x4x4=256页，如：图中虚线对应的两个叶子结点的路径组成值0x00000010和0x11111010，指向文件内相应偏移所对应的缓存页。</p>
+
+<p>Linux radix树每个结点有64个slot，与数据类型long的位数相同
+radix树为稀疏树提供了有效的存储，代替固定尺寸数组提供了键值到指针的快速查找。 
+<img src="https://xiazemin.github.io/MyBlog/img/radixtreekv.jpg" /></p>
+
+<p>（2）radix树slot数
+Linux内核根用户配置将树的slot数定义为4或6，即每个结点有16或64个slot，当树高为1时，64个slot对应64个页，当树高为2时，对应64*64个页。</p>
+
+<p>Linux内核radix树的slot数定义如下（在lib/radix-tree.c中）：</p>
+
+<p>#ifdef <strong>KERNEL</strong>
+/<em>值为6时，表示每个结点有2^6＝64个slot，值为4时，表示有2^4=16个slot</em>/
+#define RADIX_TREE_MAP_SHIFT (CONFIG_BASE_SMALL ? 4 : 6)
+#else
+#define RADIX_TREE_MAP_SHIFT 3 /* 用于更有强度的测试 <em>/
+#endif
+/</em>表示1个叶子结点可映射的页数，如：1«6=64，表示可映射64个slot映射64页<em>/
+#define RADIX_TREE_MAP_SIZE (1UL « RADIX_TREE_MAP_SHIFT)
+#define RADIX_TREE_MAP_MASK (RADIX_TREE_MAP_SIZE-1)
+/</em>定义slot数占用的long类型长度个数，每个slot用位图1位进行标记，如：64个slot时，值为2*/
+#define RADIX_TREE_TAG_LONGS <br />
+((RADIX_TREE_MAP_SIZE + BITS_PER_LONG - 1) / BITS_PER_LONG)</p>
+
+<p>（3）结点结构</p>
+
+<p>树的根结点结构radix_tree_root列出如下（在include/linux/radix-tree.h中）：
+#define RADIX_TREE_MAX_TAGS 2 /<em>每个slot需要的最大标签位数</em>/</p>
+
+<p>/<em>根结点的标签存放在gfp_mask中，通过__GFP_BITS_SHIFT移位得到 */
+struct radix_tree_root {
+    unsigned int height; /</em> 从叶子向上计算的树高度 <em>/
+    gfp_t gfp_mask;
+    /</em>间接指针指向结点而非数据条目，通过设置root-&gt;rnode的低位表示是否是间指针*/
+    struct radix_tree_node *rnode;
+#ifdef CONFIG_RADIX_TREE_CONCURRENT
+    struct radix_tree_context *context;
+    struct task_struct *owner;
+#endif
+};</p>
+
+<p>结构radix_tree_context列出如下：
+struct radix_tree_context {
+    struct radix_tree_root *root;
+#ifdef CONFIG_RADIX_TREE_CONCURRENT
+    spinlock_t *locked;
+#endif
+}</p>
+
+<p>树的结点结构radix_tree_node列出如下（在lib/radix-tree.c中）：</p>
+
+<p>struct radix_tree_node {
+    unsigned int height; /* 从叶子向上计算的树高度 <em>/
+    unsigned int count; /</em>非叶子结点含有一个count域，表示出现在该结点的孩子的数量*/</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>struct rcu_head rcu_head;
+void *slots[RADIX_TREE_MAP_SIZE]; /*结点的slot指针*/    /* 结点标签数组=每个slot需要的最大标签位数*slot数所需的long类型变量数 */    unsigned long tags[RADIX_TREE_MAX_TAGS][RADIX_TREE_TAG_LONGS]; };
+</code></pre></div></div>
+
+<p>Linux内核radix树高度是可变的，它依赖于存储的索引键值。radix树查询必须知道树高度，以便知道结点的slot是指向叶子结点的指针还是结点的其他层。Linux在结点结构中有成员height存入树高度信息。
+Linux radix树的独特特征是标签扩展</p>
+
+<p>在结点结构radix_tree_node中，tags域是一个二维数组，每个slot用2位标识，这是一个典型的用空间换时间的应用。tags域用于记录该结点下面的子结点有没有相应的标志位。目前RADIX_TREE_MAX_TAGS为2，表示只记录两个标志，其中tags[0]为PAGE_CACHE_DIRTY，tags[1]为PAGE_CACHE_WRITEBACK。如果当前节点的tags[0]值为1，那么它的子树节点就存在PAGE_CACHE_DIRTY节点，否则这个子树分枝就不存在着这样的节点，就不必再查找这个子树了。比如在查找PG_dirty的页面时，就不需要遍历整个树，而可以跳过那些tags[0]为0值的子树，这样就提高了查找效率。
+“加标签查询”是返回有指定标签集radix树条目的查询，可以查询设置了标签的条目。加标签查询可以并行执行，但它们需要通过设置或清除标签从操作上互斥。</p>
+
+<p>(4) 并行操作的优化</p>
+
+<p>Linux radix树并行操作包括并行查询和并行修改，其中，并行修改在标准内核中未完没有实现，需要通过打补丁获得该功能。并行操作说明如下：</p>
+
+<p>RCU并发查询</p>
+
+<p>通过使用RCU，RCU Radix树可以进行完全并发的查询操作。RCU从根本上要求原子操作地移动指针从数据结构的一个版本到新的版本，保持旧版本直到系统经过静止状态。在静止状态点，旧版本数据结构已没有用户，因此可以被安全释放。
+RCU radix树的修改操作之间还需要串行化，但是查询不再需要与修改操作串行化。</p>
+
+<p>并发修改</p>
+
+<p>RCU可使RCU radix树查询完全并行化，但修改操作成了“瓶颈”。这可通过将全树的锁破碎成较小的锁进行改善，再明显的方法是对结点进行加锁而非对整个树加锁。
+radix树修改操作可分为单向和双向操作。单向操作仅执行从根节点和叶子结点的单方向指针移动，它包括插入、更新和设置标签操作。双向操作较复杂，它需要在指针移到叶子后又回移，它包括删除和清除标签操作。
+梯级加锁（Ladder Locking）和锁耦合（Lock-Coupling）技术常用于数据库方面，允许单向遍历结点加锁的树（双向可能产生死锁）。如果所有的修改者从树顶到树底进行修改，并且修改的结点持有锁，那么，向下遍历时对孩子加锁，在孩子被锁住时再释放该结点锁。在这种情况下并发操作是可能的，因为只要根结点解锁，另一个操作就可以自上向下进行。如果两操作的路径没有相同操作结点，后一个操作可能在前一个操作完成之前完成。最坏的情况是流水线操作，但这还是比串行化操作好很多。</p>
+
+<p>双向操作包括删除和清除标签操作，分别说明如下：</p>
+
+<p>1）清除标签</p>
+
+<p>在radix树中清除一个标签包括向下遍历树、查找定位条目和清除条目标签的操作。只要孩子结点没有打标签的条目，就可以向上遍历结点清除标签。结束条件是：如果遍历遇到一个结点，在清除一个标签后，它还有一个或多个条目带有标签集，就可以结束向上遍历。为了与向下遍历期间有同样的结束点，将终止条件改为：向上遍历将在有比清除标签数更多标签的结点处结束。这样，不论何时遇到这样的结点，将作为上遍历树的结束点。</p>
+
+<p>2）删除元素</p>
+
+<p>删除元素在删除无用结点时还需要删除该条目的所有标签。它的终止条件需要满足这两个方面。向上回退遍历树时需要满足下面的条件：当遇到一个非空结点且没有无用的标签时应终止向上回退遍历树。
+在向下遍历树时鉴别此点的条件是：当遇到有超过2个孩子的结点、并且每个标签来说结点有多于一个标签条目被清除时，结束向上遍历。该条件用来鉴别向上回退遍历的终止点。</p>
+
+<p>（5）radix树API说明</p>
+
+<p>声明和初始化radix树
+声明和初始化radix树的方法列出如下：</p>
+
+<p>#include &lt;linux/radix-tree.h&gt;
+/* gfp_mask表示如何执行内存分配，如果操作（如：插入）以原子性上下文中执行，其值为GFP_ATOMIC<em>/
+RADIX_TREE(name, gfp_mask); /</em> 声明和初始化名为name的树*/</p>
+
+<p>struct radix_tree_root my_tree;
+INIT_RADIX_TREE(my_tree, gfp_mask);</p>
+
+<p>插入条目</p>
+
+<p>插入条目的函数定义列出如下：</p>
+
+<p>int radix_tree_insert(struct radix_tree_root *root, unsigned long index, void *item)</p>
+
+<p>函数radix_tree_insert插入条目item到树root中，如果插入条目中内存分配错误，将返回错误-ENOMEM。该函数不能覆盖写正存在的条目。如果索引键值index已存在于树中，返回错误-EEXIST。插入操作成功是，返回0。
+对于插入条目操作失败将引起严重问题的场合，下面的一对函数可避免插入操作失败：</p>
+
+<p>int radix_tree_preload(gfp_t gfp_mask);
+void radix_tree_preload_end(void);</p>
+
+<p>函数radix_tree_preload尝试用给定的gfp_mask分配足够的内存，保证下一个插入操作不会失败。在调用插入操作函数之前调用此函数，分配的结构将存放在每CPU变量中。函数radix_tree_preload操作成功后，将完毕内核抢占。因此，在插入操作完成之后，用户应调用函数radix_tree_preload_end打开内核抢占。</p>
+
+<p>删除条目</p>
+
+<p>删除条目的函数定义列出如下：</p>
+
+<p>void *radix_tree_delete(struct radix_tree_root *root, unsigned long index)</p>
+
+<p>函数radix_tree_delete删除与索引键值index相关的条目，如果删除条目在树中，返回该条目的指针，否则返回NULL。</p>
+
+<p>查询操作</p>
+
+<p>用于查询操作的函数定义列出如下：</p>
+
+<p>/<em>在树中查找指定键值的条目，查找成功，返回该条目的指针，否则，返回NULL</em>/
+void <em>radix_tree_lookup(struct radix_tree_root *root, unsigned long index);
+/</em>返回指向slot的指针，该slot含有指向查找到条目的指针<em>/
+void **radix_tree_lookup_slot(struct radix_tree_root *root, unsigned long index);
+/</em>查询返回max_items条目在results中。查询时键值索引从first_index开始*/
+radix_tree_gang_lookup(struct radix_tree_root *root, void **results, unsigned long first_index, unsigned int max_items);</p>
+
+<p>标签操作</p>
+
+<p>与标签操作相关的函数说明列出如下：</p>
+
+<p>/<em>将键值index对应的条目设置标签tag，返回值为设置标签的条目</em>/
+void <em>radix_tree_tag_set(struct radix_tree_root *root, unsigned long index, unsigned int tag);
+/</em>从键值index对应的条目清除标签tag，返回值为清除标签的条目<em>/
+void *radix_tree_tag_clear(struct radix_tree_root *root, unsigned long index, unsigned int tag);
+/</em>检查键值index对应的条目是否为标签tag，如果键值不存在，返回0，如果键值存在，但标签未设置，返回-1；如果键值存在，且标签已设置，返回1<em>/
+int radix_tree_tag_get(struct radix_tree_root *root, unsigned long index, unsigned int tag);
+/</em>从first_index起查询树root中标签值为tag的条目，在results中返回<em>/
+unsigned int radix_tree_gang_lookup_tag(struct radix_tree_root *root, void **results, unsigned long first_index, unsigned int max_items, unsigned int tag);
+/</em>如果树root中有任何条目使用tag标签，返回键值*/
+int radix_tree_tagged(struct radix_tree_root *root, unsigned int tag);</p>
+
+<p>（6）并行操作使用radix树API的方法</p>
+
+<p>查询获取slot操作</p>
+
+<p>查询操作支持RCU无阻塞并行读操作，因此，需要遵循RCU的用法加RCU读锁，还需要将rcu_dereference()用于获得的slot，在写（或更新）操作时，需要给新的slot使用rcu_assign_pointer()。查询操作的使用方法列出如下：</p>
+
+<p>struct page <em>*slot, *page;
+rcu_read_lock();
+slot = radix_tree_lookup_slot(&amp;mapping-&gt;page_tree, index);
+page = rcu_dereference(</em>slot);
+rcu_read_unlock();</p>
+
+<p>查询修改slot操作</p>
+
+<p>Linux内核的radix树需要打补丁才支持并发修改。查询仅有一个全局状态：RCU静止状态，并发修改需要跟踪持有什么锁。锁状态对于操作来说必须是外部的，因此，我们需要实例化一个本地上下文跟踪这些锁。查询修改slot的方法列出如下：</p>
+
+<p>struct page <em>*slot;
+DEFINE_RADIX_TREE_CONTEXT(ctx,&amp;mapping-&gt;page_tree);
+radix_tree_lock(&amp;ctx); /</em>锁住了根结点<em>/
+/</em> ctx.tree代替&amp;mapping-&gt;page_tree作为根，可以传递上下文
+slot = radix_tree_lookup_slot(tx.tree, index);
+rcu_assign_pointer(*slot, new_page);
+radix_tree_unlock(&amp;ctx);</p>
+
+<p>radix树API函数radix_tree_lookup_slot含有锁从树顶向下移动机制，锁移动的代码部分列出如下：</p>
+
+<p>void <em>*radix_tree_lookup_slot(struct radix_tree *root, unsigned long index)
+{
+    …
+    RADIX_TREE_CONTEXT(context, root); /</em>提供上下文和实际的root指针<em>、
+    …
+    do {
+        …
+        /</em> 从树顶向下移动锁*/
+        radix_ladder_lock(context, node);
+        …
+    } while (height &gt; 0);
+    …
+}</p>
+
+<p>（7）radix树API的实现</p>
+
+<p>树的操作通常包括查找、插入、删除和树调整，下面分别说明radix树这些操作的实现。</p>
+
+<p>查找单个条目</p>
+
+<p>radix树通过索引键值进行查询，如图1所示，它按路径组成索引键值，图中3级结点对应3段6位表示的索引值，图中key对应的叶子slot的索引键值为“2,63,1”。通过叶子slot的指针slot[1]就可得到所存储的数据item。因此，查询迭代时，需要将索引键值“2,63,1”移去高2层“2,63”，得到叶子slot的指针索引键值“1”。</p>
+
+<p>函数radix_tree_lookup执行查找操作，查找方法是：从叶子到树顶，通过数组索引键值值查看数组元素的方法，一层层地查找slot。其列出如下（在lib/radix-tree.c中）：</p>
+
+<p>void *radix_tree_lookup(struct radix_tree_root *root, unsigned long index)
+{
+    unsigned int height, shift;
+    struct radix_tree_node *node, **slot;</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>node = rcu_dereference(root-&gt;rnode); /*获取根结点*/
+if (node == NULL)
+    return NULL;
+
+ 
+
+/*间接指针指向结点而非数据条目，通过设置root-&gt;rnode的低位表示是否是间指针。对于间接指针来说，树高度值root-&gt;height大于0，但是RCU查找需要测试间接指针，因为root-&gt;height 值不可靠。这种问题仅的RCU下需要考虑*/ 
+if (!radix_tree_is_indirect_ptr(node)) { /*非间接指针，说明只有根结点*/
+    if (index &gt; 0)
+        return NULL;
+    return node;
+}
+
+ 
+
+/*获取真正结点指针，因为根结点指针的第0位设置为1表示为间接指针。当使用结点指针时，必须将第0位设置为0，因为地址以字对齐*/
+node = radix_tree_indirect_to_ptr(node);
+
+height = node-&gt;height;
+if (index &gt; radix_tree_maxindex(height)) /*索引键值不能超过最大索引值*/
+    return NULL;
+
+ 
+
+/*每层索引偏移值为RADIX_TREE_MAP_SHIFT，叶子索引值偏移基数为（树高-1）*每层索引偏移值*/ 
+shift = (height-1) * RADIX_TREE_MAP_SHIFT;
+
+do { /*从叶子到树顶，通过树路径组成的索引查找指定索引键值的slot*/
+    slot = (struct radix_tree_node **)(node-&gt;slots + ((index&gt;&gt;shift) &amp; RADIX_TREE_MAP_MASK)); /*如：slots +1*/
+    node = rcu_dereference(*slot);
+    if (node == NULL)
+        return NULL;
+
+    shift -= RADIX_TREE_MAP_SHIFT; /*向上移一层，再迭代查找*/
+    height--;
+} while (height &gt; 0);
+</code></pre></div></div>
+
+<p>return node;
+}</p>
+
+<p>查找多个条目</p>
+
+<p>函数radix_tree_gang_lookup执行多个索引键值的查找，其列出如下：</p>
+
+<p>unsigned int radix_tree_gang_lookup(struct radix_tree_root *root, void **results, unsigned long first_index, unsigned int max_items)
+{
+    unsigned long max_index;
+    struct radix_tree_node *node;
+    unsigned long cur_index = first_index;
+    unsigned int ret;</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>node = rcu_dereference(root-&gt;rnode);
+if (!node)
+    return 0;
+
+if (!radix_tree_is_indirect_ptr(node)) { /*如果为非间接指针，表示只有根节点*/
+    if (first_index &gt; 0)
+        return 0;
+    results[0] = node;
+    return 1;
+}
+node = radix_tree_indirect_to_ptr(node); /*清除用于间接指针标识的第0位*/
+
+max_index = radix_tree_maxindex(node-&gt;height); /*获取树的最大索引键值*/
+
+ret = 0;
+while (ret &lt; max_items) { /* max_items为查找的最大条目数*/
+    unsigned int nr_found;
+    unsigned long next_index; /* 下一个搜索的索引键值*/
+
+    if (cur_index &gt; max_index) /*已查询完所需查询的索引键值*/
+        break;
+    nr_found = __lookup(node, results + ret, cur_index,
+    max_items - ret, &amp;next_index);
+    ret += nr_found;
+    if (next_index == 0)
+        break;
+    cur_index = next_index;
+}
+
+return ret; }
+</code></pre></div></div>
+
+<p>static unsigned int
+__lookup(struct radix_tree_node *slot, void **results, unsigned long index, unsigned int max_items, unsigned long *next_index)
+{
+    unsigned int nr_found = 0;
+    unsigned int shift, height;
+    unsigned long i;</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>height = slot-&gt;height;
+if (height == 0)
+    goto out;
+/*所有叶子slot的索引键值基数偏移*/
+shift = (height-1) * RADIX_TREE_MAP_SHIFT; 
+
+/*从底层向树顶层，
+for ( ; height &gt; 1; height--) { /*从叶子向树顶查找*/
+    i = (index &gt;&gt; shift) &amp; RADIX_TREE_MAP_MASK;
+    for (;;) { /*遍历每一层的各个路径，由树顶到当前层一条路径组成索引键值*/
+        /*如果slot不为空，那么它挂有子结点，跳出本循环，进入子结点层进行本循环*/
+        if (slot-&gt;slots[i] != NULL)
+            break;
+       /*如果slot为空，就跳过slot对应的所有索引键值*/ 
+       /*清除索引号低位.将索引号与该层slot的起始索引号对齐*/
+       index &amp;= ~((1UL &lt;&lt; shift) - 1);
+       /*跳过一个slot的索引键值数*/
+      index += 1UL &lt;&lt; shift;
+      if (index == 0)
+          goto out; /* 32-bit wraparound */
+      i++; /*找到多个slot*/
+      if (i == RADIX_TREE_MAP_SIZE)
+          goto out;
+   }
+
+   shift -= RADIX_TREE_MAP_SHIFT; /*向上移一层，基数偏移减少*/
+   slot = rcu_dereference(slot-&gt;slots[i]);
+   if (slot == NULL)
+       goto out;
+
+}
+
+/* 返回找到的多个slot*/
+for (i = index &amp; RADIX_TREE_MAP_MASK; i &lt; RADIX_TREE_MAP_SIZE; i++) {
+    struct radix_tree_node *node;
+    index++;
+    node = slot-&gt;slots[i];
+    if (node) {
+        results[nr_found++] = rcu_dereference(node);
+       if (nr_found == max_items)
+           goto out;
+    }
+}
+out:
+*next_index = index;
+return nr_found; }
+</code></pre></div></div>
+
+<p>插入条目</p>
+
+<p>函数radix_tree_insert找到索引键值对应的结点，将item加到该结点的slot指针上。其列出如下：</p>
+
+<p>int radix_tree_insert(struct radix_tree_root *root, unsigned long index, void *item)
+{
+    struct radix_tree_node *node = NULL, *slot;
+    unsigned int height, shift;
+    int offset;
+    int error;</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>BUG_ON(radix_tree_is_indirect_ptr(item));
+
+/* 如果树的高度不够，就扩展树。函数radix_tree_maxindex计算树高容纳的最大索引*/
+if (index &gt; radix_tree_maxindex(root-&gt;height)) {
+    error = radix_tree_extend(root, index);
+    if (error)
+        return error;
+}
+
+slot = radix_tree_indirect_to_ptr(root-&gt;rnode);
+
+height = root-&gt;height;
+shift = (height-1) * RADIX_TREE_MAP_SHIFT; /*计算偏移基数*/
+
+offset = 0; 
+while (height &gt; 0) {
+    if (slot == NULL) { /*如果slot为空，则需要加入孩子结点*/
+        /* 分配slot */
+        if (!(slot = radix_tree_node_alloc(root)))
+            return -ENOMEM;
+        slot-&gt;height = height;
+        if (node) {/*添加slot*/
+            rcu_assign_pointer(node-&gt;slots[offset], slot);
+         node-&gt;count++;
+     } else
+         rcu_assign_pointer(root-&gt;rnode,radix_tree_ptr_to_indirect(slot));
+    }
+
+    /* 进入上一层*/
+    offset = (index &gt;&gt; shift) &amp; RADIX_TREE_MAP_MASK;
+    node = slot;
+    slot = node-&gt;slots[offset];
+    shift -= RADIX_TREE_MAP_SHIFT;
+    height--;
+}
+/*如果index对应的slot已有映射页面，返回-EEXIST*/
+if (slot != NULL)
+    return -EEXIST;
+
+if (node) {
+    node-&gt;count++; /*增加子结点的计数*/
+    rcu_assign_pointer(node-&gt;slots[offset], item);
+    BUG_ON(tag_get(node, 0, offset));
+    BUG_ON(tag_get(node, 1, offset));
+} else { /*为顶层结点*/
+    rcu_assign_pointer(root-&gt;rnode, item);
+    BUG_ON(root_tag_get(root, 0));
+    BUG_ON(root_tag_get(root, 1));
+}
+
+return 0; }
+</code></pre></div></div>
+
+<p>扩展树的高度</p>
+
+<p>如果当前树高度不足以存放index，就需要扩展树，扩展方法是在旧树顶上加新的根结点，并将原根结点的tag信息移到新根结点的第1个slot。函数radix_tree_extend 列出如下：
+static int radix_tree_extend(struct radix_tree_root *root, unsigned long index)
+{
+    struct radix_tree_node *node;
+    unsigned int height;
+    int tag;</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>/* 计算扩展的深度*/
+height = root-&gt;height + 1;
+/*如果index超过树高所容纳的最大索引值，树高递增*/
+while (index &gt; radix_tree_maxindex(height)) 
+    height++;
+
+/*到这里已计算好合适的高度height*/ 
+if (root-&gt;rnode == NULL) { /*只有根结点，设置好树高度就可返回*/
+    root-&gt;height = height;
+    goto out;
+}
+
+/*将当前树扩展到高度height*/
+do {
+    unsigned int newheight;
+    if (!(node = radix_tree_node_alloc(root))) /*分配一个结点*/
+        return -ENOMEM;
+
+    /* 增加树高，在树顶点之上增加一个结点*/
+    node-&gt;slots[0] = radix_tree_indirect_to_ptr(root-&gt;rnode);
+
+    /*传播tag信息到新根结点*/
+    /*以前的根结点现成为新顶结点的第1个插槽。 如果以前的根结点打上了tag，就将新增结点的第1个插槽对应的子节点打上相应的tag*/
+    for (tag = 0; tag &lt; RADIX_TREE_MAX_TAGS; tag++) {
+        if (root_tag_get(root, tag))
+           tag_set(node, tag, 0);
+    }
+
+    newheight = root-&gt;height+1;
+    node-&gt;height = newheight;
+    node-&gt;count = 1;
+    node = radix_tree_ptr_to_indirect(node);
+    rcu_assign_pointer(root-&gt;rnode, node);
+    root-&gt;height = newheight;
+} while (height &gt; root-&gt;height); out:
+return 0; }
+</code></pre></div></div>
+
+<p>删除条目</p>
+
+<p>函数radix_tree_delete删除index对应的条目，并返回删除条目的地址。其列出如下：
+void <em>radix_tree_delete(struct radix_tree_root *root, unsigned long index)
+{
+    /</em>数组path用于保存路径上的结点及索引偏移值*/
+    struct radix_tree_path path[RADIX_TREE_MAX_PATH + 1], *pathp = path;
+    struct radix_tree_node *slot = NULL;
+    struct radix_tree_node *to_free;
+    unsigned int height, shift;
+    int tag;
+    int offset;</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>height = root-&gt;height;
+if (index &gt; radix_tree_maxindex(height)) /*index不能超过树的最大索引值*/
+    goto out;
+
+slot = root-&gt;rnode;
+if (height == 0) { /*只有根结点*/
+    root_tag_clear_all(root);
+    root-&gt;rnode = NULL;
+    goto out;
+}
+slot = radix_tree_indirect_to_ptr(slot);
+
+shift = (height - 1) * RADIX_TREE_MAP_SHIFT;
+pathp-&gt;node = NULL;
+/*获取删除条目的路径*/
+/*将index从根到叶子的路径所经过的结点及相应索引偏移值存放在数组pathp中*/
+do {
+    if (slot == NULL)
+        goto out;
+
+    pathp++;
+    offset = (index &gt;&gt; shift) &amp; RADIX_TREE_MAP_MASK;
+    pathp-&gt;offset = offset;
+    pathp-&gt;node = slot;
+    slot = slot-&gt;slots[offset];
+    shift -= RADIX_TREE_MAP_SHIFT;
+    height--;
+} while (height &gt; 0);
+
+if (slot == NULL)
+    goto out;
+
+/*清除与删除条目相关的所有标签*/
+for (tag = 0; tag &lt; RADIX_TREE_MAX_TAGS; tag++) {
+    if (tag_get(pathp-&gt;node, tag, pathp-&gt;offset))
+        radix_tree_tag_clear(root, index, tag);
+}
+
+to_free = NULL;
+/*释放不再需要的结点 */
+while (pathp-&gt;node) { /*删除
+    pathp-&gt;node-&gt;slots[pathp-&gt;offset] = NULL; /*清除slot*/
+    pathp-&gt;node-&gt;count--; /*孩子数量减1*/
+    /*调用RCU机制的函数call_rcu在最后一个引用结束时延迟释放结点to_free */
+    if (to_free)
+        radix_tree_node_free(to_free);
+
+    if (pathp-&gt;node-&gt;count) { /*还有孩子存在*/
+       if (pathp-&gt;node == radix_tree_indirect_to_ptr(root-&gt;rnode)) /*为根结点的孩子*/
+            radix_tree_shrink(root); /*树缩小*/
+       goto out;
+    }
+
+    /*释放有0个slot的结点 */
+    to_free = pathp-&gt;node;
+    pathp--;
+
+}
+/*运行到这里，说明是根结点*/
+root_tag_clear_all(root);
+root-&gt;height = 0;
+root-&gt;rnode = NULL;
+if (to_free)
+    radix_tree_node_free(to_free);
+</code></pre></div></div>
+
+<p>out:
+    return slot;
+}</p>
+
+<p>缩小树的高度</p>
+
+<p>函数radix_tree_shrink缩小树的高度到最小。其列出如下：</p>
+
+<p>static inline void radix_tree_shrink(struct radix_tree_root <em>root)
+{
+    /</em> 尝试缩小树的高度*/
+    while (root-&gt;height &gt; 0) {
+        struct radix_tree_node *to_free = root-&gt;rnode;
+        void *newptr;</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    BUG_ON(!radix_tree_is_indirect_ptr(to_free));
+    to_free = radix_tree_indirect_to_ptr(to_free);
+
+    /*候选结点多于一个孩子或孩子不在最左边slot，不能缩小树的高度，跳出循环*/
+    if (to_free-&gt;count != 1)
+        break;
+    if (!to_free-&gt;slots[0])
+        break;
+
+    /*不需要调用rcu_assign_pointer()，因为仅从树的一部分到另一部分移动结点。如果释放旧指针的引用to_free-&gt;slots[0]是安全的，那么释放新指针的引用root-&gt;rnode也是安全的*/ 
+   newptr = to_free-&gt;slots[0];
+   if (root-&gt;height &gt; 1)
+       newptr = radix_tree_ptr_to_indirect(newptr);
+   root-&gt;rnode = newptr;
+   root-&gt;height--; 
+   /* 仅释放0结点*/
+   tag_clear(to_free, 0, 0);
+   tag_clear(to_free, 1, 0);
+   to_free-&gt;slots[0] = NULL;
+   to_free-&gt;count = 0;
+   radix_tree_node_free(to_free);
+} }
+</code></pre></div></div>
+
+<p>文件 Cache 是文件数据在内存中的副本，因此文件 Cache 管理与内存管理系统和文件系统都相关：一方面文件 Cache 作为物理内存的一部分，需要参与物理内存的分配回收过程，另一方面文件 Cache 中的数据来源于存储设备上的文件，需要通过文件系统与存储设备进行读写交互。从操作系统的角度考虑，文件 Cache 可以看做是内存管理系统与文件系统之间的联系纽带。因此，文件 Cache 管理是操作系统的一个重要组成部分，它的性能直接影响着文件系统和内存管理系统的性能。</p>
+
+<p>在 Linux 中，具体文件系统，如 ext2/ext3、jfs、ntfs 等，负责在文件 Cache和存储设备之间交换数据，位于具体文件系统之上的虚拟文件系统VFS负责在应用程序和文件 Cache 之间通过 read/write 等接口交换数据，而内存管理系统负责文件 Cache 的分配和回收，同时虚拟内存管理系统(VMM)则允许应用程序和文件 Cache 之间通过 memory map的方式交换数据。可见，在 Linux 系统中，文件 Cache 是内存管理系统、文件系统以及应用程序之间的一个联系枢纽。</p>
+
+<p>文件 Cache 相关数据结构
+在 Linux 的实现中，文件 Cache 分为两个层面，一是 Page Cache，另一个 Buffer Cache，每一个 Page Cache 包含若干 Buffer Cache。内存管理系统和 VFS 只与 Page Cache 交互，内存管理系统负责维护每项 Page Cache 的分配和回收，同时在使用 memory map 方式访问时负责建立映射；VFS 负责 Page Cache 与用户空间的数据交换。而具体文件系统则一般只与 Buffer Cache 交互，它们负责在外围存储设备和 Buffer Cache 之间交换数据。</p>
+
+<p>在 Linux 内核中，文件的每个数据块最多只能对应一个 Page Cache 项，它通过两个数据结构来管理这些 Cache 项，一个是 radix tree，另一个是双向链表。Radix tree 是一种搜索树，Linux 内核利用这个数据结构来通过文件内偏移快速定位 Cache 项</p>
+
+<p>Linux(2.6.7) 内核中的分叉为 64(26)，树高为 6(64位系统)或者 11(32位系统)，用来快速定位 32 位或者 64 位偏移，radix tree 中的每一个叶子节点指向文件内相应偏移所对应的Cache项。
+另一个数据结构是双向链表，Linux内核为每一片物理内存区域(zone)维护active_list和inactive_list两个双向链表，这两个list主要用来实现物理内存的回收。这两个链表上除了文件Cache之外，还包括其它匿名(Anonymous)内存，如进程堆栈等</p>
+
+<p>address_space，inode，基树以及页描述符之间的关系
+1、每个adrres_space对象对应一颗搜索树。他们之间的联系是通过address_space对象中的page_tree字段指向该address_space对象对应的基树。
+2、一个inode节点对应一个address_space对象，其中inode节点对象的i_mapping和i_data字段指向相应的 address_space对象，而address_space对象的host字段指向对应的inode节点对象。
+3、）一般情况下一个inode节点对象对应的文件或者是块设备都会包含多个页面的内容，所以一个inode对象对应多个page描述符。同一个文件拥有的所有page描述符都可以在该文件对应的基树中找到。</p>
+
+<p>page cache是VFS的一部分，buffer cache是块设备驱动的一部分，或者说page cache是面向用户IO的cache，buffer cache是面向块设备IO的cache，page cache按照文件的逻辑页进行缓冲，buffer cache按照文件的物理块进行缓冲。</p>
+
+<p>对于长整型数据的映射。怎样解决Hash冲突和Hash表大小的设计是一个非常头疼的问题。
+radix树就是针对这样的稀疏的长整型数据查找，能高速且节省空间地完毕映射。借助于Radix树，我们能够实现对于长整型数据类型的路由。
+利用radix树能够依据一个长整型（比方一个长ID）高速查找到其相应的对象指针。这比用hash映射来的简单，也更节省空间，使用hash映射hash函数难以设计，不恰当的hash函数可能增大冲突，或浪费空间。</p>
+
+<p>radix tree是一种多叉搜索树。树的叶子结点是实际的数据条目。每一个结点有一个固定的、2^n指针指向子结点（每一个指针称为槽slot，n为划分的基的大小）</p>
+
+<p>插入、删除</p>
+
+<p>radix Tree(基数树) 事实上就几乎相同是传统的二叉树。仅仅是在寻找方式上。利用比方一个unsigned int的类型的每个比特位作为树节点的推断。</p>
+
+<p>能够这样说，比方一个数1000101010101010010101010010101010，那么依照Radix 树的插入就是在根节点，假设遇到0。就指向左节点。假设遇到1就指向右节点，在插入过程中构造树节点，在删除过程中删除树节点。假设认为太多的调用Malloc的话，能够採用池化技术。预先分配多个节点。
+（使用一个比特位推断。会使树的高度过高，非叶节点过多。故在实际应用中，我们通常是使用多个比特位作为树节点的推断，但多比特位会使节点的子节点槽变多。增大节点的体积，一般选用2个或4个比特位作为树节点就可以）</p>
+
+<p>插入：</p>
+
+<p>我们在插入一个新节点时，我们依据数据的比特位，在树中向下查找，若没有对应结点，则生成对应结点，直到数据的比特位訪问完，则建立叶节点映射对应的对象。</p>
+
+<p>删除：</p>
+
+<p>我们能够“惰性删除”，即沿着路径查找到叶节点后，直接删除叶节点，中间的非叶节点不删除。</p>
+
+<p>应用</p>
+
+<p>Radix树在Linux中的应用：</p>
+
+<p>Linux基数树（radix tree）是将long整数键值与指针相关联的机制，它存储有效率。而且可高速查询，用于整数值与指针的映射（如：IDR机制）、内存管理等。
+IDR（ID Radix）机制是将对象的身份鉴别号整数值ID与对象指针建立关联表。完毕从ID与指针之间的相互转换。
+IDR机制使用radix树状结构作为由id进行索引获取指针的稀疏数组，通过使用位图能够高速分配新的ID，IDR机制避免了使用固定尺寸的数组存放指针。IDR机制的API函数在lib/idr.c中实现。</p>
+
+<p>Linux radix树最广泛的用途是用于内存管理。结构address_space通过radix树跟踪绑定到地址映射上的核心页，该radix树同意内存管理代码高速查找标识为dirty或writeback的页。
+其使用的是数据类型unsigned long的固定长度输入的版本号。每级代表了输入空间固定位数。Linux radix树的API函数在lib/radix-tree.c中实现。（把页指针和描写叙述页状态的结构映射起来。使能高速查询一个页的信息。）</p>
+
+<p>Linux内核利用radix树在文件内偏移高速定位文件缓存页。 
+Linux(2.6.7) 内核中的分叉为 64(2^6)。树高为 6(64位系统)或者 11(32位系统)，用来高速定位 32 位或者 64 位偏移，radix tree 中的每个叶子节点指向文件内相应偏移所相应的Cache项。</p>
+
+<p>【radix树为稀疏树提供了有效的存储，取代固定尺寸数组提供了键值到指针的高速查找。】</p>
+:ET

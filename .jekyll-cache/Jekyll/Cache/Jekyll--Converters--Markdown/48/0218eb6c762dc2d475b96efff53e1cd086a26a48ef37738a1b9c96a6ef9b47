@@ -1,0 +1,59 @@
+I"�
+<p>从堆上申请内存
+Go内存管理的设计目标是在并发环境下保持高性能，并且集成垃圾回收器。让我们从一个简单的例子开始：</p>
+
+<p>package main</p>
+
+<p>type smallStruct struct {
+   a, b int64
+   c, d float64
+}</p>
+
+<p>func main() {
+   smallAllocation()
+}</p>
+
+<p>//go:noinline
+func smallAllocation() *smallStruct {
+   return &amp;smallStruct{}
+}
+//go:noinline这行注释可以禁止编译时的内联优化，从而避免编译时把smallAllocation这个函数调用直接优化没了。</p>
+
+<p>运行逃逸分析命令go tool compile “-m” main.go，得到内存申请情况：</p>
+
+<p>main.go:14:9: &amp;smallStruct literal escapes to heap
+运行go tool compile -S main.go命令，获取程序的汇编代码，可以更清晰的查看内存申请情况：</p>
+
+<p>0x001d 00029 (main.go:14)   LEAQ   type.”“.smallStruct(SB), AX
+0x0024 00036 (main.go:14)  PCDATA $0, $0
+0x0024 00036 (main.go:14)  MOVQ   AX, (SP)
+0x0028 00040 (main.go:14)  CALL   runtime.newobject(SB)
+newobject是用于申请内存的内建函数，newobject是mallocgc的代理，mallocgc是管理堆内存的函数。Go分配内存有两种策略：小块内存申请和大块内存申请。
+<!-- more -->
+mcentral维护了两张span链表。一张链表为non-empty类型，包含了可供分配的span（由于一个span可能包含多个object，只要有一个或一个以上的object可供分配即表示该span可供分配），一张为empty类型，包含已分配完毕的span。当Go执行垃圾回收时，如果span中的内存块被标记为可供分配，span会重新加入到non-empty链表中。</p>
+
+<p>从mcentral获取span的流程图如下：</p>
+
+<p>从mcentral获取span</p>
+
+<p>当mcentral中也没有可供分配的span时，Go会从堆上申请新的span并将其放入mcentral中：</p>
+
+<p>从堆上获取span</p>
+
+<p>堆在必要时向操作系统申请内存。它会申请一块大内存，被称为arena，在64位系统下为64MB，其它大部分系统为4MB，申请的内存同样用span管理：</p>
+
+<p>arena</p>
+
+<p>大块内存申请
+Go申请大于32KB的大块内存不使用本地缓存策略，而是将大小取整到页大小整数倍后直接从堆上申请。</p>
+
+<p>从堆上申请大内存</p>
+
+<p>全局图
+现在我们在一个较高层次上，对Go的内存分配有了一个大致了解。让我们将所有的组件集合到一起来绘制一张全局图：</p>
+
+<p>设计灵感
+Go内存分配器的设计基于TCMalloc，TCMalloc是由Google专门为并行环境优化的内存分配器。TCMalloc的文档很值得一读，在文档里你也能找到本文中讲解到的一些概念。</p>
+
+<p>英文原文地址：https://medium.com/a-journey-with-go/go-memory-management-and-allocation-a7396d430f44</p>
+:ET

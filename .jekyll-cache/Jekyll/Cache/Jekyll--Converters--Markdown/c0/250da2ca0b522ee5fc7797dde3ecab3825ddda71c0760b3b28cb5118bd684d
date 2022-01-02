@@ -1,0 +1,87 @@
+I"^<p>你可以考虑使用bind，使用BIND作为服务器软件的DNS服务器约占所有DNS服务器的九成。这是官网：https://www.isc.org/downloads/bind/</p>
+
+<p>如果小规模使用的话也可以使用dnsmasq，一个开源的轻量级DNS转发和DHCP、TFTP服务器，多数家用路由器都是使用dnsmasq作为dns和dhcp支持的。http://www.thekelleys.org.uk/dnsmasq/doc.html
+<!-- more -->
+需要伯克利大学互联网域名工具（Berkeley Internet Name Domain），简称BIND，可以使用yum或rpm安装。因为我手中有足够的rpm包，我选择的是rpm安装。</p>
+
+<p>关于chroot：
+从名字能看得出，是change root。为了安全，bind需要的配置文件实际放在：</p>
+
+<p>/var/named/chroot/etc/named.conf</p>
+
+<p>/var/named/chroot/var/named/zone_file1</p>
+
+<p>/var/named/chroot/var/named/zone_file…..</p>
+
+<p>/var/named/chroot/var/run/named/…
+因为新版本的 RHEL或CentOS 6.x 已经將 chroot 所需要使用到的路径，使用 mount –bind 的功能进行了目录链接，例如，我们需要的 /var/named 在启动脚本中通过 mount –bind /var/named /var/named/chroot/var/named 进行目录绑定！所以在操作过程中，无需切换工作目录至 /var/named/chroot/
+ ，使用正规的目录即可。启动脚本的内容参见下图：</p>
+
+<p>修改/var/named/chroot/下的文件的优点很突出：如果umount后，原本非/var/named/chroot/下的文件不发生改变（无论你在chroot/下的文件中做什么），安全性非常好。所以，我们在学习配置过程中是可以忽略这部分知识的，等到配置过程都掌握后，在生产系统的配置过程中，一定是配置chroot/下的文件，也就是说，生产系统中下面的操作过程是针对chroot/下的对应文件，这点一定要注意。</p>
+
+<p>文件配置与调用关系：
+①首先配置的是/etc/named.conf，这是bind的主配置文件，看名称就知道这个配置文件的重要性啦。修改这两处为any；要注意的是directory “/var/named”，这说明zone文档的路径；</p>
+
+<p>②修改后，实际上就可以执行service named start。但是发现服务启动失败，怎么办呢？
+要观察/var/log/messages日志，发现启动named的时候，有open: /etc/named.conf :permission denied错误提示；我是root用户登录的没问题。再cat /etc/passwd发现named组的存在，好了，执行chown :named /etc/named.conf，然后再启动named，启动成功。</p>
+
+<p>③观察/etc/named.conf文件，在文件的末尾，有这么一句，说明还要调用这个包含性质的文件：</p>
+
+<p>接下来配置/etc/named.rfc1912.zones。前面的不用管，只要增加下图中红框内的一段，并保存退出：
+这一段是什么呢，是我希望的服务器使用istv.com这个域名的zone文件。</p>
+
+<p>这个named.istv.com就是bind需要的zone文件，下面要配置这个文件。</p>
+
+<p>④我们知道了需要配置上面说的这个zone文件，那么这个文件在哪里呢，不知道不要紧，继续从bind主配置文件找线索：</p>
+
+<p>从bind主配置文件中，有这么一段描述，说明了了directory是 /var/named/ 这个路径。</p>
+
+<p>⑤cp /var/named/named.localhost /var/named/named.istv.com，先创建这个文件。</p>
+
+<p>上面是我编辑好的，最重要的是第二个@后面这一段，前面的可以不改；NS代表域名，A代表地址，翻译成中文，这样就非常好理解了。实际上，第二段中最重要的是最后一句，用来说明www.istv.com的IP地址。大家注意到com后面的.，这代表着完整主机名称FQDN。
+TTL建议比较长，可以在客户端本地存储时间长一些，避免反复访问DNS server，给APP-Server带来不必要的压力。我使用的是1D，代表着one day，这个可能在测试的时候有影响，如果变更windows端的域名服务器或者域名解析配置有变动，还想要尽快看到测试结果，windows客户端需要把dns缓存flush掉。</p>
+
+<p>⑥chown :named /var/named/named.istv.com经过实际操作证明，也是必不可少的。</p>
+
+<p>⑦最后，要想让named进程开机自启动，需要执行chkconfig –level 2345 named on</p>
+
+<p>上面的配置中，只是配置了正向解析，反向解析没有去配置，因为我们只是想通过安装这台DNS Server，终端设备可以在局域网内访问我们自己的istv.com这个域名，也就是说使用DNS服务器解析域名所对应的IP地址——正向解析。</p>
+
+<p>关于配置文件的校验：
+bind提供了有两个校验工具，使用者可以在配置完文件后，对文件进行手动校验。问题来了，校验的工具在哪里？关键还是思路，我们可以依靠搜索引擎，也可以利用搜索引擎+自己的思考。在/usr/sbin/路径下有两个命令，一个是named-checkconf，另外一个是named-checkzone，看名称就能猜到是什么用的。对头，分别是主配置文件和zone文件。
+OK，我们现在知道了命令在哪儿和命令是什么了，命令的用法，使用者自己看提示就知道了，这里不详细说明了。
+实际上，在/etc/init.d/named文件中，有这么一句：</p>
+
+<p>这说明什么呢，在启动脚本中已经包含了这两个校验命令，可以透过named的restart并配合上面介绍的日志文件，实现同样的目的。</p>
+
+<p>定时检查dns服务：
+①编辑检查dns服务脚本，dns_check.sh：
+#!/bin/bash
+service named status &amp;&gt; /dev/null</p>
+
+<p>if [ $? -ne 0 ]</p>
+
+<p>then</p>
+
+<p>echo “At time: <code class="language-plaintext highlighter-rouge">date</code> :named  is stop .”» /var/log/messages</p>
+
+<p>service named start</p>
+
+<p>else</p>
+
+<p>echo “named is running .”</p>
+
+<p>fi
+②在crontab计划任务中，增加dns_check.sh的定时执行.</p>
+
+<p>关于DNS测试命令：
+配置OK了，程序启动也顺利OK了，接下来就要对结果进行一下测试，当然在使用PC浏览器访问服务器不方便的情况下，也是可以通过命令行去
+①最简单的host命令。
+host -a istv.com，你可以看到一个结果，好像有问题，当然，istv.com这个域名是在Internet上合法存在的，APP-Server上也配置的自己的dns，解析到的就是互联网的结果。我们局域网怎么用呢？host -a istv.com 172.16.1.7，对咯，后面指定dns服务器地址就可以了。个人认为，简单而好用。</p>
+
+<p>②nslookup命令。
+这个命令的用法就比较丰富了，这里我只用最简单的，不废话，直接给图。</p>
+
+<p>③主流的dig命令。
+更加丰富的使用方法和更加丰富的查询结果，没有仔细学习，用法差不多，继续直接给图。</p>
+:ET

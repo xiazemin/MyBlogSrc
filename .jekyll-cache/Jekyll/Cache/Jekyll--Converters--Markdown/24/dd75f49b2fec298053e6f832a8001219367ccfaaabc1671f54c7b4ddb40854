@@ -1,0 +1,138 @@
+I"<p>我正在使用nignx作为反向代理.我想将我的所有请求发送到我的第一台服务器.如果第一台服务器关闭,我想向第二台服务器发送请求.</p>
+
+<p>你想要的是主动被动设置.这是一个示例nginx conf片段,可以帮助您：
+upstream backend {
+    server 1.2.3.4:80 fail_timeout=5s max_fails=3;
+    server 4.5.6.7:80 backup;
+}</p>
+
+<p>server {
+    listen 80;
+    server_name whatevs.com;</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>location / {
+    proxy_pass http://backend;
+} } 所以,’通常’,所有请求都将转到主机1.2.3.4.如果我们在该框中输入三次失败,则4.5.6.7将接管
+</code></pre></div></div>
+
+<!-- more -->
+
+<p>#注：proxy_temp_path和proxy_cache_path指定的路径必须在同一分区<br />
+proxy_temp_path   /data0/proxy_temp_dir;</p>
+
+<p>#设置Web缓存区名称为cache_one，内存缓存空间大小为200MB，1天没有被访问的内容自动清除，硬盘缓存空间大小为30GB。<br />
+proxy_cache_path   /data0/proxy_cache_dir   levels=1:2   keys_zone=cache_one:200m inactive=1d max_size=30g;</p>
+
+<p>#轮询服务器，weight为服务器权重，与访问频率成正比，max_fails最大超时次数，fail_timeout服务器代理监听超时时间<br />
+upstream backend_server {<br />
+ server   192.168.203.43:80 weight=1 max_fails=2 fail_timeout=30s;<br />
+ server   192.168.203.44:80 weight=1 max_fails=2 fail_timeout=30s;<br />
+ server   192.168.203.45:80 weight=1 max_fails=2 fail_timeout=30s;<br />
+}</p>
+
+<p>server<br />
+{<br />
+     listen       80;<br />
+     server_name   www.yourdomain.com 192.168.203.42;<br />
+     index index.html index.htm;<br />
+     root   /data0/htdocs/www;</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>location /  
+{  
+ #如果后端的服务器返回502、504、执行超时等错误，自动将请求转发到upstream负载均衡池中的另一台服务器，实现故障转移。  
+ proxy_next_upstream http_502 http_504 error timeout invalid_header;  
+ proxy_cache cache_one;  
+   
+ #对不同的HTTP状态码设置不同的缓存时间  
+ proxy_cache_valid   200 304 12h;  
+   
+ #以域名、URI、参数组合成Web缓存的Key值，Nginx根据Key值哈希，存储缓存内容到二级缓存目录内  
+ proxy_cache_key $host$uri$is_args$args;  
+ proxy_set_header Host   $host;  
+ proxy_set_header X-Forwarded-For   $remote_addr;  
+ proxy_pass http://backend_server;  
+ expires       1d;  
+}   }  Nginx反向代理配置参数释义：
+</code></pre></div></div>
+
+<p>1.proxy_set_header(设定header)<br />
+2.proxy_hide_header(隐藏header)<br />
+3.proxy_pass_header(通过header)<br />
+4.proxy_connect_timeout(代理连接超时)<br />
+5.proxy_send_timeout(代理发送超时)<br />
+6.proxy_read_timeout(代理接收超时)<br />
+7.proxy_temp_file_write_size(设定缓存文件夹大小)<br />
+8.proxy_buffer_size(代理缓冲大小)<br />
+9.proxy_buffers (代理缓冲)<br />
+10.proxy_busy_buffers_size(高负荷下缓冲大小)<br />
+11.proxy_ignore_client_abort(不允许代理端主动关闭连接) 
+下面就分步介绍基于Nginx反向代理的upstream对服务请求转发与分配5种方式，实际生成环境综合设置，为了便于说明问题分不同方式来说明，nginx反向代理实际生成环境的应用，请参考《如何设置nginx反向代理实现服务器瞬间故障转移》文章开篇部分的proxy.conf配置。</p>
+
+<p>nginx的upstream目前支持5种方式的分配</p>
+
+<p>1、轮询（默认）</p>
+
+<p>每个请求按时间顺序逐一分配到不同的后端服务器，如果后端服务器down掉，能自动剔除。</p>
+
+<p>2、weight</p>
+
+<p>指定轮询几率，weight和访问比率成正比，用于后端服务器性能不均的情况。</p>
+
+<p>3、ip_hash</p>
+
+<p>每个请求按访问ip的hash结果分配，这样每个访客固定访问一个后端服务器，可以解决session的问题。</p>
+
+<p>upstream bakend {<br />
+    ip_hash;<br />
+    server 192.168.203.14:88;<br />
+    server 192.168.203.15:80;<br />
+} 
+4、fair（第三方）</p>
+
+<p>按后端服务器的响应时间来分配请求，响应时间短的优先分配。</p>
+
+<p>upstream backend {<br />
+    server 192.168.203.14:88;<br />
+    server 192.168.203.15:80;<br />
+    fair;<br />
+} 
+5、url_hash（第三方）</p>
+
+<p>按访问url的hash结果来分配请求，使每个url定向到同一个后端服务器，后端服务器为缓存时比较有效。</p>
+
+<p>例：在upstream中加入hash语句，server语句中不能写入weight等其他的参数，hash_method是使用的hash算法</p>
+
+<p>upstream backend {<br />
+    server squid1:3128;<br />
+    server squid2:3128;<br />
+    hash $request_uri;<br />
+    hash_method crc32;<br />
+} 
+upstream bakend{<br />
+    #定义负载均衡设备的Ip及设备状态<br />
+    ip_hash;<br />
+    server 127.0.0.1:9090 down;<br />
+    server 127.0.0.1:8080 weight=2;<br />
+    server 127.0.0.1:6060;<br />
+    server 127.0.0.1:7070 backup;<br />
+} 
+在需要使用负载均衡的server中增加：</p>
+
+<p>proxy_pass http://bakend/; 
+每个设备的状态设置为:</p>
+
+<p>1.down 表示单前的server暂时不参与负载<br />
+2.weight 默认为1.weight越大，负载的权重就越大。<br />
+3.max_fails ：允许请求失败的次数默认为1.当超过最大次数时，返回proxy_next_upstream 模块定义的错误<br />
+4.fail_timeout:max_fails次失败后，暂停的时间。<br />
+5.backup： 其它所有的非backup机器down或者忙的时候，请求backup机器。所以这台机器压力会最轻。 
+nginx支持同时设置多组的负载均衡，用来给不用的server来使用。</p>
+
+<p>client_body_in_file_only 设置为On 可以讲client post过来的数据记录到文件中用来做debug</p>
+
+<p>client_body_temp_path 设置记录文件的目录 可以设置最多3层目录</p>
+
+<p>location 对URL进行匹配.可以进行重定向或者进行新的代理 负载均衡</p>
+
+<p>https://blog.csdn.net/shudaqi2010/article/details/54341015?utm_source=blogxgwz0</p>
+:ET

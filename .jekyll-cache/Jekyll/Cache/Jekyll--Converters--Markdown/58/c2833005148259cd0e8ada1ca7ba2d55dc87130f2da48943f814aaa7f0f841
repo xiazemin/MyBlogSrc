@@ -1,0 +1,276 @@
+I" R<p>https://dev.mysql.com/doc/refman/5.7/en/spatial-function-reference.html
+1.理解下MySql GIS空间数据字段类型
+<img src="https://xiazemin.github.io/MyBlog/img/mysqlgis.gif" />
+1.一个点：POINT（15 20）
+请注意，点坐标无指定分隔逗号。
+2.一根线条，例如有四点组成的线条： LINESTRING（0 0，10 10，20 25，50 60）
+请注意，点坐标对用逗号分隔。
+3.一个多边形，例如一个外环和一个内环组成的多边形：POLYGON（（0 0,10 0,10 10 10 0 0），（5 5 7 5 7 7 5 7 5 5））
+4.多点集合，例如三个点的值：MultIPOINT（0 0，20 20，60 60）
+5.多线集合，例如两根线条的集合：MULTILINESTRING（（10 10，20 20），（15 15，30 15））
+6.多边形集合，例如两个多边形值的集合：MULTIPOLYGON（（（0 0,10 0,10 10 10,0 0）），（（5 5 7 5 7 7 5 7 5 5）））
+7.集合，例如两个点和一条线段的集合：GeometryCollection（POINT（10 10），POINT（30 30），LINESTRING（15 15，20 20））
+2.添加测试数据
+表t_pot 存储点信息，t_polygon存储几何信息
+t_pot 创建语句（由于这里使用的是mysql 5.7的数据库，所以用InnoDB数据引擎，较低版本的数据库需要采用MyISAM ）
+CREATE TABLE <code class="language-plaintext highlighter-rouge">t_pot</code> (
+  <code class="language-plaintext highlighter-rouge">id</code> int(11) NOT NULL AUTO_INCREMENT,
+  <code class="language-plaintext highlighter-rouge">name</code> varchar(255) DEFAULT NULL,
+  <code class="language-plaintext highlighter-rouge">pot</code> point DEFAULT NULL,
+  PRIMARY KEY (<code class="language-plaintext highlighter-rouge">id</code>)
+) ENGINE=InnoDB AUTO_INCREMENT=5 DEFAULT CHARSET=utf8;
+往t_pot表中添加测试数据
+ INSERT INTO <code class="language-plaintext highlighter-rouge">t_pot</code> VALUES (‘1’, ‘A’, GeomFromText(‘POINT(0 0)’));
+INSERT INTO <code class="language-plaintext highlighter-rouge">t_pot</code> VALUES (‘2’, ‘B’, GeomFromText(‘POINT(0 2)’));
+INSERT INTO <code class="language-plaintext highlighter-rouge">t_pot</code> VALUES (‘3’, ‘C’, GeomFromText(‘POINT(2 0)’));
+INSERT INTO <code class="language-plaintext highlighter-rouge">t_pot</code> VALUES (‘4’, ‘D’, GeomFromText(‘POINT(2 2)’));
+ t_polygon创建语句
+CREATE TABLE <code class="language-plaintext highlighter-rouge">t_polygon</code> (
+  <code class="language-plaintext highlighter-rouge">id</code> int(11) NOT NULL AUTO_INCREMENT,
+  <code class="language-plaintext highlighter-rouge">name</code> varchar(255) DEFAULT NULL,
+  <code class="language-plaintext highlighter-rouge">pgn</code> polygon DEFAULT NULL,
+  PRIMARY KEY (<code class="language-plaintext highlighter-rouge">id</code>)
+) ENGINE=InnoDB AUTO_INCREMENT=9 DEFAULT CHARSET=utf8;
+往t_polygon表中添加测试数据
+INSERT INTO <code class="language-plaintext highlighter-rouge">t_polygon</code> VALUES (‘1’, ‘ABCD’, GeomFromText(‘POLYGON((0 0, 2 0, 2 2, 0 2, 0 0))’));
+INSERT INTO <code class="language-plaintext highlighter-rouge">t_polygon</code> VALUES (‘2’, ‘AEGF’, GeomFromText(‘POLYGON((0 0, 4 0, 4 4, 0 4, 0 0))’));
+INSERT INTO <code class="language-plaintext highlighter-rouge">t_polygon</code> VALUES (‘3’, ‘CEGFBD’, GeomFromText(‘POLYGON((0 2, 0 4, 4 4, 4 0, 2 0, 2 2, 0 2))’));
+INSERT INTO <code class="language-plaintext highlighter-rouge">t_polygon</code> VALUES (‘4’, ‘AHJIK’, GeomFromText(‘POLYGON((0 0, 0 6, 6 6, 6 0, 0 0), (2 2, 4 4, 4 2, 2 2))’));
+INSERT INTO <code class="language-plaintext highlighter-rouge">t_polygon</code> VALUES (‘5’, ‘DGK’, GeomFromText(‘POLYGON((2 2, 4 4, 4 2, 2 2))’));
+INSERT INTO <code class="language-plaintext highlighter-rouge">t_polygon</code> VALUES (‘6’, ‘GKJ’, GeomFromText(‘POLYGON((4 4, 4 2, 6 6, 4 4))’));
+INSERT INTO <code class="language-plaintext highlighter-rouge">t_polygon</code> VALUES (‘7’, ‘ADF’, GeomFromText(‘POLYGON((0 0, 2 2, 4 0, 0 0))’));
+INSERT INTO <code class="language-plaintext highlighter-rouge">t_polygon</code> VALUES (‘8’, ‘LDK’, GeomFromText(‘POLYGON((1 1, 2 2, 4 2, 1 1))’));
+t_pot表中的点坐标数据没有什么好解释的，下面对t_polygon数据进行说明
+下面是表中对应的坐标点位置：
+ABDC：POLYGON((0 0, 2 0, 2 2, 0 2, 0 0))  面积为4的正方形
+AEGF：POLYGON((0 0, 4 0, 4 4, 0 4, 0 0)) 面积为16的正方形
+CEGFBD：POLYGON((0 2, 0 4, 4 4, 4 0, 2 0, 2 2, 0 2)) 面积为16的正方形 - 面积为4的正方形
+DGK：POLYGON((2 2, 4 4, 4 2, 2 2))面积为2的直角等腰三角形
+AHJIK：POLYGON((0 0, 0 6, 6 6, 6 0, 0 0), (2 2, 4 4, 4 2, 2 2))  面积为36的正方形 - 面积为2的三角形DGK
+GKJ ：POLYGON((4 4, 4 2, 6 6, 4 4)) 面积为2的三角形
+ADF ：POLYGON((0 0, 2 2, 4 0, 0 0))面积为4的等腰三角形
+LDK：POLYGON((1 1, 2 2, 4 2, 1 1))面积为1的三角形
+3.测试SQL语句
+ST_GEOMFROMTEXT文本数据转成空间数据，所以下面看着就乱码了(Navicate中是不乱码)
+mysql&gt; SELECT ST_GEOMFROMTEXT(“POINT(1 2)”);
++——————————-+
+| ST_GEOMFROMTEXT(“POINT(1 2)”) |
++——————————-+
+|              ð?       @      |
++——————————-+
+1 row in set (0.00 sec)</p>
+
+<p>ST_ASTEXT空间数据转文本数据
+mysql&gt; SELECT ST_ASTEXT(ST_GEOMFROMTEXT(“POINT(1 2)”));
++——————————————+
+| ST_ASTEXT(ST_GEOMFROMTEXT(“POINT(1 2)”)) |
++——————————————+
+| POINT(1 2)                               |
++——————————————+
+1 row in set (0.00 sec)
+st_distance两点之间直线距离
+mysql&gt; select st_distance(ST_GEOMFROMTEXT(“POINT(0 0)”),p.pot),p.<code class="language-plaintext highlighter-rouge">name</code> from t_pot p;
++————————————————–+——+
+| st_distance(ST_GEOMFROMTEXT(“POINT(0 0)”),p.pot) | name |
++————————————————–+——+
+|                                                0 | A    |
+|                                                2 | B    |
+|                                                2 | C    |
+|                               2.8284271247461903 | D    |
++————————————————–+——+
+4 rows in set (0.00 sec)
+st_distance_sphere两点之间地理距离，单位米，例如记录店铺与用户间的距离</p>
+
+<p>mysql&gt; select st_distance(ST_GEOMFROMTEXT(“POINT(0 0)”),p.pot),p.<code class="language-plaintext highlighter-rouge">name</code> from t_pot p;
++————————————————–+——+
+| st_distance(ST_GEOMFROMTEXT(“POINT(0 0)”),p.pot) | name |
++————————————————–+——+
+|                                                0 | A    |
+|                                                2 | B    |
+|                                                2 | C    |
+|                               2.8284271247461903 | D    |
++————————————————–+——+
+4 rows in set (0.00 sec)
+ST_Intersects图形是否有交叉重叠
+mysql&gt; SELECT
+    -&gt; ST_Intersects(tp.pgn,ST_GEOMFROMTEXT(“POLYGON((0 0,2 0,2 2,0 2,0 0))”)),tp.<code class="language-plaintext highlighter-rouge">name</code>
+    -&gt; FROM <code class="language-plaintext highlighter-rouge">t_polygon</code> tp;
++————————————————————————-+——–+
+| ST_Intersects(tp.pgn,ST_GEOMFROMTEXT(“POLYGON((0 0,2 0,2 2,0 2,0 0))”)) | name   |
++————————————————————————-+——–+
+|                                                                       1 | ABCD   |
+|                                                                       1 | AEGF   |
+|                                                                       1 | CEGFBD |
+|                                                                       1 | AHJIK  |
+|                                                                       1 | DGK    |
+|                                                                       0 | GKJ    |
+|                                                                       1 | ADF    |
+|                                                                       1 | LDK    |
++————————————————————————-+——–+
+8 rows in set (0.00 sec)</p>
+
+<p>ST_Equals图形是否有相等
+mysql&gt; SELECT
+    -&gt; ST_Equals(tp.pgn,ST_GEOMFROMTEXT(“POLYGON((0 0,2 0,2 2,0 2,0 0))”)),tp.<code class="language-plaintext highlighter-rouge">name</code>
+    -&gt; FROM <code class="language-plaintext highlighter-rouge">t_polygon</code> tp;
++———————————————————————+——–+
+| ST_Equals(tp.pgn,ST_GEOMFROMTEXT(“POLYGON((0 0,2 0,2 2,0 2,0 0))”)) | name   |
++———————————————————————+——–+
+|                                                                   1 | ABCD   |
+|                                                                   0 | AEGF   |
+|                                                                   0 | CEGFBD |
+|                                                                   0 | AHJIK  |
+|                                                                   0 | DGK    |
+|                                                                   0 | GKJ    |
+|                                                                   0 | ADF    |
+|                                                                   0 | LDK    |
++———————————————————————+——–+
+8 rows in set (0.00 sec)</p>
+
+<p>ST_Touches相接触，但不包含
+mysql&gt; SELECT
+    -&gt; ST_Touches(tp.pgn,ST_GEOMFROMTEXT(“POLYGON((0 0,2 0,2 2,0 2,0 0))”)),tp.<code class="language-plaintext highlighter-rouge">name</code>
+    -&gt; FROM <code class="language-plaintext highlighter-rouge">t_polygon</code> tp;
++———————————————————————-+——–+
+| ST_Touches(tp.pgn,ST_GEOMFROMTEXT(“POLYGON((0 0,2 0,2 2,0 2,0 0))”)) | name   |
++———————————————————————-+——–+
+|                                                                    0 | ABCD   |
+|                                                                    0 | AEGF   |
+|                                                                    1 | CEGFBD |
+|                                                                    0 | AHJIK  |
+|                                                                    1 | DGK    |
+|                                                                    0 | GKJ    |
+|                                                                    0 | ADF    |
+|                                                                    0 | LDK    |
++———————————————————————-+——–+
+8 rows in set (0.00 sec)</p>
+
+<p>ST_Contains包含
+mysql&gt; SELECT
+    -&gt; ST_Contains(tp.pgn,ST_GEOMFROMTEXT(“POLYGON((0 0,2 0,2 2,0 2,0 0))”)),tp.<code class="language-plaintext highlighter-rouge">name</code>
+    -&gt; FROM <code class="language-plaintext highlighter-rouge">t_polygon</code> tp;
++———————————————————————–+——–+
+| ST_Contains(tp.pgn,ST_GEOMFROMTEXT(“POLYGON((0 0,2 0,2 2,0 2,0 0))”)) | name   |
++———————————————————————–+——–+
+|                                                                     1 | ABCD   |
+|                                                                     1 | AEGF   |
+|                                                                     0 | CEGFBD |
+|                                                                     1 | AHJIK  |
+|                                                                     0 | DGK    |
+|                                                                     0 | GKJ    |
+|                                                                     0 | ADF    |
+|                                                                     0 | LDK    |
++———————————————————————–+——–+
+8 rows in set (0.00 sec)</p>
+
+<p>ST_SymDifference返回表示设置的几何值的对称差的点的几何形状 g1和 g2，这语话加了ST_ASTEXT，把空间数据转换成文本，要不然看着乱码的(Navicate中是不乱码)
+mysql&gt; SELECT
+    -&gt; ST_ASTEXT(ST_SymDifference(tp.pgn,ST_GEOMFROMTEXT(“POLYGON((0 0,4 0,4 4,0 4,0 0))”))),tp.<code class="language-plaintext highlighter-rouge">name</code>
+    -&gt; FROM <code class="language-plaintext highlighter-rouge">t_polygon</code> tp;
++—————————————————————————————+——–+
+| ST_ASTEXT(ST_SymDifference(tp.pgn,ST_GEOMFROMTEXT(“POLYGON((0 0,4 0,4 4,0 4,0 0))”))) | name   |
++—————————————————————————————+——–+
+| POLYGON((0 2,2 2,2 0,4 0,4 4,0 4,0 2))                                                | ABCD   |
+| GEOMETRYCOLLECTION()                                                                  | AEGF   |
+| POLYGON((0 2,0 0,2 0,2 2,0 2))                                                        | CEGFBD |
+| POLYGON((4 2,4 0,6 0,6 6,0 6,0 4,4 4,2 2,4 2))                                        | AHJIK  |
+| POLYGON((4 4,0 4,0 0,4 0,4 2,2 2,4 4))                                                | DGK    |
+| POLYGON((4 4,0 4,0 0,4 0,4 2,6 6,4 4))                                                | GKJ    |
+| POLYGON((4 0,4 4,0 4,0 0,2 2,4 0))                                                    | ADF    |
+| POLYGON((4 2,4 4,0 4,0 0,4 0,4 2),(4 2,1 1,2 2,4 2))                                  | LDK    |
++—————————————————————————————+——–+
+8 rows in set (0.00 sec)</p>
+
+<p>ST_Intersection在指定范围内交叉的集合
+mysql&gt; SELECT
+    -&gt; ST_ASTEXT(ST_Intersection(tp.pgn,ST_GEOMFROMTEXT(“POLYGON((0 0,2 0,2 2,0 2,0 0))”))),tp.<code class="language-plaintext highlighter-rouge">name</code>
+    -&gt; FROM <code class="language-plaintext highlighter-rouge">t_polygon</code> tp;
++————————————————————————————–+——–+
+| ST_ASTEXT(ST_Intersection(tp.pgn,ST_GEOMFROMTEXT(“POLYGON((0 0,2 0,2 2,0 2,0 0))”))) | name   |
++————————————————————————————–+——–+
+| POLYGON((0 2,0 0,2 0,2 2,0 2))                                                       | ABCD   |
+| POLYGON((0 2,0 0,2 0,2 2,0 2))                                                       | AEGF   |
+| LINESTRING(0 2,2 2,2 0)                                                              | CEGFBD |
+| POLYGON((0 2,0 0,2 0,2 2,0 2))                                                       | AHJIK  |
+| POINT(2 2)                                                                           | DGK    |
+| GEOMETRYCOLLECTION()                                                                 | GKJ    |
+| POLYGON((2 2,0 0,2 0,2 2))                                                           | ADF    |
+| POLYGON((2 2,1 1,2 1.3333333333333335,2 2))                                          | LDK    |
++————————————————————————————–+——–+
+8 rows in set (0.00 sec)</p>
+
+<p>还是上面的语句，但是把范围调整了为了更清楚的分析数据
+mysql&gt; SELECT
+    -&gt; ST_ASTEXT(ST_Intersection(tp.pgn,ST_GEOMFROMTEXT(“POLYGON((0 0,4 0,4 4,0 4,0 0))”))),tp.<code class="language-plaintext highlighter-rouge">name</code>
+    -&gt; FROM <code class="language-plaintext highlighter-rouge">t_polygon</code> tp;
++—————————————————————————————+——–+
+| ST_ASTEXT(ST_Intersection(tp.pgn,ST_GEOMFROMTEXT(“POLYGON((0 0,4 0,4 4,0 4,0 0))”)))  | name   |
++—————————————————————————————+——–+
+| POLYGON((0 2,0 0,2 0,2 2,0 2))                                                        | ABCD   |
+| POLYGON((0 4,0 0,4 0,4 4,0 4))                                                        | AEGF   |
+| POLYGON((0 4,0 2,2 2,2 0,4 0,4 4,0 4))                                                | CEGFBD |
+| GEOMETRYCOLLECTION(MULTIPOLYGON(((0 4,0 0,4 0,4 2,2 2,4 4,0 4))),LINESTRING(4 4,4 2)) | AHJIK  |
+| POLYGON((4 4,2 2,4 2,4 4))                                                            | DGK    |
+| LINESTRING(4 4,4 2)                                                                   | GKJ    |
+| POLYGON((4 0,2 2,0 0,4 0))                                                            | ADF    |
+| POLYGON((4 2,2 2,1 1,4 2))                                                            | LDK    |
++—————————————————————————————+——–+
+8 rows in set (0.00 sec)
+AREA计算面积
+mysql&gt; select AREA(tp.pgn),tp.<code class="language-plaintext highlighter-rouge">name</code>
+    -&gt; FROM <code class="language-plaintext highlighter-rouge">t_polygon</code> tp;
++————–+——–+
+| AREA(tp.pgn) | name   |
++————–+——–+
+|            4 | ABCD   |
+|           16 | AEGF   |
+|           12 | CEGFBD |
+|           34 | AHJIK  |
+|            2 | DGK    |
+|            2 | GKJ    |
+|            4 | ADF    |
+|            1 | LDK    |
++————–+——–+
+8 rows in set, 1 warning (0.00 sec)
+<!-- more -->
+提到空间数据库，首先想到的一定是Esri公司的ArcSDE（SDE即Spatial Database Engine，空间数据库引擎），ArcSDE主要支持的数据库包括Oracle，SQL Server，IBM DB2。功能好，性能好，但是价格也好。 
+国内很多大型活互联网公司已经转向MySql阵营。对于有实力的大公司，使用开源的MySql，可以针对自己的业务对MySql源码进行修改及优化。对于业务量不大的初创公司，直接使用开源MySql，PostgreSQL等数据库，也可节约成本，未来数据库扩展也有很多可参考的资料。 
+PostgreSQL由于具备PostGIS扩展而在开源GIS中有广泛地应用，可视化工具包括pgAdmin、Quantum GIS（类似ArcGIS Desktop） 
+从MySQL4.1开始，也对空间数据库进行了支持，以下是简单的说明和测试：
+1.常用使用场景 
+矩形查询： 
+适合智能手机、网页端高效展示屏幕范围内数据。通过API获取显示屏4角的坐标点，顺序连接生成矩形，空间数据库提供查询矩形范围内坐标功能。 
+圆型查询： 
+根据当前所在位置为中心点，根据给定的里程数为半径生成圆形，搜索圆形范围内的数据。
+2.MySql支持的类型 
+点 POINT(15 20) 
+线 LINESTRING(0 0, 10 10, 20 25, 50 60) 
+面 POLYGON((0 0,10 0,10 10,0 10,0 0),(5 5,7 5,7 7,5 7, 5 5)) 
+多个点 MULTIPOINT(0 0, 20 20, 60 60) 
+多个线 MULTILINESTRING((10 10, 20 20), (15 15, 30 15)) 
+多个面 MULTIPOLYGON(((0 0,10 0,10 10,0 10,0 0)),((5 5,7 5,7 7,5 7, 5 5))) 
+集合 GEOMETRYCOLLECTION(POINT(10 10), POINT(30 30), LINESTRING(15 15, 20 20))，简称GEOMETRY，可以放入点、线、面
+3.测试 
+a.以存储坐标点为例
+DROP TABLE IF EXISTS points;
+CREATE TABLE <code class="language-plaintext highlighter-rouge">points</code> (
+  <code class="language-plaintext highlighter-rouge">id</code> int(11) unsigned NOT NULL AUTO_INCREMENT,
+  <code class="language-plaintext highlighter-rouge">name</code> varchar(20) NOT NULL DEFAULT ‘’,
+  <code class="language-plaintext highlighter-rouge">location</code> point NOT NULL,
+  PRIMARY KEY (<code class="language-plaintext highlighter-rouge">id</code>),
+  SPATIAL KEY <code class="language-plaintext highlighter-rouge">sp_index</code> (<code class="language-plaintext highlighter-rouge">location</code>)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8;
+b.插入测试数据</p>
+<h1 id="天安门">天安门</h1>
+<p>INSERT INTO points VALUES (1,’aaaa’,POINT(116.397389,39.908149));</p>
+<h1 id="颐和园">颐和园</h1>
+<p>INSERT INTO points VALUES (2,’bbbb’,POINT(116.273106,39.992634));
+c.多边形查询 
+多边形查询 起始点与终点为同一点 以灵境胡同、灯市口、崇文门、宣武门组成多边形 
+d.查询 
+多边形查询 起始点与终点为同一点</p>
+<h1 id="定义多边形">定义多边形</h1>
+<p>SET @rect = CONCAT(‘POLYGON((116.373871 39.915786,116.417645 39.916444,116.41816 39.900841,116.374214 39.900182,116.373871 39.915786))’);</p>
+<h1 id="使用变量">使用变量</h1>
+<p>select name,X(location),Y(location),Astext(location) from points where INTERSECTS( location, GEOMFROMTEXT(@rect) ) ;</p>
+:ET

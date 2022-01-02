@@ -1,0 +1,103 @@
+I"N<p>AppArmor是一个高效和易于使用的Linux系统安全应用程序。AppArmor对操作系统和应用程序所受到的威胁进行从内到外的保护，甚至是未被发现的0day漏洞和未知的应用程序漏洞所导致的攻击。AppArmor安全策略可以完全定义个别应用程序可以访问的系统资源与各自的特权。AppArmor包含大量的默认策略，它将先进的静态分析和基于学习的工具结合起来，AppArmor甚至可以使非常复杂的应用可以使用在很短的时间内应用成功。
+AppArmor已经整合进2.6.36版内核。
+<!-- more -->
+Docker可以通过AppArmor或者SELinux进行访问控制，既然是访问控制的过程中难免需要进行对其的配置。此项目是通过AppArmor进行防护的，在配置时遇到了许多问题，在此记录。
+1.如何调用AppArmor进行Docker的权限控制
+这一项在官方文档中有记载。在启动或者运行docker通过参数”–security-opt”加入访问控制的配置文件。–security-opt的默认参数为docker-default。docker-default并非一个实际的配置文件，而是由执行时由GO语言运行的配置模板自动生成并写入AppArmor缓存。(Docker versions 1.13.0 and later)
+2.为Docker配置权限文件
+由于是为docker的container进行安全配置，我们将配置文件放置于/etc/containers/目录下。为方便管理配置文件的命名与配置名同名。官方列举了一个Nginx 的docker配置文件
+#include &lt;tunables/global&gt;
+profile docker-nginx flags=(attach_disconnected,mediate_deleted) {
+  #include &lt;abstractions/base&gt;</p>
+
+<p>network inet tcp,
+  network inet udp,
+  network inet icmp,</p>
+
+<p>deny network raw,</p>
+
+<p>deny network packet,</p>
+
+<p>file,
+  umount,</p>
+
+<p>deny /bin/** wl,
+  deny /boot/** wl,
+  deny /dev/** wl,
+  deny /etc/** wl,
+  deny /home/** wl,
+  deny /lib/** wl,
+  deny /lib64/** wl,
+  deny /media/** wl,
+  deny /mnt/** wl,
+  deny /opt/** wl,
+  deny /proc/** wl,
+  deny /root/** wl,
+  deny /sbin/** wl,
+  deny /srv/** wl,
+  deny /tmp/** wl,
+  deny /sys/** wl,
+  deny /usr/** wl,</p>
+
+<p>audit /** w,</p>
+
+<p>/var/run/nginx.pid w,</p>
+
+<p>/usr/sbin/nginx ix,</p>
+
+<p>deny /bin/dash mrwklx,
+  deny /bin/sh mrwklx,
+  deny /usr/bin/top mrwklx,</p>
+
+<p>capability chown,
+  capability dac_override,
+  capability setuid,
+  capability setgid,
+  capability net_bind_service,</p>
+
+<p>deny @{PROC}/* w,   # deny write for all files directly in /proc (not in a subdir)
+  # deny write to files not in /proc/<number>/** or /proc/sys/**
+  deny @{PROC}/{[^1-9],[^1-9][^0-9],[^1-9s][^0-9y][^0-9s],[^1-9][^0-9][^0-9][^0-9]*}/** w,
+  deny @{PROC}/sys/[^k]** w,  # deny /proc/sys except /proc/sys/k* (effectively /proc/sys/kernel)
+  deny @{PROC}/sys/kernel/{?,??,[^s][^h][^m]**} w,  # deny everything except shm* in /proc/sys/kernel/
+  deny @{PROC}/sysrq-trigger rwklx,
+  deny @{PROC}/mem rwklx,
+  deny @{PROC}/kmem rwklx,
+  deny @{PROC}/kcore rwklx,</number></p>
+
+<p>deny mount,</p>
+
+<p>deny /sys/[^f]<em>/** wklx,
+  deny /sys/f[^s]</em>/** wklx,
+  deny /sys/fs/[^c]<em>/** wklx,
+  deny /sys/fs/c[^g]</em>/** wklx,
+  deny /sys/fs/cg[^r]*/** wklx,
+  deny /sys/firmware/** rwklx,
+  deny /sys/kernel/security/** rwklx,
+}</p>
+
+<p>其中配置标签需要以profile <name>的方式进行，以便通过--security-opt参数的形式被调用。flags=(attach_disconnected)似乎是必要的。
+attach_disconnected，设定配置文件的名称解析为相对路径，不设置无法找到对应的配置。
+mediate_deleted，中介删除？
+为Docker内应用配置权限文件
+上述方式可以对Docker内文件的使用权限进行配置。但是，在对Docker内某一应用进行配置时却是区别于原本AppArmor对主机应用的配置。其权限配置主要是通过子配置实现的。
+比如对/usr/bin/python3.5限制不允许访问/etc文件夹下的内容。
+#include &lt;tunables/global&gt;
+profile docker-profile flags=(attach_disconnected,mediate_deleted) {
+#include &lt;abstractions/base&gt;
+network,
+capability,
+file,
+umount,
+...
+/usr/bin/python3.5 cx -&gt; python_profile,
+profile python_profile flags=(mediate_deleted,attach_disconnected) {
+file,
+deny /etc/** rwklx,
+deny /etc/ rwklx,
+network inet tcp,
+}
+...
+}
+AppArmor对于Docker内应用的限制似乎只能通过黑名单的形式，即使用允许file权限即允许所有docker内文件的权限。之后只能通过deny逐一禁止。</name></p>
+:ET

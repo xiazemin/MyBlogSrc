@@ -1,0 +1,269 @@
+I"�1<p>myFile.so doesn’t appear to be a valid Zend extension
+原因
+vi /home/xiaoju/php7/etc/php.ini
+把 zend_extension=myFile.so
+改成
+extension=myFile.so</p>
+
+<p>通常在php.ini中，通过extension=<em>加载的扩展我们称为PHP扩展，通过zend_extension=</em>加载的扩展我们称为Zend扩展，但从源码的角度来讲，PHP扩展应该称为“模块”（源码中以module命名），而Zend扩展称为“扩展”（源码中以extension命名）。</p>
+
+<p>两者最大的区别在于向引擎注册的钩子。少数的扩展，例如xdebug、opcache，既是PHP扩展，也是Zend扩展，但它们在php.ini中的加载方式得用zend_extension=*，具体原因下文会说明。
+<!-- more --></p>
+
+<p>先来看看两种类型扩展主要的数据结构：</p>
+
+<p>PHP扩展的结构体：</p>
+
+<p>typedef struct _zend_module_entry zend_module_entry;
+typedef struct _zend_module_dep zend_module_dep;</p>
+
+<p>struct _zend_module_entry {
+    unsigned short size;
+    unsigned int zend_api;
+    unsigned char zend_debug;
+    unsigned char zts;
+    const struct _zend_ini_entry <em>ini_entry;
+    const struct _zend_module_dep *deps;
+    const char *name;
+    const struct _zend_function_entry *functions;          /</em> PHP Functions <em>/
+    int (</em>module_startup_func)(INIT_FUNC_ARGS);             /* MINIT <em>/
+    int (</em>module_shutdown_func)(SHUTDOWN_FUNC_ARGS);        /* MSHUTDOWN <em>/
+    int (</em>request_startup_func)(INIT_FUNC_ARGS);            /* RINIT <em>/
+    int (</em>request_shutdown_func)(SHUTDOWN_FUNC_ARGS);       /* RSHUTDOWN <em>/
+    void (</em>info_func)(ZEND_MODULE_INFO_FUNC_ARGS);
+    const char <em>version;
+    size_t globals_size;
+#ifdef ZTS
+    ts_rsrc_id</em> globals_id_ptr;
+#else
+    void* globals_ptr;
+#endif
+    void (<em>globals_ctor)(void *global TSRMLS_DC);
+    void (</em>globals_dtor)(void <em>global TSRMLS_DC);
+    int (</em>post_deactivate_func)(void);
+    int module_started;
+    unsigned char type;
+    void *handle;
+    int module_number;
+    const char *build_id;
+};</p>
+
+<p>struct _zend_module_dep {
+    const char <em>name;       /</em> module name <em>/
+    const char *rel;        /</em> version relationship: NULL (exists), lt|le|eq|ge|gt (to given version) <em>/
+    const char *version;    /</em> version <em>/
+    unsigned char type;     /</em> dependency type */
+};
+Zend扩展的结构体：</p>
+
+<p>/* Typedef’s for zend_extension function pointers <em>/
+typedef int (</em>startup_func_t)(zend_extension <em>extension);
+typedef void (</em>shutdown_func_t)(zend_extension <em>extension);
+typedef void (</em>activate_func_t)(void);
+typedef void (*deactivate_func_t)(void);</p>
+
+<p>typedef void (*message_handler_func_t)(int message, void *arg);</p>
+
+<p>typedef void (*op_array_handler_func_t)(zend_op_array *op_array);</p>
+
+<p>typedef void (<em>statement_handler_func_t)(zend_op_array *op_array);
+typedef void (</em>fcall_begin_handler_func_t)(zend_op_array <em>op_array);
+typedef void (</em>fcall_end_handler_func_t)(zend_op_array *op_array);</p>
+
+<p>typedef void (<em>op_array_ctor_func_t)(zend_op_array *op_array);
+typedef void (</em>op_array_dtor_func_t)(zend_op_array *op_array);</p>
+
+<p>typedef struct _zend_extension {
+    char *name;
+    char *version;
+    char *author;
+    char *URL;
+    char *copyright;</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>startup_func_t startup;
+shutdown_func_t shutdown;
+activate_func_t activate;
+deactivate_func_t deactivate;
+ 
+message_handler_func_t message_handler;
+ 
+op_array_handler_func_t op_array_handler;
+ 
+statement_handler_func_t statement_handler;
+fcall_begin_handler_func_t fcall_begin_handler;
+fcall_end_handler_func_t fcall_end_handler;
+ 
+op_array_ctor_func_t op_array_ctor;
+op_array_dtor_func_t op_array_dtor;
+ 
+int (*api_no_check)(int api_no);
+int (*build_id_check)(const char* build_id);
+void *reserved3;
+void *reserved4;
+void *reserved5;
+void *reserved6;
+void *reserved7;
+void *reserved8;
+ 
+DL_HANDLE handle;
+int resource_number; } zend_extension;
+</code></pre></div></div>
+
+<p>typedef struct _zend_extension_version_info {
+    int zend_extension_api_no;
+    char *build_id;
+} zend_extension_version_info;
+以xdebug 2.4.0为例，来说明为何其既是PHP扩展，也是Zend扩展。</p>
+
+<p>首先看xdebug.c的2710行处，定义了一个Zend扩展的结构体：</p>
+
+<p>ZEND_DLEXPORT zend_extension zend_extension_entry = {
+    XDEBUG_NAME,
+    XDEBUG_VERSION,
+    XDEBUG_AUTHOR,
+    XDEBUG_URL_FAQ,
+    XDEBUG_COPYRIGHT_SHORT,
+    xdebug_zend_startup,
+    xdebug_zend_shutdown,
+    NULL,           /* activate_func_t <em>/
+    NULL,           /</em> deactivate_func_t <em>/
+    NULL,           /</em> message_handler_func_t <em>/
+    NULL,           /</em> op_array_handler_func_t <em>/
+    xdebug_statement_call, /</em> statement_handler_func_t <em>/
+    NULL,           /</em> fcall_begin_handler_func_t <em>/
+    NULL,           /</em> fcall_end_handler_func_t <em>/
+    xdebug_init_oparray,   /</em> op_array_ctor_func_t <em>/
+    NULL,           /</em> op_array_dtor_func_t */
+    STANDARD_ZEND_EXTENSION_PROPERTIES
+};
+因为xdebug提供了单步调试、性能优化等高级功能，这些是需要hook到Zend引擎才能做到的，而zend_extension这个结构体就提供了hook到Zend引擎的钩子，例如xdebug_statement_call会在每一条PHP语句执行之后调用。</p>
+
+<p>再看xdebug.c的160行处，定义了一个PHP扩展的结构体：</p>
+
+<p>zend_module_entry xdebug_module_entry = {
+    STANDARD_MODULE_HEADER,
+    “xdebug”,
+    xdebug_functions,
+    PHP_MINIT(xdebug),
+    PHP_MSHUTDOWN(xdebug),
+    PHP_RINIT(xdebug),
+    PHP_RSHUTDOWN(xdebug),
+    PHP_MINFO(xdebug),
+    XDEBUG_VERSION,
+    NO_MODULE_GLOBALS,
+    ZEND_MODULE_POST_ZEND_DEACTIVATE_N(xdebug),
+    STANDARD_MODULE_PROPERTIES_EX
+}
+xdebug提供了许多函数xdebug_enable()、xdebug_disable()、xdebug_call_class()……，这些函数都是定义在xdebug_module_entry中的xdebug_functions。</p>
+
+<p>所以，以我的理解，向用户层面提供一些C实现的PHP函数，需要用到zend_module_entry（即作为PHP扩展），而需要hook到Zend引擎的话，就得用到zend_extension（即作为Zend扩展），xdebug在这里两种都需要。</p>
+
+<p>但是xdebug是通过Zend扩展加载的（zend_extension=*），其PHP扩展部分是如何被加载的呢？其实在Zend扩展加载的时候会调用zend_extension中的startup，即xdebug的xdebug_zend_startup函数，在该函数中：</p>
+
+<p>ZEND_DLEXPORT int xdebug_zend_startup(zend_extension <em>extension)
+{
+    /</em> Hook output handlers (header and output writer) */
+    xdebug_hook_output_handlers();</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>zend_xdebug_initialised = 1;
+                                                                                                                                                                                                           
+return zend_startup_module(&amp;xdebug_module_entry);//对xdebug PHP扩展的加载 } 加载顺序区别 分清PHP扩展和Zend扩展的差异后，接着看看扩展是如何加载的，其加载顺序和依赖是怎么处理的：
+</code></pre></div></div>
+
+<p>相关的主要代码片段在main/main.c中：</p>
+
+<p>int php_module_startup(sapi_module_struct *sf, zend_module_entry *additional_modules, uint num_additional_modules)
+{
+    . . . . . .</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>/* this will read in php.ini, set up the configuration parameters,
+   load zend extensions and register php function extensions
+   to be loaded later */
+if (php_init_config(TSRMLS_C) == FAILURE) {
+    return FAILURE;
+}
+
+. . . . . .
+
+/* startup extensions statically compiled in */
+if (php_register_internal_extensions_func(TSRMLS_C) == FAILURE) {
+    php_printf("Unable to start builtin modules\n");
+    return FAILURE;
+}
+
+/* start additional PHP extensions */
+php_register_extensions_bc(additional_modules, num_additional_modules TSRMLS_CC);
+
+/* load and startup extensions compiled as shared objects (aka DLLs)
+   as requested by php.ini entries
+   theese are loaded after initialization of internal extensions
+   as extensions *might* rely on things from ext/standard
+   which is always an internal extension and to be initialized
+   ahead of all other internals
+ */
+php_ini_register_extensions(TSRMLS_C);
+zend_startup_modules(TSRMLS_C);
+
+/* start Zend extensions */
+zend_startup_extensions();
+
+. . . . . . } 1、php_init_config解析php.ini文件，获取需要加载的PHP扩展和Zend扩展
+</code></pre></div></div>
+
+<p>2、php_register_internal_extensions_func加载静态编译的扩展，静态编译进PHP中的扩展，例如date、ereg、pcre等，这些扩展包含在main/internal_functions.c中的zend_module_entry *php_builtin_extensions[]中</p>
+
+<p>3、php_register_extensions_bc注册SAPI的扩展模块，即additional_modules中的扩展，例如Apache SAPI会注册一些与Apache功能相关的扩展，CLI模式下additional_modules为NULL</p>
+
+<p>4、php_ini_register_extensions中会先加载Zend扩展，之后再加载PHP扩展</p>
+
+<p>void php_ini_register_extensions(TSRMLS_D)
+{
+    zend_llist_apply(&amp;extension_lists.engine, php_load_zend_extension_cb TSRMLS_CC);//加载Zend扩展
+    zend_llist_apply(&amp;extension_lists.functions, php_load_php_extension_cb TSRMLS_CC);//加载PHP扩展</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>zend_llist_destroy(&amp;extension_lists.engine);
+zend_llist_destroy(&amp;extension_lists.functions); } Zend扩展的加载（php_load_zend_extension_cb-&gt;zend_load_extension）：
+</code></pre></div></div>
+
+<p>在zend_load_extension中会判断扩展是否合法（能否加载？版本信息是否符合要求？……），如果合法的话将调用zend_register_extension，向全局变量zend_extensions添加当前Zend扩展，并向其他已加载的Zend扩展广播一条消息（实现了message_handler的Zend扩展将接收到）说明自己被加载了，该功能的用处在于，如果某些扩展存在冲突，则扩展能够发出警告信息，并停止加载。</p>
+
+<p>PHP扩展的加载（php_load_php_extension_cb-&gt;php_load_extension）：</p>
+
+<p>在php_load_extension中会判断扩展是否合法（能否加载？版本信息是否符合要求？……），如果合法的话将调用zend_register_module_ex，先检查扩展的依赖（_zend_module_entry中的deps），这里只检查当前扩展是否与已加载的扩展冲突，如果没有冲突，则向全局变量module_registry添加当前PHP扩展，接着注册当前PHP扩展的函数（_zend_module_entry中的functions）</p>
+
+<p>这里需要注意的点是deps依赖，该依赖声明了：</p>
+
+<p>当前扩展会与哪些扩展冲突
+哪些扩展需要先于当前扩展加载
+但是zend_register_module_ex中只对冲突做检查，如果A声明自己与B冲突，但是B却在A之后加载，那么就无法检查到该冲突了。为了解决这个问题，可以在php.ini中排好PHP扩展的顺序（即B放到A之前），加载的时候会按照该顺序加载。</p>
+
+<p>5、扩展初始化阶段：</p>
+
+<p>先激活PHP扩展，在zend_startup_modules中，会先对PHP扩展进行排序（根据每个PHP扩展中deps声明的依赖），然后执行zend_startup_module_ex，调用PHP扩展的MINIT</p>
+
+<p>再激活Zend扩展，在zend_startup_extensions中，对每个Zend扩展调用其startup()</p>
+
+<p>6、请求初始化阶段：</p>
+
+<p>先调用Zend扩展的activate()：php_request_startup-&gt;zend_activate-&gt;init_executor-&gt;zend_extension_activator-&gt;activate</p>
+
+<p>再调用PHP扩展的RINIT：php_request_startup-&gt;zend_activate_modules-&gt;request_startup_func</p>
+
+<p>7、请求结束阶段：</p>
+
+<p>先调用PHP扩展的RSHUTDOWN：php_request_shutdown-&gt;zend_deactivate_modules-&gt;request_shutdown_func</p>
+
+<p>再调用Zend扩展的deactivate：php_request_shutdown-&gt;zend_deactivate-&gt;shutdown_executor-&gt;zend_extension_deactivator-&gt;deactivate</p>
+
+<p>8、扩展关闭阶段：</p>
+
+<p>先调用PHP扩展的MSHUTDOWN：zend_shutdown-&gt;zend_destroy_modules-&gt;zend_hash_graceful_reverse_destroy-&gt;module_destructor-&gt;module_shutdown_func</p>
+
+<p>再调用Zend扩展的shutdown()：zend_shutdown-&gt;zend_shutdown_extensions-&gt;zend_extension_shutdown-&gt;shutdown</p>
+
+<p>一张图了解扩展的生命周期</p>
+
+<p>http://yangxikun.github.io/php/2016/07/10/php-zend-extension.html</p>
+
+<p>https://blog.csdn.net/weixin_30488313/article/details/98249252</p>
+:ET

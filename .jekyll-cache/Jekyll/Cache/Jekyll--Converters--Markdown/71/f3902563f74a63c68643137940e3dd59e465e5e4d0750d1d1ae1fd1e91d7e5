@@ -1,0 +1,502 @@
+I"�N<p>许多自动化代码生成工具都离不开语法树分析，例如goimport，gomock，wire等项目都离不开语法树分析。基于语法树分析，可以实现许多有趣实用的工具。
+<!-- more -->
+许多自动化代码生成工具都离不开语法树分析，例如goimport，gomock，wire等项目都离不开语法树分析。基于语法树分析，可以实现许多有趣实用的工具。本篇将结合示例，展示如何基于ast标准包操作语法树。
+本篇中的代码的完整示例可以在这里找到：ast-example
+Quick Start
+首先我们看下语法树长什么样子，以下代码将打印./demo.go文件的语法树：
+package main</p>
+
+<p>import (
+	“go/ast”
+	“go/parser”
+	“go/token”
+	“log”
+	“path/filepath”
+)</p>
+
+<p>func main() {
+	fset := token.NewFileSet()
+	// 这里取绝对路径，方便打印出来的语法树可以转跳到编辑器
+	path, _ := filepath.Abs(“./demo.go”)
+	f, err := parser.ParseFile(fset, path, nil, parser.AllErrors)
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	// 打印语法树
+	ast.Print(fset, f)
+}</p>
+
+<p>复制代码
+demo.go:</p>
+
+<p>package main</p>
+
+<p>import (
+	“context”
+)</p>
+
+<p>// Foo 结构体
+type Foo struct {
+	i int
+}</p>
+
+<p>// Bar 接口
+type Bar interface {
+	Do(ctx context.Context) error
+}</p>
+
+<p>// main方法
+func main() {
+    a := 1
+}
+复制代码demo.go文件已尽量简化，但其语法树的输出内容依旧十分庞大。我们截取部分来做一些简要的说明。
+首先是文件所属的包名，和其声明在文件中的位置：
+ 0  <em>ast.File {
+     1  .  Package: /usr/local/gopath/src/github.com/DrmagicE/ast-example/quickstart/demo.go:1:1
+     2  .  Name: *ast.Ident {
+     3  .  .  NamePos: /usr/local/gopath/src/github.com/DrmagicE/ast-example/quickstart/demo.go:1:9
+     4  .  .  Name: “main”
+     5  .  }
+     …
+复制代码紧接着是Decls，也就是Declarations，其包含了声明的一些变量，方法，接口等：
+…
+     6  .  Decls: []ast.Decl (len = 4) {
+     7  .  .  0: *ast.GenDecl {
+     8  .  .  .  TokPos: /usr/local/gopath/src/github.com/DrmagicE/ast-example/quickstart/demo.go:3:1
+     9  .  .  .  Tok: import
+    10  .  .  .  Lparen: /usr/local/gopath/src/github.com/DrmagicE/ast-example/quickstart/demo.go:3:8
+    11  .  .  .  Specs: []ast.Spec (len = 1) {
+    12  .  .  .  .  0: *ast.ImportSpec {
+    13  .  .  .  .  .  Path: *ast.BasicLit {
+    14  .  .  .  .  .  .  ValuePos: /usr/local/gopath/src/github.com/DrmagicE/ast-example/quickstart/demo.go:4:2
+    15  .  .  .  .  .  .  Kind: STRING
+    16  .  .  .  .  .  .  Value: “"context"”
+    17  .  .  .  .  .  }
+    18  .  .  .  .  .  EndPos: -
+    19  .  .  .  .  }
+    20  .  .  .  }
+    21  .  .  .  Rparen: /usr/local/gopath/src/github.com/DrmagicE/ast-example/quickstart/demo.go:5:1
+    22  .  .  }
+ ….
+复制代码可以看到该语法树包含了4条Decl记录，我们取第一条记录为例，该记录为</em>ast.GenDecl类型。不难看出这条记录对应的是我们的import代码段。始位置(TokPos)，左右括号的位置(Lparen,Rparen)，和import的包（Specs）等信息都能从语法树中得到。
+语法树的打印信来自ast.File结构体：</p>
+
+<p>$GOROOT/src/go/ast/ast.go</p>
+
+<p>// 该结构体位于标准包 go/ast/ast.go 中，有兴趣可以转跳到源码阅读更详尽的注释
+type File struct {
+	Doc        <em>CommentGroup   // associated documentation; or nil
+	Package    token.Pos       // position of “package” keyword
+	Name       *Ident          // package name
+	Decls      []Decl          // top-level declarations; or nil
+	Scope      *Scope          // package scope (this file only)
+	Imports    []</em>ImportSpec   // imports in this file
+	Unresolved []<em>Ident        // unresolved identifiers in this file
+	Comments   []</em>CommentGroup // list of all comments in the source file
+}
+复制代码结合注释和字段名我们大概知道每个字段的含义，接下来我们详细梳理一下语法树的组成结构。
+Node节点
+整个语法树由不同的node组成，从源码注释中可以得知主要有如下三种node：</p>
+
+<p>There are 3 main classes of nodes: Expressions and type nodes, statement nodes, and declaration nodes.</p>
+
+<p>在Go的Language Specification中可以找到这些节点类型详细规范和说明，有兴趣的小伙伴可以深入研究一下，在此不做展开。</p>
+
+<p>但实际在代码，出现了第四种node：Spec Node，每种node都有专门的接口定义：</p>
+
+<p>$GOROOT/src/go/ast/ast.go</p>
+
+<p>…
+// All node types implement the Node interface.
+type Node interface {
+	Pos() token.Pos // position of first character belonging to the node
+	End() token.Pos // position of first character immediately after the node
+}</p>
+
+<p>// All expression nodes implement the Expr interface.
+type Expr interface {
+	Node
+	exprNode()
+}</p>
+
+<p>// All statement nodes implement the Stmt interface.
+type Stmt interface {
+	Node
+	stmtNode()
+}</p>
+
+<p>// All declaration nodes implement the Decl interface.
+type Decl interface {
+	Node
+	declNode()
+}
+…</p>
+
+<p>// A Spec node represents a single (non-parenthesized) import,
+// constant, type, or variable declaration.
+//
+type (
+	// The Spec type stands for any of *ImportSpec, *ValueSpec, and *TypeSpec.
+	Spec interface {
+		Node
+		specNode()
+	}
+….
+)
+复制代码可以看到所有的node都继承Node接口，记录了node的开始和结束位置。还记得Quick Start示例中的Decls吗？它正是declaration nodes。除去上述四种使用接口进行分类的node，还有些node没有再额外定义接口细分类别，仅实现了Node接口，为了方便描述，在本篇中我把这些节点称为common node。
+$GOROOT/src/go/ast/ast.go列举了所有所有节点的实现，我们从中挑选几个作为例子，感受一下它们的区别。
+Expression and Type
+先来看expression node。</p>
+
+<p>$GOROOT/src/go/ast/ast.go</p>
+
+<p>…
+	// An Ident node represents an identifier.
+	Ident struct {
+		NamePos token.Pos // identifier position
+		Name    string    // identifier name
+		Obj     *Object   // denoted object; or nil
+	}
+…
+复制代码Indent（identifier）表示一个标识符，比如Quick Start示例中表示包名的Name字段就是一个expression node：
+ 0  *ast.File {
+     1  .  Package: /usr/local/gopath/src/github.com/DrmagicE/ast-example/quickstart/demo.go:1:1
+     2  .  Name: *ast.Ident { &lt;—-
+     3  .  .  NamePos: /usr/local/gopath/src/github.com/DrmagicE/ast-example/quickstart/demo.go:1:9
+     4  .  .  Name: “main”
+     5  .  }
+     …
+复制代码接下来是type node。</p>
+
+<p>$GOROOT/src/go/ast/ast.go</p>
+
+<p>…
+	// A StructType node represents a struct type.
+	StructType struct {
+		Struct     token.Pos  // position of “struct” keyword
+		Fields     *FieldList // list of field declarations
+		Incomplete bool       // true if (source) fields are missing in the Fields list
+	}</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>// Pointer types are represented via StarExpr nodes.
+
+// A FuncType node represents a function type.
+FuncType struct {
+	Func    token.Pos  // position of "func" keyword (token.NoPos if there is no "func")
+	Params  *FieldList // (incoming) parameters; non-nil
+	Results *FieldList // (outgoing) results; or nil
+}
+
+// An InterfaceType node represents an interface type.
+InterfaceType struct {
+	Interface  token.Pos  // position of "interface" keyword
+	Methods    *FieldList // list of methods
+	Incomplete bool       // true if (source) methods are missing in the Methods list
+} ... 复制代码type node很好理解，它包含一些复合类型，例如在Quick Start中出现的StructType,FuncType和InterfaceType。 Statement 赋值语句，控制语句（if，else,for，select...）等均属于statement node。
+</code></pre></div></div>
+
+<p>$GOROOT/src/go/ast/ast.go</p>
+
+<p>…
+	// An AssignStmt node represents an assignment or
+	// a short variable declaration.
+	//
+	AssignStmt struct {
+		Lhs    []Expr
+		TokPos token.Pos   // position of Tok
+		Tok    token.Token // assignment token, DEFINE
+		Rhs    []Expr
+	}
+…</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>// An IfStmt node represents an if statement.
+IfStmt struct {
+	If   token.Pos // position of "if" keyword
+	Init Stmt      // initialization statement; or nil
+	Cond Expr      // condition
+	Body *BlockStmt
+	Else Stmt // else branch; or nil
+} ... 复制代码例如Quick Start中，我们在main函数中对变量a赋值的程序片段就属于AssignStmt: ...  174  .  .  .  Body: *ast.BlockStmt {    175  .  .  .  .  Lbrace: /usr/local/gopath/src/github.com/DrmagicE/ast-example/quickstart/demo.go:18:13    176  .  .  .  .  List: []ast.Stmt (len = 1) {    177  .  .  .  .  .  0: *ast.AssignStmt { &lt;--- 这里    178  .  .  .  .  .  .  Lhs: []ast.Expr (len = 1) {    179  .  .  .  .  .  .  .  0: *ast.Ident {    180  .  .  .  .  .  .  .  .  NamePos: /usr/local/gopath/src/github.com/DrmagicE/ast-example/quickstart/demo.go:19:2    181  .  .  .  .  .  .  .  .  Name: "a" ... 复制代码Spec Node Spec node只有3种，分别是ImportSpec，ValueSpec和TypeSpec：
+</code></pre></div></div>
+
+<p>$GOROOT/src/go/ast/ast.go</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>// An ImportSpec node represents a single package import.
+ImportSpec struct {
+	Doc     *CommentGroup // associated documentation; or nil
+	Name    *Ident        // local package name (including "."); or nil
+	Path    *BasicLit     // import path
+	Comment *CommentGroup // line comments; or nil
+	EndPos  token.Pos     // end of spec (overrides Path.Pos if nonzero)
+}
+
+// A ValueSpec node represents a constant or variable declaration
+// (ConstSpec or VarSpec production).
+//
+ValueSpec struct {
+	Doc     *CommentGroup // associated documentation; or nil
+	Names   []*Ident      // value names (len(Names) &gt; 0)
+	Type    Expr          // value type; or nil
+	Values  []Expr        // initial values; or nil
+	Comment *CommentGroup // line comments; or nil
+}
+
+// A TypeSpec node represents a type declaration (TypeSpec production).
+TypeSpec struct {
+	Doc     *CommentGroup // associated documentation; or nil
+	Name    *Ident        // type name
+	Assign  token.Pos     // position of '=', if any
+	Type    Expr          // *Ident, *ParenExpr, *SelectorExpr, *StarExpr, or any of the *XxxTypes
+	Comment *CommentGroup // line comments; or nil
+} 复制代码ImportSpec表示一个单独的import，ValueSpec表示一个常量或变量的声明，TypeSpec则表示一个type声明。例如 在Quick Start示例中，出现了ImportSpec和TypeSpec import (
+"context" // &lt;--- 这里是一个ImportSpec node )
+</code></pre></div></div>
+
+<p>// Foo 结构体
+type Foo struct { // &lt;— 这里是一个TypeSpec node
+	i int
+}
+复制代码在语法树的打印结果中可以看到对应的输出，小伙伴们可自行查找。
+Declaration Node
+Declaration node也只有三种：</p>
+
+<p>$GOROOT/src/go/ast/ast.go</p>
+
+<p>…
+type (
+	// A BadDecl node is a placeholder for declarations containing
+	// syntax errors for which no correct declaration nodes can be
+	// created.
+	//
+	BadDecl struct {
+		From, To token.Pos // position range of bad declaration
+	}</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>// A GenDecl node (generic declaration node) represents an import,
+// constant, type or variable declaration. A valid Lparen position
+// (Lparen.IsValid()) indicates a parenthesized declaration.
+//
+// Relationship between Tok value and Specs element type:
+//
+//	token.IMPORT  *ImportSpec
+//	token.CONST   *ValueSpec
+//	token.TYPE    *TypeSpec
+//	token.VAR     *ValueSpec
+//
+GenDecl struct {
+	Doc    *CommentGroup // associated documentation; or nil
+	TokPos token.Pos     // position of Tok
+	Tok    token.Token   // IMPORT, CONST, TYPE, VAR
+	Lparen token.Pos     // position of '(', if any
+	Specs  []Spec
+	Rparen token.Pos // position of ')', if any
+}
+
+// A FuncDecl node represents a function declaration.
+FuncDecl struct {
+	Doc  *CommentGroup // associated documentation; or nil
+	Recv *FieldList    // receiver (methods); or nil (functions)
+	Name *Ident        // function/method name
+	Type *FuncType     // function signature: parameters, results, and position of "func" keyword
+	Body *BlockStmt    // function body; or nil for external (non-Go) function
+} ) ... 复制代码BadDecl表示一个有语法错误的节点； GenDecl用于表示import, const，type或变量声明；FunDecl用于表示函数声明。 GenDecl和FunDecl在Quick Start例子中均有出现，小伙伴们可自行查找。 Common Node 除去上述四种类别划分的node,还有一些node不属于上面四种类别：
+</code></pre></div></div>
+
+<p>$GOROOT/src/go/ast/ast.go</p>
+
+<p>// Comment 注释节点，代表单行的 //-格式 或 /*-格式的注释.
+type Comment struct {
+    …
+}
+…
+// CommentGroup 注释块节点，包含多个连续的Comment
+type CommentGroup struct {
+    …
+}</p>
+
+<p>// Field 字段节点, 可以代表结构体定义中的字段，接口定义中的方法列表，函数前面中的入参和返回值字段
+type Field struct {
+    …
+}
+…
+// FieldList 包含多个Field
+type FieldList struct {
+    …
+}</p>
+
+<p>// File 表示一个文件节点
+type File struct {
+	…
+}</p>
+
+<p>// Package 表示一个包节点
+type Package struct {
+    …
+}
+复制代码Quick Start示例包含了上面列举的所有node，小伙伴们可以自行查找。更为详细的注释和具体的结构体字段请查阅源码。
+所有的节点类型大致列举完毕，其中还有许多具体的节点类型未能一一列举，但基本上都是大同小异，源码注释也比较清晰，等用到的时候再细看也不迟。现在我们对整个语法树的构造有了基本的了解，接下来通过几个示例来演示具体用法。
+示例
+为文件中所有接口方法添加context参数
+实现这个功能我们需要四步：</p>
+
+<p>遍历整个语法树
+判断是否已经importcontext包，如果没有则import
+遍历所有的接口方法，判断方法列表中是否有context.Context类型的入参，如果没有我们将其添加到方法的第一个参数
+将修改过后的语法树转换成Go代码并输出</p>
+
+<p>遍历语法树
+语法树层级较深，嵌套关系复杂，如果不能完全掌握node之间的关系和嵌套规则，我们很难自己写出正确的遍历方法。不过好在ast包已经为我们提供了遍历方法：</p>
+
+<p>$GOROOT/src/go/ast/ast.go</p>
+
+<p>func Walk(v Visitor, node Node) 
+复制代码type Visitor interface {
+	Visit(node Node) (w Visitor)
+}
+复制代码Walk方法会按照深度优先搜索方法（depth-first order）遍历整个语法树，我们只需按照我们的业务需要，实现Visitor接口即可。
+Walk每遍历一个节点就会调用Visitor.Visit方法，传入当前节点。如果Visit返回nil，则停止遍历当前节点的子节点。本示例的Visitor实现如下：
+// Visitor
+type Visitor struct {
+}
+func (v <em>Visitor) Visit(node ast.Node) ast.Visitor {
+	switch node.(type) {
+	case *ast.GenDecl:
+		genDecl := node.(</em>ast.GenDecl)
+		// 查找有没有import context包
+		// Notice：没有考虑没有import任何包的情况
+		if genDecl.Tok == token.IMPORT {
+			v.addImport(genDecl)
+			// 不需要再遍历子树
+			return nil
+		}
+	case <em>ast.InterfaceType:
+		// 遍历所有的接口类型
+		iface := node.(</em>ast.InterfaceType)
+		addContext(iface)
+		// 不需要再遍历子树
+		return nil
+	}
+	return v
+}
+复制代码添加import
+// addImport 引入context包
+func (v <em>Visitor) addImport(genDecl *ast.GenDecl) {
+	// 是否已经import
+	hasImported := false
+	for _, v := range genDecl.Specs {
+		imptSpec := v.(</em>ast.ImportSpec)
+		// 如果已经包含”context”
+		if imptSpec.Path.Value == strconv.Quote(“context”) {
+			hasImported = true
+		}
+	}
+	// 如果没有import context，则import
+	if !hasImported {
+		genDecl.Specs = append(genDecl.Specs, &amp;ast.ImportSpec{
+			Path: &amp;ast.BasicLit{
+				Kind:  token.STRING,
+				Value: strconv.Quote(“context”),
+			},
+		})
+	}
+}</p>
+
+<p>复制代码为接口方法添加参数
+// addContext 添加context参数
+func addContext(iface <em>ast.InterfaceType) {
+	// 接口方法不为空时，遍历接口方法
+	if iface.Methods != nil || iface.Methods.List != nil {
+		for _, v := range iface.Methods.List {
+			ft := v.Type.(</em>ast.FuncType)
+			hasContext := false
+			// 判断参数中是否包含context.Context类型
+			for _, v := range ft.Params.List {
+				if expr, ok := v.Type.(<em>ast.SelectorExpr); ok {
+					if ident, ok := expr.X.(</em>ast.Ident); ok {
+						if ident.Name == “context” {
+							hasContext = true
+						}
+					}
+				}
+			}
+			// 为没有context参数的方法添加context参数
+			if !hasContext {
+				ctxField := &amp;ast.Field{
+					Names: []<em>ast.Ident{
+						ast.NewIdent(“ctx”),
+					},
+					// Notice: 没有考虑import别名的情况
+					Type: &amp;ast.SelectorExpr{
+						X:   ast.NewIdent(“context”),
+						Sel: ast.NewIdent(“Context”),
+					},
+				}
+				list := []</em>ast.Field{
+					ctxField,
+				}
+				ft.Params.List = append(list, ft.Params.List…)
+			}
+		}
+	}
+}
+复制代码将语法树转换成Go代码
+format包为我们提供了转换函数，format.Node会将语法树按照gofmt的格式输出：
+…
+	var output []byte
+	buffer := bytes.NewBuffer(output)
+	err = format.Node(buffer, fset, f)
+	if err != nil {
+		log.Fatal(err)
+	}
+	// 输出Go代码
+	fmt.Println(buffer.String())
+…
+复制代码输出结果如下：
+package main</p>
+
+<p>import (
+        “context”
+)</p>
+
+<p>type Foo interface {
+        FooA(ctx context.Context, i int)
+        FooB(ctx context.Context, j int)
+        FooC(ctx context.Context)
+}</p>
+
+<p>type Bar interface {
+        BarA(ctx context.Context, i int)
+        BarB(ctx context.Context)
+        BarC(ctx context.Context)
+}
+复制代码可以看到我们所有的接口方的第一个参数都变成了context.Context。建议将示例中的语法树先打印出来，再对照着代码看，方便理解。
+一些坑与不足
+至此我们已经完成了语法树的解析，遍历，修改以及输出。但细心的小伙伴可能已经发现：示例中的文件并没有出现一行注释。这的确是有意为之，如果我们加上注释，会发现最终生成文件的注释就像迷途的羔羊，完全找不到自己的位置。比如这样：
+//修改前
+type Foo interface {
+	FooA(i int)
+	// FooB
+	FooB(j int)
+	FooC(ctx context.Context)
+}</p>
+
+<p>// 修改后
+type Foo interface {
+    FooA(ctx context.
+            // FooB
+            Context, i int)</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>FooB(ctx context.Context, j int)
+FooC(ctx context.Context) } 复制代码导致这种现象的原因在于：ast包生成的语法树中的注释是"free-floating"的。还记得每个node都有Pos()和End()方法来标识其位置吗？对于非注释节点，语法树能够正确的调整他们的位置，但却不能自动调整注释节点的位置。如果我们想要让注释出现在正确的位置上，我们必须手动设置节点Pos和End。源码注释中提到了这个问题：
+</code></pre></div></div>
+
+<p>Whether and how a comment is associated with a node depends on the interpretation of the syntax tree by the manipulating program: Except for Doc and Comment comments directly associated with nodes, the remaining comments are “free-floating” (see also issues #18593, #20744).</p>
+
+<p>issue中有具体的讨论，官方承认这是一个设计缺陷，但还是迟迟未能改进。其中有位迫不及待的小哥提供了自己的方案：</p>
+
+<p>github.com/dave/dst</p>
+
+<p>如果实在是要对有注释的语法树进行修改，可以尝试一下。
+虽然语法树的确存在修改困难问题，但其还是能满足大部分基于语法树分析的代码生成工作了(gomock,wire等等)。</p>
+:ET

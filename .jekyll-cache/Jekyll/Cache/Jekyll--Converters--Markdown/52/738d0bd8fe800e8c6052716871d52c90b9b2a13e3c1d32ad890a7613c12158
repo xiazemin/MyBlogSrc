@@ -1,0 +1,65 @@
+I"�<p>https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/
+协议
+https://github.com/grpc/grpc-proto/blob/master/grpc/health/v1/health.proto
+https://github.com/grpc/grpc/blob/v1.15.0/doc/health-checking.md
+https://github.com/grpc-ecosystem/grpc-health-probe/
+https://github.com/grpc/grpc-proto/blob/master/grpc/health/v1/health.proto</p>
+
+<p>Kubernetes 健康检查 （liveness and readiness probes）就是让您的应用程序在您睡觉时保持可用的原因。
+httpGet probe: 不能与gRPC原生使用。您需要重构您的应用程序以同时提供gRPC和HTTP / 1.1协议（在不同的端口号上）。
+tcpSocket probe: 打开套接字到gRPC服务器是没有意义的，因为它无法读取响应正文。
+exec probe: 这会定期调用容器生态系统中的程序。对于gRPC，这意味着您自己实现健康RPC，然后使用编写客户端工具，并将客户端 工具 与容器打包到一起。
+<!-- more -->
+gRPC有一个 标准的健康检查协议 。它可以从任何语言轻松使用。生成的代码和用于设置运行状况的实用程序几乎都在gRPC的所有语言实现中提供。</p>
+
+<p>如果在gRPC应用程序中实现此运行状况检查协议，则可以使用标准/通用工具调用此Check（）方法来确定 服务器 状态。</p>
+
+<p>使用此工具，您可以在所有gRPC应用程序中使用相同的运行状况检查配置。这种方法需要你：</p>
+
+<p>选择您喜欢的语言找到gRPC“health”模块并开始使用它（例如 Go库 ）。
+将grpc_health_probe二进制文件打到容器中。
+配置Kubernetes“exec”探针以调用容器中的“grpc_health_probe”工具。
+示例
+您可以将静态编译的grpc_health_probe打在容器映像中。选择二进制版本并将其下载到Dockerfile中：</p>
+
+<p>RUN GRPC_HEALTH_PROBE_VERSION=v0.2.0 &amp;&amp; <br />
+    wget -qO/bin/grpc_health_probe https://github.com/grpc-ecosystem/grpc-health-probe/releases/download/${GRPC_HEALTH_PROBE_VERSION}/grpc_health_probe-linux-amd64 &amp;&amp; <br />
+    chmod +x /bin/grpc_health_probe</p>
+
+<p>在你的 Kubernetes Pod manifest中,指定容器的 livenessProbe and/or readinessProbe 。</p>
+
+<p>spec:
+  containers:</p>
+<ul>
+  <li>name: server
+image: “[YOUR-DOCKER-IMAGE]”
+ports:
+    <ul>
+      <li>containerPort: 5000
+readinessProbe:
+exec:
+  command: [“/bin/grpc_health_probe”, “-addr=:5000”]
+initialDelaySeconds: 5
+livenessProbe:
+exec:
+  command: [“/bin/grpc_health_probe”, “-addr=:5000”]
+initialDelaySeconds: 10</li>
+    </ul>
+  </li>
+</ul>
+
+<p>服务器健康检查的代码实现，主要部分如下：</p>
+
+<p>hsrv := health.NewServer()
+    hsrv.SetServingStatus(“”, healthpb.HealthCheckResponse_SERVING)
+    healthpb.RegisterHealthServer(s, hsrv)</p>
+
+<p>https://www.codercto.com/a/64490.html
+https://blog.csdn.net/weixin_33188832/article/details/115930691</p>
+
+<p>https://studygolang.com/articles/18609
+https://www.ucloud.cn/yun/33135.html
+https://kubernetes.io/zh/blog/2018/10/01/%E5%9C%A8-kubernetes-%E4%B8%8A%E5%AF%B9-grpc-%E6%9C%8D%E5%8A%A1%E5%99%A8%E8%BF%9B%E8%A1%8C%E5%81%A5%E5%BA%B7%E6%A3%80%E6%9F%A5/
+https://zhuanlan.zhihu.com/p/136112161
+https://blog.csdn.net/liuliuzi_hz/article/details/78810599</p>
+:ET

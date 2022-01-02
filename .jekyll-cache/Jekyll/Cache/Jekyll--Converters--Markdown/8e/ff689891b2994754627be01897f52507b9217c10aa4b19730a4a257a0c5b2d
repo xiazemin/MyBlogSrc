@@ -1,0 +1,299 @@
+I"4&<p>使用方法
+构建约束以一行+build开始的注释。在+build之后列出了一些条件，在这些条件成立时，该文件应包含在编译的包中；
+约束可以出现在任何源文件中，不限于go文件；
++build必须出现在package语句之前，+build注释之后应要有一个空行。</p>
+
+<p>// 
+// +build debug</p>
+
+<p>package main</p>
+
+<p>import “fmt”</p>
+
+<p>func main() {
+ fmt.Println(“Hello World!”)
+}</p>
+
+<p>语法规则
+1）只允许是字母数字或_</p>
+
+<p>2）多个条件之间，空格表示OR；逗号表示AND；叹号(!)表示NOT</p>
+
+<p>3）一个文件可以有多个+build，它们之间的关系是AND。如：</p>
+
+<p>// +build linux darwin
+// +build 386
+等价于
+// +build (linux OR darwin) AND 386
+4）预定义了一些条件：
+runtime.GOOS、runtime.GOARCH、compiler（gc或gccgo）、cgo、context.BuildTags中的其他单词</p>
+
+<p>5）如果一个文件名（不含后缀），以 *_GOOS, *_GOARCH, 或 *_GOOS_GOARCH结尾，它们隐式包含了 构建约束</p>
+
+<p>6）当不想编译某个文件时，可以加上// +build ignore。这里的ignore可以是其他单词，只是ignore更能让人知道什么意思</p>
+
+<p>更多详细信息，可以查看go/build/build.go文件中shouldBuild和match方法。
+<!-- more -->
+1）文件列表：main.go logger_debug.go logger_product.go</p>
+
+<p>2）在main.go中简单的调用Debug()方法。</p>
+
+<p>3）在logger_product.go中的Debug()是空实现，但是在文件开始加上// + build !debug</p>
+
+<p>4）在logger_debug.go中的Debug()是需要输出的调试信息，同时在文件开始加上// + build debug</p>
+
+<p>这样，在测试环境编译的时传递-tags参数：go build/install -tags “debug” logger。生产环境：go build/install logger就行了。</p>
+
+<p>对于生产环境，不传递-tags时，为什么会编译logger_product.go呢？因为在go/build/build.go中的match方法中有这么一句：</p>
+
+<p>if strings.HasPrefix(name, “!”) { // negation
+    return len(name) &gt; 1 &amp;&amp; !ctxt.match(name[1:])
+}
+也就是说，只要有!（不能只是!），tag不在BuildTags中时，总是会编译。</p>
+
+<p>，两个文件中一个是hash tag，一个是int tag，需要引入第三个tag来区分编译的文件。否则，只要不带！的tag都会被编译进包。</p>
+
+<p>display_hash.go</p>
+
+<p>// +build hash !display_alternatives</p>
+
+<p>// 上面
+package main</p>
+
+<p>import “fmt”</p>
+
+<p>type DisplayName string</p>
+
+<p>func Print(name DisplayName) {
+    fmt.Printf(“%s\n”, name)
+}</p>
+
+<p>func MakeDisplayName(name string) DisplayName {
+    return DisplayName(name)
+}
+display_int.go</p>
+
+<p>// +build int</p>
+
+<p>package main</p>
+
+<p>import (
+    “fmt”
+    “encoding/hex”
+    “encoding/binary”
+)</p>
+
+<p>type DisplayName uint64</p>
+
+<p>func Print(name DisplayName) {
+    fmt.Printf(“%d\n”, name)
+}</p>
+
+<p>func MakeDisplayName(name string) DisplayName {
+    h, err := hex.DecodeString(name)
+    if err != nil {
+        panic(fmt.Sprintf(“decode hex string failed. cause: %v\n”, err))
+    }
+    fmt.Printf(“data: %v\n”, h)</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>value := binary.BigEndian.Uint16(h)
+return DisplayName(value) } build_tag.go
+</code></pre></div></div>
+
+<p>package main</p>
+
+<p>import (
+    “sync”
+    “fmt”
+    “math/rand”
+    “time”
+)</p>
+
+<p>func main() {
+    var name DisplayName
+    name = MakeDisplayName(“FAD9C812”)
+    Print(name)
+编译display_int.go
+编译执行过程 go build -tags “display_alternatives int”</p>
+
+<p>编译display_hash.go
+编译执行过程 go build -tags hash</p>
+
+<p>$ go run -tags “int” .</p>
+<h1 id="buildtag">buildTag</h1>
+<p>./display_int.go:11:6: DisplayName redeclared in this block
+        previous declaration at ./display_hash.go:8:6
+./display_int.go:13:6: Print redeclared in this block
+        previous declaration at ./display_hash.go:10:17
+./display_int.go:17:6: MakeDisplayName redeclared in this block
+        previous declaration at ./display_hash.go:14:35</p>
+
+<p>两个条件都满足，所以失败了</p>
+
+<p>关于注释的说明</p>
+
+<p>刚开始使用编译标签经常会犯下面这个错误</p>
+
+<p>// +build !linux
+package mypkg // wrong
+这个例子里的编译标签和包的声明之间没有用 空行隔开，这样编译标签会被当做包声明的 注释而不是编译标签从而被忽略掉</p>
+
+<p>下面这个是正确的标签的书写方式，标签的结尾添加一个空行这样标签就不会当做其他声明的注释
+// +build !linux</p>
+
+<p>package mypkg // correct</p>
+
+<p>用go vet命令也可以检测到这个缺少空行的错误，初期可以用这个命令来避免缺少空行的错误</p>
+
+<p>% go vet mypkg
+mypkg.go:1: +build comment appears too late in file
+exit status 1</p>
+
+<p>作为参考，下面的例子将licence声明,编译标签和包声明放在一起，请大家注意分辨</p>
+
+<p>% head headspin.go 
+// Copyright 2013 Way out enterprises. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.</p>
+
+<p>// +build someos someotheros thirdos,!amd64</p>
+
+<p>// Package headspin implements calculates numbers so large
+// they will make your head spin.
+package headspin</p>
+
+<ol>
+  <li>第二种条件编译方法：文件后缀</li>
+</ol>
+
+<p>这个方法通过改变文件名的后缀来提供条件编译，这种方案比编译标签要简单，go/build可以在不读取源文件的情况下就可以决定哪些文件不需要参与编译</p>
+
+<p>文件命名约定可以在go/build 包里找到详细的说明，简单来说如果你的源文件包含后缀：<em>$GOOS.go，那么这个源文件只会在这个平台下编译，</em>$GOARCH.go也是如此。这两个后缀可以结合在一起使用，但是要注意顺序：<em>$GOOS</em>$GOARCH.go，    不能反过来用：<em>$GOARCH</em>$GOOS.go</p>
+
+<p>例子如下：</p>
+
+<p>mypkg_freebsd_arm.go // only builds on freebsd/arm systems
+mypkg_plan9.go       // only builds on plan9</p>
+
+<p>源文件不能只提供条件编译后缀，还必须有文件名：</p>
+
+<p>_linux.go
+_freebsd_386.go
+这两个源文件在所有平台下都会被忽略掉，因为go/build将会忽略所有以下划线或者点开头的源文件</p>
+
+<ol>
+  <li>编译标签和文件后缀的选择</li>
+</ol>
+
+<p>编译标签和文件后缀的功能上有重叠，例如一个文件名：mypkg_linux.go包含了// +build linux将会出现冗余</p>
+
+<p>通常情况下，如果源文件与平台或者cpu架构完全匹配，那么用文件后缀，例如：</p>
+
+<p>mypkg_linux.go         // only builds on linux systems
+mypkg_windows_amd64.go // only builds on windows 64bit platforms</p>
+
+<p>相反，如果这个源文件可以在超过一个平台或者超过一个cpu架构下可以使用或者需要去除指定平台，那么使用编译标签，例如下面的编译标签可以在所有*nix平台上编译：</p>
+
+<p>% grep ‘+build’ $HOME/go/src/pkg/os/exec/lp_unix.go 
+// +build darwin dragonfly freebsd linux netbsd openbsd</p>
+
+<p>下面是可以在除了windows的所有平台下编译</p>
+
+<p>% grep ‘+build’ $HOME/go/src/pkg/os/types_notwin.go 
+// +build !windows</p>
+
+<p>// +build linux,windows   // ‘,’ 为且的关系 这一条就冲突了一定不会被编译
+// +build linux windows   // ‘ ’ 为或的关系 这一条就会被编译
+// +build !ssd,linux windows
+// +build windows                          // 如果有多行的话， 多行之间为 且的关系
+除了操作系统 &amp; 处理器架构的还有自定义的 。</p>
+
+<p>// +build ignore</p>
+
+<p>#testadd.go</p>
+
+<p>// +build ignore</p>
+
+<p>package add</p>
+
+<p>func Add(a, b int) int {
+    return a + b
+}</p>
+
+<p>#test.go</p>
+
+<p>package main</p>
+
+<p>import (
+    “fmt”
+    “shenshida.com/hello/test/testadd”
+)</p>
+
+<p>func main() {
+    c := add.Add(1, 2)
+    fmt.Println(c)
+}</p>
+
+<p>可以发现报编译错误。 这是因为编译被忽略了，
+被忽略的原因就是 doesnt match to target system .
+ignore 这是一个约定的忽略， 好多源码或者其他中遵循了这一约定</p>
+
+<p>[work@testphp test]$ go build test.go 
+test.go:5:2: build constraints exclude all Go files in /home/work/workspace/Go/src/shenshida.com/hello/test/testadd
+我们可以把tag换成一个我们自己的自定义的</p>
+
+<p>// +build testadd</p>
+
+<p>#testadd.go</p>
+
+<p>// +build testadd</p>
+
+<p>package add</p>
+
+<p>func Add(a, b int) int {
+    return a + b
+}
+同样是无法编译的。 这时候我们可以利用go build 的 -i 参数中的 build flags 来编译成功</p>
+
+<p>go build -i -tags ‘testadd’ test.go</p>
+
+<p>就可以编译成功了 。</p>
+
+<p>如果有多个 需要用 空格 隔开 这样就可以编译成功了 。 这个就成功的帮我</p>
+
+<p>go build -i -tags ‘testadd testminus’ test.go</p>
+
+<p>还有一种情况， 如果有两个文件名不同但是函数名相同的函数。
+#testadd.go
+package add</p>
+
+<p>func Add(a, b int) int {
+    return a + b
+}</p>
+
+<p>#testadd_ssd.go</p>
+
+<p>// +build ssd</p>
+
+<p>package add</p>
+
+<p>func Add(a, b int) int {
+    return a + b + 1
+}</p>
+
+<h1 id="shenshidacomhellotesttestadd">shenshida.com/hello/test/testadd</h1>
+<p>testadd/testadd_ssd.go:6:6: Add redeclared in this block
+        previous declaration at testadd/testadd.go:3:20</p>
+
+<h1 id="惨兮兮的重复定义了-那要怎么才能编译呢-">惨兮兮的重复定义了。 那要怎么才能编译呢 。</h1>
+<p>需要修改 testadd.go 的文件. !ssd 《= 这样就不会包含了。</p>
+
+<p>// +build !ssd</p>
+
+<p>package add</p>
+
+<p>func Add(a, b int) int {
+    return a + b
+}</p>
+
+:ET

@@ -1,0 +1,61 @@
+I"z<p>2.3.0 is the latest release. The current stable version is 2.3.0.
+http://kafka.apache.org/downloads
+<!-- more -->
+Kafka 2.0.0引入了线程协议的变化。通过遵循下面建议的滚动升级计划，您可以保证在升级期间不会出现停机。</p>
+
+<p>2.0.0中的显着变化
+KIP-186将默认偏移保留时间从1天增加到7天。这使得在不经常提交的应用程序中“丢失”偏移的可能性降低。它还会增加活动的偏移量，因此可以增加代理上的内存使用量。请注意，控制台使用者当前默认启用偏移提交，并且可以是大量偏移的来源，此更改现在将保留7天而不是1.您可以通过将代理配置设置offsets.retention.minutes为1440 来保留现有行为。
+已经删除了对Java 7的支持，Java 8现在是所需的最低版本。
+默认值ssl.endpoint.identification.algorithm已更改为https，执行主机名验证（否则可能是中间人攻击）。设置ssl.endpoint.identification.algorithm为空字符串以恢复以前的行为。
+KAFKA-5674将较低的间隔扩展max.connections.per.ip minimum为零，因此允许对入站连接进行基于IP的过滤。
+KIP-272 为指标添加了API版本标记kafka.network:type=RequestMetrics,name=RequestsPerSec,request={Produce|FetchConsumer|FetchFollower|…}。此指标现在变为kafka.network:type=RequestMetrics,name=RequestsPerSec,request={Produce|FetchConsumer|FetchFollower|…},version={0|1|2|3|…}。这将影响不自动聚合的JMX监视工具。要获取特定请求类型的总计数，需要更新该工具以跨不同版本进行聚合。
+KIP-225将度量标准“records.lag”更改为使用主题和分区标记。名称格式为“{topic} - {partition} .records-lag”的原始版本已被删除。
+自0.11.0.0以来已弃用的Scala使用者已被删除。自0.10.0.0以来，Java使用者一直是推荐的选择。请注意，即使经纪商升级到2.0.0，1.1.0（及更早版本）中的Scala使用者也将继续工作。
+自0.10.0.0以来已弃用的Scala生成器已被删除。自0.9.0.0以来，Java生产者一直是推荐的选择。请注意，Java生成器中的默认分区程序的行为与Scala生成器中的默认分区程序不同。迁移用户应考虑配置保留先前行为的自定义分区程序。请注意，即使代理升级到2.0.0，1.1.0（及更早版本）中的Scala生成器也将继续工作。
+MirrorMaker和ConsoleConsumer不再支持Scala使用者，他们总是使用Java使用者。
+ConsoleProducer不再支持Scala生成器，它总是使用Java生成器。
+已删除了许多依赖于Scala客户端的已弃用工具：ReplayLogProducer，SimpleConsumerPerformance，SimpleConsumerShell，ExportZkOffsets，ImportZkOffsets，UpdateOffsetsInZK，VerifyConsumerRebalance。
+已弃用的kafka.tools.ProducerPerformance已被删除，请使用org.apache.kafka.tools.ProducerPerformance。
+upgrade.from添加了新的Kafka Streams配置参数，允许从旧版本滚动退回升级。
+KIP-284通过将其默认值设置为更改了Kafka Streams重新分区主题的保留时间Long.MAX_VALUE。
+更新ProcessorStateManager了Kafka Streams中的API，用于将状态存储注册到处理器拓扑。有关更多详细信息，请阅读Streams 升级指南。
+在早期版本中，Connect的worker配置需要internal.key.converter和internal.value.converter属性。在2.0中，不再需要这些，并且默认为JSON转换器。您可以安全地从Connect独立和分布式工作器配置中删除这些属性：
+internal.key.converter=org.apache.kafka.connect.json.JsonConverter internal.key.converter.schemas.enable=falseinternal.value.converter=org.apache.kafka.connect.json.JsonConverter internal.value.converter.schemas.enable=false
+KIP-266添加了一个新的使用者配置，default.api.timeout.ms 以指定用于KafkaConsumer可能阻止的API 的默认超时。KIP还为这样的阻塞API添加了重载，以支持指定每个阻塞API使用的特定超时，而不是使用默认超时设置default.api.timeout.ms。特别是，poll(Duration)添加了一个新的API，它不会阻止动态分区分配。旧poll(long)API已弃用，将在以后的版本中删除。重载还添加了其他KafkaConsumer的方法，如partitionsFor，listTopics，offsetsForTimes， beginningOffsets，endOffsets并close表示诚挚的一个Duration。
+同时作为KIP-266的一部分，默认值request.timeout.ms已更改为30秒。之前的值略高于5分钟，以说明重新平衡所需的最长时间。现在我们将重新平衡中的JoinGroup请求视为一种特殊情况，并使用从max.poll.interval.ms请求超时派生的值 。所有其他请求类型都使用由定义的超时request.timeout.ms
+内部方法kafka.admin.AdminClient.deleteRecordsBefore已被删除。鼓励用户迁移到org.apache.kafka.clients.admin.AdminClient.deleteRecords。
+AclCommand工具–producer便捷选项在给定主题上使用KIP-277更细粒度的ACL。
+KIP-176删除了–new-consumer所有基于消费者的工具的选项。此选项是多余的，因为如果定义了–bootstrap-server，则会自动使用新的使用者。
+KIP-290增加了在前缀资源上定义ACL的功能，例如以’foo’开头的任何主题。
+KIP-283改进了Kafka代理上的消息下转换处理，这通常是一个内存密集型操作。KIP添加了一种机制，通过该机制，通过一次下转换分区数据块来减少内存消耗，这有助于在内存消耗上设置上限。通过这种改进，FetchResponse协议行为发生了变化， 其中代理可以在响应结束时发送超大的消息批，并使用无效的偏移量。消费者客户必须忽略这种超大消息，就像这样做KafkaConsumer。
+KIP-283还添加了新的主题和代理配置，message.downconversion.enable并log.message.downconversion.enable分别控制是否启用了下转换。禁用时，代理不会执行任何向下转换，而是向UNSUPPORTED_VERSION 客户端发送错误。</p>
+
+<p>在启动代理之前，可以使用kafka-configs.sh将动态代理配置选项存储在ZooKeeper中。此选项可用于避免在server.properties中存储明确的密码，因为所有密码配置都可以加密存储在ZooKeeper中。
+如果连接尝试失败，ZooKeeper主机现在会重新解析。但是，如果您的ZooKeeper主机名解析为多个地址，而其中一些地址无法访问，则可能需要增加连接超时zookeeper.connection.timeout.ms。
+新协议版本
+KIP-279：OffsetsForLeaderEpochResponse v1引入了分区级leader_epoch字段。
+KIP-219：将非群集操作请求和响应的协议版本更改为限制配额违规。
+KIP-290：Bump up协议版本ACL创建，描述和删除请求和响应。
+升级1.1 Kafka Streams应用程序
+将Streams应用程序从1.1升级到2.0不需要代理升级。Kafka Streams 2.0应用程序可以连接到2.0,1.1,1.0,0.11.0,0.10.2和0.10.1代理（但是不可能连接到0.10.0代理）。
+请注意，在2.0中，我们删除了在1.0之前弃用的公共API; 利用这些已弃用的API的用户需要相应地更改代码。有关更多详细信息，请参阅2.0.0中的Streams API更改。</p>
+
+<p>Spring for Apache Kafka 2.1.3 已发布，此外，Spring 集成扩展 Spring Integration Kafka 也发布了 3.0.2 版本，看看这次更新带来了哪些新功能 ——</p>
+
+<p>Spring for Apache Kafka(Change Log)</p>
+
+<p>使用 ReplyingKafkaTemplate 请求/应答信息</p>
+
+<p>监听器容器上的 暂停/恢复 功能</p>
+
+<p>用于多方法 @KafkaListener 的默认 @KafkaHandler 方法</p>
+
+<p>ChainedKafkaTransactionManager 用于改进事务同步场景</p>
+
+<p>Spring Integration Kafka(Change Log)</p>
+
+<p>Spring Integration 网关用于用于请求/应答场景</p>
+
+<p>支持出站端点中的事务启动</p>
+
+:ET

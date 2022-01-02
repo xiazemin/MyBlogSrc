@@ -1,0 +1,261 @@
+I"�H<p>文章大致分为3个部分，提供Raft相关资料，介绍Raft算法，实现Raft的思考和提示。</p>
+
+<p>一致性算法有很多，我选择了Raft，易于理解（据说）并且有MIT6.824（分布式课程）这样的存在。</p>
+
+<p>Raft原文，Raft中文，Raft可视化，结合6.824的Lab 2，这是我学习Raft时主要的参考资料。另外知乎上有不少作者比如
+@郁白
+ 、
+@朱一聪
+ 、
+@uncle creepy
+ 、
+@bangerlee
+ 等写过一致性算法的回答或文章可以作为参考。</p>
+
+<p>在开始之前这里有两个知乎问题链接可以帮助你了解RPC，阻塞/非阻塞、同步/异步。</p>
+
+<p>6.824的Lab2是实现一个Raft，完成这个实验你大概需要用Go写300行左右的代码。如果你对Go不熟悉的话以下附赠一个Go极速入门（仅适用于6.824 Lab2）：</p>
+
+<ol>
+  <li>学会var、:=、make、append的使用</li>
+  <li>知道if、for的格式，go没有while</li>
+  <li>学会type，func的定义</li>
+  <li>学会go func和channel的使用（go的特色）</li>
+  <li>去go package官网查找你需要使用的库API
+自己从头实现Raft算法不是一个明智的选择，因为如果你确定要将一致性算法用于分布式系统的话，那你不得不面对通信库、RPC框架这些涉及网络的模块，阻塞/非阻塞、同步/异步还有并发编程都会让你的一致性算法的实现增加很多不确定因素。</li>
+</ol>
+
+<p>所以6.824是个很好的选择，只需要把重心放在Raft上，而不需要去考虑搭建测试框架、实现网络通信和RPC框架。不过6.824的lab2有个缺点那就是所有RPC调用都是同步的，这虽然简化了实现，但是增加了局限性。</p>
+
+<p>下面介绍Raft算法。</p>
+
+<p>什么是Raft？Raft是木筏。。。不对，Raft是一个允许网络分化（Partition Tolerant）的一致性协议，它保证了在一个由N个节点构成的系统中有(N+1)/2（向上取整）个节点正常工作的情况下系统的一致性。比如在一个5个节点的系统中允许2个节点出现非拜占庭错误，如节点宕机、网络分化、消息延时。</p>
+
+<p>每个Raft节点都有着以下三种状态：</p>
+
+<p>跟随者（Follower）
+候选者（Candidate）
+领导者（Leader）
+时间被划分为一个个的任期，每个任期都会产生一个新领导者，领导者接收来自客户的请求，通过RPC与其它节点通信并复制日志来保证系统的一致性。</p>
+
+<p>下面这张图展示了状态之间的转换关系。</p>
+
+<p>跟随者：接收来自候选者的投票请求和接收领导者的心跳，如果在一段时间内没有收到任何请求或心跳那么成为候选者并且发起选举。
+候选者：若收到大部分节点的投票则成为领导者，如果在选举过程中发现领导者或者任期比自己高的候选者，则变为跟随者，如果选举超时，则重新发起选举。</p>
+
+<p>领导者：如果发现任期比自己高的节点则变为跟随者</p>
+
+<p>同时领导者会周期性地向所有跟随者发送心跳RPC来保证其权威，心跳RPC充当着失败检测器的功能。</p>
+
+<p>论文中的图3（上图）展示了每个状态的变化，而图2则详细地描述了Raft的整体算法，因为图2太大而且信息非常密集，就不贴出来了。</p>
+
+<p>最后分享一下实现Raft过程中的一些思考和提示。</p>
+
+<p>从实现角度讲Raft可以分为4个点：</p>
+
+<p>领导选举
+日志复制
+日志压缩
+配置更改
+我目前完成了前两个。我觉得整体上来说Raft的实现可以分为两个分支，第一个分支就是各个状态的变化涉及到的所有函数之间的调用关系，这个部分是非常自由的，你可以做非常多的尝试，然后找出你的最优解。</p>
+
+<p>在6.824里面我给每个Raft节点分配了3个线程（go routine），一个用于监控所有状态的变化并作出回应（选举，发送心跳），一个用于接收来自客户的请求，一个用于周期性地应用提交的日志。</p>
+
+<p>而在Mushroom里，所有RPC调用是异步的，所以实现上和6.824有很大的区别，我首先尝试了2个线程，一个用于监控状态的变化和选举，选举是阻塞等待的，而另一个线程则非阻塞地发送心跳RPC。但是很快测试的时候觉得这样写非常差劲，因为我发现其实Raft自己不一定要有一个循环线程，它所有函数调用是由一个个事件触发的，所以推倒重来。</p>
+
+<p>在现在的这个实现里，Raft自身不分配线程，它只是根据自身不同的状态将一个个事件（选举、心跳、AppendEntry、超时函数）或者注册或者取消在网络模块的定时队列里（这是我的实现比较有意思的地方），定时队列由epoll+线程池实现。这样一来所有的调用都采用了非阻塞+异步（注意epoll是同步I/O）调用的方式,。</p>
+
+<p>第二个分支相对来说没有自由度，那就是对节点的具体操作。必须做到论文中图2+论文第5节所描述的每一个字，注意是每一个字，尤其是图2，它包括了每个状态下的每一次操作的指示，无论对节点做出什么改变，必须在改变节点信息前完成所要求的每个检查，比如检查任期，检查日志是否匹配……</p>
+
+<p>图2+图3+论文第5节，完成这些则已经实现了Raft的核心模块，领导选举+日志复制。</p>
+
+<p>一些提示（血和泪的教训）：</p>
+
+<p>在接收到RPC的请求或回复时，如果RPC中参数的任期大于当前节点任期，无论当前节点处于什么状态，必须立刻变为跟随者
+在接收到RPC的请求或回复时，如果要对当前节点进行操作，必须保证RPC中的参数的任期等于当前任期
+当候选者发起投票时，LastLogIndex应该是当前日志的长度，而不是已提交的日志的长度
+当领导者发送心跳（或AppendEntry）时，PrevLogIndex应该是之前领导者发送过去的日志的最后一条的索引，不是跟随者日志的长度，也不是领导者日志的长度。比如你把1至3的索引发送过去了，那下一次发送时PrevLogIndex应该赋值为3。
+LastApplied代表你应用到本地的索引号，它永远小于等于CommitIndex
+准确区别CommitIndex、PrevLogIndex、LastLogIndex、LeaderCommit、LastApplied
+心跳和AppendEntry的唯一区别在于一个有日志一个没有日志，也就是说除了不能给跟随者增加日志外，心跳也一定需要完成日志一致性检测
+投票和AppendEntry之前需要进行非常小心的检测，首先检查任期，然后检查日志
+当两条日志的索引号和任期相同时，可以保证它们存储的是相同的日志
+投票允许后才能重置选举超时时间，AppendEntry只有在接收到当前领导人时才能重置选举超时时间，也就是说发送过来的任期大于等于当前任期
+领导者只能提交自己任期内的日志，但是它可以通过提交自己任期内的日志来间接提交之前任期的日志
+6.824的Lab 2是一个很好的实现Raft的开始
+Raft中的多线程编程是最基本的对于互斥量和条件变量的运用，不要被吓倒
+把论文中的图2落实到每一个字</p>
+
+<p>我觉得实现Raft收获大概有这些：</p>
+
+<p>理解了阻塞/非阻塞、同步/异步
+学会了写epoll+线程池的网络库和RPC框架
+掌握了回调函数、定时队列的概念
+并发编程的话遇见了之前没遇到过的递归加锁
+和Raft有关的收获那就是学会了一些基本的分布式知识，比如Raft中的选举、多数派、心跳机制，了解了FLP定理，CAP定理，2PC，3PC，向量锁…
+https://zhuanlan.zhihu.com/p/26506491
+<!-- more -->
+https://github.com/UncP/Mushroom</p>
+
+<p>一、可以不动手写 raft 吗？
+自己动手实现 raft 协议，是不是很觉得装逼？或许有的同学会说，网上一搜几百页，github 上成熟案例也很多，你写这个有jb用啊。好了，我也觉得是这样，第二篇文章暂时就不写了。</p>
+
+<p>咱们现在直接开始第三篇文章：raftexample 指南。那有的同学又会问 raftexample 是什么鬼？其实 raftexample 就是 etcd 中自带的一个使用 Raft 例子。example 代码大概是这样：</p>
+
+<p>从截图我们可以发现，大概有11个文件，887行代码，260行注释。这里要说明的是，它只是一个使用Raft的example，其内部还会涉及很多底层调用和通信。那现在可以怎样玩？有两种选择：</p>
+
+<p>我是大神，我一口气就可以写887行代码，我要通过 底层代码 与 raftexample 结合把它搞懂
+我是弱鸡，先通过简易版代码弄懂 Raft 执行流程，加深理解，再来搞 raftexample
+选择第1种方式的同学可以告辞了，也可以直接去瞅瞅第三篇 “raftexample指南”</p>
+
+<p>选择第2种方式的同学咱们继续回过头来，动手写一写 simple raft（弱鸡！！！我不是针对你，我是说在座的各位）</p>
+
+<p>二、Raft 实现思路
+2.1 实现功能
+通过上一篇 Raft 理论基础 我们可以知道，Raft 问题可以划分为三个主要的子问题：</p>
+
+<p>Leader选举（Leader Election ）
+日志复制（Log replication）
+安全（Safety）
+本文主要实现 Leader选举 和 日志复制 的基本功能。不保证代码的安全，规范，健壮性等等，如果考虑这些，这就不是一个简化版的 Raft 了。我只按 Raft 文档约束并保证：</p>
+
+<p>每次选举只能有一位 Leader
+Leader 不能更改旧的日志项，只能添加新的日志项
+同一 Entry 条目的 Index 和 Term 相同
+如果一个日志是由 Leader 提交，则后面的 Leader 必须具有该日志条目
+如果节点已将给定索引的条目应用于其状态机，则其他服务器不能为该索引应用不同的项
+2.2 节点 Behaviour 和 RPC 描述
+通过上一篇 Raft 理论基础 我们可以知道，节点运行过程中有三种状态：</p>
+
+<p>Follower
+Candidate
+Leader
+节点的不同状态将决定于它的行为（Behaviour），节点的状态转换需要通信（RPC）。</p>
+
+<p>因此我们可以来梳理一下Follower、Candidate、Leader三种状态的行为和通信结构。</p>
+
+<p>Follower 行为</p>
+
+<p>监听来自 Leader 的日志条目请求和消息
+将日志条目请求转发给 Leader
+当接收到来自 Leader 的提交消息时追加日志项
+如果 Follower 节点接收不到来自 Leader 的消息，Follower 节点将把自己变成一个 Candidate 节点，并向集群中的所有节点发送投票请求消息。
+节点必须始终跟踪群集成员身份
+在选举的情况下，Follower 节点将投票给Candidate 发送节点，除非发送节点 Term 在 Follower 节点之后。如果发送节点 Term 在 Follower 节点后面，则 Follower 将声明自己是 Candidate 节点，为自己投票，并向集群的所有成员广播投票请求的RPC
+Follower 节点会对 Follower 的心跳做出响应，表明他们还活着，并告诉 Leader 节点他们的最高 committed索引。这将允许Leader更新其匹配索引列表
+Follower RPC 消息</p>
+
+<p>响应 Leader heartbeat（appendEntries）
+VoteReply — 如果另一个节点触发了选举，那么 follower 可能会收到一个投票请求的RPC，该 RPC 将包含发送方的最高提交索引，follower 使用 VoteReply 响应投票请求的节点
+Candidate 行为</p>
+
+<p>将投票请求RPC发送到群集中的每个节点并等待响应
+如果收到投票超过半数（N/2+1），计票并宣布自己为 Leader
+Candidate RPC 消息</p>
+
+<p>VoteRequest
+Leader 行为</p>
+
+<p>将 heartbeat（appendentries）发送到所有集群成员，heartbeat msg 在空闲期间也需要重复，以防止触发不必要选举
+如果leader从客户端接收到 log 请求，它会将该条目附加到其本地日志中，并在条目应用到状态机之后响应请求节点
+leader 跟踪着每个节点的 nextIndex 和 matchIndex， nextIndex 是节点上的下一个未填充索引
+Leader RPC 消息</p>
+
+<p>Leader heartbeat
+提交 Entry
+LogEntry 请求
+2.3 结构体
+定义完三种状态的行为和RPC消息后，似乎没有什么luan用，它的作用只是为了梳理流程。下面开始我们的代码编写。</p>
+
+<p>https://zhuanlan.zhihu.com/p/86616572</p>
+
+<p>https://github.com/maemual/raft-zh_cn/blob/master/raft-zh_cn.md</p>
+
+<p>https://github.com/robertabbott/RaftConsensus</p>
+
+<p>https://zhuanlan.zhihu.com/p/85680181</p>
+
+<p>Raft实现数据结构和流程要点
+Leader的心跳和日志复制都可以作为Append Entries RPC请求发送，可以简化代码。与日志复制不同的是，心跳RPC的Entries参数为空。
+注意两个超时。一个是选举超时，一个是日志复制(心跳)间隔时间。选举超时ElectionTimeout和日志复制间隔HeartbeatTimeout两个超时时间的选择，注意复制间隔必须远小于选举超时，即 HeartbeatTimeout « Electiontimeout。我的代码设置的选举超时随机为(300+Rand(100))ms(原论文要求的是150-300ms，但是实验里面的意思是要大于300ms比较好，不过设置为300+ms测试也能通过)，注意选举超时每次都要随机，不然可能造成选举不成功。复制间隔固定为50ms(论文里面要求是20ms以内，实验里面是要求100ms左右，测试发现在选举超时为300+ms的时候心跳间隔为50ms可以测试通过)。
+注意加锁问题，多个协程共享的数据要加锁访问rf.mu.Lock()，记得释放锁，使用defer rf.mu.Unlock()是个不错的方案。测试的时候也要记得加上data race的检测， go test -race。
+注意提交日志的时候applyLogs()函数里面的日志提交部分，commitIndex只要比lastApplied大的日志项都要提交，因为一次可能是提交多个日志的，否则会出错。
+日志数组rf.log的第一项没有使用，主要是为了和论文兼容，日志索引从1开始，注意，go语言的数组第一项如果是nil的话gob编码解码会有问题，所以要加个空的LogEntry进去填充。
+只要修改了本机要持久存储的变量，就要调用rf.persist()进行持久化。每个节点都要持久存储的变量有 currentTerm, voteFor, log。
+对于优化Append Entries RPC次数的代码</p>
+
+<p>https://juejin.im/entry/6844903657540943880</p>
+
+<p>https://github.com/shishujuan/mit6.824-2017-raft</p>
+
+<p>https://juejin.im/post/6844903929109561351</p>
+
+<p>https://blog.lovezhy.cc/2019/09/05/Raft%E5%AE%9E%E7%8E%B0%E6%8C%87%E5%8C%97/</p>
+
+<p>https://lichuang.github.io/post/20180921-raft/
+https://ramcloud.stanford.edu/~ongaro/thesis.pdf</p>
+
+<p>https://raft.github.io/</p>
+
+<p>https://cloud.tencent.com/developer/article/1394643</p>
+
+<p>https://zhuanlan.zhihu.com/p/27415397</p>
+
+<p>本文为golang实现Raft第一篇，主要描述了如何使用golang实现选主，文中的代码框架来自于MIT 6.824课程，包括rpc框架及测试用例。</p>
+
+<p>Raft选主
+根据Raft论文，选主模块主要包括三大功能：</p>
+
+<p>candidate状态下的选主功能
+leader状态下的心跳广播功能
+follower状态下的确认功能
+candidate状态下的选主功能
+candidate状态下的选主功能需要关注两个方面：</p>
+
+<p>何时进入candidate状态，进行选主？
+选主的逻辑是怎样的？
+首先，来讨论何时进入candidate状态，进行选主。</p>
+
+<p>在一定时间内没有收到来自leader或者其他candidate的有效RPC时，将会触发选主。这里需要关注的是有效两个字，要么是leader发的有效的心跳信息，要么是candidate发的是有效的选主信息，即server本身确认这些信息是有效的后，才会重新更新超时时间，超时时间根据raft论文中推荐设置为[150ms,300ms]，并且每次是随机生成的值。</p>
+
+<p>其次，来讨论选主的逻辑。</p>
+
+<p>server首先会进行选主的初始化操作，即server会增加其term，把状态改成candidate，然后选举自己为主，并把选主的RPC并行地发送给集群中其他的server，根据返回的RPC的情况的不同，做不同的处理：</p>
+
+<p>该server被选为leader
+其他的server选为leader
+一段时间后，没有server被选为leader
+针对情况一，该server被选为leader,当前仅当在大多数的server投票给该server时。当其被选为主时，会立马发送心跳消息给其他的server，来表明其已经是leader，防止发生新的选举。</p>
+
+<p>针对情况二，其他的server被选为leader，它会收到leader发送的心跳信息，此时，该server应该转为follower，然后退出选举。</p>
+
+<p>针对情况三，一段时间后，没有server被选为leader，这种情况发生在没有server获得了大多数的server的投票情况下，此时，应该发起新一轮的选举。</p>
+
+<p>leader状态下的心跳广播功能
+当某个server被选为leader后，需要广播心跳信息，表明其是leader，主要在以下两个场景触发：</p>
+
+<p>server刚当选为leader
+server周期性的发送心跳消息，防止其他的server进入candidate选举状态
+leader广播心跳的逻辑为，如果广播的心跳信息得到了大多数的server的确认，那么更新leader自身的选举超时时间，防止发生重新选举。</p>
+
+<p>follower状态下的确认功能
+主要包括对candidate发的选举RPC以及leader发来的心跳RPC的确认功能。</p>
+
+<p>对于选举RPC，假设candidate c发送选举RPC到该follower，由于follower每个term只能选举一个server，因此，只有当一个follower没有选举其他server的时候，并且选举RPC中的candidate c的term大于或等于follower的term时，才会返回选举当前candidate c为主，否则，则返回拒绝选举当前candidate c为主。</p>
+
+<p>对于leader的心跳RPC，如果leader的心跳的term大于或等于follower的term，则认可该leader的心跳，否则，不认可该leader的心跳。</p>
+
+<p>备注：本节所讨论的选举功能仅限于raft论文5.2，还未考虑选举过程中日志相关的信息以及选主过程中出现宕机等场景，此部分功能将在日志复制功能实现中再描述。</p>
+
+<p>http://oserror.com/distributed/implement-raft-with-golang-first/</p>
+
+<p>https://blog.csdn.net/xiongwenwu/article/details/79981804</p>
+
+<p>https://github.com/goraft/raft</p>
+
+<p>https://learnku.com/articles/42132
+https://github.com/xuchongfeng/raft
+http://www.itpub.net/2020/03/20/5674/</p>
+
+<p>https://www.zhihu.com/question/29597104https://blog.jetbrains.com/phpstorm/2018/03/how-to-provide-stubs-for-phpstorm/</p>
+:ET

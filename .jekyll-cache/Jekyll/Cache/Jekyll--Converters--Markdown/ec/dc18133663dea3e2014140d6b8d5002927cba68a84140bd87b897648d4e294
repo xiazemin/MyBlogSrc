@@ -1,0 +1,477 @@
+I"$\<p>php扩展里 
+PHP_MINIT_FUNCTION， 
+PHP_MSHUTDOWN_FUNCTION，
+PHP_RINIT_FUNCTION
+PHP_RSHUTDOWN_FUNCTION 这4个函数的。
+发现在 php-fpm里执行的过程是这样的。</p>
+
+<p>假设 一个静态变量 count_s ＝ 2；以上函数执行时会将值+1并打印到文件里。</p>
+
+<p>(1) php-fpm 启动的时候 会执行PHP_MINIT_FUNCTION(3),然后执行PHP_MSHUTDOWN_FUNCTION(4)。</p>
+
+<p>(2) 当一个请求来的时候，假设处理的是进程1，会执行 PHP_RINIT_FUNCTION(4), 然后执行PHP_RSHUTDOWN_FUNCTION(5).</p>
+
+<p>(3) 如果第二请求来了，假设处理的是进程2，命中了另外一个进程则执行PHP_RINIT_FUNCTION(4), 然后执行PHP_RSHUTDOWN_FUNCTION(5).</p>
+
+<p>(4) 第三个请求来了，如果处理的是进程1，则执行 PHP_RINIT_FUNCTION(6), 然后执行PHP_RSHUTDOWN_FUNCTION(7). 此时如果这个进程到达max_request 设置的最大请求数，则会消亡。此时会再次执行一个PHP_MSHUTDOWN_FUNCTION(8)。</p>
+
+<p>(5) 如果手动执行 killall php-fpm 干掉php-fpm进程，则会执行一次PHP_MSHUTDOWN_FUNCTION(4)。
+<!-- more -->
+PHP开始执行以后会经过两个主要的阶段：
+处理请求之前的开始阶段</p>
+
+<p>请求之后的结束阶段</p>
+
+<p>开始阶段有两个过程：</p>
+
+<p>第一个过程是模块初始化阶段（MINIT）， 在整个SAPI生命周期内（例如Apache启动以后的整个生命周期内或者命令行程序整个执行过程中）， 该过程只进行一次。</p>
+
+<p>第二个过程是模块激活阶段（RINIT），该过程发生在请求阶段， 例如通过url请求某个页面，则在每次请求之前都会进行模块激活（RINIT请求开始）。 例如PHP注册了一些扩展模块，则在MINIT阶段会回调所有模块的MINIT函数。 模块在这个阶段可以进行一些初始化工作，例如注册常量，定义模块使用的类等等。</p>
+
+<p>模块在实现时可以通过如下宏来实现这些回调函数：</p>
+
+<p>PHP_MINIT_FUNCTION(myphpextension)
+{
+    // 注册常量或者类等初始化操作
+    return SUCCESS; 
+}
+请求到达之后PHP初始化执行脚本的基本环境，例如创建一个执行环境，包括保存PHP运行过程中变量名称和值内容的符号表， 以及当前所有的函数以及类等信息的符号表。然后PHP会调用所有模块的RINIT函数， 在这个阶段各个模块也可以执行一些相关的操作，模块的RINIT函数和MINIT回调函数类似：</p>
+
+<p>PHP_RINIT_FUNCTION(myphpextension)
+{
+    // 例如记录请求开始时间
+    // 随后在请求结束的时候记录结束时间。这样我们就能够记录下处理请求所花费的时间了
+    return SUCCESS; 
+}
+请求处理完后就进入了结束阶段，一般脚本执行到末尾或者通过调用exit()或die()函数， PHP都将进入结束阶段。和开始阶段对应，结束阶段也分为两个环节，一个在请求结束后停用模块(RSHUTDOWN，对应RINIT)， 一个在SAPI生命周期结束（Web服务器退出或者命令行脚本执行完毕退出）时关闭模块(MSHUTDOWN，对应MINIT)。</p>
+
+<p>PHP_RSHUTDOWN_FUNCTION(myphpextension)
+{
+    // 例如记录请求结束时间，并把相应的信息写入到日至文件中。
+    return SUCCESS; 
+}</p>
+
+<p>PHP开始执行以后会经过两个主要的阶段：
+处理请求之前的开始阶段</p>
+
+<p>请求之后的结束阶段</p>
+
+<p>开始阶段有两个过程：</p>
+
+<p>第一个过程是模块初始化阶段（MINIT）， 在整个SAPI生命周期内（例如Apache启动以后的整个生命周期内或者命令行程序整个执行过程中）， 该过程只进行一次。</p>
+
+<p>第二个过程是模块激活阶段（RINIT），该过程发生在请求阶段， 例如通过url请求某个页面，则在每次请求之前都会进行模块激活（RINIT请求开始）。 例如PHP注册了一些扩展模块，则在MINIT阶段会回调所有模块的MINIT函数。 模块在这个阶段可以进行一些初始化工作，例如注册常量，定义模块使用的类等等。</p>
+
+<p>模块在实现时可以通过如下宏来实现这些回调函数：</p>
+
+<p>PHP_MINIT_FUNCTION(myphpextension)</p>
+
+<p>{</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>// 注册常量或者类等初始化操作
+
+return SUCCESS; 
+</code></pre></div></div>
+
+<p>}</p>
+
+<p>请求到达之后PHP初始化执行脚本的基本环境，例如创建一个执行环境，包括保存PHP运行过程中变量名称和值内容的符号表， 以及当前所有的函数以及类等信息的符号表。然后PHP会调用所有模块的RINIT函数， 在这个阶段各个模块也可以执行一些相关的操作，模块的RINIT函数和MINIT回调函数类似：</p>
+
+<p>PHP_RINIT_FUNCTION(myphpextension)</p>
+
+<p>{</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>// 例如记录请求开始时间
+
+// 随后在请求结束的时候记录结束时间。这样我们就能够记录下处理请求所花费的时间了
+
+return SUCCESS; 
+</code></pre></div></div>
+
+<p>}</p>
+
+<p>请求处理完后就进入了结束阶段，一般脚本执行到末尾或者通过调用exit()或die()函数， PHP都将进入结束阶段。和开始阶段对应，结束阶段也分为两个环节，一个在请求结束后停用模块(RSHUTDOWN，对应RINIT)， 一个在SAPI生命周期结束（Web服务器退出或者命令行脚本执行完毕退出）时关闭模块(MSHUTDOWN，对应MINIT)。</p>
+
+<p>PHP_RSHUTDOWN_FUNCTION(myphpextension)</p>
+
+<p>{</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>// 例如记录请求结束时间，并把相应的信息写入到日至文件中。
+
+return SUCCESS; 
+</code></pre></div></div>
+
+<p>}</p>
+
+<p>PHP程序的启动可以看作有两个概念上的启动，终止也有两个概念上的终止。 其中一个是 PHP 作为Apache(拿它举例，板砖勿扔)的一个模块的启动与终止， 这次启动 PHP 会初始化一些必要数据，比如与宿主 Apache 有关的，并且这些数据是常驻内存的，终止与之相对。还有一个概念上的启动就是当 Apache 分配一个页面请求过来的时候，PHP会有一次启动与终止，这也是我们最常讨论的一种。 现在我们主要来看一个 PHP 扩展的生命旅程是怎样走完这四个过程的。 在最初初始化的时候，就是 PHP 随着 Apache 的启动而诞生在内存里的时候，它会把自己所有已加载扩展的 MINIT 方法(全称 Module Initialization，是由每个模块自己定义的函数)都执行一遍。在这个时间里，扩展可以定义一些自己的常量、类、资源等所有会被用户端的 PHP 脚本用到的东西。但你要记住，这里定义的东西都会随着 Apache 常驻内存，可以被所有请求使用，直到 Apache 卸载掉 PHP 模块。 内核中预置了 PHP_MINIT_FUNCTION 宏函数，来帮助我们实现这个功能：
+1
+//抛弃作者那个例子，书才看两页整那样的例子太复杂了!
+2
+//walu是我扩展的名称
+3
+int time_of_minit; // 在MINIT()中初始化，在每次页面请求中输出，看看是否变化
+4
+PHP_MINIT_FUNCTION(walu)
+5
+{
+6
+    time_of_minit=time(NULL); //我们在MINIT启动中对它初始化
+7
+    return SUCCESS; //返回SUCCESS代表正常，返回FALIURE就不会加载这个扩展了。
+8
+}
+当一个页面请求到来时候，PHP 会迅速开辟一个新的环境，并重新扫描自己的各个扩展，遍历执行它们各自的RINIT 方法(俗称 Request Initialization)，这时候一个扩展可能会初始化在本次请求中会使用到的变量等， 还会初始化用户端（即 PHP 脚本）中的变量之类的，内核预置了 PHP_RINIT_FUNCTION() 这个宏函数来帮我们实现这个功能：
+1
+int time_of_rinit; //在RINIT里初始化，看看每次页面请求的时候是否变化。
+2
+PHP_RINIT_FUNCTION(walu)
+3
+{
+4
+    time_of_rinit=time(NULL);
+5
+    return SUCCESS;
+6
+}
+好了，现在这个页面请求执行的差不多了，可能是顺利的走到了自己文件的最后，也可能是出师未捷，半道被用户给 die 或者 exit 了， 这时候 PHP 便会启动回收程序，收拾这个请求留下的烂摊子。它这次会执行所有已加载扩展的 RSHUTDOWN（俗称 Request Shutdown）方法， 这时候扩展可以抓紧利用内核中的变量表之类的做一些事情， 因为一旦 PHP 把所有扩展的 RSHUTDOWN 方法执行完， 便会释放掉这次请求使用过的所有东西， 包括变量表的所有变量、所有在这次请求中申请的内存等等。 内核预置了 PHP_RSHUTDOWN_FUNCTION 宏函数来帮助我们实现这个功能
+1
+PHP_RSHUTDOWN_FUNCTION(walu)
+2
+{
+3
+    FILE *fp=fopen(“time_rshutdown.txt”,”a+”);
+4
+    fprintf(fp,”%ld\n”,time(NULL)); //让我们看看是不是每次请求结束都会在这个文件里追加数据
+5
+    fclose(fp);
+6
+    return SUCCESS;
+7
+}
+前面该启动的也启动了，该结束的也结束了，现在该 Apache 老人家歇歇的时候，当 Apache 通知 PHP 自己要 Stop 的时候，PHP 便进入 MSHUTDOWN（俗称Module Shutdown）阶段。这时候 PHP 便会给所有扩展下最后通牒，如果哪个扩展还有未了的心愿，就放在自己 MSHUTDOWN 方法里，这可是最后的机会了，一旦 PHP 把扩展的 MSHUTDOWN 执行完，便会进入自毁程序，这里一定要把自己擅自申请的内存给释放掉，否则就杯具了。 内核中预置了 PHP_MSHUTDOWN_FUNCTION 宏函数来帮助我们实现这个功能：
+1
+PHP_MSHUTDOWN_FUNCTION(walu)
+2
+{
+3
+    FILE *fp=fopen(“time_mshutdown.txt”,”a+”);
+4
+    fprintf(fp,”%ld\n”,time(NULL));
+5
+    return SUCCESS;
+6
+}
+这四个宏都是在 walu.c 里完成最终实现的，而他们的则是在 /main/php.h 里被定义的(其实也是调用的别的宏，本节最后我把这几个宏给展开了，供有需要的人查看)。 好了，现在我们本节内容说完了，下面我们把所有的代码合在一起，并预测一下应该出现的结果：
+1
+//这些代码都在walu.c里面，不在.h里
+2
+​
+3
+int time_of_minit; //在MINIT中初始化，在每次页面请求中输出，看看是否变化
+4
+PHP_MINIT_FUNCTION(walu)
+5
+{
+6
+    time_of_minit=time(NULL); //我们在MINIT启动中对他初始化
+7
+    return SUCCESS;
+8
+}
+9
+​
+10
+int time_of_rinit;//在RINIT里初始化，看看每次页面请求的时候是否变化。
+11
+PHP_RINIT_FUNCTION(walu)
+12
+{
+13
+    time_of_rinit=time(NULL);
+14
+    return SUCCESS;
+15
+}
+16
+​
+17
+PHP_RSHUTDOWN_FUNCTION(walu)
+18
+{
+19
+    FILE *fp=fopen(“/cnan/www/erzha/time_rshutdown.txt”,”a+”); //请确保文件可写，否则apache会莫名崩溃
+20
+    fprintf(fp,”%d\n”,time(NULL)); //让我们看看是不是每次请求结束都会在这个文件里追加数据
+21
+    fclose(fp);
+22
+    return SUCCESS;
+23
+}
+24
+​
+25
+PHP_MSHUTDOWN_FUNCTION(walu)
+26
+{
+27
+    FILE *fp=fopen(“/cnan/www/erzha/time_mshutdown.txt”,”a+”); //请确保文件可写，否则apache会莫名崩溃
+28
+    fprintf(fp,”%d\n”,time(NULL));
+29
+    return SUCCESS;
+30
+}
+31
+​
+32
+//我们在页面里输出time_of_minit和time_of_rinit的值
+33
+PHP_FUNCTION(walu_test)
+34
+{
+35
+    php_printf(“%d&lt;br /&gt;“,time_of_minit);
+36
+    php_printf(“%d&lt;br /&gt;“,time_of_rinit);
+37
+    return;
+38
+}
+time_of_minit 的值每次请求都不变。
+time_of_rinit 的值每次请求都改变。
+每次页面请求结束都会往 time_rshutdown.txt 中写入数据。
+只有在 Apache 结束后 time_mshutdown.txt 才写入有数据。
+启动模式
+一个 PHP 实例，无论通过 HTTP 请求调用的，还是从命令行启动的，都会依次进行 Module init、Request init、Request Shutdown、Module shutdown 四个过程， 当然之间还会执行脚本自己的逻辑。 那么两种 init 和两种 shutdown 各会执行多少次、各自的执行频率有多少呢？这取决于 PHP 是用什么 SAPI 与宿主通信的。最常见的四种方式如下所列：
+直接以 CLI/CGI 模式调用
+多进程模式
+多线程模式
+Embedded(嵌入式，在自己的 C 程序中调用 Zend Engine)
+CLI/CGI
+CLI 和 CGI 的 SAPI 是相当特殊的，因为这时 PHP 的生命周期完全在一个单独的请求中完成。虽然简单，不过我们以前提过的两种 init 和两种 shutdown 仍然都会被执行。下图展示了PHP在这种模式下是怎么工作的：
+<img src="https://xiazemin.github.io/MyBlog/img/clicgi.jpeg" /></p>
+
+<p>多进程模式
+ps:书是2006年出版的，所以你应该理解作者说多进程是主流
+PHP 最常见的工作方式便是编译成为 Apache2 的 Pre-fork MPM 或者 Apache1 的 APXS 模式，其它 Web 服务器也大多用相同的方式工作，在本书后面，把这种方式统一叫做多进程方式。给它起这个名字是有原因的，不是随便拍拍屁股拍拍脑袋定下来的。当 Apache 启动的时候，会立即把自己 fork 出好几个子进程，每一个进程都有自己独立的内存空间， 也就代表了有自己独立的变量、函数等。在每个进程里的PHP的工作方式如下图所示
+<img src="https://xiazemin.github.io/MyBlog/img/multiprocess.jpeg" /></p>
+
+<p>因为是 fork 出来的，所以各个进程间的数据是彼此独立，不会受到外界的干扰（ps：fork 后可以用管道等方式实现进程间通信）。这是一片独立天地，它允许每个子进程做任何事情
+多线程模式
+随着时代的进步，PHP 越来越多地在多线程模式下工作，就像 IIS 的 isapi 和 Apache MPM worker（支持混合的多线程多进程的多路处理模块）。在这种模式下，只有一个服务器进程在运行着，但会同时运行很多线程，这样可以减少一些资源开销，像 Module init 和 Module shutdown 就只需要运行一次就行了，一些全局变量也只需要初始化一次，因为线程独具的特质，使得各个请求之间方便的共享一些数据成为可能。
+https://xueyuanjun.com/link/7152#bkmrk-%E5%85%B6%E5%AE%9E%E5%A4%9A%E7%BA%BF%E7%A8%8B%E4%B8%8E-minit%E3%80%81mshutdo</p>
+
+<p>其实多线程与 MINIT、MSHUTDOWN 只执行一次并没有什么联系，多进程模式下一样可以实现。</p>
+
+<p>Embed
+Embed SAPI 是一种比较特殊的 SAPI，容许你在 C/C++ 语言中调用 PHP/ZE 提供的函数。并且这种 SAPI 和上面的三种一样，按 Module Init、Request Init、Rshutdown、mshutdown 的流程执行着。 当然，这只是其中一种情况。因为特定的应用有自己特殊的需求，只是在处理 PHP 脚本这个环节基本一致。 真正令 Emebed 模式独特的是因为它可能随时嵌入到某个程序里面去(比如你的 test.exe 里)， 然后被当作脚本的一部分在一个请求的时候执行。控制权在 PHP 和原程序间来回传递。关于嵌入式的 PHP 在第20章会有应用，到时我们再用实例介绍这个不经常使用的 SAPI。</p>
+
+<p>看过PHP源码或者扩展开发相关资料的都知道PHP扩展的几个关键函数，或者叫生命周期
+PHP_MINIT
+PHP_RINIT
+PHP_RSHUTDOWN
+PHP_MSHUTDOWN</p>
+
+<p>其中PHP_MINIT 是php启动的时候加载扩展的时候会调用的函数 ， 这个宏展开后其实真的就是定义了一个这样的C函数</p>
+
+<p>zm_startup_##module(…){…}</p>
+
+<p>那么这个在扩展的代码里定义的C函数是如何被执行的呢? 接下来，我们还会发现，每个扩展都有一个zend_module_entry 的结构体定义</p>
+
+<p>例如swoole的扩展 zend_module_entry 定义如下</p>
+
+<p>zend_module_entry swoole_module_entry =
+{
+#if ZEND_MODULE_API_NO &gt;= 20050922
+    STANDARD_MODULE_HEADER_EX,
+    NULL,
+    NULL,
+#else
+    STANDARD_MODULE_HEADER,
+#endif
+    “swoole”,
+    swoole_functions,
+    PHP_MINIT(swoole),
+    PHP_MSHUTDOWN(swoole),
+    PHP_RINIT(swoole),     //RINIT
+    PHP_RSHUTDOWN(swoole), //RSHUTDOWN
+    PHP_MINFO(swoole),
+    PHP_SWOOLE_VERSION,
+    STANDARD_MODULE_PROPERTIES
+};
+定义这么一个结构体就加载了吗？ 显然是不能的，php源码在编写的时候又不知道你要定义什么扩展。 关键点就在下面的代码，每个扩展还会有这么一句代码</p>
+
+<p>ZEND_GET_MODULE(swoole)</p>
+
+<p>//上面这个宏展开后其实是个函数 ， 以swoole为例，这个函数就是返回上面定义的 swoole_module_entry  这个结构体
+zend_module_entry *get_module(void) { return &amp;name##_module_entry; }
+大概总结下流程
+1.扩展会提供一个 get_module(void)的方法拿到扩展的 zend_module_entry 结构体的定义</p>
+
+<p>扩展被编译成so文件后，在php.ini文件中配置 xxx.so， 表示加载扩展
+php 启动的时候会读php.ini 文件，并做解析
+4.在linux下 通过 dlopen()打开扩展的xxx.so库文件
+通过系统的 dlsym()获取动态库中get_module()函数的地址，执行每个扩展的get_module方法拿到 zend_module_entry 结构体
+把zend_module_entry 结构体注册到php的 extension_lists 扩展列表中
+7.在php的生生命周期中执行各个扩展定义的PHP_MINIT
+上面是个执行流程的总结，下面进行源码求证</p>
+
+<p>看源码很容易在php启动的时候找到这个函数执行 php_module_startup()</p>
+
+<p>int php_module_startup(sapi_module_struct *sf, zend_module_entry *additional_modules, uint num_additional_modules)
+{
+    …
+    //根据php.ini注册扩展
+    php_ini_register_extensions();</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>... } 动态库就是在php_ini_register_extensions()这个函数中完成的注册：
+</code></pre></div></div>
+
+<p>//main/php_ini.c
+void php_ini_register_extensions(void)
+{
+    //注册zend扩展
+    zend_llist_apply(&amp;extension_lists.engine, php_load_zend_extension_cb);
+    //注册php扩展
+    zend_llist_apply(&amp;extension_lists.functions, php_load_php_extension_cb);</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>zend_llist_destroy(&amp;extension_lists.engine);
+zend_llist_destroy(&amp;extension_lists.functions); } extension_lists是一个链表，保存着根据php.ini中定义的extension=xxx.so取到的全部扩展名称，其中engine是zend扩展，functions为php扩展，依次遍历这两个数组然后调用php_load_php_extension_cb()或php_load_zend_extension_cb()进行各个扩展的加载：
+</code></pre></div></div>
+
+<p>static void php_load_php_extension_cb(void <em>arg)
+{
+#ifdef HAVE_LIBDL
+    php_load_extension(</em>((char **) arg), MODULE_PERSISTENT, 0);
+#endif
+}
+HAVE_LIBDL这个宏根据dlopen()函数是否存在设置的：</p>
+
+<p>#Zend/Zend.m4
+AC_DEFUN([LIBZEND_LIBDL_CHECKS],[
+AC_CHECK_LIB(dl, dlopen, [LIBS=”-ldl $LIBS”])
+AC_CHECK_FUNC(dlopen,[AC_DEFINE(HAVE_LIBDL, 1,[ ])])
+])
+接着就是最关键的操作了，php_load_extension()：</p>
+
+<p>//ext/standard/dl.c
+PHPAPI int php_load_extension(char <em>filename, int type, int start_now)
+{
+    void *handle;
+    char *libpath;
+    zend_module_entry *module_entry;
+    zend_module_entry *(</em>get_module)(void);
+    …
+    //调用dlopen打开指定的动态连接库文件：xx.so
+    handle = DL_LOAD(libpath); 
+    …
+    //调用dlsym获取get_module的函数指针
+    get_module = (zend_module_entry <em>(</em>)(void)) DL_FETCH_SYMBOL(handle, “get_module”); 
+    …
+    //调用扩展的get_module()函数
+    module_entry = get_module();
+    …
+    //检查扩展使用的zend api是否与当前php版本一致
+    if (module_entry-&gt;zend_api != ZEND_MODULE_API_NO) {
+        DL_UNLOAD(handle);
+        return FAILURE;
+    }
+    …
+    module_entry-&gt;type = type;
+    //为扩展编号
+    module_entry-&gt;module_number = zend_next_free_module();
+    module_entry-&gt;handle = handle;</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>if ((module_entry = zend_register_module_ex(module_entry)) == NULL) {
+    DL_UNLOAD(handle);
+    return FAILURE;
+}
+... } DL_LOAD()、DL_FETCH_SYMBOL()这两个宏在linux下展开后就是：dlopen()、dlsym()，所以上面过程的实现就比较直观了
+</code></pre></div></div>
+
+<p>PHP的最多的两种运行模式是WEB模式、CLI模式。
+无论哪种模式，PHP工作原理都是一样的，作为一种SAPI运行。
+1、当我们在终端敲入php这个命令的时候，它使用的是CLI。
+它就像一个web服务器一样来支持php完成这个请求，请求完成后再重新把控制权交给终端。</p>
+
+<p>2、当使用Apache作为宿主时，当一个请求到来时，PHP会来支持完成这个请求。</p>
+
+<p>main/php.h中定义了以下几个宏</p>
+
+<p>#define PHP_MINIT_FUNCTION		ZEND_MODULE_STARTUP_D
+#define PHP_MSHUTDOWN_FUNCTION	ZEND_MODULE_SHUTDOWN_D
+#define PHP_RINIT_FUNCTION		ZEND_MODULE_ACTIVATE_D
+#define PHP_RSHUTDOWN_FUNCTION	ZEND_MODULE_DEACTIVATE_D
+#define PHP_MINFO_FUNCTION		ZEND_MODULE_INFO_D
+#define PHP_GINIT_FUNCTION		ZEND_GINIT_FUNCTION
+#define PHP_GSHUTDOWN_FUNCTION	ZEND_GSHUTDOWN_FUNCTION</p>
+
+<p>对应的作用是
+PHP_MINIT_FUNCTION	初始化module时运行
+PHP_MSHUTDOWN_FUNCTION	当module被卸载时运行
+PHP_RINIT_FUNCTION	当一个REQUEST请求初始化时运行
+PHP_RSHUTDOWN_FUNCTION	当一个REQUEST请求结束时运行
+PHP_MINFO_FUNCTION	这个是设置phpinfo中这个模块的信息
+PHP_GINIT_FUNCTION	初始化全局变量时
+PHP_GSHUTDOWN_FUNCTION	释放全局变量时</p>
+
+<p>看一个自定义扩展案例片段：
+int minit_time;
+PHP_MINIT_FUNCTION(test)
+{
+	minit_time = time(NULL);
+	return SUCCESS;
+}</p>
+
+<p>PHP_MSHUTDOWN_FUNCTION(test)
+{
+	FILE *fp=fopen(“mshutdown.txt”,”a+”);
+	fprintf(fp,”%ld\n”,time(NULL));//让我们看看是不是每次请求结束都会在这个文件里追加数据
+	fclose(fp);
+	return SUCCESS;
+}</p>
+
+<p>int rinit_time;
+PHP_RINIT_FUNCTION(test)
+{
+	rinit_time = time(NULL);
+	return SUCCESS;
+}</p>
+
+<p>PHP_RSHUTDOWN_FUNCTION(test)
+{
+	FILE *fp=fopen(“rshutdown.txt”,”a+”);
+	fprintf(fp,”%ld\n”,time(NULL));//让我们看看是不是每次请求结束都会在这个文件里追加数据
+	fclose(fp);
+	return SUCCESS;
+}</p>
+
+<p>PHP_MINFO_FUNCTION(test)
+{
+	php_info_print_table_start();//调用php_write输出HTML标签
+	php_info_print_table_header(2, “module info”, “enabled”);
+	php_info_print_table_end();//调用php_write输出HTML标签</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>/* Remove comments if you have entries in php.ini
+DISPLAY_INI_ENTRIES();
+*/ }
+</code></pre></div></div>
+
+<p>//定义PHP中可以调用的函数test(),让它在页面里输出minit_time和rinit_time的值
+PHP_FUNCTION(test)
+{
+	php_printf(“%d<br />“,time_of_minit);
+	php_printf(“%d<br />“,time_of_rinit);
+	return;
+}</p>
+
+<p>以Apache为例，
+如果在多线程的模式下工作：
+在这种模式下，只有一个服务器进程在运行着，但会同时运行很多线程，这样可以减少一些资源开销，向Module init和Module shutdown就只需要运行一遍就行了，一些全局变量也只需要初始化一次，因为线程独具的特质，使得各个请求之间方便的共享一些数据成为可能。</p>
+
+<p>如果在多进程的模式下工作：</p>
+
+<p>minit_time、rinit_time的值每次请求都在变。
+每次页面请求结束都会往time_rshutdown.txt、time_mshutdown.txt中写入数据。</p>
+:ET

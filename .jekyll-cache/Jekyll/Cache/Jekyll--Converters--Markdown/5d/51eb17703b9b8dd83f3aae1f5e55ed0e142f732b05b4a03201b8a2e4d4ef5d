@@ -1,0 +1,224 @@
+I"(#<p>https://github.com/Thriftpy/thriftpy
+https://thrift.apache.org/docs/idl
+线上有很多个爬虫程序，它们在数据清洗完成后都要做文本情感分析。以往同学的做法是在每个爬虫中把相同代码都Copy一份，但是考虑到这样会让项目维护变得极其困难，所以在重构的使用考虑以基础服务的方式提供情感分析模块。thrift是Facebook开源的一套跨语言服务调用RPC，用它便可以进行某些功能模块的服务化，thriftpy是饿了么开源的thrift协议的纯Python实现。由于它的使用更加符合Python的编码习惯，对Pythoneer更友好
+<!-- more -->
+service PingService {
+    string ping(),
+}
+该文件的作用是描述服务接口，形式采用C语言的语法，所有基本类型（如上述文件的string）如下</p>
+
+<p>bool：布尔类型(true or value)，占一个字节
+byte：有符号字节
+i16:16位有符号整型
+i32:32位有符号整型
+i64:64位有符号整型
+double：64位浮点数
+string：未知编码或者二进制的字符串
+比如，我定义一个需要带参数的接口，就该这样</p>
+
+<p>service AargsPingService {
+   string ping(1:string ping);
+}
+除了同步调用以外，还可以采用异步调用的方式，我们也需要在.thrift文件中进行定义，比如我想定义一个异步调用，且返回内容的方法</p>
+
+<p>service Sleep {
+    oneway void sleep(1: i32 seconds)
+}
+可以看到，我们加了关键词oneway。</p>
+
+<p>我们再来看看如何编写thriftpy的服务端代码，还是以最简单的ping为例进行说明
+ping_server.py</p>
+
+<h1 id="导入thriftpy提供的接口">导入thriftpy提供的接口</h1>
+<p>import thriftpy
+from thriftpy.rpc import make_server
+pp_thrift = thriftpy.load(“pingpong.thrift”, module_name=”pp_thrift”)</p>
+
+<h1 id="实现thrift文件定义的接口">实现.thrift文件定义的接口</h1>
+<p>class Dispatcher(object):
+    def ping(self):
+        print(“ping pong!”)
+        return ‘pong’</p>
+
+<p>def main():
+    # 定义监听的端口和服务
+    server = make_server(pp_thrift.PingService, Dispatcher(),
+                         ‘127.0.0.1’, 6000)
+    print(“serving…”)
+    server.serve()
+if <strong>name</strong> == ‘<strong>main</strong>’:
+    main()
+如果我们要同时提供多个服务呢？比如PingService和AargsPingService。这个时候需要建立多个.thrift文件，可以参考multiplexer 。</p>
+
+<p>我们再来看看客户端代码怎么写。
+ping_client.py</p>
+
+<p>import thriftpy
+from thriftpy.rpc import client_context</p>
+<h1 id="读入thrift文件module_name最好与server端保持一致也可以不保持一致">读入thrift文件，module_name最好与server端保持一致，也可以不保持一致</h1>
+<p>pp_thrift = thriftpy.load(“pingpong.thrift”, module_name=”pp_thrift”)
+def main():
+    with client_context(pp_thrift.PingService, ‘127.0.0.1’, 6000) as c:
+        pong = c.ping()
+        print(pong)
+if <strong>name</strong> == ‘<strong>main</strong>’:
+    main()
+如果一个服务比较耗时，但是我们需要同步拿到返回结果，那么怎么办？这个时候需要注意客户端调用超时，thriftpy的默认超时时间是3秒，我们可以通过修改客户端的socket_time和connect_time来进行设置</p>
+
+<p>with client_context(pp_thrift.PingService, ‘127.0.0.1’, 6000, socket_timeout=10 * 1000, connect_timeout=10*1000) as c:</p>
+
+<p>此外，由于thriftpy默认的server是单进程的，为了充分利用CPU资源，eleme又开源了一个多进程的server gunicorn_thrift。需要单独通过</p>
+
+<p>pip install gunicorn_thrift</p>
+
+<p>此外还需要注意一点，在Python3中，只支持 多进程同步模型，也就是需要在gunicorn_config.py修改</p>
+
+<p>worker_class = “thriftpy_gevent”</p>
+
+<p>一、Thriftpy是什么
+Thriftpy是饿了么根据Apache Thrift协议标准，使用纯Python实现的用于构建内部SOA框架的基础组件，Thriftpy目前已开源，最新版本为0.3.9</p>
+
+<p>二、项目地址
+Thriftpy代码在github上托管，项目地址为https://github.com/eleme/thriftpy</p>
+
+<p>三、一个简单的例子
+此为官方提供的例子，本文中可能会根据需要对代码进行少量修改（方便讲解）。官方代码位置https://github.com/eleme/thriftpy/tree/v0.3.9/examples/oneway</p>
+
+<p>本示例功能介绍：Server端实现Sleep服务，对外提供sleep方法。Client端调用Server端Sleep服务的sleep方法</p>
+
+<p>sleep.thrift文件（什么是thrift文件？），文件内容如下,该文件定义了一个Sleep服务，该服务提供一个sleep方法，sleep方法接受一个32位int类型的参数且没有返回值
+service Sleep {
+    // oneway表示该方法没有任何返回值,返回值类型必须为void
+    // 客户端调用后不等待服务器响应，直接返回
+    // 服务器端收到请求，执行相关业务逻辑后，不返回任何返回值
+    oneway void sleep(1: i32 seconds)
+}
+1
+2
+3
+4
+5
+6
+sleep_server.py文件，文件内容如下</p>
+<h1 id="---coding-utf-8---">-<em>- coding: utf-8 -</em>-</h1>
+<p>import time
+import thriftpy
+from thriftpy.rpc import make_server</p>
+
+<h1 id="根据sleepthrift文件在内存中动态构建一个名为sleep_thriftpy的module">根据sleep.thrift文件，在内存中动态构建一个名为”sleep_thriftpy”的module</h1>
+<h1 id="该module中包含了名为sleep的一个object">该module中包含了名为Sleep的一个object</h1>
+<p>sleep_thrift = thriftpy.load(“sleep.thrift”, module_name=”sleep_thrift”)</p>
+
+<h1 id="官方代码中该class名称为dispatcher">官方代码中该Class名称为Dispatcher</h1>
+<h1 id="修改为sleep只是为了方便读者和sleepthrift文件中的sleep服务相对应">修改为Sleep只是为了方便读者和sleep.thrift文件中的Sleep服务相对应</h1>
+<p>class Sleep(object):
+    # 该方法对应sleep.thrift文件中的oneway void sleep(1: i32 seconds)
+    def sleep(self, seconds):
+        print(“I’m going to sleep %d seconds” % seconds)
+        time.sleep(seconds)
+        print(“Sleep over!”)</p>
+
+<p>def main():
+    # 创建一个服务，在127.0.0.1的6000端口进行监听
+    # 将class Sleep和module sleep_thrift中名为Sleep的Object绑定
+    server = make_server(sleep_thrift.Sleep, Sleep(),
+                         ‘127.0.0.1’, 6000)
+    print(“serving…”)
+    # 启动服务
+    server.serve()</p>
+
+<p>if <strong>name</strong> == ‘<strong>main</strong>’:
+    main()
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29
+sleep_client.py文件，文件内容如下</p>
+<h1 id="---coding-utf-8----1">-<em>- coding: utf-8 -</em>-</h1>
+<p>import thriftpy
+from thriftpy.rpc import make_client</p>
+
+<h1 id="根据sleepthrift文件动态生成一个名为sleep_thriftpy的module">根据sleep.thrift文件，动态生成一个名为”sleep_thriftpy”的module</h1>
+<h1 id="该module中包含了名为sleep的一个object-1">该module中包含了名为Sleep的一个object</h1>
+<p>sleep_thrift = thriftpy.load(“sleep.thrift”, module_name=”sleep_thrift”)</p>
+
+<p>def main():
+    # 创建一个客户端，该客户端连接127.0.0.1的6000端口
+    # 并将该客户端和服务器端的Sleep服务进行绑定
+    client = make_client(sleep_thrift.Sleep, ‘127.0.0.1’, 6000)
+    # 绑定完成后即可直接调用服务器端相应的方法
+    client.sleep(1)</p>
+
+<p>if <strong>name</strong> == ‘<strong>main</strong>’:
+    main()
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+运行结果</p>
+
+<p>执行sleep_server.py，输出如下信息</p>
+
+<p>serving…</p>
+
+<p>执行sleep_client.py，server端输出如下</p>
+
+<p>I’m going to sleep 1 seconds
+Sleep over!</p>
+
+<p>四、小结
+thrift文件通过一种中立的方式描述了服务器和客户端之间通信的接口（Thriftpy创建服务器和客户端都需要对该文件进行解析），使得使用不同语言的客户端和服务器之间可以进行透明的通信</p>
+
+<p>开发人员使用Thriftpy编写服务器/客户端可以不用关心接口调用实现的细节，更加专注于业务功能的开发</p>
+
+<p>使用Thriftpy创建一个Thrift服务器只需要以下三步即可完成</p>
+
+<p>调用thriftpy.load方法对thrift文件进行解析,在内存中构建对应的module
+调用make_server将上一步构建的module和完成具体业务功能的class绑定,同时完成传输层和协议层的设置,生成thrift服务器端
+调用server.serve方法启动服务器
+使用Thriftpy创建一个thrift客户端接口只需要以下三步即可完成</p>
+
+<p>调用thriftpy.load方法对thrift文件进行解析,在内存中构建对应的module
+根据上一步的解析结果，调用make_client绑定上一步构建的module,同时完成传输层和协议层的设置,生成Thirft客户端
+根据上一步生成的客户端调用响应的接口</p>
+
+<p>Python 做服务化，用 thriftpy 和 celery 有啥区别？</p>
+:ET

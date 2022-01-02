@@ -1,0 +1,382 @@
+I"�6<p>写这个系列的目的不是为了列出 Golang 编程语言的调试器的所有特性。如果你想看这些内容，可以看下 Delve。在这篇文章里我们试着去探索下调试器通常是怎样工作的，怎么在 Linux 上完成一个基本的调试，Linux 上比较关心 Golang 的功能，比如 goroutine 。</p>
+
+<p>创建调试器没那么简单。就这一个话题我们单独写一篇文章也讲不完。相反，本篇博文是个开始，这个系列的最终目标是找到解决方案来处理最常见的场景。期间我们会讨论类似 ELF, DWARF 的话题，还会接触到一些架构相关的问题。
+<!-- more -->
+环境
+整个系列文章中，我们都会使用 Docker 来获取基于 Debian Jessie 的可复制的 playground。我使用的是 x86-64，这可以在一定程度上让我们在做一些底层讨论的时候起点作用。项目结构如下：</p>
+
+<blockquote>
+  <p>tree
+.
+├── Dockerfile
+└── src
+    └── github.com
+        └── mlowicki
+            ├── debugger
+            │   └── debugger.go
+            └── hello
+                └── hello.go
+我们马上要用到的调试器的主要文件就是 debugger.go，hello.go 文件包含我们整个流程中调试的 sample 程序源代码。现在你写最简单的内容就可以：</p>
+</blockquote>
+
+<p>package main
+func main() {
+}
+我们先写一个非常简单的 Dockerfile：</p>
+
+<p>FROM golang:1.8.1
+RUN apt-get update &amp;&amp; apt-get install -y tree
+为了编译 Docker 镜像，到（Dockerfile 所在的）最外层目录，运行：</p>
+
+<blockquote>
+  <p>docker build -t godebugger .
+给容器加速，执行：</p>
+</blockquote>
+
+<blockquote>
+  <p>docker run –rm -it -v “$PWD”/src:/go/src –security-opt seccomp=unconfined godebugger
+这里 有安全运算模式（seccomp）的相关描述。现在剩下的是在容器里编译这这两个程序。第一个可以这样做：</p>
+</blockquote>
+
+<blockquote>
+  <p>go install –gcflags=”-N -l” github.com/mlowicki/hello
+标识 –gcflag 用于禁止 内联函数 （-l），编译优化（-N）可以让调试更容易。调试器如下做编译：</p>
+</blockquote>
+
+<blockquote>
+  <p>go install github.com/mlowicki/debugger
+在容器的环境变量 PATH 中包含 /go/bin ，这样不用使用完整路径就可以运行任何刚编译好的程序，不论是 hello 还是 debugger。</p>
+</blockquote>
+
+<p>第一步
+我们的第一个任务很简单。在执行任何指令之前停止程序，然后再运行起来，直到程序停止（不管是自动停止还是出现错误停止）。大多数调试器你都可以这样开始使用。设定一些跟踪点（断点），然后执行类似 continue 的指令真正的跑起来，直到停在你要停的地方。我们看看 Delve 是如何工作的：</p>
+
+<blockquote>
+  <p>cat hello.go
+package main
+import “fmt”
+func f() int {
+    var n int
+    n = 1
+    n = 2
+    return n
+}
+func main() {
+    fmt.Println(f())
+}
+dlv debug
+break Type ‘help’ for list of commands.
+(dlv) break main.f
+Breakpoint 1 set at 0x1087050 for main.f() ./hello.go:5
+(dlv) continue
+main.f() ./hello.go:5 (hits goroutine(1):1 total:1) (PC: 0x1087050)
+     1: package main
+     2:
+     3: import “fmt”
+     4:
+=&gt;   5: func f() int {
+     6:     var n int
+     7:     n = 1
+     8:     n = 2
+     9:     return n
+    10: }
+(dlv) next
+main.f() ./hello.go:6 (PC: 0x1087067)
+     1: package main
+     2:
+     3: import “fmt”
+     4:
+     5: func f() int {
+=&gt;   6:     var n int
+     7:     n = 1
+     8:     n = 2
+     9:     return n
+    10: }
+    11:
+(dlv) print n
+842350461344
+(dlv) next
+main.f() ./hello.go:7 (PC: 0x108706f)
+     2:
+     3: import “fmt”
+     4:
+     5: func f() int {
+     6:     var n int
+=&gt;   7:     n = 1
+     8:     n = 2
+     9:     return n
+    10: }
+    11:
+    12: func main() {
+(dlv) print n
+0
+(dlv) next
+main.f() ./hello.go:8 (PC: 0x1087077)
+     3: import “fmt”
+     4:
+     5: func f() int {
+     6:     var n int
+     7:     n = 1
+=&gt;   8:     n = 2
+     9:     return n
+    10: }
+    11:
+    12: func main() {
+    13:     fmt.Println(f())
+(dlv) print n
+1
+让我们看看我们自己怎么实现。</p>
+</blockquote>
+
+<p>第一步是需要给进程（我们的调试器）找一个机制，去控制其他进程（我们要调试的进程）。幸好在 Linux 上我们有这个– ptrace。这还不算。Golang 的 syscall 包提供了一个类似 PtraceCont 的接口，可以重启被跟踪的进程。因此这里包含了第二部分内容，但是为了有机会在程序开始执行之前设置断点我们还得做点其他的。创建新进程的时候我们可以通过设置属性– SysProcAttr 指定进程行为。其中一个是 Ptrace 可以跟踪进程，然后进程会停止并在开启之前给父进程发送 SIGSTOP signal。我们把刚才学到的内容整理成一个工作流程…</p>
+
+<blockquote>
+  <p>cat src/github.com/mlowicki/hello/hello.go
+package main
+import “fmt”
+func main() {
+    fmt.Println(“hello world”)
+}
+cat src/github.com/mlowicki/debugger/debugger.go
+package main
+import (
+    “flag”
+    “log”
+    “os”
+    “os/exec”
+    “syscall”
+)
+func main() {
+    flag.Parse()
+    input := flag.Arg(0)
+    cmd := exec.Command(input)
+    cmd.Args = []string{input}
+    cmd.Stdout = os.Stdout
+    cmd.Stderr = os.Stderr
+    cmd.SysProcAttr = &amp;syscall.SysProcAttr{Ptrace: true}
+    err := cmd.Start()
+    if err != nil {
+        log.Fatal(err)
+    }
+    err = cmd.Wait()
+    log.Printf(“State: %v\n”, err)
+    log.Println(“Restarting…”)
+    err = syscall.PtraceCont(cmd.Process.Pid, 0)
+    if err != nil {
+        log.Panic(err)
+    }
+    var ws syscall.WaitStatus
+    _, err = syscall.Wait4(cmd.Process.Pid, &amp;ws, syscall.WALL, nil)
+    if err != nil {
+        log.Fatal(err)
+    }
+    log.Printf(“Exited: %v\n”, ws.Exited())
+    log.Printf(“Exit status: %v\n”, ws.ExitStatus())
+}
+go install -gcflags=”-N -l” github.com/mlowicki/hello
+go install github.com/mlowicki/debugger
+debugger /go/bin/hello
+2017/05/05 20:09:38 State: stop signal: trace/breakpoint trap
+2017/05/05 20:09:38 Restarting…
+hello world
+2017/05/05 20:09:38 Exited: true
+2017/05/05 20:09:38 Exit status: 0
+第一版的调试器实现方式很简单。启动了一个被跟踪的进程，然后进程在执行第一条指令前停止，并向父进程发送了一个 signal。父进程等待这个 signal，打出日志 log.Printf(“State: %v\n”, err)。之后程序重启，父进程等待其终止。这种方式可以让我们有机会提前设置断点，启动程序，等一会到达指定跟踪点，看看类似堆栈或注册表里的当前值，检查下进程状态。</p>
+</blockquote>
+
+<p>我们首先介绍了开发环境并且实现了一个简单的调试器（tracer），它可以使子进程（tracee）在最开始处停止运行，然后继续执行，并显示它的标准输出。现在是扩展这个程序的时候了。</p>
+
+<p>通常，调试器允许单步执行被调试的代码，这个可以通过 ptrace 的 PTRACE_SINGLESTEP 命令实现，它告诉 tracee　执行完一条指令后停止运行。</p>
+
+<p>package main</p>
+
+<p>import (
+    “flag”
+    “log”
+    “os”
+    “os/exec”
+    “syscall”
+)</p>
+
+<p>func main() {
+    flag.Parse()
+    input := flag.Arg(0)
+    cmd := exec.Command(input)
+    cmd.Args = []string{input}
+    cmd.Stdout = os.Stdout
+    cmd.Stderr = os.Stderr
+    cmd.SysProcAttr = &amp;syscall.SysProcAttr{Ptrace: true}
+    err := cmd.Start()
+    if err != nil {
+        log.Fatal(err)
+    }
+    err = cmd.Wait()
+    log.Printf(“State: %v\n”, err)
+    wpid := cmd.Process.Pid
+    pgid, err := syscall.Getpgid(cmd.Process.Pid)
+    if err != nil {
+        log.Panic(err)
+    }
+    err = syscall.PtraceSetOptions(cmd.Process.Pid, syscall.PTRACE_O_TRACECLONE)
+    if err != nil {
+        log.Fatal(err)
+    }
+    err = syscall.PtraceSingleStep(wpid)
+    if err != nil {
+        log.Fatal(err)
+    }
+    steps := 1</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>for {
+    var ws syscall.WaitStatus
+    wpid, err = syscall.Wait4(-1*pgid, &amp;ws, syscall.WALL, nil)
+    if wpid == -1 {
+        log.Fatal(err)
+    }
+    if wpid == cmd.Process.Pid &amp;&amp; ws.Exited() {
+        break
+    }
+    if !ws.Exited() {
+        err := syscall.PtraceSingleStep(wpid)
+        if err != nil {
+            log.Fatal(err)
+        }
+        steps += 1
+    }
+}
+log.Printf("Steps: %d\n", steps) } 构建并运行这个段代码，输出应该像下面这样（每次调用显示的步数可能不一样）
+</code></pre></div></div>
+
+<blockquote>
+  <p>go install -gcflags=”-N -l” github.com/mlowicki/hello
+go install github.com/mlowicki/debugger
+debugger /go/bin/hello
+2017/06/09 19:54:42 State: stop signal: trace/breakpoint trap
+hello world
+2017/06/09 19:54:49 Steps: 297583
+程序的前半部分和上一篇文章里的一样，新加的地方是对 syscall.PtraceSingleStep 的调用，它使被调试的程序（在这里是 hello )执行完一条指令后停止。</p>
+</blockquote>
+
+<p>PTRACE_O_TRACECLONE 选项也被设定了</p>
+
+<p>PTRACE_O_TRACECLONE (since Linux 2.5.46) Stop the tracee at the next clone(2) and automatically start tracing the newly cloned process…</p>
+
+<p>(http://man7.org/linux/man-pages/man2/ptrace.2.html)</p>
+
+<p>由于我们的调试器知道新线程什么时间开始并且可以跳过它，所以最后显示的步数是通过所有进程执行的指令总数</p>
+
+<p>被执行的指令数量可能相当多，但是里面包含了 Go 运行时中其它一些初始化代码（有 C 语言开始经验的人应该了解 libc 的初始化过程）。我们可以写一个非常简单的程序来验证我们的调试器工作是正常的。让我们创建一个汇编文件 src/github.com/mlowicki/hello/hello.asm:</p>
+
+<p>section .data
+    msg db “hello, world!”, 0xA
+    len equ $ — msg
+section .text
+    global _start
+_start:
+    mov rax, 1 ; write syscall (https://linux.die.net/man/2/write)
+    mov rdi, 1 ; stdout
+    mov rsi, msg
+    mov rdx, len
+    ; Passing parameters to <code class="language-plaintext highlighter-rouge">syscall</code> instruction described in
+    ; https://en.wikibooks.org/wiki/X86_Assembly/Interfacing_with_Linux#syscall
+    syscall
+    mov rax, 60 ; exit syscall (https://linux.die.net/man/2/exit)
+    mov rdi, 0 ; exit code
+    syscall
+在容器中构建我们的 “hello world” 程序，看一下执行了多少条指令</p>
+
+<blockquote>
+  <p>pwd
+/go
+apt-get install nasm
+nasm -f elf64 -o hello.o src/github.com/mlowicki/hello/hello.asm &amp;&amp; ld -o hello hello.o
+./hello
+hello, world!
+debugger ./hello
+2017/06/17 17:58:43 State: stop signal: trace/breakpoint trap
+hello, world!
+2017/06/17 17:58:43 Steps: 8
+输出结果很好，正好等于 hello.asm 中指令的数量</p>
+</blockquote>
+
+<p>到目前为止，我们已经知道怎样让程序在一开始停止，如何一步一步的执行代码并查看 进程/线程 的状态，现在是在需要的地方设置断点，监视像变量值这样的进程状态的时候了。</p>
+
+<p>让我们从一个简单的例子开始，hello.go 中有一个 main 函数</p>
+
+<p>package main</p>
+
+<p>import “fmt”</p>
+
+<p>func main() {
+    fmt.Println(“hello world”)
+}
+怎样在这个函数的一开始设置断点呢？我们的程序经过编译链接后，最终生成的是一系列机器指令。怎样在只包含了一些二进制代码（只有 CPU 能理解的格式）的源文件里表示我们要设置一个断点呢？</p>
+
+<p>lineTable
+Golang 内置有一些功能，可以访问编译生成的二进制文件中的调试信息。 维护 指令计数器 ( PC ) 和程序代码行的映射关系的结构叫做行表，让我们通过一个例子来看一下</p>
+
+<p>package main</p>
+
+<p>import (
+    “debug/elf”
+    “debug/gosym”
+    “flag”
+    “log”
+)</p>
+
+<p>func main() {
+    flag.Parse()
+    path := flag.Arg(0)
+    exe, err := elf.Open(path)
+    if err != nil {
+        log.Fatal(err)
+    }
+    var pclndat []byte
+    if sec := exe.Section(“.gopclntab”); sec != nil {
+        pclndat, err = sec.Data()
+        if err != nil {
+            log.Fatalf(“Cannot read .gopclntab section: %v”, err)
+        }
+    }
+    sec := exe.Section(“.gosymtab”)
+    symTabRaw, err := sec.Data()
+    pcln := gosym.NewLineTable(pclndat, exe.Section(“.text”).Addr)
+    symTab, err := gosym.NewTable(symTabRaw, pcln)
+    if err != nil {
+        log.Fatal(“Cannot create symbol table: %v”, err)
+    }
+    sym := symTab.LookupFunc(“main.main”)
+    filename, lineno, _ := symTab.PCToLine(sym.Entry)
+    log.Printf(“filename: %v\n”, filename)
+    log.Printf(“lineno: %v\n”, lineno)
+}
+如果传递给上面程序的文件中包含以下代码</p>
+
+<p>package main</p>
+
+<p>import “fmt”</p>
+
+<p>func main() {
+    fmt.Println(“hello world”)
+}
+那么输出应该是这样的</p>
+
+<blockquote>
+  <p>go install github.com/mlowicki/linetable
+go install — gcflags=”-N -l” github.com/mlowicki/hello
+linetable /go/bin/hello
+2017/06/30 18:47:38 filename: /go/src/github.com/mlowicki/hello/hello.go
+2017/06/30 18:47:38 lineno: 5
+ELF 是 Executable and Linkable Format 的缩写，是一种可执行文件的格式</p>
+</blockquote>
+
+<blockquote>
+  <p>apt-get install file
+file /go/bin/hello
+/go/bin/hello: ELF 64-bit LSB executable, x86-64, version 1 (SYSV), statically linked, not stripped
+ELF 中包含许多段，我们用到了其中三个：.text、.gopclntab 和 .gosymtab。第一个包含了机器指令，第二个实现了指令计数器到源码行的映射，最后一个是一个符号表</p>
+</blockquote>
+
+<p>https://medium.com/golangspec/making-debugger-in-golang-part-i
+https://medium.com/golangspec/making-debugger-in-golang-part-ii</p>
+:ET

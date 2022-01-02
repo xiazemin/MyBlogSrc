@@ -1,0 +1,643 @@
+I"�f<p>https://kilabit.info/journal/2020/re-learning_slice/</p>
+
+<!-- more -->
+<p>Re-learning slice
+Shulhan
+15 March 2020
+Overview
+Back to the basic: What is an array?
+Array size is part of its type
+Arrays elements are zeroed
+Array are values
+What is slice?
+The backing storage
+Slicing slice
+Zeroing slice
+Slice gotchas
+Too much reallocation
+Unreleased memory allocation
+Taking advantages of gotchas
+References
+This article show how the slice works in Go language in practice, by using code examples which you can try by yourself.</p>
+
+<p>The original source of this article is the following slide that I submit to GopherCon Singapore 2019,</p>
+
+<p>Overview
+Most of the time we forgot or did not know how actually the slices works. Most of the time we just assume that slices is dynamic array. By relearning how slices works, we can possible avoid slice’s “gotcha” or take advantage of it. In this article we will review back how the slices works and maybe by knowing how it work we can write a better program.</p>
+
+<p>The content of this article is not new, if you already read and understand Effective Go, The Go Programming Language Specification, and The Go Blog - Go Slices: usage and internals, most of the topics in here already discussed there. This article try to emphasis on code examples, learning by doing, step by step.</p>
+
+<p>Back to the basic: What is an array?
+An array is sequence of value of single type with fixed size.</p>
+
+<p>There are two elements needed to create an array: size and type. The size is defined inside the square bracket and the type is defined after the closing bracket.</p>
+
+<p>ArrayType   = “[” ArrayLength “]” ElementType .
+ArrayLength = Expression .
+ElementType = Type .
+Array size is part of its type
+One of the first properties of array is the size of an array is part of its type.</p>
+
+<p>x := [5]int{1, 2, 3}
+y := [5]int{3, 2, 1}
+z := [5]int{1, 2, 3}</p>
+
+<p>fmt.Printf(“x == y: %v\n”, x == y) // false
+fmt.Printf(“x == z: %v\n”, x == z) // true
+In the above snippet, x, y, and z are array with size 5 and int as its type.</p>
+
+<p>Array x have the same size with y but does not contains the same order of value, so if we compare them it will return false.</p>
+
+<p>Array x have the same size with z and contains the same value in the same order, so if we compare them it will return true.</p>
+
+<p>Let say that we have another array a with different size from x,</p>
+
+<p>a := [4]int{1, 2, 3}
+If we try to compare them</p>
+
+<p>fmt.Printf(“x == a: %v\n”, x == a)
+the compiler will thrown an error,</p>
+
+<p>[…] invalid operation: x == a (mismatched types [5]int and [4]int)
+Out of curiosity, what would happen if we access address of array out of its range?</p>
+
+<p>fmt.Printf(“out of bounds&gt; &amp;in[5]:%p\n”, &amp;in[5])
+The compiler will thrown an error at compile time,</p>
+
+<p>./main_test.go:14:66: invalid array index 5 (out of bounds for 5-element array)
+Arrays elements are zeroed
+Once the array is created, all of its elements are set to its zero value.</p>
+
+<p>in := [5]int{10, 20, 30}
+fmt.Printf(“contents &gt; in:%v\n”, in)
+// Output:
+// contents &gt; in:[10 20 30 0 0]
+In the above snippet, in is an array of int with size set to 5. The values for the first three elements at index 0, 1, 2 are set to 10, 20, 30 and the rest of values will be set to 0 by the compiler.</p>
+
+<p>Array are values
+Assigning or passing an array to another array will copy all of its values.</p>
+
+<p>To understand this let see the address of instance of array and its first value.</p>
+
+<p>in := [5]int{1, 2, 3}
+fmt.Printf(“&amp;in:%p &amp;in[0]:%p &amp;in[1]:%p\n”, &amp;in, &amp;in[0], &amp;in[1])</p>
+
+<p>// Output:
+// &amp;in:0xc0000122a0 &amp;in[0]:0xc0000122a0 &amp;in[1]:0xc0000122a8
+(Note: The %p format print the address of value in memory, and it will be different on each system.)</p>
+
+<p>The address of array in can be accessed using &amp;in, and we got 0xc0000122a0. The address of first value can be accessed using &amp;in[0], and we got 0xc0000122a0. This means the address of instance of array and address of its first element is equal.</p>
+
+<p>Now, what would happen if we pass an array to function?</p>
+
+<p>func passArray(y [5]int) {
+	fmt.Printf(“&amp;y:%p\n”, &amp;y) // &amp;y:0x45e020
+	y[0] = 90
+	fmt.Printf(“y: %v\n”, y)  // y: [90 20 30 0 0]
+}</p>
+
+<p>func main() {
+	x := [5]int{10, 20, 30}</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>fmt.Printf("&amp;x:%p\n", &amp;x) // &amp;x:0x45e000
+
+passArray(x)
+
+fmt.Printf("x: %v\n", x) // x: [10 20 30 0 0] } Playground.
+</code></pre></div></div>
+
+<p>Array x is created with address is 0xc00007a0f0. When we pass x to passArray() function, x values is copied to y. Array y is in different address 0xc00007a120 but have the same size and values as x. We can test this by changing the first value of y to 9 and print the x after call to passArray, the values in x does not affected by assignment in passArray() function.</p>
+
+<p>So, x and y are two different arrays with the same size and values (on initial pass).</p>
+
+<p>If we want passArray() function to be able to change the value that it received in y and the changes affected in x, we can pass x by using address and receive them by using pointer in y.</p>
+
+<p>func passArray(y *[5]int) {
+	fmt.Printf(“y:%p\n”, y) // &amp;y:0x45e000
+	y[0] = 90
+	fmt.Printf(“y: %v\n”, y)  // y: [90 20 30 0 0]
+}</p>
+
+<p>func main() {
+	x := [5]int{1, 2, 3}</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>fmt.Printf("&amp;x:%p\n", &amp;x) // &amp;x:0x45e000
+
+passArray(&amp;x)
+
+fmt.Printf("x: %v\n", x) // x: [90 20 30 0 0] } Playground.
+</code></pre></div></div>
+
+<p>Since y is a pointer to array of [5]int, we access the address without &amp;, and we can see that x and y now have the same address. Changing any value in y will affect x.</p>
+
+<p>What is slice?
+In this section I will not discuss how to create slice, zero value of slice, growing slice, since most of article in Effective Go, and others tutorial already explain it in detail. Instead, we will do a reverse learning, or learning by doing.</p>
+
+<p>From the go blog The Go Blog - Go Slices: usage and internals,</p>
+
+<p>A slice is a descriptor of an array segment. It consists of a pointer to the array, the length of the segment, and its capacity (the maximum length of the segment).
+An attempt to rewrite slice with struct will result in linked-list.</p>
+
+<p>type Slice struct {
+    Len int
+    Cap int
+    elements *Element
+}</p>
+
+<p>Type Element struct {
+    next *Element
+}
+But instead of linked-list, Go internal use an array in *Element, or what we will call as backing storage of slice.</p>
+
+<p>The backing storage
+To test this hypothesis let break then down one by one, first by printing their address.</p>
+
+<p>func passSlice(xx []int) {
+	fmt.Printf(“xx&gt; &amp;xx:%p &amp;xx[0]:%p\n”, &amp;xx, &amp;xx[0])
+	fmt.Printf(“xx&gt; len:%d cap:%d\n”, len(xx), cap(xx))
+}</p>
+
+<p>func main() {
+	x := []int{1, 2, 3}</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>fmt.Printf("x&gt; &amp;x:%p &amp;x[0]:%p\n", &amp;x, &amp;x[0])
+fmt.Printf("x&gt; len:%d cap:%d\n", len(x), cap(x))
+
+passSlice(x) } Playground.
+</code></pre></div></div>
+
+<p>It will print the following output,</p>
+
+<p>x&gt; &amp;x:0x40a0e0 &amp;x[0]:0x40e020
+x&gt; len:3 cap:3
+xx&gt; &amp;xx:0x40a0f0 &amp;xx[0]:0x40e020
+xx&gt; len:3 cap:3
+Did you see the different? Go create new slice when passing it to function, but the backing storage is point to the same address. The address of x is different with xx, x and xx is different instance of slice with the same type. The address of first value of x and xx are same 0x40e020, that means x and xx share the same backing storage.</p>
+
+<p>Of course both have the same length and capacity.</p>
+
+<p>What would happen if we change the content of slice passed in function?</p>
+
+<p>func sliceModifyByIndex(xx []int) {
+	xx[0] = 0
+}</p>
+
+<p>func main() {
+	x := []int{1, 2, 3}</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>sliceModifyByIndex(x)
+
+fmt.Printf("%v\n", x) } Playground.
+</code></pre></div></div>
+
+<p>Output,</p>
+
+<p>[0 2 3]
+This confirm our hypothesis that slice share the same backing storage.</p>
+
+<p>But wait, things are become more interesting. What would happen if we append a value to slice in function?</p>
+
+<p>func sliceAppend(xx []int) {
+	xx = append(xx, 4)
+}</p>
+
+<p>func main() {
+	x := []int{1, 2, 3}</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>sliceAppend(x)
+
+fmt.Printf("%v\n", x) } Playground.
+</code></pre></div></div>
+
+<p>If you thought the output would be [1 2 3 4] you are wrong. The program will print [1 2 3].</p>
+
+<p>What happened? Let see their addresses.</p>
+
+<p>func sliceAppendAddress(xx []int) {
+	fmt.Printf(“xx before &gt; &amp;[0]:%p len:%d cap:%d\n”, &amp;xx[0], len(xx), cap(xx))
+	xx = append(xx, 4)
+	fmt.Printf(“xx after  &gt; &amp;[0]:%p len:%d cap:%d\n”, &amp;xx[0], len(xx), cap(xx))
+}</p>
+
+<p>func main() {
+	x := []int{1, 2, 3}</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>fmt.Printf("x before  &gt; &amp;[0]:%p len:%d cap:%d\n", &amp;x[0], len(x), cap(x))
+sliceAppendAddress(x)
+fmt.Printf("x after   &gt; &amp;[0]:%p len:%d cap:%d\n", &amp;x[0], len(x), cap(x)) }
+</code></pre></div></div>
+
+<p>// Output:
+// x before  &gt; &amp;[0]:0x40e020 len:3 cap:3
+// xx before &gt; &amp;[0]:0x40e020 len:3 cap:3
+// xx after  &gt; &amp;[0]:0x456020 len:4 cap:8
+// x after   &gt; &amp;[0]:0x40e020 len:3 cap:3
+Playground.</p>
+
+<p>Before we append the slice xx the length and capability of xx and x are same: 3. After we append new value to xx the backing storage of xx is changed, but the change does not affect the x. This means the backing storage of xx after append is different with backing storage of x. We can see this from the address of first value of xx that change from 0x40e020 to 0x456020, but the address of first value of x still the same as before and after the function is called.</p>
+
+<p>So, the address change because in previous exercise the slice xx does not have enough capacity to add new item to backing storage.</p>
+
+<p>What if we provide enough capacity and pass to function and let function append the slice again, there will be no allocation and backing storage still reference the same right?</p>
+
+<p>func sliceAppend(xx []int) {
+	fmt.Printf(“xx before &gt; len:%d cap:%d\n”, len(xx), cap(xx))
+	xx = append(xx, 4)
+	fmt.Printf(“xx after  &gt; len:%d cap:%d\n”, len(xx), cap(xx))
+}</p>
+
+<p>func main() {
+	x := make([]int, 0, 5)
+	x = append(x, 1, 2, 3) // [1 2 3]</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>fmt.Printf("x before  &gt; len:%d cap:%d\n", len(x), cap(x))
+sliceAppend(x)
+fmt.Printf("x after   &gt; %v\n", x) }
+</code></pre></div></div>
+
+<p>// Output:
+// x before  &gt; len:3 cap:5
+// xx before &gt; len:3 cap:5
+// xx after  &gt; len:4 cap:5
+// x after   &gt; [1 2 3]
+Playground.</p>
+
+<p>Why? Remember that the variable xx in function is different with x at the outside. The length of xx is growing with append, but the length of x does not change.</p>
+
+<p>Since the backing storage of xx is not reallocated (the capacity is large enough for new item), does the address of backing storage in xx change? Or equal with x?</p>
+
+<p>func sliceAppend(xx []int) {
+	fmt.Printf(“&amp;xx[0] before:%p\n”, &amp;xx[0])
+	xx = append(xx, 4)
+	fmt.Printf(“&amp;xx[0] after :%p\n”, &amp;xx[0])
+}</p>
+
+<p>func main() {
+	x := make([]int, 0, 5)
+	x = append(x, 1, 2, 3)</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>fmt.Printf("&amp;x[0] before :%p\n", &amp;x[0])
+sliceAppendAddress(x)
+fmt.Printf("&amp;x[0] after  :%p\n", &amp;x[0]) }
+</code></pre></div></div>
+
+<p>// Output:
+// &amp;x[0] before :0x456000
+// &amp;xx[0] before:0x456000
+// &amp;xx[0] after :0x456000
+// &amp;x[0] after  :0x456000
+Playground.</p>
+
+<p>So both the address of x and xx does not change. But how come when we print x its output is [1 2 3] not [1 2 3 4]? Because printing x limited by their length.</p>
+
+<p>To see the new value 4 in x, we can extend its length using x = x[:4],</p>
+
+<p>func sliceAppend(xx []int) {
+	fmt.Printf(“xx before &gt; len:%d cap:%d\n”, len(xx), cap(xx))
+	xx = append(xx, 4)
+	fmt.Printf(“xx after  &gt; len:%d cap:%d\n”, len(xx), cap(xx))
+}</p>
+
+<p>func main() {
+	x := make([]int, 0, 5)
+	x = append(x, 1, 2, 3) // [1 2 3]</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>fmt.Printf("x before  &gt; len:%d cap:%d\n", len(x), cap(x))
+sliceAppend(x)
+x = x[:4]
+fmt.Printf("x after   &gt; %v\n", x)
+fmt.Printf("x after   &gt; len:%d cap:%d\n", len(x), cap(x)) }
+</code></pre></div></div>
+
+<p>// Output:
+// x before  &gt; len:3 cap:5
+// xx before &gt; len:3 cap:5
+// xx after  &gt; len:4 cap:5
+// x after   &gt; [1 2 3 4]
+// x after   &gt; len:4 cap:5
+Playground.</p>
+
+<p>What we have learned?</p>
+
+<p>Slice passed by value</p>
+
+<p>Unless the address in backing storage is not changed, the slice receiver can change the content of its referenced</p>
+
+<p>If the address in backing storage changed, both receiver and caller/assigner will have different backing storage</p>
+
+<p>Slicing slice
+Now, that we know how the slice works when passing to function, we got to the second point of relearning slices: slicing slice.</p>
+
+<p>What is the output of this snippet?</p>
+
+<p>s := []int{1, 2, 3, 4, 5, 6, 7}
+fmt.Printf(“s &gt; len:%d cap:%d\n”, len(s), cap(s))</p>
+
+<p>ss := s[2:4]
+fmt.Printf(“ss&gt; len:%d cap:%d\n”, len(ss), cap(ss))</p>
+
+<p>// s &gt; len:6 cap:7
+// ss&gt; len:? Cap:?
+// A. 2 2
+// B. 2 5
+// C. 2 7
+In the simplest form, the input for slicing a slice is</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>T [ low : high ) which return the new slice, or the sub-slice.
+</code></pre></div></div>
+
+<p>The sub-slice will contains parent elements start from low index and end with high index, exclusive. The length of sub-slice is set to high - low. The capability of sub-slice is set to cap(T) - low. If low is not defined, it will be default to 0. If high is not defined, it will be default to len(T).</p>
+
+<p>If your answer to previous exercise is B. 2 5, you are correct.</p>
+
+<p>In the full form, the input for slicing a slice have third parameter, max,</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>[ low : high : max ) This syntax only applicable for an array, pointer to array, or slice; but not a string.
+</code></pre></div></div>
+
+<p>The result, sub-slice, is the same with simple form, but the sub-slice will have capacity set to max - low.</p>
+
+<p>Address of sub-slice
+The next question is what is the address of sub-slice?</p>
+
+<p>s := []int{10, 20, 30, 40, 50, 60, 70}
+fmt.Printf(“ &amp;s:%p  &amp;s[2]:%p\n”, &amp;s, &amp;s[2])</p>
+
+<p>ss := s[2:4]
+fmt.Printf(“&amp;ss:%p &amp;ss[0]:%p\n”, &amp;ss, &amp;ss[0])</p>
+
+<p>// &amp;s :0xc00000a0a0  &amp;s[2]:0xc000018250
+// &amp;ss:0xc00000a0c0 &amp;ss[0]:0xc000018250
+The sub-slice ss created by slicing s start from index 2 until 4 (values [30 40]). The address of index 2 in slice s is 0xc000018250 which is equal to the address of first value (index 0) in ss, 0xc000018250. This means that slice and its sub-slice share the same backing storage.</p>
+
+<p>To prove this lets change the content of sub slice,</p>
+
+<p>s := []int{10, 20, 30, 40, 50, 60, 70}
+ss := s[2:4]
+ss[0] = 80</p>
+
+<p>fmt.Printf(“s :%v\n”, s)</p>
+
+<p>// s :[10 20 80 40 50 60 70]
+When we change the value of index 0 in sub-slice ss to 80, the value in the slice s at index 2 (which point to the same address) is also change.</p>
+
+<p>Appending to sub-slice
+In previous section we said that “slice and sub-slice share the same backing storage”, is it always true?</p>
+
+<p>In the following example, we will append the new value to sub-slice and print the result of both original slice and its sub-slice.</p>
+
+<p>s := []int{10, 20, 30, 40, 50, 60, 70}
+ss := s[2:4]</p>
+
+<p>ss = append(ss, 80)</p>
+
+<p>fmt.Printf(“ss after :%v\n”, ss)
+fmt.Printf(“s after  :%v\n”, s)</p>
+
+<p>// ss after :[30 40 80]
+// s after  :[10 20 30 40 80 60 70]
+Surprise?</p>
+
+<p>This is what happened,</p>
+
+<p>func main() {
+	s := []int{10, 20, 30, 40, 50, 60, 70}
+	ss := s[2:4]</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>fmt.Printf("s  before  &amp;s[2]:%p len:%d cap:%d values:%v\n", &amp;s[2], len(s), cap(s), s)
+fmt.Printf("ss before &amp;ss[0]:%p len:%d cap:%d values:%v\n", &amp;ss[0], len(ss), cap(ss), ss)
+
+ss = append(ss, 80)
+
+fmt.Printf("s  after  &amp;s[2]:%p len:%d cap:%d values:%v\n", &amp;s[2], len(s), cap(s), s)
+fmt.Printf("ss after &amp;ss[0]:%p len:%d cap:%d values:%v\n", &amp;ss[0], len(ss), cap(ss), ss) }
+</code></pre></div></div>
+
+<p>// Output:
+// s  before  &amp;s[2]:0x45e008 len:7 cap:7 values:[10 20 30 40 50 60 70]
+// ss before &amp;ss[0]:0x45e008 len:2 cap:5 values:[30 40]
+// s  after  &amp;s[2]:0x45e008 len:7 cap:7 values:[10 20 30 40 80 60 70]
+// ss after &amp;ss[0]:0x45e008 len:3 cap:5 values:[30 40 80]
+Playground.</p>
+
+<p>The length of sub-slice ss is 2 and its capability is 5, so append only write the appended value 80 into index 2 (the length) and increase the len to len+1 because the sub-slice ss have enough backing storage for new item.</p>
+
+<p>What would happened if we grow the sub-slice beyond its capacity?</p>
+
+<p>func main() {
+	s := []int{10, 20, 30, 40, 50, 60, 70}
+	ss := s[2:4]</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>fmt.Printf("s  before  &amp;s[2]:%p len:%d cap:%d values:%v\n", &amp;s[2], len(s), cap(s), s)
+fmt.Printf("ss before &amp;ss[0]:%p len:%d cap:%d values:%v\n", &amp;ss[0], len(ss), cap(ss), ss)
+
+ss = append(ss, 80, 90, 100, 110)
+
+fmt.Printf("s  after   &amp;s[2]:%p len:%d cap:%d values:%v\n", &amp;s[2], len(s), cap(s), s)
+fmt.Printf("ss after  &amp;ss[0]:%p len:%d cap:%d values:%v\n", &amp;ss[0], len(ss), cap(ss), ss) }
+</code></pre></div></div>
+
+<p>// Output:
+// s  before  &amp;s[2]:0x456008 len:7 cap:7 values:[10 20 30 40 50 60 70]
+// ss before &amp;ss[0]:0x456008 len:2 cap:5 values:[30 40]
+// s  after   &amp;s[2]:0x456008 len:7 cap:7 values:[10 20 30 40 50 60 70]
+// ss after  &amp;ss[0]:0x454030 len:6 cap:12 values:[30 40 80 90 100 110]
+Playground.</p>
+
+<p>Once the slice is growing beyond their capacity, Go will reallocated new backing storage, copy the old value to new backing stroage, and update the backing storage of ss to new one. The sub-slice ss now use new backing storage, different with s.</p>
+
+<p>What we have learned?</p>
+
+<p>Sub-slice initial element address is pointer to their original slice</p>
+
+<p>Unless the backing storage is not changed, the sub-slice can change the content that its referenced</p>
+
+<p>If the backing storage in sub-slice changed, both original slice and sub-slice will have different backing storage</p>
+
+<p>Zeroing slice
+What is the best way to reset slice to zero? Is it s = nil or s = [:0]?</p>
+
+<p>First, lets look how nil behave.</p>
+
+<p>s := []int{1, 2, 3}
+fmt.Printf(“s&gt; len:%d cap:%d &amp;[0]:%p\n”, len(s), cap(s), &amp;s[0])</p>
+
+<p>s = nil
+fmt.Printf(“s&gt; len:%d cap:%d\n”, len(s), cap(s))</p>
+
+<p>s = append(s, 4)
+fmt.Printf(“s&gt; len:%d cap:%d &amp;[0]:%p\n”, len(s), cap(s), &amp;s[0])</p>
+
+<p>// Output:
+// s&gt; len:3 cap:3 &amp;[0]:0xc0000ac040
+// s&gt; len:0 cap:0
+// s&gt; len:1 cap:1 &amp;[0]:0xc00007e0e8
+The first backing storage of s have and address at 0xc0000ac040, and after we nil it and append new item, the backing storage change. So, this means nil-ing a slice will release the previous backing storage and create new backing storage when we append new item.</p>
+
+<p>Second, we look how sub-slicing with cap 0.</p>
+
+<p>s := []int{1, 2, 3}
+fmt.Printf(“s&gt; len:%d cap:%d &amp;[0]:%p\n”, len(s), cap(s), &amp;s[0])</p>
+
+<p>s = s[:0]
+fmt.Printf(“s&gt; len:%d cap:%d\n”, len(s), cap(s))</p>
+
+<p>s = append(s, 4)
+fmt.Printf(“s&gt; len:%d cap:%d &amp;[0]:%p\n”, len(s), cap(s), &amp;s[0])
+fmt.Printf(“s&gt; %v\n”, s)</p>
+
+<p>// s&gt; len:3 cap:3 &amp;[0]:0xc0000144c0
+// s&gt; len:0 cap:3
+// s&gt; len:1 cap:3 &amp;[0]:0xc0000144c0
+// s&gt; [4]
+Zeroing slice using [:0] reset the length to zero and keep and backing storage.</p>
+
+<p>Concolusion</p>
+
+<p>The answer to above question is depends on how you use the slice,</p>
+
+<p>use nil if we want to release slice’s (and its backing storage),</p>
+
+<p>use [:0] if we want to keep the slice backing storage, to minimize reallocation.</p>
+
+<p>Slice gotchas
+In this section we look what are commons mistake that we do when using slice.</p>
+
+<p>Too much reallocation
+Calling multiple append() on slices values may cause memory re-allocation.</p>
+
+<p>In this example we print the length and capability of slice before and appending the slice.</p>
+
+<p>func doX(in []int) (out []int){
+    for _, v := range in {
+    	fmt.Printf(“before&gt; out len:%d cap:%d\n”, len(out), cap(out))
+        out = append(out, v)
+    	fmt.Printf(“after &gt; out len:%d cap:%d\n”, len(out), cap(out))
+    }
+    return out
+}</p>
+
+<p>doX([]int{1,2,3,4,5})
+We found that doX do 4 reallocation to slice out,</p>
+
+<p>// Output: 4 re-allocation
+before&gt; out len:0 cap:0
+after &gt; out len:1 cap:1
+before&gt; out len:1 cap:1
+after &gt; out len:2 cap:2
+before&gt; out len:2 cap:2
+after &gt; out len:3 cap:4
+before&gt; out len:3 cap:4
+after &gt; out len:4 cap:4
+before&gt; out len:4 cap:4
+after &gt; out len:5 cap:8
+The slice out backing storage growth from 0 to 1, 2, 4, and 8.</p>
+
+<p>To minimize this we can allocate the capability to the possible maximum values that we may know. Since we know that out will at least take all length of in, we can allocate the initialize storage to len(in),</p>
+
+<p>func doX(in []int) (out []int){
+    out = make([]int, 0, len(in))
+    for _, v := range in {
+        out = append(out, v)
+    }
+    return out
+}
+doX([]int{1,2,3,4,5})
+The allocation decrease to 1 (on initial make),</p>
+
+<p>// Output: 1 allocation
+before&gt; out len:0 cap:5
+after &gt; out len:1 cap:5
+before&gt; out len:1 cap:5
+after &gt; out len:2 cap:5
+before&gt; out len:2 cap:5
+after &gt; out len:3 cap:5
+before&gt; out len:3 cap:5
+after &gt; out len:4 cap:5
+before&gt; out len:4 cap:5
+after &gt; out len:5 cap:5
+The good news is we have static analysis tool for that: prealloc.</p>
+
+<p>Unreleased memory allocation
+A quote from go blog,</p>
+
+<p>re-slicing a slice doesn’t make a copy of the underlying array. The full array will be kept in memory until it is no longer referenced. Occasionally this can cause the program to hold all the data in memory when only a small piece of it is needed.
+— Andrew Gerrand
+The Go Blog - Go Slices: usage and internals
+Given the following slicing statement,</p>
+
+<p>msg.id = packet[0:4]
+Memory allocated by packet will not released until msg.id get nil-ed or msg itself has no reference.</p>
+
+<p>I avoid the term “memory leak” here, because technically part of the memory content is still in use, but not whole of it. The term “memory leak” is when we allocated it but forgot to free-it.</p>
+
+<p>Just like reading Term of Services, sometimes we skip reading the content and looking only how to do X while forgot the internal detail.</p>
+
+<p>Bad news is, AFAIK, there is no static analysis tool to help us with it. Your best friend right now is pprof.</p>
+
+<p>Taking advantages of gotchas
+If we knew that the original slices is cacheable or reusable, we can take advantage of it to minimize memory usage.</p>
+
+<p>Case example, assume that we have a cacheable packet, that need to be parsed, checked, and validated; we can reuse the content by sub-slicing it.</p>
+
+<p>Assume that a packet is sequences of characters with the following format,</p>
+
+<p>key:value
+we create a struct to store the key and value,</p>
+
+<p>type Field struct {
+    Key []byte
+    Value []byte
+}
+Common approaches when parsing it is by appending it one by one, and each Field’s key and name will allocated new slices.</p>
+
+<p>field := Field{}
+packet := []byte(“key:value”)</p>
+
+<p>for _, c := range packet {
+	if c == ‘:’ {
+		break
+	}
+	field.Key = append(field.Key, c)
+}
+field.Value = append(field.Value, packet[len(field.Key)+1:]…)</p>
+
+<p>fmt.Printf(“Key: %s len:%d cap:%d\n”, field.Key, len(field.Key), cap(field.Key))
+fmt.Printf(“Value: %s len:%d cap:%d\n”, field.Value, len(field.Value), cap(field.Value))</p>
+
+<p>fmt.Printf(“packet storage: %p\n”, &amp;packet[0])
+fmt.Printf(“field.Key storage: %p\n”, &amp;field.Key[0])
+fmt.Printf(“field.Value storage: %p\n”, &amp;field.Value[0])</p>
+
+<p>// Key: key len:3 cap:8
+// Value: value len:5 cap:8
+// packet storage: 0x40e020
+// field.Key storage: 0x40e030
+// field.Value storage: 0x40e038
+In this approach the backing storage for packet, Key, and Value are different, and we have 4 * 2 re-allocation.</p>
+
+<p>An alternative to minimize memory allocation is to use the original backing array and point the Field Key and Value into it.</p>
+
+<p>var x := 0
+// Get the beginning and end of index key
+for ; x &lt; len(packet); x++ {
+	if packet[x] == ‘:’
+		break
+	}
+}</p>
+
+<p>field.Key = packet[:x]
+field.Value = packet[x+1:]
+With this approach all of the slice use single backing storage.</p>
+
+<p>slices_gotcha_subslicing_original</p>
+
+<p>Remember, using this approach require a careful attention on where the instance of Field go and released.</p>
+
+<p>References
+[EFF-GO] The Go Authors, “Effective Go”, https://golang.org/doc/effective_go.html, February 2019.</p>
+
+<p>[GO-SPEC] The Go Authors, “The Go Programming Language Specification”, https://golang.org/ref/spec, May 2018.</p>
+
+<p>[GO-BLOG] Gerrand, Andrew, “The Go Blog - Go Slices: usage and internals”, https://blog.golang.org/go-slices-usage-and-internals, January 2011.</p>
+:ET

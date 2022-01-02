@@ -1,0 +1,276 @@
+I"�1<p>https://www.php.net/manual/zh/internals2.buildsys.skeleton.php</p>
+
+<p>不同扩展之间，这些文件的很多细节是相似的，只是要费力去复制每个文件的内容。幸运的是，有脚本可以做所有的初始化工作，名为 ext_skel，自 PHP 4.0 起与其一起分发。
+<!-- more -->
+php-5.2.2/ext$ ./ext_skel 
+./ext_skel –extname=module [–proto=file] [–stubs=file] [–xml[=file]]
+           [–skel=dir] [–full-xml] [–no-help]</p>
+
+<p>–extname=module   module is the name of your extension
+  –proto=file       file contains prototypes of functions to create
+  –stubs=file       generate only function stubs in file
+  –xml              generate xml documentation to be added to phpdoc-cvs
+  –skel=dir         path to the skeleton directory
+  –full-xml         generate xml documentation for a self-contained extension
+                     (not yet implemented)
+  –no-help          don’t try to be nice and create comments in the code
+                     and helper functions to test if the module compiled</p>
+
+<p>第一步，生成扩展框架代码
+   首先切换到PHP-SRC/ext目录下面(PHP-SRC即php源代码的文件夹路径)
+通过ls我们可以查看到一个叫ext_skel(skel就是骨骼骨架的意思)
+执行./ext_sekl –help可以查看简要的帮助</p>
+
+<p>ext_sekl 是个bash脚本</p>
+
+<p>proto参数的使用
+在PHP-SRC/ext/下创建一个echo.proto的文件，其内容为</p>
+
+<p>void my_echo(string str)
+执行ext_skel</p>
+
+<p>./ext_skel –extname=echo –proto=echo.proto</p>
+
+<p>它会自动创建一个名为”扩展名”的文件夹,里面包含了扩展的整个框架代码</p>
+
+<p>第二步，修改编译配置文件
+修改PHP-SRC/ext/echo/config.m4
+把10、11、12行的dnl 去掉 修改为下面的样子
+PHP_ARG_WITH(echo, for echo support,
+Make sure that the comment is aligned:
+[  –with-echo             Include echo support])</p>
+
+<p>第三步，实现我们的函数
+编辑echo.c,找到PHP_FUNCTION(my_echo)，修改为下面的代码</p>
+
+<p>/* { { { proto void my_echo(string str)
+    */
+PHP_FUNCTION(my_echo)
+{
+        char *str = NULL;
+        int argc = ZEND_NUM_ARGS();
+        size_t str_len;</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    if (zend_parse_parameters(argc TSRMLS_CC, "s", &amp;str, &amp;str_len) == FAILURE)
+            return;
+
+    printf("%s",str);
+
+    //php_error(E_WARNING, "my_echo: not yet implemented"); } /* }}} */ 第四步，编译扩展 /root/php7d/bin/phpize ./configure --with-php-config=/root/php7d/bin/php-config make &amp;&amp; make install 其中/root/php7d是php的安装目录
+</code></pre></div></div>
+
+<p>执行完成之后，会自动把生成的.so文件拷贝进php的扩展目录，我这里是/root/php7d/lib/php/extensions/debug-non-zts-20141001</p>
+
+<p>编辑php.ini文件（我的在/root/php7d/lib/php.ini）,在最后添加一下代码让php加载扩展</p>
+
+<p>[echo]
+extension = echo.so</p>
+
+<p>; Local Variables:
+; tab-width: 4
+; End:
+通过执行php -m便可以查看加载的扩展了</p>
+
+<p>第五步，测试函数
+通过执行PHP-SRC/ext/echo/echo.php文件可以检验扩展是否安装成功</p>
+
+<p>[root@localhost echo]# /root/php7d/bin/php ./echo.php
+Functions available in the test extension:
+confirm_echo_compiled
+my_echo</p>
+
+<p>Congratulations! You have successfully modified ext/echo/config.m4. Module echo is now compiled into PHP.</p>
+
+<p>一、ext_skel 脚本
+二、与 UNIX 构建系统交互: config.m4</p>
+
+<p>扩展的 config.m4 文件告诉 UNIX 构建系统哪些扩展 configure 选项是支持的，你需要哪些扩展库，以及哪些源文件要编译成它的一部分。</p>
+
+<p>autoconf 语法简介
+config.m4 文件使用 GNU autoconf 语法编写。简而言之，就是用强大的宏语言增强的 shell 脚本。注释用字符串 dnl 分隔，字符串则放在左右方括号中间（例如，[ 和 ]）。字符串可按需要多次嵌套引用。
+根据需要修改config.m4</p>
+
+<p>切换到ext/edutest1/目录。
+vi config.m4
+将下面的第一、三行取消注释，并删掉第二行：</p>
+
+<p>16 dnl PHP_ARG_ENABLE(edutest1, whether to enable edutest1 support,
+ 17 dnl Make sure that the comment is aligned:
+ 18 dnl [  –enable-edutest1           Enable edutest1 support])</p>
+
+<p>修改为：</p>
+
+<p>16 PHP_ARG_ENABLE(edutest1, whether to enable edutest1 support,
+ 17     [  –enable-edutest1           Enable edutest1 support])</p>
+
+<p>将PHP_SUBST一行的注释打开：</p>
+
+<p>19 if test “$PHP_EDUTEST1” != “no”; then
+……
+59   PHP_SUBST(EDUTEST1_SHARED_LIBADD)
+60
+61   PHP_NEW_EXTENSION(edutest1, edutest1.c, $ext_shared)
+62 fi</p>
+
+<p>简要说明：</p>
+
+<p>宏PHP_ARG_ENABLE，含有三个参数：
+第一个参数，extest1为./configure建立了名为enable-edutest1的选项
+第二个参数将会在./configure命令处理到该扩展的配置文件时，显示该参数的内容
+第三个参数是./configure命令的帮助，在使用./configure –help的时候显示
+宏PHP_NEW_EXTENSION
+该宏声明了扩展的模块和必须要编译作为扩展一部分的源码文件。如果需要多个源文件，则使用空格分隔，第三个参数$ext_shared与调用PHP_SUBST(EDUTEST1_SHARED_LIBADD)有关。
+三、phpize、配置、编译
+因为我的Mac上已经自带了PHP的环境，就不采取全套PHP源码编译的方法了。使用命令行工具phpize对扩展进行编译。</p>
+
+<p>phpize 命令是用来准备 PHP 扩展库的编译环境的工具。如果系统中没有 phpize 命令并且使用了预编译的包（例如 RPM），那要安装 PHP 包相应的开发版本，此版本通常包含了 phpize 命令以及相应的用于编译 PHP 及其扩展库的头文件。使用 phpize –help 命令可以显示此命令用法。</p>
+
+<p>使用root权限执行phpize：
+ zhangxuefeng@zhangxuefengdeMac-mini  ~/Developer/php-5.6.24/ext/edutest1  sudo /usr/bin/phpize
+Password:
+Configuring for:
+PHP Api Version:         20121113
+Zend Module Api No:      20121212
+Zend Extension Api No:   220121212</p>
+
+<p>configure，需要使用php-config工具：</p>
+
+<p>php-config 是一个简单的命令行脚本用于获取所安装的 PHP 配置的信息。在编译扩展时，如果安装有多个 PHP 版本，可以在配置时用 –with-php-config 选项来指定使用哪一个版本编译，该选项指定了相对应的 php-config 脚本的路径。</p>
+
+<p>✘ zhangxuefeng@zhangxuefengdeMac-mini  ~/Developer/php-5.6.24/ext/edutest1  sudo ./configure –enable-edutest1 –with-php-config=/usr/bin/php-config
+checking for grep that handles long lines and -e… /usr/bin/grep
+checking for egrep… /usr/bin/grep -E
+checking for a sed that does not truncate output… /usr/bin/sed
+checking for cc… cc
+……</p>
+
+<p>Make 编译：
+ zhangxuefeng@zhangxuefengdeMac-mini  ~/Developer/php-5.6.24/ext/edutest1  sudo make
+Password:
+/bin/sh /Users/zhangxuefeng/Developer/php-5.6.24/ext/edutest1/libtool –mode=compile cc  -I. -I/Users/zhangxuefeng/Developer/php-5.6.24/ext/edutest1 -DPHP_ATOM_INC -I/Users/zhangxuefeng/Developer/php-5.6.24/ext/edutest1/include -I/Users/zhangxuefeng/Developer/php-5.6.24/ext/edutest1/main -I/Users/zhangxuefeng/Developer/php-5.6.24/ext/edutest1 -I/usr/include/php -I/usr/include/php/main -I/usr/include/php/TSRM -I/usr/include/php/Zend -I/usr/include/php/ext -I/usr/include/php/ext/date/lib  -DHAVE_CONFIG_H  -g -O2   -c /Users/zhangxuefeng/Developer/php-5.6.24/ext/edutest1/edutest1.c -o edutest1.lo
+mkdir .libs
+……
+……
+……
+Build complete.
+Don’t forget to run ‘make test’.</p>
+
+<p>Make Install：
+ zhangxuefeng@zhangxuefengdeMac-mini  ~/Developer/php-5.6.24/ext/edutest1  sudo make install
+Installing shared extensions:     /usr/lib/php/extensions/no-debug-non-zts-20121212/</p>
+
+<p>添加完整路径到php.ini中：
+ zhangxuefeng@zhangxuefengdeMac-mini sudo vim /etc/php.ini
+……
+899 extension=/usr/lib/php/extensions/no-debug-non-zts-20121212/edutest1.so
+……</p>
+
+<p>PHP-X</p>
+
+<p>https://github.com/swoole/phpx</p>
+
+<p>安装
+修改~/.bashrc设置环境变量：</p>
+
+<p>PHPX_ROOT：设置phpx的根路径
+PATH：将$PHPX_ROOT/bin目录加入系统可执行文件路径
+vim ~/.bashrc
+export PHPX_ROOT=/path/to/phpx
+export PATH=$PHPX_ROOT/bin:$PATH
+下载并安装</p>
+
+<p>curl -sS https://swoole-cloud.com/phpx/installer.sh | sh
+更新</p>
+<h1 id="更新-phpx">更新 phpx</h1>
+<p>phpx update self</p>
+<h1 id="更新内核包括-php-swoole-以及其他扩展">更新内核，包括 php swoole 以及其他扩展</h1>
+<p>phpx update core</p>
+
+<p>git clone https://github.com/swoole/PHP-X.git
+cd PHP-X
+cmake .
+make -j 4
+sudo make install
+未出现任何编译错误，会成功编译出libphpx.so，并安装到系统的lib目录。头文件会复制到系统的include目录。这时需要执行 sudo ldconfig刷新so文件缓存。</p>
+
+<p>0x02 新建工程
+使用任意开发工具，新建一个test.cc源文件。首先需要引入phpx.h头文件。然后使用using引入phpx的命名空间。PHP官方未使用C++，因此phpx直接使用了php作为命名空间。</p>
+
+<p>#include <phpx.h>
+using namespace std;
+using namespace php;
+创建扩展使用PHPX_EXTENSION宏来实现。在这宏中只需要new Extension即可创建扩展。构造方法接受2个参数，第一个是扩展的名称，第二个是扩展的版本号。在PHPX_EXTENSION宏中return这个扩展对象的指针。</phpx.h></p>
+
+<p>PHPX_EXTENSION()
+{
+    Extension *ext = new Extension(“test”, “0.0.1”);
+    return ext;
+}
+这里必须使用 new Extension，而不能直接在栈上创建对象</p>
+
+<p>0x03 增加函数
+一个PHP扩展的主要作用就是提供扩展函数，扩展函数由于是用C/C++代码实现，因此它的性能会比PHP用户函数性能高几十甚至上百倍。在phpx中实现函数非常简单。使用PHPX_FUNCTION来实现扩展函数，然后调用Extension::registerFunction来注册扩展函数。</p>
+
+<p>PHPX_FN是一个助手宏，实际上展开就是”cpp_hello_world”, cpp_hello_world 
+PHPX_FUNCTION展开后，包含了2个变量，第一个是参数args，第二个是返回值retval 
+通过操作args和retval两个变量，就可以实现函数的输入和输出</p>
+
+<p>这里我们的代码非常简单，cpp_test($str, $n)，调用这个函数返回一个$n个$str的数组。</p>
+
+<p>#include <phpx.h>
+using namespace std;
+using namespace php;</phpx.h></p>
+
+<p>//声明函数
+PHPX_FUNCTION(cpp_test);</p>
+
+<p>PHPX_EXTENSION()
+{
+    Extension *ext = new Extension(“test”, “0.0.1”);
+    ext-&gt;registerFunction(PHPX_FN(cpp_test));
+    return ext;
+}</p>
+
+<p>//实现函数
+PHPX_FUNCTION(cpp_test)
+{
+    //args[1] 就是这个扩展函数的第 2 个参数
+    long n = args[1].toInt();</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>//将返回值 retval 初始化为数组
+Array _array(retval);
+
+for(int i = 0; i &lt; n; i++)
+{
+    //args[0] 就是这个扩展函数的第 1 个参数
+    //append 方法表示向数组中追加元素
+    _array.append(args[0]);
+} } 0x04 编译扩展 编写一个Makefile文件。内容如下：
+</code></pre></div></div>
+
+<p>PHP_INCLUDE = <code class="language-plaintext highlighter-rouge">php-config --includes</code>
+PHP_LIBS = <code class="language-plaintext highlighter-rouge">php-config --libs</code>
+PHP_LDFLAGS = <code class="language-plaintext highlighter-rouge">php-config --ldflags</code>
+PHP_INCLUDE_DIR = <code class="language-plaintext highlighter-rouge">php-config --include-dir</code>
+PHP_EXTENSION_DIR = <code class="language-plaintext highlighter-rouge">php-config --extension-dir</code></p>
+
+<p>test.so: test.cc
+    c++ -DHAVE_CONFIG_H -g -o test.so -O0 -fPIC -shared test.cc -std=c++11 ${PHP_INCLUDE} -I${PHP_INCLUDE_DIR} -lphpx</p>
+
+<p>install: test.so
+    cp test.so ${PHP_EXTENSION_DIR}/
+clean:
+    rm *.so
+php-config 这个工具是PHP提供的，使用php-config可以得到PHP的安装路径、头文件目录、扩展目录、其他额外的编译参数等等。</p>
+
+<p>这个Makefile支持了3个指令，make编译，make clean清理，make install安装到扩展目录中。</p>
+
+<p>这里可能需要root权限，使用sudo make install进行安装 
+直接从网页复制，可能会出现tab制表符被替换为空格，请手工编辑一下Makefile使用tab缩进 
+MacOS下需要在c++编译参数中增加-undefined dynamic_lookup</p>
+
+<p>编写好之后执行make install，就会编译扩展并将扩展test.so安装到PHP的扩展目录中。这时需要修改php.ini加入extension=test.so加载扩展。</p>
+
+<p>使用php -m来观察你的扩展是否正常加载。</p>
+
+:ET

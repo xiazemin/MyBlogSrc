@@ -1,0 +1,72 @@
+I"1<p>MTU
+Maximum Transfer Unit 最大传输单元
+链路层的帧（frame）中的数据部分的最大字节数
+以太网中的一般为1500字节
+MSS
+Maximum Segment Size 最大报文段大小
+TCP的报文段中的数据部分的最大字节数，MTU减去IPv4的Header和TCP的Header
+IPv4的Header和TCP的Header一般都是20字节，则MSS=1500-20-20 = 1460字节
+MSL
+Maximum Segment Lifetime 报文最大生存时间
+报文在网络上存在的最长时间，TCP四次挥手是主动断开连接的一方再发送完最后一个ACK后进入TIME_WAIT状态时，需要等待2MSL时间后才变成CLOSED状态
+RFC 793建议为2分钟
+RTT
+Round-Trip Time
+从发送端发送数据开始，到发送端收到来自接收端的确认（接收端收到数据后便立即发送确认），总共经历的时延
+TCP中保留了RTT的加权平均值RTTS（下标S表示Smoothed）
+对于i=1，RTTS[i]=新RTT样本
+对于i&gt;1，RTTS[i]=(1-a) * RTTS[i-1] + a * 新RTT样本，RFC2988建议a=1/8
+TTL
+Time To Live
+该字段指定IP包被路由器丢弃之前允许通过的最大网段数量。TTL是IPv4包头的一个8 bit字段。
+RTO
+Retransmission Timeout 超时重传时间
+TCP中触发超时重传机制的时间，应略大于RTT
+RFC2988中建议RTO = RTTS + 4 * RTTD
+RTTD时RTT的偏差的加权平均值
+对于i=1，RTTD[i] = 新RTT样本/2
+对于i&gt;1，RTTD[i] = (1 - b) * RTTD[i-1] + b * | 新RTT样本 - RTTD[i] |，建议b=1/4
+<!-- more -->
+net.ipv4.tcp_timestamps 是linux的内核参数,用来控制是否开启tcp时间戳，开启后会吧发送端的内核时间记录在TCP包头。</p>
+
+<p>RTT (round trip time)
+在开启了TCP时间戳后，A记录下时间t1把包发给B,B收到包后记录下时间t2把包回给A ，这个过程里t2-t1就是RTT</p>
+
+<p>RTO （retransamission timeout）
+ 概述：先根据该socket的RTT计算出SRTT（Smoothed Round Trip Time），然后根据一个最大、最小超时时间确定当前RTO。说明：srtt可以理解为“平滑化”的RTT，即在保持计算简单的情况尽量考虑历史RTT。
+详细计算：SRTT = ( ALPHA * SRTT ) + ((1-ALPHA) * RTT)
+基于SRTT，我们再来计算RTO：RTO = min[UBOUND,max[LBOUND,(BETA*SRTT)］
+UBOUND是RTO上线，ALPHA是平滑因子（smoothing factor， e.g., .8 to .9），BETA是一个延迟方差因子（BETA is a delay variance factor (e.g., 1.3 to 2.0)）。
+上面我们介绍的是初次重传时的RTO，如果重传后还没收到另一端的响应，下一次重传RTO则会指数增加，例如第一次重传RTO是1，之后分别2，4，8，16…。
+proc/sys/net/ipv4/tcp_retries1 (integer; default: 3)
+在连接建立后TCP尝试了3次（tcp_retries1默认3）重传后，还没有收到ACK的话，则后续每次重传都需要network layer先更新路由。
+/proc/sys/net/ipv4/tcp_retries2 (integer; default: 15)
+T在连接建立后CP默认最多做15次重传。根据RTO(retransmission timeout)不同，最后一次重传间隔大概是13到30分钟左右。如果15次重传都做完了，TCP/IP就会告诉应用层说：“搞不定了，包怎么都传不过去！”
+tcp_syn_retries（默认为5）
+主动新建一个连接时（也就是sock处于SYN_SEND状态时），内核要重试发送多少个SYN请求包后才决定放弃；
+tcp_synack_retries
+（2）收到了SYN连接请求后（也就是sock处于SYN_RECV状态时），内核要重试发送多少个ACK确认包才决定放弃</p>
+
+<p>MSL、TTL及RTT的区别
+   1、 MSL 是Maximum Segment Lifetime英文的缩写，中文可以译为“报文最大生存时间”，他是任何报文在网络上存在的最长时间，超过这个时间报文将被丢弃。因为tcp报文 （segment）是ip数据报（datagram）的数据部分，具体称谓请参见《数据在网络各层中的称呼》一文；
+   2、ip头中有一个TTL域，TTL是 time to live的缩写，中文可以译为“生存时间”，这个生存时间是由源主机设置初始值但不是存的具体时间，而是存储了一个ip数据报可以经过的最大路由数，每经 过一个处理他的路由器此值就减1，当此值为0则数据报将被丢弃，同时发送ICMP报文通知源主机。RFC 793中规定MSL为2分钟，实际应用中常用的是30秒，1分钟和2分钟等。
+    TTL与MSL是有关系的但不是简单的相等的关系，MSL要大于等于TTL。
+   3、 RTT是客户到服务器往返所花时间（round-trip time，简称RTT），TCP含有动态估算RTT的算法。TCP还持续估算一个给定连接的RTT，这是因为RTT受网络传输拥塞程序的变化而变化
+   4、2MSL即两倍的MSL，TCP的TIME_WAIT状态也称为2MSL等待状态，当TCP的一端发起主动关闭，在发出最后一个ACK包后，即第3次握 手完成后发送了第四次握手的ACK包后就进入了TIME_WAIT状态，必须在此状态上停留两倍的MSL时间，等待2MSL时间主要目的是怕最后一个 ACK包对方没收到，那么对方在超时后将重发第三次握手的FIN包，主动关闭端接到重发的FIN包后可以再发一个ACK应答包。在TIME_WAIT状态 时两端的端口不能使用，要等到2MSL时间结束才可继续使用。当连接处于2MSL等待阶段时任何迟到的报文段都将被丢弃。不过在实际应用中可以通过设置 SO_REUSEADDR选项达到不必等待2MSL时间结束再使用此端口。</p>
+
+<p>1、 MSL 是Maximum Segment Lifetime英文的缩写，中文可以译为“报文最大生存时间”，他是任何报文在网络上存在的最长时间，超过这个时间报文将被丢弃。TCP报文 （segment）是ip数据报（datagram）的数据部分，具体称谓请参见《数据在网络各层中的称呼》一文；</p>
+
+<p>2、ip头中有一个TTL域，TTL是 time to live的缩写，中文可以译为“生存时间”，这个生存时间是由源主机设置初始值但不是存的具体时间，而是存储了一个ip数据报可以经过的最大路由数，每经 过一个处理他的路由器此值就减1，当此值为0则数据报将被丢弃，同时发送ICMP报文通知源主机。RFC 793中规定MSL为2分钟，实际应用中常用的是30秒，1分钟和2分钟等。</p>
+
+<p>TTL与MSL是有关系的但不是简单的相等的关系，MSL要大于等于TTL。
+1
+3、 RTT是客户到服务器往返所花时间（round-trip time，简称RTT），TCP含有动态估算RTT的算法。TCP还持续估算一个给定连接的RTT，这是因为RTT受网络传输拥塞程序的变化而变化。</p>
+
+<p>表示从发送端发送数据开始，到发送端收到来自接收端的确认（接收端收到数据后便立即发送确认），总共经历的时延。
+一般认为单向时延=传输时延t1+传播时延t2+排队时延t3
+t1是数据从进入节点到传输媒体所需要的时间，通常等于数据块长度/信道带宽
+t2是信号在信道中需要传播一定距离而花费的时间，等于信道长度/传播速率（光纤中电磁波的传播速率约为210^5 km/s，铜缆中2.310^5 km/s）
+t3可笼统归纳为随机噪声，由途径的每一跳设备及收发两端负荷情况及吞吐排队情况决定(包含互联网设备和传输设备时延)</p>
+
+<p>4、2MSL即两倍的MSL，TCP的TIME_WAIT状态也称为2MSL等待状态，当TCP的一端发起主动关闭，在发出最后一个ACK包后，即第3次握 手完成后发送了第四次握手的ACK包后就进入了TIME_WAIT状态，必须在此状态上停留两倍的MSL时间，等待2MSL时间主要目的是怕最后一个 ACK包对方没收到，那么对方在超时后将重发第三次握手的FIN包，主动关闭端接到重发的FIN包后可以再发一个ACK应答包。在TIME_WAIT状态 时两端的端口不能使用，要等到2MSL时间结束才可继续使用。当连接处于2MSL等待阶段时任何迟到的报文段都将被丢弃。不过在实际应用中可以通过设置 SO_REUSEADDR选项达到不必等待2MSL时间结束再使用此端口</p>
+:ET

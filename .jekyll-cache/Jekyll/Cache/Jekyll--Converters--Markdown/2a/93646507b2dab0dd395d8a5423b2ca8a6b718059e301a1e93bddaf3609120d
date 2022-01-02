@@ -1,0 +1,130 @@
+I"�<p>Redis最为常用的数据类型主要有以下：</p>
+
+<p>String
+Hash
+List
+Set
+Sorted set
+pub/sub
+Transactions
+<!-- more -->
+2.2.1 String</p>
+
+<p>简介：String 数据结构是简单的key-value类型，value其实不仅是String，也可以是数字.</p>
+
+<p>常用命令： set,get,decr,incr,mget 等。</p>
+
+<p>实现方式：String在redis内部存储默认就是一个字符串，被redisObject所引用，当遇到incr,decr等操作时会转成数值型进行计算，此时redisObject的encoding字段为int</p>
+
+<p>2.2.2 Hash</p>
+
+<p>简介：内部实际就是一个HashMap</p>
+
+<p>常用命令：hget,hset,hgetall 等。</p>
+
+<p>实现方式：内部实际就是一个HashMap，但有2种不同实现，当成员比较少时，为了节省内存会采用类似一维数组的方式来紧凑存储，而不会采用真正的HashMap结构，对应的value redisObject的encoding为zipmap,当成员数量增大时会自动转成真正的HashMap,此时encoding为ht。</p>
+
+<p>2.2.3 List</p>
+
+<p>常用命令：lpush,rpush,lpop,rpop,lrange等。</p>
+
+<p>应用场景：Redis list的应用场景非常多，也是Redis最重要的数据结构之一，比如twitter的关注列表，粉丝列表等都可以用Redis的list结构来实现。Lists 就是链表，相信略有数据结构知识的人都应该能理解其结构。使用Lists结构，我们可以轻松地实现最新消息排行等功能。Lists的另一个应用就是消息队列，可以利用Lists的PUSH操作，将任务存在Lists中，然后工作线程再用POP操作将任务取出进行执行。Redis还提供了操作Lists中某一段的api，你可以直接查询，删除Lists中某一段的元素。</p>
+
+<p>实现方式：Redis list的实现为一个双向链表，即可以支持反向查找和遍历，更方便操作，不过带来了部分额外的内存开销，Redis内部的很多实现，包括发送缓冲队列等也都是用的这个数据结构。</p>
+
+<p>2.2.4 Set</p>
+
+<p>常用命令：sadd,spop,smembers,sunion 等。</p>
+
+<p>应用场景：Redis set对外提供的功能与list类似是一个列表的功能，特殊之处在于set是可以自动排重的，当你需要存储一个列表数据，又不希望出现重复数据时，set是一个很好的选择，并且set提供了判断某个成员是否在一个set集合内的重要接口，这个也是list所不能提供的。</p>
+
+<p>Sets 集合的概念就是一堆不重复值的组合。利用Redis提供的Sets数据结构，可以存储一些集合性的数据，比如在微博应用中，可以将一个用户所有的关注人存在一个集合中，将其所有粉丝存在一个集合。Redis还为集合提供了求交集、并集、差集等操作，可以非常方便的实现如共同关注、共同喜好、二度好友等功能，对上面的所有集合操作，你还可以使用不同的命令选择将结果返回给客户端还是存集到一个新的集合中。</p>
+
+<p>实现方式：set 的内部实现是一个 value永远为null的HashMap，实际就是通过计算hash的方式来快速排重的，这也是set能提供判断一个成员是否在集合内的原因。</p>
+
+<p>2.2.5 Sorted Set</p>
+
+<p>常用命令：zadd,zrange,zrem,zcard等</p>
+
+<p>使用场景：Redis sorted set的使用场景与set类似，区别是set不是自动有序的，而sorted set可以通过用户额外提供一个优先级(score)的参数来为成员排序，并且是插入有序的，即自动排序。当你需要一个有序的并且不重复的集合列表，那么可以选择sorted set数据结构，比如twitter 的public timeline可以以发表时间作为score来存储，这样获取时就是自动按时间排好序的。另外还可以用Sorted Sets来做带权重的队列，比如普通消息的score为1，重要消息的score为2，然后工作线程可以选择按score的倒序来获取工作任务。让重要的任务优先执行。</p>
+
+<p>实现方式：Redis sorted set的内部使用HashMap和跳跃表(SkipList)来保证数据的存储和有序，HashMap里放的是成员到score的映射，而跳跃表里存放的是所有的成员，排序依据是HashMap里存的score,使用跳跃表的结构可以获得比较高的查找效率，并且在实现上比较简单。</p>
+
+<p>3 集群搭建</p>
+
+<p>首先，在redis的每一个节点上，都有这么两个东西，一个是插槽（slot）可以理解为是一个可以存储两个数值的一个变量这个变量的取值范围是：0-16383。还有一个就是cluster我个人把这个cluster理解为是一个集群管理的插件。当我们的存取的key到达的时候，redis会根据crc16的算法得出一个结果，然后把结果对 16384 求余数，这样每个 key 都会对应一个编号在 0-16383 之间的哈希槽，通过这个值，去找到对应的插槽所对应的节点，然后直接自动跳转到这个对应的节点上进行存取操作。</p>
+
+<p>4 序列化方式</p>
+
+<p>4.1 Snapshotting（快照）也是默认方式：将内存中数据以快照的方式写入到二进制文件中,默认的文件名为dump.rdb</p>
+
+<p>4.2 Append-only file（缩写aof）的方式：将每一个收到的写命令都通过write函数追加到文件中(默认是appendonly.aof)</p>
+
+<p>5 运行原理（单线程）</p>
+
+<p>5.1 完全基于内存</p>
+
+<p>5.2 使用多路I/O复用模型</p>
+
+<p>sinter 、sunion 、sdiff
+redis 支持 Set集合的数据存储，其中有三个比较特殊的方法：</p>
+
+<p>sinter key [key …] 返回一个集合的全部成员，该集合是所有给定集合的交集。
+sunion key [key …] 返回一个集合的全部成员，该集合是所有给定集合的并集。
+sdiff key [key …] 返回所有给定 key 与第一个 key 的差集
+sinter 代码示例
+redis&gt; SMEMBERS group_1
+1) “LI LEI”
+2) “TOM”
+3) “JACK”</p>
+
+<p>redis&gt; SMEMBERS group_2
+1) “HAN MEIMEI”
+2) “JACK”</p>
+
+<p>redis&gt; SINTER group_1 group_2      # 取的是交集的数据 
+1) “JACK”
+sunion 代码示例
+redis&gt; SMEMBERS songs
+1) “Billie Jean”</p>
+
+<p>redis&gt; SMEMBERS my_songs
+1) “Believe Me”</p>
+
+<p>redis&gt; SUNION songs my_songs       # 取的是集合的并集数据据
+1) “Billie Jean”
+2) “Believe Me”
+sdiff 代码示例
+redis&gt; SMEMBERS peter’s_movies
+1) “bet man”
+2) “start war”
+3) “2012”</p>
+
+<p>redis&gt; SMEMBERS joe’s_movies
+1) “hi, lady”
+2) “Fast Five”
+3) “2012”</p>
+
+<p>redis&gt; SDIFF peter’s_movies joe’s_movies     # 取的是两个集合的差集的数据
+1) “bet man”
+2) “start war”</p>
+
+<p>sinterstore、sunionstore、sdiffstore
+sinterstore destination key [key …] 将 交集 数据存储到某个对象中
+sunionstore destination key [key …] 将 并集 数据存储到某个对象中
+sdiffstore destination key [key …] 将 差集 数据存储到某个对象中
+sinterstore 代码示例
+redis&gt; SMEMBERS songs
+1) “good bye joe”
+2) “hello,peter”</p>
+
+<p>redis&gt; SMEMBERS my_songs
+1) “good bye joe”
+2) “falling”</p>
+
+<p>redis&gt; SINTERSTORE song_interset songs my_songs           # 将交集的数据存储到 song_interset 对象中
+(integer) 1</p>
+
+<p>redis&gt; SMEMBERS song_interset                 # 返回 song_interset 对象中的 所有数据
+1) “good bye joe”</p>
+:ET

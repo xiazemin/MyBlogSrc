@@ -1,0 +1,136 @@
+I"K<p>在内核中，对socket实现了一种虚拟的文件系统（VFS）：socketfs。和其它一般文件系统不同，它不能被mount，没有挂载点，而是通过一个静态变量来引用： 
+[ net/socket.c ] 
+static struct vfsmount *sock_mnt __read_mostly;
+ 在用户空间创建了一个socket后，返回值是一个文件描述符，下面分析一下创建socket时怎么和文件描述符联系的。在SYSCALL_DEFINE3(socket, int, family, int, type, int, protocol)最后调用sock_map_fd进行关联，其中返回的retval就是用户空间获取的文件描述符fd，sock就是调用sock_create创建成功的socket.</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>     sock_map_fd()主要用于对socket的*file指针初始化，经过sock_map_fd()操作后，socket就通过其*file指针与VFS管理的文件进行了关联，便可以进行文件的各种操作，如read、write、lseek、ioctl等. 
+</code></pre></div></div>
+
+<p>retval = sock_map_fd(sock, flags &amp; (O_CLOEXEC | O_NONBLOCK));
+<!-- more -->
+系统调用read(v)、write(v)是用户空间读写socket的一种方法
+SYSCALL_DEFINE3(read, unsigned int, fd, char __user *, buf, size_t, count)
+ 2{
+ 3    struct file *file;
+ 4    ssize_t ret = -EBADF;
+ 5    int fput_needed;
+ 6
+ 7    file = fget_light(fd, &amp;fput_needed);
+ 8    if (file) {
+ 9        loff_t pos = file_pos_read(file);
+10        ret = vfs_read(file, buf, count, &amp;pos);
+11      <br />
+12    }
+13
+14    return ret;
+15}
+先调用fget_light得到fd对应的file，再调用vfs_read。
+ 1ssize_t vfs_read(struct file *file, char __user *buf, size_t count, loff_t *pos)
+ 2{
+ 3    ssize_t ret;
+ 4  <br />
+ 5    ret = rw_verify_area(READ, file, pos, count);
+ 6    if (ret &gt;= 0) {
+ 7        count = ret;
+ 8        if (file-&gt;f_op-&gt;read)
+ 9            ret = file-&gt;f_op-&gt;read(file, buf, count, pos);
+10        else
+11            ret = do_sync_read(file, buf, count, pos);
+12      <br />
+13    }
+14
+15    return ret;
+16}</p>
+
+<p>1ssize_t do_sync_read(struct file *filp, char __user *buf, size_t len, loff_t *ppos)
+ 2{
+ 3    struct iovec iov = { .iov_base = buf, .iov_len = len };
+ 4    struct kiocb kiocb;
+ 5    ssize_t ret;
+ 6
+ 7  <br />
+ 8    for (;;) {
+ 9        ret = filp-&gt;f_op-&gt;aio_read(&amp;kiocb, &amp;iov, 1, kiocb.ki_pos);
+10        if (ret != -EIOCBRETRY)
+11            break;
+12        wait_on_retry_sync_kiocb(&amp;kiocb);
+13    }
+14
+15    if (-EIOCBQUEUED == ret)
+16        ret = wait_on_sync_kiocb(&amp;kiocb);
+17    *ppos = kiocb.ki_pos;
+18    return ret;
+19}</p>
+
+<p>调用到了f_op-&gt;aio_read，使用异步读来实现同步读，若异步读没有完成，则调用wait_on_sync_kiocb等待。</p>
+
+<p>) 示例代码如下：</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>int server_sockfd = socket(AF_INET, SOCK_STREAM, 0);
+
+
+
+2) 入口：
+net/Socket.c:sys_socketcall()，根据子系统调用号，创建socket会执行sys_socket()函数；
+
+2、分配socket结构：
+1) 调用链：
+net/Socket.c:sys_socket()-&gt;sock_create()-&gt;__sock_create()-&gt;sock_alloc()；
+
+2) 在socket文件系统中创建i节点：
+
+
+inode = new_inode(sock_mnt-&gt;mnt_sb); 
+这里，new_inode函数是文件系统的通用函数，其作用是在相应的文件系统中创建一个inode；其主要代码如下(fs/Inode.c)：
+
+
+上面有个条件判断：if (sb-&gt;s_op-&gt;alloc_inode)，意思是说如果当前文件系统的超级块有自己分配inode的操作函数，则调用它自己的函数分配inode，否则从公用的高速缓存区中分配一块inode；
+
+3) 创建socket专用inode：
+在“socket文件系统注册”一文中后面提到，在安装socket文件系统时，会初始化该文件系统的超级块，此时会初始化超级块的操作指针s_op为sockfs_ops结构；因此此时分配inode会调用sock_alloc_inode函数来完成：实际上分配了一个socket_alloc结构体，该结构体包含socket和inode，但最终返回的是该结构体中的inode成员；至此，socket结构和inode结构均分配完毕；分配inode后，应用程序便可以通过文件描述符对socket进行read()/write()之类的操作，这个是由虚拟文件系统(VFS)来完成的。
+
+3、根据inode取得socket对象：
+由于创建inode是文件系统的通用逻辑，因此其返回值是inode对象的指针；但这里在创建socket的inode后，需要根据inode得到socket对象；内联函数SOCKET_I由此而来，这里使用两个重要宏containerof和offsetof
+
+
+
+4、使用协议族来初始化socket：
+
+
+1) 注册AF_INET协议域：
+
+
+在“socket文件系统注册”中提到系统初始化的工作，AF_INET的注册也正是通过这个来完成的；
+
+
+初始化入口net/ipv4/Af_inet.c：这里调用sock_register函数来完成注册：
+
+
+根据family将AF_INET协议域inet_family_ops注册到内核中的net_families数组中；下面是其定义：
+
+
+static struct net_proto_family inet_family_ops = { .family = PF_INET, .create = inet_create, .owner = THIS_MODULE, };
+
+
+其中，family指定协议域的类型，create指向相应协议域的socket的创建函数；
+
+
+2) 套接字类型
+
+
+在相同的协议域下，可能会存在多个套接字类型；如AF_INET域下存在流套接字(SOCK_STREAM)，数据报套接字(SOCK_DGRAM)，原始套接字（SOCK_RAW），在这三种类型的套接字上建立的协议分别是TCP, UDP，ICMP/IGMP等。
+
+
+在Linux内核中，结构体struct proto表示域中的一个套接字类型，它提供该类型套接字上的所有操作及相关数据(在内核初始化时会分配相应的高速缓冲区，见上面提到的inet_init函数)。
+
+
+AF_IENT域的这三种套接字类型定义用结构体inet_protosw(net/ipv4/Af_inet.c)来表示，如下：其中，tcp_prot(net/ipv4/Tcp_ipv4.c)、 udp_prot(net/ipv4/Udp.c)、raw_prot(net/ipv4/Raw.c)分别表示三种类型的套接字，分别表示相应套接字的 操作和相关数据；ops成员提供该协议域的全部操作集合，针对三种不同的套接字类型，有三种不同的域操作inet_stream_ops、 inet_dgram_ops、inet_sockraw_ops，其定义均位于net/ipv4/Af_inet.c下；
+
+
+内 核初始化时，在inet_init中，会将不同的套接字存放到全局变量inetsw中统一管理；inetsw是一个链表数组，每一项都是一个struct inet_protosw结构体的链表，总共有SOCK_MAX项，在inet_init函数对AF_INET域进行初始化的时候，调用函数 inet_register_protosw把数组inetsw_array中定义的套接字类型全部注册到inetsw数组中；其中相同套接字类型，不同 协议类型的套接字通过链表存放在到inetsw数组中，以套接字类型为索引，在系统实际使用的时候，只使用inetsw，而不使用 inetsw_array；
+
+一个socket句柄代表两个地址对   “本地ip:port”--“远程ip:port”
+socket为内核对象，由操作系统内核来维护其缓冲区，引用计数，并且可以在多个进程中使用。  至于称它为“句柄”“文件描述符”都是一样的，它只不过是内核开放给用户进程使用的整数而已
+</code></pre></div></div>
+
+:ET

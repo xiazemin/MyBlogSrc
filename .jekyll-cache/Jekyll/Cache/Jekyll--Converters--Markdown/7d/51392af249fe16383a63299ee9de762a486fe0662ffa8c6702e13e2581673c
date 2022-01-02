@@ -1,0 +1,466 @@
+I"<L<p>有的程序可以通过编译, 但在运行时会出现Segment fault(段错误). 这通常都是指针错误引起的. 但这不像编译错误一样会提示到文件某一行, 而是没有任何信息, 使得我们的调试变得困难起来.</p>
+
+<p>gdb: 有一种办法是, 我们用gdb的step, 一步一步寻找. 这放在短小的代码中是可行的, 但要让你step一个上万行的代码, 我想你会从此厌恶程序员这个名字, 而把他叫做调试员. 我们还有更好的办法, 这就是core file.</p>
+
+<p>ulimit: 如果想让系统在信号中断造成的错误时产生core文件, 我们需要在shell中按如下设置: #设置core大小为无限 ulimit -c unlimited #设置文件大小为无限 ulimit unlimited 这些需要有root权限, 在ubuntu下每次重新打开中断都需要重新输入上面的第一条命令, 来设置core大小为无限.</p>
+
+<p>用gdb查看core文件: 下面我们可以在发生运行时信号引起的错误时发生core dump了. 发生core dump之后, 用gdb进行查看core文件的内容, 以定位文件中引发core dump的行. gdb [exec file] [core file] 如: gdb ./test test.core 在进入gdb后, 用bt命令查看backtrace以检查发生程序运行到哪里, 来定位core dump的文件-&gt;行.</p>
+
+<ol>
+  <li>什么是Core：</li>
+</ol>
+
+<p>Sam之前一直以为Core Dump中Core是 Linux Kernel的意思. 今天才发现在这里，Core是另一种意思：</p>
+
+<p>在使用半导体作为内存的材料前，人类是利用线圈当作内存的材料（发明者为王安），线圈就叫作 core ，用线圈做的内存就叫作 core memory。如今 ，半导体工业澎勃发展，已经没有人用 core memory 了，不过，在许多情况下， 人们还是把记忆体叫作 core 。</p>
+
+<ol>
+  <li>什么是Core Dump：</li>
+</ol>
+
+<p>我们在开发（或使用）一个程序时，最怕的就是程序莫明其妙地当掉。虽然系统没事，但我们下次仍可能遇到相同的问题。于是这时操作系统就会把程序当掉 时的内存内容 dump 出来（现在通常是写在一个叫 core 的 file 里面），让 我们或是 debugger 做为参考。这个动作就叫作 core dump。</p>
+
+<ol>
+  <li>Core Dump时会生成何种文件：</li>
+</ol>
+
+<p>Core Dump时，会生成诸如 core.进程号 的文件。</p>
+
+<ol>
+  <li>为何有时程序Down了，却没生成 Core文件。</li>
+</ol>
+
+<p>Linux下，有一些设置，标明了resources available to the shell and to processes。 可以使用#ulimit -a 来看这些设置。 (ulimit是bash built-in Command)</p>
+
+<p>-a All current limits are reported</p>
+
+<p>-c The maximum size of core files created</p>
+
+<p>-d The maximum size of a process鈥檚 data segment</p>
+
+<p>-e The maximum scheduling priority (“nice”)</p>
+
+<p>-f The maximum size of files written by the shell and its children</p>
+
+<p>-i The maximum number of pending signals</p>
+
+<p>-l The maximum size that m ay be locked into memory</p>
+
+<p>-m The maximum resident set size (has no effect on Linux)</p>
+
+<p>-n The maximum number of open file descriptors (most systems do not allow this value to be set)</p>
+
+<p>-p The pipe size in 512-byte blocks (this may not be set)</p>
+
+<p>-q The maximum number of bytes in POSIX message queues</p>
+
+<p>-r The maximum real-time scheduling priority</p>
+
+<p>-s The maximum stack size</p>
+
+<p>-t The maximum amount of cpu time in seconds</p>
+
+<p>-u The maximum number of processes available to a single user</p>
+
+<p>-v The maximum amount of virtual memory available to the shell</p>
+
+<p>-x The maximum number of file locks</p>
+
+<p>从这里可以看出，如果 -c是显示：core file size (blocks, -c) 如果这个值为0，则无法生成core文件。所以可以使用： 
+#ulimit -c 1024 或者 #ulimit -c unlimited 来使能 core文件。</p>
+
+<p>如果程序出错时生成Core 文件，则会显示Segmentation fault (core dumped) 。</p>
+
+<ol>
+  <li>
+    <p>Core Dump的核心转储文件目录和命名规则: 
+/proc/sys/kernel /core_uses_pid可以控制产生的core文件的文件名中是否添加pid作为扩展，如果添加则文件内容为1，否则为0</p>
+  </li>
+  <li>
+    <p>如何使用Core文件： 
+在Linux下，使用： 
+#gdb -c core.pid program_name 
+就可以进入gdb模式。 
+输入where，就可以指出是在哪一行被Down掉，哪个function内，由谁调用等等。 
+(gdb) where 
+或者输入 bt。 
+(gdb) bt</p>
+  </li>
+  <li>
+    <p>如何让一个正常的程序down: 
+#kill -s SIGSEGV pid</p>
+  </li>
+  <li>
+    <p>察看Core文件输出在何处： 
+存放Coredump的目录即进程的当前目录，一般就是当初发出命令启动该进程时所在的目录。但如果是通过脚本启动，则脚本可能会修改当前目录，这时进程真正的当前目录就会与当初执行脚本所在目录不同。这时可以查看”/proc/<进程pid>/cwd“符号链接的目标来确定进程真正的当前目录地址。通过系统服务启动的进程也可通过这一方法查看。
+<!-- more -->
+分析coredump的工具</进程pid></p>
+  </li>
+</ol>
+
+<p>现在大部分类unix操作系统都提供了分析core文件的工具，比如 GNU Binutils Binary File Descriptor library (BFD),GNU Debugger (gdb），mdb等</p>
+
+<p>coredump的文件格式</p>
+
+<p>类unix操作系统中使用efi格式保存coredump文件。</p>
+
+<p>在solairs下</p>
+
+<p>bash-3.2# file *unix.3 ELF 32-bit LSB executable 80386 Version 1, statically linked, not stripped, no debugging information availableunix.4 ELF 32-bit LSB executable 80386 Version 1, statically linked, not stripped, no debugging information available</p>
+
+<p>造成程序coredump的原因很多，这里根据以往的经验总结一下：</p>
+
+<p>1 内存访问越界
+  a) 由于使用错误的下标，导致数组访问越界
+  b) 搜索字符串时，依靠字符串结束符来判断字符串是否结束，但是字符串没有正常的使用结束符
+  c) 使用strcpy, strcat, sprintf, strcmp, strcasecmp等字符串操作函数，将目标字符串读/写爆。应该使用strncpy, strlcpy, strncat, strlcat, snprintf, strncmp, strncasecmp等函数防止读写越界。</p>
+
+<p>2 多线程程序使用了线程不安全的函数。
+应该使用下面这些可重入的函数，尤其注意红色标示出来的函数，它们很容易被用错：
+asctime_r(3c) gethostbyname_r(3n) getservbyname_r(3n) ctermid_r(3s) gethostent_r(3n) getservbyport_r(3n) ctime_r(3c) getlogin_r(3c) getservent_r(3n) fgetgrent_r(3c) getnetbyaddr_r(3n) getspent_r(3c) fgetpwent_r(3c) getnetbyname_r(3n) getspnam_r(3c) fgetspent_r(3c) getnetent_r(3n) gmtime_r(3c) gamma_r(3m) getnetgrent_r(3n) lgamma_r(3m) getauclassent_r(3) getprotobyname_r(3n) localtime_r(3c) getauclassnam_r(3) etprotobynumber_r(3n) nis_sperror_r(3n) getauevent_r(3) getprotoent_r(3n) rand_r(3c) getauevnam_r(3) getpwent_r(3c) readdir_r(3c) getauevnum_r(3) getpwnam_r(3c) strtok_r(3c) getgrent_r(3c) getpwuid_r(3c) tmpnam_r(3s) getgrgid_r(3c) getrpcbyname_r(3n) ttyname_r(3c) getgrnam_r(3c) getrpcbynumber_r(3n) gethostbyaddr_r(3n) getrpcent_r(3n)</p>
+
+<p>3 多线程读写的数据未加锁保护。
+对于会被多个线程同时访问的全局数据，应该注意加锁保护，否则很容易造成core dump</p>
+
+<p>4 非法指针
+  a) 使用空指针
+  b) 随意使用指针转换。一个指向一段内存的指针，除非确定这段内存原先就分配为某种结构或类型，或者这种结构或类型的数组，否则不要将它转换为这种结构或类型 的指针，而应该将这段内存拷贝到一个这种结构或类型中，再访问这个结构或类型。这是因为如果这段内存的开始地址不是按照这种结构或类型对齐的，那么访问它 时就很容易因为bus error而core dump.</p>
+
+<p>5 堆栈溢出
+不要使用大的局部变量（因为局部变量都分配在栈上），这样容易造成堆栈溢出，破坏系统的栈和堆结构，导致出现莫名其妙的错误。</p>
+
+<p>coredump文件的生成方法以及使用方法：</p>
+
+<p>（假设下例是在x86上交叉编译，而在arm上运行异常的现象）</p>
+
+<p>1． 在arm内核里加入coredump的支持（一般内核都支持coredump,不用重编）</p>
+
+<p>2． 运行命令，此时允许coredump文件产生：(在arm上)
+ ulimit –cunlimited</p>
+
+<p>3． 执行程序：（在arm上）
+./test
+在异常退出时，会显示如下信息，注意括号里的内容
+Segmentation fault (core dumped)
+程序执行目录下将产生*core文件</p>
+
+<p>4． 用gdb分析：（在x86上）
+arm-linux-gdb ./testtest.core
+再用gdb的bt或where看就可以了
+(arm-linux-gdb的编译见<调试工具之四gdbserve>)</调试工具之四gdbserve></p>
+
+<p>系统支持生成core并设置存储位置的方法：</p>
+
+<p>1&gt; 在/etc/profile中加入以下一行，这将允许生成coredump文件
+ulimit -c unlimited</p>
+
+<p>2&gt; 在rc.local中加入以下一行，这将使程序崩溃时生成的coredump文件位于/tmp目录下:
+echo /tmp/core.%e.%p &gt; /proc/sys/kernel/core_pattern</p>
+
+<p>/tmp/也可以是其它的目录位置。最佳位置应当满足以下需求：</p>
+<ul>
+  <li>对所有用户可写</li>
+  <li>空间容量足够大</li>
+  <li>掉电后文件不丢失</li>
+</ul>
+
+<ol>
+  <li>
+    <p>前言:
+有的程序可以通过编译, 但在运行时会出现Segment fault(段错误). 这通常都是指针错误引起的.
+但这不像编译错误一样会提示到文件-&gt;行, 而是没有任何信息, 使得我们的调试变得困难起来.</p>
+  </li>
+  <li>
+    <p>gdb:
+有一种办法是, 我们用gdb的step, 一步一步寻找. 
+这放在短小的代码中是可行的, 但要让你step一个上万行的代码, 我想你会从此厌恶程序员这个名字, 而把他叫做调试员.
+我们还有更好的办法, 这就是core file.</p>
+  </li>
+  <li>
+    <p>ulimit:
+如果想让系统在信号中断造成的错误时产生core文件, 我们需要在shell中按如下设置:
+#设置core大小为无限
+ulimit -c unlimited
+#设置文件大小为无限
+ulimit unlimited</p>
+  </li>
+</ol>
+
+<p>这些需要有root权限, 在ubuntu下每次重新打开中断都需要重新输入上面的第一条命令, 来设置core大小为无限.</p>
+
+<ol>
+  <li>用gdb查看core文件:
+下面我们可以在发生运行时信号引起的错误时发生core dump了.
+发生core dump之后, 用gdb进行查看core文件的内容, 以定位文件中引发core dump的行.
+gdb [exec file] [core file]
+如:
+gdb ./test test.core
+在进入gdb后, 用bt命令查看backtrace以检查发生程序运行到哪里, 来定位core dump的文件-&gt;行.</li>
+</ol>
+
+<p>当我们的程序崩溃时，内核有可能把该程序当前内存映射到core文件里，方便程序员找到程序出现问题的地方。最常出现的，几乎所有C程序员都出现过的错误就是“段错误”了。也是最难查出问题原因的一个错误。下面我们就针对“段错误”来分析core文件的产生、以及我们如何利用core文件找到出现崩溃的地方。</p>
+
+<p>何谓core文件</p>
+
+<p>当一个程序崩溃时，在进程当前工作目录的core文件中复制了该进程的存储图像。core文件仅仅是一个内存映象(同时加上调试信息)，主要是用来调试的。</p>
+
+<p>当程序接收到以下UNIX信号会产生core文件：</p>
+
+<p>名字</p>
+
+<p>说明</p>
+
+<p>ANSI C  POSIX.1</p>
+
+<p>SVR4  4.3+BSD</p>
+
+<p>缺省动作</p>
+
+<p>SIGABRT</p>
+
+<p>异常终止(abort)</p>
+
+<p>.       .</p>
+
+<p>.      .</p>
+
+<p>终止w/core</p>
+
+<p>SIGBUS</p>
+
+<p>硬件故障</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>      .
+</code></pre></div></div>
+
+<p>.      .</p>
+
+<p>终止w/core</p>
+
+<p>SIGEMT</p>
+
+<p>硬件故障</p>
+
+<p>.      .</p>
+
+<p>终止w/core</p>
+
+<p>SIGFPE</p>
+
+<p>算术异常</p>
+
+<p>.       .</p>
+
+<p>.      .</p>
+
+<p>终止w/core</p>
+
+<p>SIGILL</p>
+
+<p>非法硬件指令</p>
+
+<p>.       .</p>
+
+<p>.      .</p>
+
+<p>终止w/core</p>
+
+<p>SIGIOT</p>
+
+<p>硬件故障</p>
+
+<p>.      .</p>
+
+<p>终止w/core</p>
+
+<p>SIGQUIT</p>
+
+<p>终端退出符</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>      .
+</code></pre></div></div>
+
+<p>.      .</p>
+
+<p>终止w/core</p>
+
+<p>SIGSEGV</p>
+
+<p>无效存储访问</p>
+
+<p>.       .</p>
+
+<p>.      .</p>
+
+<p>终止w/core</p>
+
+<p>SIGSYS</p>
+
+<p>无效系统调用</p>
+
+<p>.      .</p>
+
+<p>终止w/core</p>
+
+<p>SIGTRAP</p>
+
+<p>硬件故障</p>
+
+<p>.      .</p>
+
+<p>终止w/core</p>
+
+<p>SIGXCPU</p>
+
+<p>超过CPU限制(setrlimit)</p>
+
+<p>.      .</p>
+
+<p>终止w/core</p>
+
+<p>SIGXFSZ</p>
+
+<p>超过文件长度限制(setrlimit)</p>
+
+<p>.      .</p>
+
+<p>终止w/core</p>
+
+<p>在系统默认动作列，“终止w/core”表示在进程当前工作目录的core文件中复制了该进程的存储图像（该文件名为core，由此可以看出这种功能很久之前就是UNIX功能的一部分）。大多数UNIX调试程序都使用core文件以检查进程在终止时的状态。</p>
+
+<p>core文件的产生不是POSIX.1所属部分,而是很多UNIX版本的实现特征。UNIX第6版没有检查条件(a)和(b)，并且其源代码中包含如下说明：“如果你正在找寻保护信号，那么当设置-用户-ID命令执行时，将可能产生大量的这种信号”。4.3 + BSD产生名为core.prog的文件，其中prog是被执行的程序名的前1 6个字符。它对core文件给予了某种标识，所以是一种改进特征。</p>
+
+<p>表中“硬件故障”对应于实现定义的硬件故障。这些名字中有很多取自UNIX早先在DP-11上的实现。请查看你所使用的系统的手册，以确切地确定这些信号对应于哪些错误类型。</p>
+
+<p>下面比较详细地说明这些信号。</p>
+
+<p>? SIGABRT 调用abort函数时产生此信号。进程异常终止。</p>
+
+<p>? SIGBUS  指示一个实现定义的硬件故障。</p>
+
+<p>? SIGEMT  指示一个实现定义的硬件故障。</p>
+
+<p>EMT这一名字来自PDP-11的emulator trap 指令。</p>
+
+<p>? SIGFPE  此信号表示一个算术运算异常，例如除以0，浮点溢出等。</p>
+
+<p>? SIGILL  此信号指示进程已执行一条非法硬件指令。</p>
+
+<p>4.3BSD由abort函数产生此信号。SIGABRT现在被用于此。</p>
+
+<p>? SIGIOT  这指示一个实现定义的硬件故障。</p>
+
+<p>IOT这个名字来自于PDP-11对于输入／输出TRAP(input/output TRAP)指令的缩写。系统V的早期版本，由abort函数产生此信号。SIGABRT现在被用于此。</p>
+
+<p>? SIGQUIT 当用户在终端上按退出键（一般采用Ctrl-\）时，产生此信号，并送至前台进</p>
+
+<p>程组中的所有进程。此信号不仅终止前台进程组（如SIGINT所做的那样），同时产生一个core文件。</p>
+
+<p>? SIGSEGV 指示进程进行了一次无效的存储访问。</p>
+
+<p>名字SEGV表示“段违例（segmentation violation）”。</p>
+
+<p>? SIGSYS  指示一个无效的系统调用。由于某种未知原因，进程执行了一条系统调用指令，</p>
+
+<p>但其指示系统调用类型的参数却是无效的。</p>
+
+<p>? SIGTRAP 指示一个实现定义的硬件故障。</p>
+
+<p>此信号名来自于PDP-11的TRAP指令。</p>
+
+<p>? SIGXCPU SVR4和4.3+BSD支持资源限制的概念。如果进程超过了其软C P U时间限制，则产生此信号。</p>
+
+<p>? SIGXFSZ 如果进程超过了其软文件长度限制，则SVR4和4.3+BSD产生此信号。</p>
+
+<p>摘自《UNIX环境高级编程》第10章 信号。</p>
+
+<p>使用core文件调试程序</p>
+
+<p>看下面的例子：</p>
+
+<p>/<em>core_dump_test.c</em>/
+ #include <stdio.h>
+const char *str = "test";
+void core_test(){
+    str[1] = 'T';
+}</stdio.h></p>
+
+<p>int main(){
+    core_test();
+    return 0;
+}</p>
+
+<p>编译：
+gcc –g core_dump_test.c -o core_dump_test</p>
+
+<p>如果需要调试程序的话，使用gcc编译时加上-g选项，这样调试core文件的时候比较容易找到错误的地方。</p>
+
+<p>执行：
+ ./core_dump_test
+段错误</p>
+
+<p>运行core_dump_test程序出现了“段错误”，但没有产生core文件。这是因为系统默认core文件的大小为0，所以没有创建。可以用ulimit命令查看和修改core文件的大小。
+ulimit -c 0
+ulimit -c 1000
+ulimit -c 1000</p>
+
+<p>-c 指定修改core文件的大小，1000指定了core文件大小。也可以对core文件的大小不做限制，如：</p>
+
+<p>ulimit -c unlimited
+ulimit -c unlimited</p>
+
+<p>如果想让修改永久生效，则需要修改配置文件，如 .bash_profile、/etc/profile或/etc/security/limits.conf。</p>
+
+<p>再次执行：
+./core_dump_test
+段错误 (core dumped)
+ls core.*
+core.6133</p>
+
+<p>可以看到已经创建了一个core.6133的文件.6133是core_dump_test程序运行的进程ID。</p>
+
+<p>调式core文件
+core文件是个二进制文件，需要用相应的工具来分析程序崩溃时的内存映像。</p>
+
+<p>file core.6133</p>
+
+<p>core.6133: ELF 32-bit LSB core file Intel 80386, version 1 (SYSV), SVR4-style, from ‘core_dump_test’</p>
+
+<p>在Linux下可以用GDB来调试core文件。</p>
+
+<p>gdb core_dump_test core.6133</p>
+
+<p>GNU gdb Red Hat Linux (5.3post-0.20021129.18rh)
+Copyright 2003 Free Software Foundation, Inc.
+GDB is free software, covered by the GNU General Public License, and you are
+welcome to change it and/or distribute copies of it under certain conditions.
+Type “show copying” to see the conditions.
+There is absolutely no warranty for GDB.  Type “show warranty” for details.
+This GDB was configured as “i386-redhat-linux-gnu”…
+Core was generated by `./core_dump_test’.
+Program terminated with signal 11, Segmentation fault.
+Reading symbols from /lib/tls/libc.so.6…done.
+Loaded symbols for /lib/tls/libc.so.6
+Reading symbols from /lib/ld-linux.so.2…done.
+Loaded symbols for /lib/ld-linux.so.2
+#0  0x080482fd in core_test () at core_dump_test.c:7
+7           str[1] = ‘T’;
+(gdb) where
+#0  0x080482fd in core_test () at core_dump_test.c:7
+#1  0x08048317 in main () at core_dump_test.c:12
+#2  0x42015574 in __libc_start_main () from /lib/tls/libc.so.6</p>
+
+<p>GDB中键入where，就会看到程序崩溃时堆栈信息（当前函数之前的所有已调用函数的列表（包括当前函数），gdb只显示最近几个），我们很容易找到我们的程序在最后崩溃的时候调用了core_dump_test.c 第7行的代码，导致程序崩溃。注意：在编译程序的时候要加入选项-g。您也可以试试其他命令，　如　fram、list等。更详细的用法，请查阅GDB文档。</p>
+
+<p>core文件创建在什么位置</p>
+
+<p>在进程当前工作目录的下创建。通常与程序在相同的路径下。但如果程序中调用了chdir函数，则有可能改变了当前工作目录。这时core文件创建在chdir指定的路径下。有好多程序崩溃了，我们却找不到core文件放在什么位置。和chdir函数就有关系。当然程序崩溃了不一定都产生core文件。</p>
+
+<p>什么时候不产生core文件</p>
+
+<p>在下列条件下不产生core文件：
+( a )进程是设置-用户-ID，而且当前用户并非程序文件的所有者；
+( b )进程是设置-组-ID，而且当前用户并非该程序文件的组所有者；
+( c )用户没有写当前工作目录的许可权；
+( d )文件太大。core文件的许可权(假定该文件在此之前并不存在)通常是用户读/写，组读和其他读。</p>
+:ET

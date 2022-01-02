@@ -1,0 +1,478 @@
+I"�Q<p>官方解释下就是：反向代理的场景，upstream后端用域名时，配置resolver以便于nginx能够解析该域名</p>
+
+<p>Configures name servers used to resolve names of upstream servers into addresses</p>
+
+<p>官网地址：http://nginx.org/en/docs/http/ngx_http_core_module.html#resolver</p>
+
+<p>平时我们在配置NG upstream 一般都是指定号IP 地址或者是地址池，或者是一个固定的域名</p>
+
+<p>如果一些复杂的场景，比如我们的upstream 是变量的servername，这时候需要用到resolver 的指令用来对变量做解析了。
+<!-- more -->
+前有个测试环境配置 proxy_pass 时直接指定域名是可以用的，比如</p>
+
+<p>location / {
+    proxy_pass http://dev.abc.com:10068;
+}
+遇到一个问题是：
+反向代理的地址是通过花生壳动态dns实现的。
+dev.abc.com通过cname解析到花生壳之类的动态dns给分配的域名上，如果路由器因为断电或者掉线之类的原因重新拨号后ip发生变化，此处nginx就无法反向代理了，必须重启一次nginx才行。</p>
+
+<p>今天遇到一个问题就是通过 set 设置变量，然后 proxy_pass 调用变量实现反向代理（目的是减少配置复杂度），比如：</p>
+
+<p>set $skyneturl “http://dev.abc.com:10077”; # 注意set好像不支持变量名中带下划线或其它特殊字符</p>
+
+<p>location /applyrecord/aladinnApplyrecord { 
+    proxy_pass $skyneturl;
+}
+重启nginx后发现报502错误，也就是连不上后端服务器。
+看nginx日志发现错误提示：</p>
+
+<p>1
+2019/04/11 10:34:04 [error] 17241#0: *4334742 no resolver defined to resolve dev.abc.com …
+说没有定义 resolver命令 来解析域名，查了一下发现需要配置resolver参数。</p>
+
+<p>官网文档：http://nginx.org/en/docs/http/ngx_http_core_module.html#resolver</p>
+
+<p>Syntax: resolver address … [valid=time] [ipv6=on|off];
+Default:    —
+Context:    http, server, location</p>
+
+<p>Configures name servers used to resolve names of upstream servers into addresses, for example:
+意思是需要配置dns地址用来解析upstream中的域名（用域名替代ip地址，后来经过测试upstream中配置域名只会在nginx启动时解析一次，然后就一直用这个ip，无法使用resolver实现每次解析）</p>
+
+<p>添加resolver配置参数：</p>
+
+<p>resolver 202.102.134.68 114.114.114.114 valid=5 ipv6=off;
+set $skyneturl “http://dev.abc.com:10077”;
+location /applyrecord/aladinnApplyrecord { 
+    proxy_pass $skyneturl;
+}
+重启nginx后访问成功。</p>
+
+<p>过程回顾:</p>
+
+<p>无意间查资料发现 proxy_pass 后面跟域名的话并不是每次请求都会解析出这个域名的ip（这也验证了必须重启nginx才能解决），所以就会导致路由ip变化时造成服务无法访问。
+解决这个问题的话，就可以用 set 设置一个变量，通过 resolver 实现每次访问都重新解析出ip地址。
+这里还有一个问题，发现通过set和resolver设置域名解析时，重启路由器测试访问时，还是无法解析出新地址，通过tcpdump抓包没有发现有请求dns解析。
+后来注意到还有个 valid 参数需要配置，这个参数用来控制缓存时间的，默认时间取决于dns记录的ttl值，比如我用windows搭建的dns解析默认是3600秒，也就是一小时。
+通过修改valid参数，这里设置为5秒后，再次抓包发现每隔5秒后访问虚拟主机的时候就会产生一次dns解析。</p>
+
+<p>这样才解决动态dns解析访问问题。</p>
+
+<p>Nginx怎么做域名解析？怎么在你自己开发的模块里面使用Nginx提供的方法解析域名？它内部实现是什么样的？</p>
+
+<p>本文以Nginx 1.5.1为例，从nginx_mail_smtp模块如何进行域名解析出发，分析Nginx进行域名解析的过程。为了简化流程，突出重点，在示例代码中省掉了一些异常部分的处理，比如内存分配失败等。DNS查询分为两种：根据域名查询地址和根据地址查询域名，在代码结构上这两种方式非常相似，这里只介绍根据域名查询地址这一种方式。本文将从以下几个方面进行介绍：</p>
+
+<p>域名查询的函数接口介绍
+域名解析流程分析
+查询场景分析及实现介绍
+一、域名查询的函数接口介绍
+在使用同步IO的情况下，调用gethostbyname()或者gethostbyname_r()就可以根据域名查询到对应的IP地址, 但因为可能会通过网络进行远程查询，所以需要的时间比较长。</p>
+
+<p>为了不阻塞当前线程，Nginx采用了异步的方式进行域名查询。整个查询过程主要分为三个步骤，这点在各种异步处理时都是一样的：</p>
+
+<p>准备函数调用需要的信息，并设置回调方法
+调用函数
+处理结束后回调方法被调用
+另外，为了尽量减少查询花费的时间，Nginx还对查询结果做了本地缓存。为了初始化DNS Server地址和本地缓存等信息，需要在真正查询前需要先进行一些全局的初始化操作。</p>
+
+<p>下面先从调用者的角度对每个步骤做详细的分析：</p>
+
+<p>初始化域名查询所需要的的全局信息
+需要初始化的全局信息包括：</p>
+
+<p>DNS 服务器的地址，如果指定了多个服务器，nginx会采用Round Robin的方式轮流查询每个服务器
+对查询结果的缓存，采用Red Black Tree的数据结构，以要查询名字的Hash作为Key, 节点信息存放在 struct ngx_resolver_node_t中。
+因为resolver是全局的，与任何一个connection都无关，所有需要放在一个随时都可以取到的地方，如 ngx_mail_core_srv_conf_t结构体上，在使用时从当前session找到ngx_mail_core_srv_conf_t，然后找到resolver。</p>
+
+<p>DNS 服务器的信息需要在配置文件中明确指出，比如</p>
+
+<p>#nginx.conf</p>
+
+<p>resolver 8.8.8.8
+#nginx 默认会根据DNS请求结果里的TTL值来进行缓存，
+#当然也可以通过一个可选的参数valid来设置过期时间，如:
+#resolver 127.0.0.1 [::1]:5353 valid=30s;
+下面根据配置中的resolver参数，初始化全局的ngx_resolver_t，其中保存了前面提及的DNS服务器地址和查询结果等信息:</p>
+
+<p>static char *
+ngx_mail_core_resolver(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
+{
+     ngx_mail_core_srv_conf_t  *cscf = conf;
+     ngx_str_t  *value;
+     value = cf-&gt;args-&gt;elts;</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code> cscf-&gt;resolver = ngx_resolver_create(cf, &amp;value[1],
+                                      cf-&gt;args-&gt;nelts - 1);
+ return NGX_CONF_OK; } 准备本次查询的信息 和本次查询相关的信息放在ngx_resolver_ctx_t结构体中，包括要查询的名称，查询完的回调方法，以及超时时间等。如果本次要查询的地址已经是IPv4用点分隔的地址了，比如74.125.128.100, nginx会在ngx_resolve_start中进行判断，并设置好标志位，在调用ngx_resolve_name时不会发送真正的DNS查询请求。
+</code></pre></div></div>
+
+<p>static void
+ngx_mail_smtp_resolve_name(ngx_event_t *rev)
+{
+     ngx_connection_t          *c;
+     ngx_mail_session_t        *s;
+     ngx_resolver_ctx_t        *ctx;
+     ngx_mail_core_srv_conf_t  *cscf;</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code> c = rev-&gt;data;
+ s = c-&gt;data;
+ 
+ cscf = ngx_mail_get_module_srv_conf(s, ngx_mail_core_module);
+ 
+ ctx = ngx_resolve_start(cscf-&gt;resolver, NULL);
+ if (ctx == NULL) {
+     ngx_mail_close_connection(c);
+     return ;
+ }
+ 
+ ctx-&gt;name = s-&gt;host;
+ ctx-&gt;type = NGX_RESOLVE_A;
+ ctx-&gt;handler = ngx_mail_smtp_resolve_name_handler;
+ ctx-&gt;data = s;
+ ctx-&gt;timeout = cscf-&gt;resolver_timeout;
+ 
+ //根据名字进行IP地址查询
+ if (ngx_resolve_name(ctx) != NGX_OK) {
+     ngx_mail_close_connection(c);
+ } } 根据名字进行IP地址查询 前面方法的最后通过ngx_resolve_name方法进行IP地址查询。查询时，Nginx会先检查本地缓存，如果在缓存中，就更新缓存过期时间，并回调设置的handler, 如前面设置的：ngx_mail_smtp_resolve_name_handler，然后整个查询过程结束。如果没有在缓存中就发送查询请求给dns server，同时方法返回。
+</code></pre></div></div>
+
+<p>查询完成后回调在ngx_resolver_ctx_t中指定的方法
+真正的DNS查询完成后，不管成功，失败或是超时，nginx会回调相应查询的handler, 如前面设置的：ngx_mail_smtp_resolve_name_handler。在handler中都需要调用ngx_resolve_addr_done来标识查询结束。</p>
+
+<p>static void
+ngx_mail_smtp_resolve_name_handler(ngx_resolver_ctx_t *ctx)
+{
+     in_addr_t            addr;
+     ngx_uint_t           i;
+     ngx_connection_t    *c;
+     struct sockaddr_in  * sin ;
+     ngx_mail_session_t  *s;</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code> s = ctx-&gt;data;
+ c = s-&gt;connection;
+ 
+ if (ctx-&gt;state) {
+     ngx_log_error(NGX_LOG_ERR, c-&gt; log , 0,
+                   "" %V " could not be resolved (%i: %s)" ,
+                   &amp;ctx-&gt;name, ctx-&gt;state,
+                   ngx_resolver_strerror(ctx-&gt;state));
+ } else {
+     /* AF_INET only */
+     sin = ( struct sockaddr_in *) c-&gt;sockaddr;
+ 
+     for (i = 0; i &lt; ctx-&gt;naddrs; i++) {
+         addr = ctx-&gt;addrs[i];
+ 
+         ngx_log_debug4(NGX_LOG_DEBUG_MAIL, c-&gt; log , 0,
+                        "name was resolved to %ud.%ud.%ud.%ud" ,
+                        (ntohl(addr) &gt;&gt; 24) &amp; 0xff,
+                        (ntohl(addr) &gt;&gt; 16) &amp; 0xff,
+                        (ntohl(addr) &gt;&gt; 8) &amp; 0xff,
+                        ntohl(addr) &amp; 0xff);
+ 
+         if (addr == sin -&gt;sin_addr.s_addr) {
+             goto found;
+         }
+     }
+ 
+     s-&gt;host = smtp_unavailable;
+ }
+</code></pre></div></div>
+
+<p>found:
+     //不管成功失败都要执行
+     ngx_resolve_name_done(ctx);
+}
+二、域名解析流程分析
+通过Nginx进行域名查询的流程图如下，颜色越深花费的时间越长。调用过程分为三种：</p>
+
+<p>首先判断是不是IPv4地址，如果是就直接调用Handler
+再次检查是不是在缓存中，如果有，就调用Handler
+最后发送远程DNS请求，收到回复后调用Handler
+nginx_dns_resolve (3)</p>
+
+<p>三、查询场景分析及实现介绍
+查询的地址是IP v4地址
+比如74.125.128.100, nginx会在ngx_resolve_start中通过ngx_inet_addr方法进行判断，如果是IPv4的地址，就设置好标志位 ngx_resolver_ctx_t-&gt;quick，在接下来的ngx_resolve_name中会对这个标志位进行判断，如果为1，就直接调用ngx_resolver_ctx_t-&gt;handler</p>
+
+<p>ngx_resolver_ctx_t *
+ngx_resolve_start(ngx_resolver_t *r, ngx_resolver_ctx_t *temp)
+{
+     in_addr_t            addr;
+     ngx_resolver_ctx_t  *ctx;</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code> if (temp) {
+     addr = ngx_inet_addr(temp-&gt;name.data, temp-&gt;name.len);
+ 
+     if (addr != INADDR_NONE) {
+         temp-&gt;resolver = r;
+         temp-&gt;state = NGX_OK;
+         temp-&gt;naddrs = 1;
+         temp-&gt;addrs = &amp;temp-&gt;addr;
+         temp-&gt;addr = addr;
+         temp-&gt;quick = 1;
+ 
+         return temp;
+     }
+ }
+ ... } 超时没有得到查询结果 调用ngx_resolve_name时设置的回调方法被调用，同时ngx_resolver_ctx_t-&gt;state被设置为NGX_RESOLVE_TIMEDOUT。相应的代码为：
+</code></pre></div></div>
+
+<p>static void
+ngx_resolver_timeout_handler(ngx_event_t *ev)
+{
+     ngx_resolver_ctx_t  *ctx;
+     ctx = ev-&gt;data;
+     ctx-&gt;state = NGX_RESOLVE_TIMEDOUT;
+     ctx-&gt;handler(ctx);
+}
+正常查询一个不在缓存中的域名
+如果要查询的域名不在缓存中，首先把域名按hash值放在缓存中，然后准备查询需要的数据，发送DNS查询的UDP请求给DNS服务器，</p>
+
+<p>static ngx_int_t
+ngx_resolve_name_locked(ngx_resolver_t *r, ngx_resolver_ctx_t *ctx)
+{
+     ngx_resolver_node_t  *rn;
+     rn = ngx_resolver_alloc(r, sizeof (ngx_resolver_node_t));
+     ngx_rbtree_insert(&amp;r-&gt;name_rbtree, &amp;rn-&gt;node);
+     ngx_resolver_create_name_query(rn, ctx);
+     ngx_resolver_send_query(r, rn);</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code> rn-&gt;cnlen = 0;
+ rn-&gt;naddrs = 0;
+ rn-&gt;valid = 0;
+ rn-&gt;waiting = ctx;
+ 
+ ctx-&gt;state = NGX_AGAIN; }
+</code></pre></div></div>
+
+<p>//收到DNS查询结果后的回调方法
+static void
+ngx_resolver_read_response(ngx_event_t *rev)
+{
+     ssize_t            n;
+     ngx_connection_t  *c;
+     u_char             buf[NGX_RESOLVER_UDP_SIZE];
+     c = rev-&gt;data;</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code> do {
+     n = ngx_udp_recv(c, buf, NGX_RESOLVER_UDP_SIZE);
+     if (n &lt; 0) {
+         return ;
+     }
+ 
+     ngx_resolver_process_response(c-&gt;data, buf, n);
+ } while (rev-&gt;ready); }
+</code></pre></div></div>
+
+<p>static void
+ngx_resolver_process_a(ngx_resolver_t *r, u_char *buf, size_t last,
+     ngx_uint_t ident, ngx_uint_t code, ngx_uint_t nan, ngx_uint_t ans)
+{
+     hash = ngx_crc32_short(name.data, name.len);
+     rn = ngx_resolver_lookup_name(r, &amp;name, hash);</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code> //copy addresses to cached node
+ rn-&gt;u.addrs = addrs;
+ 
+ //回调所有等待本域名解析的请求
+ next = rn-&gt;waiting;
+ rn-&gt;waiting = NULL;
+ 
+ while (next) {
+      ctx = next;
+      ctx-&gt;state = NGX_OK;
+      ctx-&gt;naddrs = naddrs;
+      ctx-&gt;addrs = (naddrs == 1) ? &amp;ctx-&gt;addr : addrs;
+      ctx-&gt;addr = addr;
+      next = ctx-&gt;next;
+ 
+      ctx-&gt;handler(ctx);
+ } } 对同一域名查询多次查询 如果多次查询时，之前的查询结果还在缓存中并且没有失效，就直接从缓存中取到查询结果，并调用设置的回调方法。
+</code></pre></div></div>
+
+<p>static ngx_int_t
+ngx_resolve_name_locked(ngx_resolver_t *r, ngx_resolver_ctx_t *ctx)
+{
+     uint32_t              hash;
+     in_addr_t             addr, *addrs;
+     ngx_uint_t            naddrs;
+     ngx_resolver_ctx_t   *next;
+     ngx_resolver_node_t  *rn;</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code> hash = ngx_crc32_short(ctx-&gt;name.data, ctx-&gt;name.len);
+ rn = ngx_resolver_lookup_name(r, &amp;ctx-&gt;name, hash);
+ 
+ if (rn) {
+     if (rn-&gt;valid &gt;= ngx_time()) {
+         naddrs = rn-&gt;naddrs;
+ 
+         if (naddrs) {
+             ctx-&gt;next = rn-&gt;waiting;
+             rn-&gt;waiting = NULL;
+ 
+             do {
+                 ctx-&gt;state = NGX_OK;
+                 ctx-&gt;naddrs = naddrs;
+                 ctx-&gt;addrs = (naddrs == 1) ? &amp;ctx-&gt;addr : addrs;
+                 ctx-&gt;addr = addr;
+                 next = ctx-&gt;next;
+ 
+                 ctx-&gt;handler(ctx);
+ 
+                 ctx = next;
+             } while (ctx);
+ 
+             return NGX_OK;
+         }
+     }
+ } } 得到查询结果时同时超时了 如果在得到查询结果的同时，设置的超时时间也到期了，那该怎么办呢？ Nginx会先处理各种网络读写事件，再处理超时事件，在处理网络事件时，会相应地把设置的定时器删除，所以在执行超时事件时就不会再执行了。
+</code></pre></div></div>
+
+<p>void
+ngx_process_events_and_timers(ngx_cycle_t *cycle)
+{
+     ngx_uint_t  flags;
+     ngx_msec_t  timer, delta;</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code> //处理各种网络事件
+ ( void ) ngx_process_events(cycle, timer, flags);
+ 
+ //处理各种timer事件，其中包含了查询超时
+ ngx_event_expire_timers(); } 得到查询结果时客户端已经关闭连接 如果不做任何处理，那么在收到dns查询结果后，会回调查询时设置的回调方法，但因为连接已经被关闭，相应的内存已经被释放，所以会有非法内存访问的问题。怎么避免呢？在处理连接关闭事件时，同时需要调用ngx_resolve_name_done(ctx)方法,调用时需要把state设为NGX_AGAIN或者NGX_RESOLVE_TIMEDOUT，这样就会删除查询所设置的回调信息:
+</code></pre></div></div>
+
+<p>void ngx_close_xxx_session(ngx_xxx_session_t *s)
+{
+     if (s-&gt;resolver_ctx != NULL) {
+         s-&gt;resolver_ctx-&gt;state = NGX_RESOLVE_TIMEDOUT;
+         ngx_resolve_name_done(s-&gt;resolver_ctx);
+         s-&gt;resolver_ctx = NULL;
+     }
+}</p>
+
+<p>void ngx_resolve_name_done(ngx_resolver_ctx_t *ctx)
+{
+     uint32_t              hash;
+     ngx_resolver_t       *r;
+     ngx_resolver_ctx_t   *w, **p;
+     ngx_resolver_node_t  *rn;</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code> r = ctx-&gt;resolver;
+ if (ctx-&gt;state == NGX_AGAIN || ctx-&gt;state == NGX_RESOLVE_TIMEDOUT) {
+     hash = ngx_crc32_short(ctx-&gt;name.data, ctx-&gt;name.len);
+     rn = ngx_resolver_lookup_name(r, &amp;ctx-&gt;name, hash);
+ 
+     if (rn) {
+         p = &amp;rn-&gt;waiting;
+         w = rn-&gt;waiting;
+ 
+         while (w) {
+             if (w == ctx) {
+                 *p = w-&gt;next;
+                 goto done;
+             }
+ 
+             p = &amp;w-&gt;next;
+             w = w-&gt;next;
+         }
+     }
+ }
+</code></pre></div></div>
+
+<p>done:
+     ngx_resolver_free_locked(r, ctx);
+}
+本地缓存的地址没有再次被查询
+每次在查询结束的时候（调用ngx_resolve_addr_done），都会检查有没有缓存过期，如果有，就会进行释放。</p>
+
+<p>static void
+ngx_resolver_expire(ngx_resolver_t *r, ngx_rbtree_t *tree,
+                     ngx_queue_t *queue)
+{
+     time_t                now;
+     ngx_uint_t            i;
+     ngx_queue_t          *q;
+     ngx_resolver_node_t  *rn;
+     now = ngx_time();</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code> for (i = 0; i &lt; 2; i++) {
+     if (ngx_queue_empty(queue)) {
+         return ;
+     }
+ 
+     q = ngx_queue_last(queue);
+     rn = ngx_queue_data(q, ngx_resolver_node_t, queue);
+ 
+     if (now &lt;= rn-&gt;expire) {
+         return ;
+     }
+ 
+     ngx_log_debug2(NGX_LOG_DEBUG_CORE, r-&gt; log , 0,
+         "resolver expire " %*s "" , ( size_t ) rn-&gt;nlen, rn-&gt;name);
+ 
+     ngx_queue_remove(q);
+     ngx_rbtree_delete(tree, &amp;rn-&gt;node);
+     ngx_resolver_free_node(r, rn);
+ } } 域名对应这多个IP地址 如果对应的有多个ip,那么在每次查询时，会随机的重新排列顺序，然后返回。对于调用者来说，只要去第一个地址，就可以达到取随机地址的目的了。
+</code></pre></div></div>
+
+<p>static ngx_int_t
+ngx_resolve_name_locked(ngx_resolver_t *r, ngx_resolver_ctx_t *ctx)
+{
+     if (naddrs) {
+         if (naddrs != 1) {
+             addr = 0;
+             addrs = ngx_resolver_rotate(r, rn-&gt;u.addrs, naddrs);
+             if (addrs == NULL) {
+                 return NGX_ERROR;
+             }</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>     } else {
+         addr = rn-&gt;u.addr;
+         addrs = NULL;
+     }
+ } }
+</code></pre></div></div>
+
+<p>static in_addr_t *
+ngx_resolver_rotate(ngx_resolver_t *r, in_addr_t *src, ngx_uint_t n)
+{
+     void        *dst, *p;
+     ngx_uint_t   j;</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code> dst = ngx_resolver_alloc(r, n * sizeof (in_addr_t));
+ j = ngx_random() % n;
+ 
+ if (j == 0) {
+     ngx_memcpy(dst, src, n * sizeof (in_addr_t));
+     return dst;
+ }
+ 
+ p = ngx_cpymem(dst, &amp;src[j], (n - j) * sizeof (in_addr_t));
+ ngx_memcpy(p, src, j * sizeof (in_addr_t));
+ 
+ return dst; } 指定了多个dns server地址会怎么查询 如果在配置文件里指定了多个dns server地址会发生什么呢？比如
+</code></pre></div></div>
+
+<p>#nginx.conf
+resolver 8.8.8.8 8.8.4.4
+那么nginx 会采用Round Robin 的方式轮流查询各个dns server。在方法ngx_resolver_send_query中通过在每次调用时改变last_connection来轮流使用不同的dns server进行查询</p>
+
+<p>static ngx_int_t
+ngx_resolver_send_query(ngx_resolver_t *r, ngx_resolver_node_t *rn)
+{
+     ssize_t                n;
+     ngx_udp_connection_t  *uc;</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code> uc = r-&gt;udp_connections.elts;
+ 
+ uc = &amp;uc[r-&gt;last_connection++];
+ if (r-&gt;last_connection == r-&gt;udp_connections.nelts) {
+     r-&gt;last_connection = 0;
+ }
+ ... }
+</code></pre></div></div>
+:ET

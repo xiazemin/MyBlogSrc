@@ -1,0 +1,396 @@
+I"P.<p>https://github.com/xiazemin/json-parser</p>
+
+<p>flex&amp;bison(lex&amp;yacc)解析JSON
+http://json.org/json-zh.html
+词法解析器（lex/flex）
+当然我们的目标不是写一个相对完整的JSON，所以，在对Number的正则上也是随便意思一下……</p>
+
+<p>但是对于String类型的词法解析还是比较复杂的，我凑了半天没凑出正则了，后来我就参考了这篇文章《Lex识别C风格字符串和注释》
+https://blog.csdn.net/xfxyy_sxfancy/article/details/45024573
+<!-- more --></p>
+
+<p>testjson.l文件</p>
+
+<p>%{
+#include <string.h>
+char* yylval;
+%}
+def [_a-zA-Z][_a-zA-Z0-9]*
+str \"(\\\"|[^\"])*\"
+num [0-9]+(\.[0-9]+)?
+arrs \[
+arre \]
+objs \{
+obje \}
+split ,
+desc :
+%%
+{str} { yylval = strdup(yytext);
+printf("[STR:%s]",yylval); 
+free(yylval);}
+{def} { yylval = strdup(yytext);
+printf("[DEF:%s]",yylval);
+free(yylval);}
+{num} { yylval = strdup(yytext);
+printf("[NUM:%s]",yylval); 
+free(yylval);}
+{arrs} {printf("[ARRS]");}
+{arre} {printf("[ARRE]");}
+{objs} { printf("[OBJS]"); }
+{obje} { printf("[OBJE]"); }
+{desc} { printf("[DESC]"); }
+{split} { printf("[SPLIT]");}
+%%
+然后用flex工具生成C文件，用gcc编译一下，相关命令：</string.h></p>
+
+<p>flex -o testjson.c testjson.l
+gcc -o testjson.exe testjson.c -lfl
+当然，我写了个批处理来编译运行它，内容如下：
+@echo off
+color 1E
+echo 当前目录:%~dp0
+cd “%~dp0”
+echo flex编译testjson.l生成testjson.c…
+flex -o testjson.c testjson.l
+echo gcc编译testjson.c链接libfl.a输出testjson.exe…
+gcc -o testjson.exe testjson.c -L. -lfl
+echo 运行testjson.exe输入json.txt作为测试文件…
+echo 输出结果:
+testjson.exe&lt;json.txt
+pause
+其中的示例json.txt内容如下（后面再不声明的情况下，都是用的这个串）：</p>
+
+<p>{
+	a:[1,2,3],
+	b:[“a\tbc”,”12  3”,”4,5"6”,{
+					x:1,
+					y:”cc\ncc”
+				},4.56],
+	“text”:”I’m OK~”,
+	“1-2”:234
+}</p>
+
+<p>运行批处理生成结果如下：
+当前目录:C:\jsonParse\lexTest\</p>
+
+<p>flex编译testjson.l生成testjson.c…
+gcc编译testjson.c链接libfl.a输出testjson.exe…
+运行testjson.exe输入json.txt作为测试文件…
+输出结果:
+[OBJS]
+        [DEF:a][DESC][ARRS][NUM:1][SPLIT][NUM:2][SPLIT][NUM:3][ARRE][SPLIT]
+        [DEF:b][DESC][ARRS][STR:”a\tbc”][SPLIT][STR:”12  3”][SPLIT][STR:”4,5"6”
+][SPLIT][OBJS]
+                                        [DEF:x][DESC][NUM:1][SPLIT]
+                                        [DEF:y][DESC][STR:”cc\ncc”]
+                                [OBJE][SPLIT][NUM:4.56][ARRE][SPLIT]
+        [STR:”text”][DESC][STR:”I’m OK~”][SPLIT]
+        [STR:”1-2”][DESC][NUM:234]
+[OBJE]
+请按任意键继续. . .</p>
+
+<p>语法解析器（yacc/bison）
+然后，就是语法解析了……轮到yacc神器出场了，当然，我们在这儿用的工具是bison……</p>
+
+<p>对于yacc来说，最关键的东西就是语法生成树了…
+yacc源文件中的“#define YYSTYPE char*”放得高点比较好，还有就是那三个函数的定义，不写上会报warnning，尽管没什么影响……</p>
+
+<p>先要改写json.l文件，使其的词法解析结果（token）作为json.y的输入：</p>
+
+<p>%{
+#include <string.h>
+#include "json.tab.h"
+extern char* yylval;
+%}
+space [ \t\n]+
+def [_a-zA-Z][_a-zA-Z0-9]*
+str \"(\\\"|[^\"])*\"
+num [0-9]+(\.[0-9]+)?
+arrs \[
+arre \]
+objs \{
+obje \}
+split ,
+desc :
+%%
+{str} { yylval = strdup(yytext);
+return STR; }
+{def} {
+	if(strcmp(yytext,"true")==0){
+		return TRUE;
+	}else if(strcmp(yytext,"false")==0){
+		return FALSE;
+	}else if(strcmp(yytext,"null")==0){
+		return NIL;
+	}else{
+		yylval = strdup(yytext);
+		return STR; 
+	}
+}
+{num} { yylval = strdup(yytext);
+return NUM; }
+{arrs} { return ARRS; }
+{arre} { return ARRE; }
+{objs} { return OBJS; }
+{obje} { return OBJE; }
+{desc} { return DESC; }
+{split} { return SPLIT; }
+{space} {}
+%%
+然后是json.y的语法树解析，输出一下对于解析结果的一些初步规划，比如说push和add之类的，这样可以查看结果跟预想的是不是一样：
+%{
+#define YYSTYPE char*
+#include <stdio.h>
+#include "lex.yy.c"
+int yyparse(void);
+int yyerror(const char* msg);
+int yywrap();
+%}
+%token STR NUM DESC SPLIT ARRS OBJS ARRE OBJE FALSE TRUE NIL
+%%
+command : value {printf("end\n");}
+value: STR {printf("value:[string]%s\n",$1);free($1);}
+	|NUM {printf("value:[number]%s\n",$1);free($1);}
+	|FALSE {printf("value:FALSE\n");}
+	|TRUE {printf("value:TRUE\n");}
+	|NIL {printf("value:NULL\n");}
+	|object {printf("value:OBJECT\n");}
+	|array {printf("value:ARRAY\n");}
+;
+arrs: ARRS {printf("array_start\n");};
+array : arrs ARRE {printf("[empty]\n"); }
+	| arrs values ARRE {printf("[...]\n"); }
+;
+objs: OBJS {printf("object_start\n");};
+object : objs OBJE {printf("{empty}\n");}
+	| objs pairs OBJE {printf("{...}\n");}
+;
+values : values SPLIT value {printf("add %s\n",$3);}
+	|value {printf("add %s\n",$1);}
+	|values SPLIT
+;
+pairs : pairs SPLIT pair {printf("put\n");}
+	|pair {printf("put\n");}
+	|pairs SPLIT
+;
+pair : STR DESC value {printf("key %s\n",$1);}
+;
+%%
+int main()
+{
+    return yyparse();
+}
+int yyerror( const char* msg)
+{
+	fprintf (stderr,"%s\n",msg);
+	return 0;
+}
+int yywrap()
+{
+    return 1;
+}</stdio.h></string.h></p>
+
+<p>同样，写个脚本运行一下，同样的测试字符串：
+@echo off
+color 1E
+echo 当前目录:%~dp0
+cd “%~dp0”
+echo flex编译json.l生成lex.yy.c…
+flex json.l
+echo bison编译json.y生成json.tab.h、json.tab.c…
+bison -d json.y
+echo gcc编译json.tab.c输出json.exe…
+gcc json.tab.c -o json.exe
+echo 运行json.exe输入json.txt作为测试文件…
+echo 输出结果:
+json.exe&lt;json.txt
+pause</p>
+
+<p>…配合堆栈以及Map和List的复式结构，就可以把这个json中表现的内容存起来了~</p>
+
+<p>配套堆栈处理
+语法解析是第一道坎，而相关的堆栈操作和处理便是第二道坎……</p>
+
+<p>每一步执行什么操作都是要有所设计，做到心中有数的……</p>
+
+<p>刚才已经看到了语法解析的处理结果，必须要配合堆栈才能把数据处理好……</p>
+
+<p>可惜，C语言里要写个Stack或者是Map是挺麻烦的……我并不准备这么干……</p>
+
+<p>因为我们的目标是弄清楚编译原理，而不是要实现各什么东西……</p>
+
+<p>于是我选择了语法解析之后，将结果转为JS语句，将JSON输出形成一个返回JS对象的函数……
+json.l文件不用变动，其中的json.y文件变成了这样：</p>
+
+<p>%{
+#define YYSTYPE char*
+#include <stdio.h>
+#include "lex.yy.c"
+int yyparse(void);
+int yyerror(const char* msg);
+int yywrap();
+%}
+%token STR NUM DESC SPLIT ARRS OBJS ARRE OBJE FALSE TRUE NIL
+%%
+command : value {printf("\treturn curValue;\n");}
+value: STR {printf("\tcurValue=\"%s\"\n",$1);free($1);}
+	|NUM {printf("\tcurValue=%s\n",$1);free($1);}
+	|FALSE {printf("\tcurValue=false;\n");}
+	|TRUE {printf("\tcurValue=true;\n");}
+	|NIL {printf("\tcurValue=null;\n");}
+	|object {printf("\tcurValue=curObj;\n\tcurObj=stack[stack.length-1];\n\n");}
+	|array {printf("\tcurValue=curObj;\n\tcurObj=stack[stack.length-1];\n\n");}
+;
+arrs: ARRS {printf("\tcurObj=[];\n\tstack.push(curObj);\n");};
+array : arrs ARRE {printf("\tcurObj=stack.pop();\n"); }
+	| arrs values ARRE {printf("\tcurObj=stack.pop();\n"); }
+;
+objs: OBJS {printf("\tcurObj={};\n\tstack.push(curObj);\n");};
+object : objs OBJE {printf("\tcurObj=stack.pop();\n");}
+	| objs pairs OBJE {printf("\tcurObj=stack.pop();\n");}
+;
+values : values SPLIT value {printf("\tcurObj.push(curValue);\n");}
+	|value {printf("\tcurObj.push(curValue);\n");}
+	|values SPLIT
+;
+pairs : pairs SPLIT STR DESC value {printf("\tcurObj[\"%s\"]=curValue;\n",$3);}
+	|STR DESC value {printf("\tcurObj[\"%s\"]=curValue;\n",$1);}
+	|pairs SPLIT
+;
+;
+%%
+int main()
+{
+    printf("(function(){\n\tvar stack = [];\n\tvar curObj = null;\n\tvar curValue=null;\n\n");
+    int r = yyparse();
+    printf("})()");
+    return r;
+}
+int yyerror( const char* msg)
+{
+	fprintf (stderr,"%s\n",msg);
+	return 0;
+}
+int yywrap()
+{
+    return 1;
+}</stdio.h></p>
+
+<p>相应的测试批处理文件内容：
+@echo off
+color 1E
+echo 当前目录:%~dp0
+cd “%~dp0”
+echo flex编译json.l生成lex.yy.c…
+flex json.l
+echo bison编译json.y生成json.tab.h、json.tab.c…
+bison -d json.y
+echo gcc编译json.tab.c输出json.exe…
+gcc json.tab.c -o json.exe
+echo 运行json.exe输入json.txt输出“生成结果.txt”…
+json.exe<json.txt>生成结果.txt
+pause</json.txt></p>
+
+<p>生成的结果：
+(function(){
+	var stack = [];
+	var curObj = null;
+	var curValue=null;</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>curObj={};
+stack.push(curObj);
+curObj=[];
+stack.push(curObj);
+curValue=1
+curObj.push(curValue);
+curValue=2
+curObj.push(curValue);
+curValue=3
+curObj.push(curValue);
+curObj=stack.pop();
+curValue=curObj;
+curObj=stack[stack.length-1];
+ 
+curObj["a"]=curValue;
+curObj=[];
+stack.push(curObj);
+curValue="a\tbc"
+curObj.push(curValue);
+curValue="12  3"
+curObj.push(curValue);
+curValue="4,5\"6"
+curObj.push(curValue);
+curObj={};
+stack.push(curObj);
+curValue=1
+curObj["x"]=curValue;
+curValue="cc\ncc"
+curObj["y"]=curValue;
+curObj=stack.pop();
+curValue=curObj;
+curObj=stack[stack.length-1];
+ 
+curObj.push(curValue);
+curValue=4.56
+curObj.push(curValue);
+curObj=stack.pop();
+curValue=curObj;
+curObj=stack[stack.length-1];
+ 
+curObj["b"]=curValue;
+curValue="I'm OK~"
+curObj["text"]=curValue;
+curValue=234
+curObj["1-2"]=curValue;
+curValue=false;
+curObj["mybool"]=curValue;
+curValue=null;
+curObj["mynull"]=curValue;
+curValue=true;
+curObj["myreal"]=curValue;
+curObj=stack.pop();
+curValue=curObj;
+curObj=stack[stack.length-1];
+ 
+return curValue; })()
+</code></pre></div></div>
+
+<p>既然生成了js，就可以在浏览器里执行一下看看效果有什么不同：</p>
+
+<p>s中用变量stack作为json解析的处理堆栈……</p>
+
+<p>注意，在语法解析时，yacc里面其实是有堆栈的，一个是运行堆栈，一个是值堆栈，这是语法解析用的堆栈……</p>
+
+<p>而js中这个stack是真正的运行时堆栈……传说中的runtime对象……只是听上去高大上而已……</p>
+
+<p>stack的出栈入栈就这么被体现出来了~</p>
+
+<p>还有一个是curValue、curObj，是保存当前值的变量……这两个变量赋值来赋值去的，看上去挺烦的……</p>
+
+<p>https://blog.csdn.net/yimengqiannian/article/details/53700204</p>
+
+<p>https://pan.baidu.com/s/1o84OL0Q</p>
+
+<p>https://www.jianshu.com/p/bb7ab49ba5f6</p>
+
+<p>一开始解析到{状态变为开始解析对象
+-解析到”状态变为开始解析键名
+–后面的Name四个字符都当做键名
+-又解析到”状态变为键名解析完毕，等待:
+-解析到:状态变为已经有:了
+-解析到”状态变为值是String,等待字符串
+–后面的aaa:bbb都当作字符串来处理，虽然里面有:，但是当前的状态是值是String,等待字符串所以会把它当作值保留下来
+-解析到”状态变为当前键值对完毕
+解析到}状态变为JSON对象解析完毕</p>
+
+<p>这种是通过状态机转移的方式来做的解析，不同状态间定义了严谨的转移条件就不会混乱（比如你举例字符串中的:不会被识别为键值之间的分隔符），大部分语法分析都是通过这种方式来完成的，全手写的话需要严格定义各个状态以及转移条件，挺费力的，尤其还得考虑嵌套转意等等。
+https://github.com/isayme/tJson/</p>
+
+<p>https://www.jianshu.com/p/bb7ab49ba5f6
+https://github.com/fanyang89/FadeJSON
+http://www.fuisblog.com/post/how-to-design-and-write-json-lib
+https://github.com/Tencent/rapidjson/tree/master/bin/jsonchecker</p>
+
+<p>https://code.google.com/p/rapidjson/source/browse/tags/version0.1/include/rapidjson/reader.h</p>
+
+:ET
