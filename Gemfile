@@ -27,6 +27,6 @@ gem "pygments.rb","~>1.1.2"
 # Windows does not include zoneinfo files, so bundle the tzinfo-data gem
 gem 'tzinfo-data', platforms: [:mingw, :mswin, :x64_mingw, :jruby]
 
-gem "addressable", "~> 2.5.2"
+gem "addressable", "~> 2.8.0"
 
 gem "webrick", "~> 1.7"
