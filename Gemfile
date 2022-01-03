@@ -28,3 +28,5 @@ gem "pygments.rb","~>1.1.2"
 gem 'tzinfo-data', platforms: [:mingw, :mswin, :x64_mingw, :jruby]
 
 gem "addressable", "~> 2.5.2"
+
+gem "webrick", "~> 1.7"
