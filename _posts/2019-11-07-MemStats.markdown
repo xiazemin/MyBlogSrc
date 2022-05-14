@@ -1,0 +1,552 @@
+---
+title: MemStats 查询度量内存和GC使用
+layout: post
+category: golang
+author: 夏泽民
+---
+top、ps等命令。这些监控内存使用情况的方法，一般需要编写脚本，执行脚本后将执行结果发送给对应的监控服务，从而达到监控的效果。但是golang自带的包却有一个runtime包，可以轻松获取服务运行时候的各种包括内存使用情况的信息。
+使用linux命令，一般情况下只能看服务使用了多少内存。但是服务内存具体的使用情况缺无法获取。golang的runtime包可以做到获取服务总共使用主机多少内存，也可以获取服务已经申请了多少内存，以及内存的分布
+<!-- more -->
+runtime中和内存使用情况相关的结构体为runtime.MemStats，这个结构定义了golang运行过程中所有内存相关的信息，在源代码中定义如下：
+
+// A MemStats records statistics about the memory allocator. 记录内存分配器的信息
+type MemStats struct {
+    // General statistics.
+
+    // Alloc is bytes of allocated heap objects.
+    // 堆空间分配的字节数
+    // This is the same as HeapAlloc (see below).
+    Alloc uint64
+
+    // TotalAlloc is cumulative bytes allocated for heap objects.
+    //
+    // TotalAlloc increases as heap objects are allocated, but
+    // unlike Alloc and HeapAlloc, it does not decrease when
+    // objects are freed. 从服务开始运行至今分配器为分配的堆空间总和
+    TotalAlloc uint64
+
+    // Sys is the total bytes of memory obtained from the OS.
+    //
+    // Sys is the sum of the XSys fields below. Sys measures the
+    // virtual address space reserved by the Go runtime for the
+    // heap, stacks, and other internal data structures. It's
+    // likely that not all of the virtual address space is backed
+    // by physical memory at any given moment, though in general
+    // it all was at some point. 服务现在使用的内存
+    Sys uint64
+
+    // Lookups is the number of pointer lookups performed by the
+    // runtime.
+    //
+    // This is primarily useful for debugging runtime internals. 被runtime监视的指针数
+    Lookups uint64
+
+    // Mallocs is the cumulative count of heap objects allocated. 服务malloc的次数
+    // The number of live objects is Mallocs - Frees.
+    Mallocs uint64
+
+    // Frees is the cumulative count of heap objects freed. 服务回收的heap objects
+    Frees uint64
+
+    // Heap memory statistics.
+    //
+    // Interpreting the heap statistics requires some knowledge of
+    // how Go organizes memory. Go divides the virtual address
+    // space of the heap into "spans", which are contiguous
+    // regions of memory 8K or larger. A span may be in one of
+    // three states:
+    //
+    // An "idle" span contains no objects or other data. The
+    // physical memory backing an idle span can be released back
+    // to the OS (but the virtual address space never is), or it
+    // can be converted into an "in use" or "stack" span.
+    //
+    // An "in use" span contains at least one heap object and may
+    // have free space available to allocate more heap objects.
+    //
+    // A "stack" span is used for goroutine stacks. Stack spans
+    // are not considered part of the heap. A span can change
+    // between heap and stack memory; it is never used for both
+    // simultaneously.
+
+    // HeapAlloc is bytes of allocated heap objects.
+    //
+    // "Allocated" heap objects include all reachable objects, as
+    // well as unreachable objects that the garbage collector has
+    // not yet freed. Specifically, HeapAlloc increases as heap
+    // objects are allocated and decreases as the heap is swept
+    // and unreachable objects are freed. Sweeping occurs
+    // incrementally between GC cycles, so these two processes
+    // occur simultaneously, and as a result HeapAlloc tends to
+    // change smoothly (in contrast with the sawtooth that is
+    // typical of stop-the-world garbage collectors).
+    //服务分配的堆内存
+    HeapAlloc uint64
+
+    // HeapSys is bytes of heap memory obtained from the OS.
+    //
+    // HeapSys measures the amount of virtual address space
+    // reserved for the heap. This includes virtual address space
+    // that has been reserved but not yet used, which consumes no
+    // physical memory, but tends to be small, as well as virtual
+    // address space for which the physical memory has been
+    // returned to the OS after it became unused (see HeapReleased
+    // for a measure of the latter).
+    //
+    // HeapSys estimates the largest size the heap has had.
+    //系统分配的堆内存
+    HeapSys uint64
+
+    // HeapIdle is bytes in idle (unused) spans.
+    //
+    // Idle spans have no objects in them. These spans could be
+    // (and may already have been) returned to the OS, or they can
+    // be reused for heap allocations, or they can be reused as
+    // stack memory.
+    //
+    // HeapIdle minus HeapReleased estimates the amount of memory
+    // that could be returned to the OS, but is being retained by
+    // the runtime so it can grow the heap without requesting more
+    // memory from the OS. If this difference is significantly
+    // larger than the heap size, it indicates there was a recent
+    // transient spike in live heap size.
+    //申请但是为分配的堆内存，（或者回收了的堆内存）
+    HeapIdle uint64
+
+    // HeapInuse is bytes in in-use spans.
+    //
+    // In-use spans have at least one object in them. These spans
+    // can only be used for other objects of roughly the same
+    // size.
+    //
+    // HeapInuse minus HeapAlloc esimates the amount of memory
+    // that has been dedicated to particular size classes, but is
+    // not currently being used. This is an upper bound on
+    // fragmentation, but in general this memory can be reused
+    // efficiently.
+    //正在使用的堆内存
+    HeapInuse uint64
+
+    // HeapReleased is bytes of physical memory returned to the OS.
+    //
+    // This counts heap memory from idle spans that was returned
+    // to the OS and has not yet been reacquired for the heap.
+    //返回给OS的堆内存，类似C/C++中的free。
+    HeapReleased uint64
+
+    // HeapObjects is the number of allocated heap objects.
+    //
+    // Like HeapAlloc, this increases as objects are allocated and
+    // decreases as the heap is swept and unreachable objects are
+    // freed.
+    //堆内存块申请的量
+    HeapObjects uint64
+
+    // Stack memory statistics.
+    //
+    // Stacks are not considered part of the heap, but the runtime
+    // can reuse a span of heap memory for stack memory, and
+    // vice-versa.
+
+    // StackInuse is bytes in stack spans.
+    //
+    // In-use stack spans have at least one stack in them. These
+    // spans can only be used for other stacks of the same size.
+    //
+    // There is no StackIdle because unused stack spans are
+    // returned to the heap (and hence counted toward HeapIdle).
+    //正在使用的栈
+    StackInuse uint64
+
+    // StackSys is bytes of stack memory obtained from the OS.
+    //
+    // StackSys is StackInuse, plus any memory obtained directly
+    // from the OS for OS thread stacks (which should be minimal).
+    //系统分配的作为运行栈的内存
+    StackSys uint64
+
+    // Off-heap memory statistics.
+    //
+    // The following statistics measure runtime-internal
+    // structures that are not allocated from heap memory (usually
+    // because they are part of implementing the heap). Unlike
+    // heap or stack memory, any memory allocated to these
+    // structures is dedicated to these structures.
+    //
+    // These are primarily useful for debugging runtime memory
+    // overheads.
+
+    // MSpanInuse is bytes of allocated mspan structures. 用于测试用的结构体使用的字节数
+    MSpanInuse uint64
+
+    // MSpanSys is bytes of memory obtained from the OS for mspan
+    // structures. 系统为测试用的结构体分配的字节数
+    MSpanSys uint64
+
+    // MCacheInuse is bytes of allocated mcache structures. mcache结构体申请的字节数
+    MCacheInuse uint64
+
+    // MCacheSys is bytes of memory obtained from the OS for
+    // mcache structures. 操作系统申请的堆空间用于mcache的量
+    MCacheSys uint64
+
+    // BuckHashSys is bytes of memory in profiling bucket hash tables.用于剖析桶散列表的堆空间
+    BuckHashSys uint64
+
+    // GCSys is bytes of memory in garbage collection metadata. 垃圾回收标记元信息使用的内存
+    GCSys uint64
+
+    // OtherSys is bytes of memory in miscellaneous off-heap
+    // runtime allocations.  golang系统架构占用的额外空间
+    OtherSys uint64
+
+    // Garbage collector statistics.
+
+    // NextGC is the target heap size of the next GC cycle.
+    //
+    // The garbage collector's goal is to keep HeapAlloc ≤ NextGC.
+    // At the end of each GC cycle, the target for the next cycle
+    // is computed based on the amount of reachable data and the
+    // value of GOGC. 垃圾回收器检视的内存大小
+    NextGC uint64
+
+    // LastGC is the time the last garbage collection finished, as
+    // nanoseconds since 1970 (the UNIX epoch).
+    // 垃圾回收器最后一次执行时间。
+    LastGC uint64
+
+    // PauseTotalNs is the cumulative nanoseconds in GC
+    // stop-the-world pauses since the program started.
+    //
+    // During a stop-the-world pause, all goroutines are paused
+    // and only the garbage collector can run. 
+    // 垃圾回收或者其他信息收集导致服务暂停的次数。
+    PauseTotalNs uint64
+
+    // PauseNs is a circular buffer of recent GC stop-the-world
+    // pause times in nanoseconds.
+    //
+    // The most recent pause is at PauseNs[(NumGC+255)%256]. In
+    // general, PauseNs[N%256] records the time paused in the most
+    // recent N%256th GC cycle. There may be multiple pauses per
+    // GC cycle; this is the sum of all pauses during a cycle. 一个循环队列，记录最近垃圾回收系统中断的时间
+    PauseNs [256]uint64
+
+    // PauseEnd is a circular buffer of recent GC pause end times,
+    // as nanoseconds since 1970 (the UNIX epoch).
+    //
+    // This buffer is filled the same way as PauseNs. There may be
+    // multiple pauses per GC cycle; this records the end of the
+    // last pause in a cycle. 一个循环队列，记录最近垃圾回收系统中断的时间开始点。
+    PauseEnd [256]uint64
+
+    // NumGC is the number of completed GC cycles.
+    //垃圾回收的内存大小
+    NumGC uint32
+
+    // NumForcedGC is the number of GC cycles that were forced by
+    // the application calling the GC function.
+    //服务调用runtime.GC()强制使用垃圾回收的次数。
+    NumForcedGC uint32
+
+    // GCCPUFraction is the fraction of this program's available
+    // CPU time used by the GC since the program started.
+    //
+    // GCCPUFraction is expressed as a number between 0 and 1,
+    // where 0 means GC has consumed none of this program's CPU. A
+    // program's available CPU time is defined as the integral of
+    // GOMAXPROCS since the program started. That is, if
+    // GOMAXPROCS is 2 and a program has been running for 10
+    // seconds, its "available CPU" is 20 seconds. GCCPUFraction
+    // does not include CPU time used for write barrier activity.
+    //
+    // This is the same as the fraction of CPU reported by
+    // GODEBUG=gctrace=1.
+    //垃圾回收占用服务CPU工作的时间总和。如果有100个goroutine，垃圾回收的时间为1S,那么久占用了100S
+    GCCPUFraction float64
+
+    // EnableGC indicates that GC is enabled. It is always true,
+    // even if GOGC=off.
+    //是否启用GC
+    EnableGC bool
+
+    // DebugGC is currently unused.
+    DebugGC bool
+
+    // BySize reports per-size class allocation statistics.
+    //
+    // BySize[N] gives statistics for allocations of size S where
+    // BySize[N-1].Size < S ≤ BySize[N].Size.
+    //
+    // This does not report allocations larger than BySize[60].Size.
+    //内存分配器使用情况
+    BySize [61]struct {
+        // Size is the maximum byte size of an object in this
+        // size class.
+        Size uint32
+
+        // Mallocs is the cumulative count of heap objects
+        // allocated in this size class. The cumulative bytes
+        // of allocation is Size*Mallocs. The number of live
+        // objects in this size class is Mallocs - Frees.
+        Mallocs uint64
+
+        // Frees is the cumulative count of heap objects freed
+        // in this size class.
+        Frees uint64
+    }
+}
+runtime.MemStats这个结构体包含的字段比较多，但是大多都很有用，去掉那些注释来看各个属性，会发现各个属性都是很有价值的：
+1、Alloc uint64 //golang语言框架堆空间分配的字节数
+2、TotalAlloc uint64 //从服务开始运行至今分配器为分配的堆空间总 和，只有增加，释放的时候不减少
+3、Sys uint64 //服务现在系统使用的内存
+4、Lookups uint64 //被runtime监视的指针数
+5、Mallocs uint64 //服务malloc的次数
+6、Frees uint64 //服务回收的heap objects的字节数
+7、HeapAlloc uint64 //服务分配的堆内存字节数
+8、HeapSys uint64 //系统分配的作为运行栈的内存
+9、HeapIdle uint64 //申请但是未分配的堆内存或者回收了的堆内存（空闲）字节数
+10、HeapInuse uint64 //正在使用的堆内存字节数
+10、HeapReleased uint64 //返回给OS的堆内存，类似C/C++中的free。
+11、HeapObjects uint64 //堆内存块申请的量
+12、StackInuse uint64 //正在使用的栈字节数
+13、StackSys uint64 //系统分配的作为运行栈的内存
+14、MSpanInuse uint64 //用于测试用的结构体使用的字节数
+15、MSpanSys uint64 //系统为测试用的结构体分配的字节数
+16、MCacheInuse uint64 //mcache结构体申请的字节数(不会被视为垃圾回收)
+17、MCacheSys uint64 //操作系统申请的堆空间用于mcache的字节数
+18、BuckHashSys uint64 //用于剖析桶散列表的堆空间
+19、GCSys uint64 //垃圾回收标记元信息使用的内存
+20、OtherSys uint64 //golang系统架构占用的额外空间
+21、NextGC uint64 //垃圾回收器检视的内存大小
+22、LastGC uint64 // 垃圾回收器最后一次执行时间。
+23、PauseTotalNs uint64 // 垃圾回收或者其他信息收集导致服务暂停的次数。
+24、PauseNs [256]uint64 //一个循环队列，记录最近垃圾回收系统中断的时间
+25、PauseEnd [256]uint64 //一个循环队列，记录最近垃圾回收系统中断的时间开始点。
+26、NumForcedGC uint32 //服务调用runtime.GC()强制使用垃圾回收的次数。
+27、GCCPUFraction float64 //垃圾回收占用服务CPU工作的时间总和。如果有100个goroutine，垃圾回收的时间为1S,那么久占用了100S。
+28、BySize //内存分配器使用情况
+以上是我个人对runtime.MemStats各个属性的理解，有理解错的地方还请发表评论或者联系下我共同探讨一下。
+
+从runtime.MemStats的属性可以看到，golang中的runtime包其实是一个带有一点维护性质的功能包。开发者可以获取大量golang服务运行时的信息，查看runtime.MenStats的方法也很简单。直接调用runtime.ReadMemStats方法即可获取调用点服务运行信息。一下是我测试过程中获取到的runtime.MenStats，内容如下：
+
+memstat: {
+Alloc:69257680 //golang语言框架堆空间分配的字节数 大概68M
+TotalAlloc:79489528 //从服务开始运行至今分配器为分配的堆空间总 和，只有增加，释放的时候不减少。大约79M
+Sys:1345724664 //服务现在系统使用的内存, 大约1345M
+Lookups:3 //被runtime监视的指针数
+Mallocs:307494 //服务malloc的次数
+Frees:9105  //服务回收的heap objects的字节数 free次数
+HeapAlloc:69257680 //golang语言框架堆空间分配的字节数 大概68M
+HeapSys:71434240  //系统分配的堆内存 大概71M
+HeapIdle:974848 //申请但是未分配的堆内存或者回收了的堆内存（空闲）字节数 大概1M
+HeapInuse:70459392 //正在使用的堆内存字节数 大概70M
+HeapReleased:0 //返回给OS的堆内存，
+HeapObjects:298389  //堆内存块申请的量
+StackInuse:1220804608 //正在使用的栈字节数 约1220M
+StackSys:1220804608 //系统分配的作为运行栈的内存 约1220M
+MSpanInuse:6924360  //用于测试用的结构体使用的字节数 不受GC控制， 约7M
+MSpanSys:6979584 //系统为测试用的结构体分配的字节数 约7M
+MCacheInuse:6816 //mcache结构体申请的字节数(不会被视为垃圾回收) 约6K
+MCacheSys:16384 //操作系统申请的堆空间用于mcache的字节数,约16K
+BuckHashSys:1468496 //用于剖析桶散列表的堆空间 约14K
+GCSys:40984576 //垃圾回收标记元信息使用的内存 约40M
+OtherSys:4036776 //golang系统架构占用的额外空间 约4M
+NextGC:135394784  //垃圾回收器检视的内存大小 约135M
+LastGC:1506577064496115700 //最后一次GC的时间戳
+PauseTotalNs:1834800 //系统暂停的时间，大约1.8毫秒
+PauseNs:[0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 833700 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 131600 0 69500 299900 500100 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0] //最近垃圾回收消耗情况
+PauseEnd:[1506576868237062600 1506576873250702600 1506576878266318900 1506576883290562700 1506576888313706000 1506576893339216000 1506576898380539200 1506576903430807600 1506576908483751100 1506576913540053700 1506576918589605600 1506576923651466900 1506576928716329900 1506576933785270400 1506576938872682700 1506576943987556700 1506576949080171300 1506576954205844600 1506576959319027700 1506576964454667000 1506576969604832300 1506576974795338100 1506576979945880300 1506576985117374500 1506576990330379400 1506576995548568900 1506577000766977100 1506577005980367800 1506577011190038400 1506577016427160200 1506577021671897800 1506577026958806600 1506577032285905300 1506577037561334600 1506577042926588300 1506577048190473200 1506577053579177600 1506577059147393600 1506577064496115700 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0] //垃圾回收调用的时间点
+NumGC:39 //垃圾回收调用次数
+NumForcedGC:39 
+GCCPUFraction:-1.325626798158314e-06 //调用GC消耗的性能
+EnableGC:true 
+DebugGC:false 
+BySize:[
+{Size:0 Mallocs:0 Frees:0} 
+{Size:8 Mallocs:45 Frees:41} 
+{Size:16 Mallocs:4316 Frees:4273} 
+{Size:32 Mallocs:118 Frees:58} 
+{Size:48 Mallocs:192 Frees:1} 
+{Size:64 Mallocs:149078 Frees:52} 
+{Size:80 Mallocs:6 Frees:1} 
+{Size:96 Mallocs:4 Frees:0} 
+{Size:112 Mallocs:1 Frees:1} 
+{Size:128 Mallocs:41 Frees:41} 
+{Size:144 Mallocs:0 Frees:0} 
+{Size:160 Mallocs:1 Frees:1} 
+{Size:176 Mallocs:0 Frees:0} 
+{Size:192 Mallocs:50 Frees:50} 
+{Size:208 Mallocs:2 Frees:0} 
+{Size:224 Mallocs:0 Frees:0} 
+{Size:240 Mallocs:0 Frees:0} 
+{Size:256 Mallocs:48 Frees:41} 
+{Size:288 Mallocs:0 Frees:0} 
+{Size:320 Mallocs:1 Frees:0} 
+{Size:352 Mallocs:0 Frees:0} 
+{Size:384 Mallocs:149024 Frees:0} 
+{Size:416 Mallocs:1 Frees:0} 
+{Size:448 Mallocs:0 Frees:0} 
+{Size:480 Mallocs:3 Frees:0} 
+{Size:512 Mallocs:80 Frees:80} 
+{Size:576 Mallocs:0 Frees:0} 
+{Size:640 Mallocs:0 Frees:0} 
+{Size:704 Mallocs:0 Frees:0} 
+{Size:768 Mallocs:0 Frees:0} 
+{Size:896 Mallocs:7 Frees:0} 
+{Size:1024 Mallocs:41 Frees:41} 
+{Size:1152 Mallocs:1 Frees:0} 
+{Size:1280 Mallocs:8 Frees:8} 
+{Size:1408 Mallocs:0 Frees:0} 
+{Size:1536 Mallocs:0 Frees:0} 
+{Size:1792 Mallocs:10 Frees:8} 
+{Size:2048 Mallocs:33 Frees:33} 
+{Size:2304 Mallocs:8 Frees:8} 
+{Size:2688 Mallocs:31 Frees:31} 
+{Size:3072 Mallocs:8 Frees:8} 
+{Size:3200 Mallocs:0 Frees:0} 
+{Size:3456 Mallocs:31 Frees:31} 
+{Size:4096 Mallocs:10 Frees:10} 
+{Size:4864 Mallocs:35 Frees:31} 
+{Size:5376 Mallocs:0 Frees:0} 
+{Size:6144 Mallocs:39 Frees:39} 
+{Size:6528 Mallocs:0 Frees:0} 
+{Size:6784 Mallocs:0 Frees:0} 
+{Size:6912 Mallocs:0 Frees:0} 
+{Size:8192 Mallocs:3 Frees:2} 
+{Size:9472 Mallocs:0 Frees:0} 
+{Size:9728 Mallocs:0 Frees:0} 
+{Size:10240 Mallocs:2 Frees:2} 
+{Size:10880 Mallocs:0 Frees:0} 
+{Size:12288 Mallocs:0 Frees:0} 
+{Size:13568 Mallocs:2 Frees:2} 
+{Size:14336 Mallocs:1 Frees:0} 
+{Size:16384 Mallocs:0 Frees:0} 
+{Size:18432 Mallocs:2 Frees:2} 
+{Size:19072 Mallocs:0 Frees:0}
+] //具体内存分配情况 
+}
+
+
+golang服务可以通过runtime.ReadMemStats方法获取服务运行期间内存使用情况和垃圾回收等相关信息，比起各种内存监控工具要详细很多，而且是以golang的方式获取内存数据。因为在golang中，我们只获取内存使用总量和增长趋势往往可以确定的事情很少，但是由runtime.MemStats获取到的信息确是非常有价值的。在服务后台开发过程中，有一个非常重要的话就是“无监控，不服务”，这是服务后台开发的基本。无论是架构的演进方向和服务可靠性控制，以及部分性能优化的数据来源都需要以监控数据作为参考。而golang内存信息的监控个人觉得必须通过对应时刻runtime.MemStats的为标准。当然使用runtime.ReadMemStats会短暂的暂停服务中的所有goroutine，然后收集调用时刻的MemStats。从源代码来看，暂停所有goroutine的时间仅仅是使用memcopy拷贝一个MemStats的时间。代码如下：
+
+func ReadMemStats(m *MemStats) {
+    stopTheWorld("read mem stats")
+
+    systemstack(func() {
+        readmemstats_m(m)
+    })
+
+    startTheWorld()
+}
+
+func readmemstats_m(stats *MemStats) {
+    updatememstats()
+
+    // The size of the trailing by_size array differs between
+    // mstats and MemStats. NumSizeClasses was changed, but we
+    // cannot change MemStats because of backward compatibility.
+    memmove(unsafe.Pointer(stats), unsafe.Pointer(&memstats), sizeof_C_MStats)
+
+    // memstats.stacks_sys is only memory mapped directly for OS stacks.
+    // Add in heap-allocated stack memory for user consumption.
+    stats.StackSys += stats.StackInuse
+}
+
+
+runtime.MemStats字段介绍
+
+字段	说明
+Alloc	golang语言框架堆空间分配的字节数
+TotalAlloc	从服务开始运行至今分配器为分配的堆空间总 和，只有增加，释放的时候不减少
+Sys	服务现在系统使用的内存
+Lookups	被runtime监视的指针数
+Mallocs	服务malloc heap objects的次数
+Frees	服务回收的heap objects的次数
+HeapAlloc	服务分配的堆内存字节数
+HeapSys	系统分配的作为运行栈的内存
+HeapIdle	申请但是未分配的堆内存或者回收了的堆内存（空闲）字节数
+HeapInuse	正在使用的堆内存字节数
+HeapReleased	返回给OS的堆内存，类似C/C++中的free
+HeapObjects	堆内存块申请的量
+StackInuse	正在使用的栈字节数
+StackSys	系统分配的作为运行栈的内存
+MSpanInuse	用于测试用的结构体使用的字节数
+MSpanSys	系统为测试用的结构体分配的字节数
+MCacheInuse	mcache结构体申请的字节数(不会被视为垃圾回收)
+MCacheSys	操作系统申请的堆空间用于mcache的字节数
+BuckHashSys	用于剖析桶散列表的堆空间
+GCSys	垃圾回收标记元信息使用的内存
+OtherSys	golang系统架构占用的额外空间
+NextGC	垃圾回收器检视的内存大小
+LastGC	垃圾回收器最后一次执行时间
+PauseTotalNs	垃圾回收或者其他信息收集导致服务暂停的次数
+PauseNs	一个循环队列，记录最近垃圾回收系统中断的时间
+PauseEnd	一个循环队列，记录最近垃圾回收系统中断的时间开始点
+NumForcedGC	服务调用runtime.GC()强制使用垃圾回收的次数
+GCCPUFraction	垃圾回收占用服务CPU工作的时间总和。如果有100个goroutine，垃圾回收的时间为1S,那么就占用了100S
+BySize	内存分配器使用情况
+
+首先是通过
+
+stats := &runtime.MemStats{}
+runtime.ReadMemStats(stats)
+这个来获取一个stat,里面包含了内存和垃圾回收的信息：GC时间分布slice，GC总时间，GC次数等等
+type Garbage struct{ a int }
+
+func notify(f *Garbage) {
+    stats := &runtime.MemStats{}
+    runtime.ReadMemStats(stats)
+
+    fmt.Println("Last GC was:", stats.LastGC)
+
+    go ProduceFinalizedGarbage()
+}
+
+func ProduceFinalizedGarbage() {
+    x := &Garbage{}
+    runtime.SetFinalizer(x, notify)
+}
+
+func main() {
+    go ProduceFinalizedGarbage()
+
+    for {
+        runtime.GC()
+        time.Sleep(30 * time.Second) // Give GC time to run
+    }
+}
+
+https://github.com/golang/go/issues/32284
+https://github.com/golang/go/issues/11890
+
+runtime.MemStats这个结构体包含的字段比较多，但是大多都很有用：
+1、Alloc uint64 //golang语言框架堆空间分配的字节数
+2、TotalAlloc uint64 //从服务开始运行至今分配器为分配的堆空间总 和，只有增加，释放的时候不减少
+3、Sys uint64 //服务现在系统使用的内存
+4、Lookups uint64 //被runtime监视的指针数
+5、Mallocs uint64 //服务malloc heap objects的次数
+6、Frees uint64 //服务回收的heap objects的次数
+7、HeapAlloc uint64 //服务分配的堆内存字节数
+8、HeapSys uint64 //系统分配的作为运行栈的内存
+9、HeapIdle uint64 //申请但是未分配的堆内存或者回收了的堆内存（空闲）字节数
+10、HeapInuse uint64 //正在使用的堆内存字节数
+10、HeapReleased uint64 //返回给OS的堆内存，类似C/C++中的free。
+11、HeapObjects uint64 //堆内存块申请的量
+12、StackInuse uint64 //正在使用的栈字节数
+13、StackSys uint64 //系统分配的作为运行栈的内存
+14、MSpanInuse uint64 //用于测试用的结构体使用的字节数
+15、MSpanSys uint64 //系统为测试用的结构体分配的字节数
+16、MCacheInuse uint64 //mcache结构体申请的字节数(不会被视为垃圾回收)
+17、MCacheSys uint64 //操作系统申请的堆空间用于mcache的字节数
+18、BuckHashSys uint64 //用于剖析桶散列表的堆空间
+19、GCSys uint64 //垃圾回收标记元信息使用的内存
+20、OtherSys uint64 //golang系统架构占用的额外空间
+21、NextGC uint64 //垃圾回收器检视的内存大小
+22、LastGC uint64 // 垃圾回收器最后一次执行时间。
+23、PauseTotalNs uint64 // 垃圾回收或者其他信息收集导致服务暂停的次数。
+24、PauseNs [256]uint64 //一个循环队列，记录最近垃圾回收系统中断的时间
+25、PauseEnd [256]uint64 //一个循环队列，记录最近垃圾回收系统中断的时间开始点。
+26、NumForcedGC uint32 //服务调用runtime.GC()强制使用垃圾回收的次数。
+27、GCCPUFraction float64 //垃圾回收占用服务CPU工作的时间总和。如果有100个goroutine，垃圾回收的时间为1S,那么就占用了100S。
+28、BySize //内存分配器使用情况

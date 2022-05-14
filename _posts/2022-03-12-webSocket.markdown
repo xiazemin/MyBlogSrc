@@ -1,0 +1,18 @@
+---
+title: webSocket保持长连接
+layout: post
+category: web
+author: 夏泽民
+---
+解说：今天用nginx反代通讯项目，发现平均1分钟左右，就会出现webSocket连接中断，然后查看了一下，是nginx出现的问题。
+
+原因是： nginx等待你 第一次通讯和第二次通讯的时间差，超过了它设定的最大等待时间，简单来说就是，超时，所以就啪的一声断了，开始上解决步骤。
+
+1. proxy_connect_timeout; 
+2. proxy_read_timeout; 
+3. proxy_send_timeout;
+
+这个是服务器对你等待最大的时间，也就是说，当你webSocket使用nginx转发的时候，用上面的配置2来说，如果60秒内没有通讯，依然是会断开的，所以，你可以按照你的需求来设定
+<!-- more -->
+https://blog.csdn.net/chengmei9099/article/details/100783430
+

@@ -1,0 +1,529 @@
+---
+title: uber go guide
+layout: post
+category: golang
+author: 夏泽民
+---
+https://tonybai.com/2019/10/12/uber-go-style-guide/
+
+https://eng.uber.com/
+
+https://github.com/uber-go/guide
+
+https://golang.org/doc/effective_go.html
+
+https://github.com/golang/go/wiki/CodeReviewComments
+
+https://learnku.com/go/wikis/38426
+
+https://github.com/xxjwxc/uber_go_guide_cn
+<!-- more -->
+零值 Mutex 是有效的
+零值 sync.Mutex 和 sync.RWMutex 是有效的。所以指向 mutex 的指针基本是不必要的。
+
+Bad	
+mu := new(sync.Mutex)
+mu.Lock()
+
+Good
+var mu sync.Mutex
+mu.Lock()
+如果你使用结构体指针，mutex 可以非指针形式作为结构体的组成字段，或者更好的方式是直接嵌入到结构体中。 如果是私有结构体类型或是要实现 Mutex 接口的类型，我们可以使用嵌入 mutex 的方法
+
+
+伪代码声明:请无视一些拼写错误
+mutex实例无需实例化，声明即可使用
+func add(){
+    var mutex sync.Mutex
+    mutex.Lock()
+    defer mutex.Unlock()
+    fmtPrintln("test lock")
+}
+
+mutex在传递给外部使用的时候，需要传指针,不然传的是拷贝，会引起锁失败。并且指针的mutex是一定要实例化过的。
+func add() *sync.Mutex{
+    var m = &sync.Mutex{}
+    return m
+}
+
+对同一个锁，进行多次锁，会死锁
+func a(){
+    var mutex sync.Mutex
+    mutex.Lock()
+    mutex.Lock() // dead lock
+}
+
+对一个RWLock进行同时Lock()和RLock()会死锁.
+func a(){
+    var mutex sync.RWMutex
+    mutex.RLock()
+    mutex.Lock() // dead lock
+}
+
+这意味着如果一个操作函数里同时包含写和读，千万不要这么写
+
+type Object struct{
+    Data []interface{}
+    L  sync.RWMutex
+}
+func WR(o Object){
+    o.L.Lock()
+    defer o.L.UnLock()
+    o.Data = append(o.Data, 1)
+    
+    o.L.RLock()
+    defer o.L.RUnLock()
+    fmt.Println(o.Data[len(o.Data)-1])
+}
+
+因为defer是在return前执行，该段逻辑的锁顺序实际上是 Lock(), RLock(), UnLock(),RUnLock() 死锁了
+可以改成:
+
+func WR(o Object){
+    func(){
+        o.L.Lock()
+        defer o.L.UnLock()
+        o.Data = append(o.Data, 1)
+    }()
+
+    func(){
+        o.L.RLock()
+        defer o.L.RUnLock()
+        fmt.Println(o.Data[len(o.Data)-1])
+    }()
+}
+
+抛开业务来理解读写锁，它的本质是:
+Lock()时，会阻塞另一个协程Rlock()和Lock()
+Rlock时，不会阻塞另一个协程Lock()和Rlock()
+读的时候加读锁，写的时候加写锁，只是恰好满足了我们大多数场景的需求，如果要真正理解锁，可以问问自己下面两个问题:
+
+①.假定有一个data，怎么做到，让他在读时，不让写，写时让读?
+
+很简单读取的时候加写锁，写的时候加读锁。
+
+// 因为读取函数的Lock会使得Rlock阻塞，所以就做到了，读取的时候不让写，写的时候时读锁，不影响readData的调用。
+var m sync.Mutex
+var data = 5
+func readData() int {
+    m.Lock()
+    defer m.Unlock()
+    return data
+}
+
+func writeData() {
+   m.Rlock()
+   defer m.RUnlock()
+   data =6
+}
+
+②怎么做到写的时候不让读，读的时候也不让写
+答案也很简单，读写时都加写锁。
+
+关于不同锁交叉
+不同的锁交叉，是允许的，但是要深入理解了锁的另一个原则，才能用的安全。
+假设，有data1，data2，data3，他们对应有l1,l2, l3 三个读写锁。
+如果，你想要在操作一个变量时，阻塞掉他们三个的读写，你可能会封装一个这样的函数:
+var l1,l2,l3 sync.RWMutex
+var data1,data2,data3 int
+var count int
+
+func Glock() {
+    l1.Lock()
+    l2.Lock()
+    l3.Lock()
+}
+
+func GUnlock() {
+    l1.Unlock()
+    l2.Unlock()
+    l3.Unlcok()
+}
+func CountIncr() {
+   Glock()
+   count ++
+   Gunlock 
+}
+
+好了，你想了想，Glock时，确实把data1,data2,data3的读写操作都锁住了，你以为没问题可以交卷了，那就大错特错了。
+
+单纯这一部分代码确实不会死锁，那么，我再提下一个需求，你再操作一下试试。
+
+现在，需要将data1的值，赋予给data3,你理所应当地写道
+
+func F() {
+   var tmp int
+   l3.lock()
+   l1.RLock()
+   data3 = data1
+   l1.RUnlock()
+   l3.Unlock()
+}
+
+好了，你想了想，读取data1的值，赋予data3，所以读锁l1，写锁l3，完美。
+
+死锁了！
+
+为什么呢？
+Glock里，l3的lock再l1之后，就是说，可能有某一个协程，l1Lock()通了，走到l3时，等待另一个协程的l3 Unlock时，他才能走得通l3.Lock()，也就是，l1在等待l3放锁，他才能走到下面的l1.Unlock()，否则将永久阻塞，走不到l1.Unlock().
+
+而，下面的代码里，l3在lock之后，必须要等l1.Rlock()通行，才能走到后面的l3.Unlock()，只要l1Rlock一直阻塞，将永久阻塞。即l3在等待l1解锁。
+
+那么就必然，有概率，走到一个a协程里，l1在等l3，b协程里l3在等l1。结果你说呢，必将死锁。
+
+现在理解了锁把， 那么思考一下，怎么解决上面的问题呢？
+
+很简单，最笨的方法是，避免锁交叉，将第二份代码里的交叉锁，分开，假设data都是map类型
+
+var tmp = make(map[string]string,0)
+l1.RLock()
+for k,v:=range data1 {
+    tmp[k] = v
+}
+l1.RUnlock()
+
+l3.Lock()
+for k,v:=range tmp {
+    data3[k] = v
+}
+l3.Unlock()
+
+你瞧，这样是不是避免了锁交叉，只要不进行锁交叉，就永远不存在A等B的场景。
+
+但，为什么说这是一个蠢办法呢？
+因为，go里，不同的锁对象是允许交叉的。你想想，如果每一次读写，都需要迭代一遍，用一个复制体来避免交叉，这得多浪费迭代的复杂度和空间啊。毕竟map是一个O(1)的结构，被你玩成了O(n)
+
+我们知道，go里经常报cricle import，循环引用，解决方法就是层级关系。package A 作为上层，可以importB, B作为下层，永远不能import上层的额东西。保持规范，就能避免循环引用。
+
+同理，lock交叉也允许，那么我们只需要永远保证，A等待B，而B不能等待A，就不会死锁了
+第一步：
+
+func Glock() {
+    l1.Lock()
+	    l2.Lock()
+    		l3.Lock()
+}
+
+func GUnlock() {
+   			l3.Unlcok()
+    	l2.Unlock()
+    l1.Unlcok()
+}
+
+我们约束，l1是上层锁，允许l1，等待l2，和l3，同时所以放锁顺序，就必须先放l3,再放l2，在放l1
+
+其次，在交叉里，也是l1等l3
+
+func F() {
+   var tmp int
+   l1.RLock()
+	   l3.lock()
+		   data3 = data1
+	   l3.Unlock()
+   l1.RUnlock()
+
+
+Go中sync包下有2种mutex实现：
+
+sync.Mutex
+
+sync.RWMutex
+
+Mutex底层基于sync/atomic实现了 Compare and Swap. 由于该算法逻辑只需要一条汇编就可以实现，在单核CPU上运行是可以保证原子性的，但多 核CPU上运行时，需要加上LOCK前缀来对总线加锁，从而保证了该指令的原子性：
+
+// src/sync/atomic/asm_amd64.s#L35
+TEXT ·CompareAndSwapInt32(SB),NOSPLIT,$0-17
+    JMP    ·CompareAndSwapUint32(SB)
+
+TEXT ·CompareAndSwapUint32(SB),NOSPLIT,$0-17
+  // 初始化参数
+    MOVQ    addr+0(FP), BP
+    MOVL    old+8(FP), AX
+    MOVL    new+12(FP), CX
+  // 锁总线
+    LOCK
+  // 执行Compare and Exchange
+    CMPXCHGL    CX, 0(BP)
+  // 处理返回值
+    SETEQ    swapped+16(FP)
+    RET
+sync.Mutex实现了sync.Locker接口，主要有Lock()/Unlock()2个method，值得注意 的是，不能重复的对已经解锁的mutex解锁，否则会panic.
+
+sync.Mutex阻塞进程的方式其实是让进程不断的轮询.
+
+值得注意的是Mutex的zero value是一个unlocked mutex:
+
+// A Mutex is a mutual exclusion lock.
+// Mutexes can be created as part of other structures;
+// the zero value for a Mutex is an unlocked mutex.
+//
+// A Mutex must not be copied after first use.
+在加锁和解锁的时候，都会检查是否enabled race，允许抢占可能会造成不可预知的问题 看起来只有在sync.RWMutex和sync.WaitGroup里面才使用了race.Enable()，目前 还不清楚这个东西的作用是什么.
+
+Go1.6中引入了更可靠的竞争检测机制， Introducing the Go Race Detector. 只要执行Go Command的时候带上-race即可：
+
+例 1 e4_1.go 在没有加锁的情况下存在多个goroutine同时读写公有数据
+
+go run -race e4_1.go
+
+...
+Found 2 data race(s)
+另外, sync.RWMutex，同样实现了sync.Locker接口，提供了更灵活的锁机制：
+
+// An RWMutex is a reader/writer mutual exclusion lock.
+// The lock can be held by an arbitrary number of readers or a single writer.
+// RWMutexes can be created as part of other structures;
+// the zero value for a RWMutex is an unlocked mutex.
+//
+// An RWMutex must not be copied after first use.
+//
+// If a goroutine holds a RWMutex for reading, it must not expect this or any
+// other goroutine to be able to also take the read lock until the first read
+// lock is released. In particular, this prohibits recursive read locking.
+// This is to ensure that the lock eventually becomes available;
+// a blocked Lock call excludes new readers from acquiring the lock.
+有意思的是，sync.RWMutex会检测公有数据的修改； 例 2 e4_2.go中模拟了2组goroutine，一组专门读数据，一组专门 写数据；其中读数据的速度非常快，写数据会比较慢（加了随机延迟）：
+
+package main
+
+import (
+    "math/rand"
+    "sync"
+    "time"
+)
+
+var shared = struct {
+    *sync.RWMutex
+    count int
+}{}
+
+var wg *sync.WaitGroup
+
+const N = 10
+
+func main() {
+    rand.Seed(time.Now().Unix())
+    shared.RWMutex = new(sync.RWMutex)
+    wg = new(sync.WaitGroup)
+    wg.Add(2 * N)
+    defer wg.Wait()
+
+    for i := 0; i < N; i++ {
+        // write goroutines
+        go func(ii int) {
+            shared.Lock()
+            duration := rand.Intn(5)
+            // shared.Lock()
+            time.Sleep(time.Duration(duration) * time.Second)
+            shared.count++
+            println(ii, "write --- shared.count =>", shared.count)
+            // shared.Unlock()
+            shared.Unlock()
+
+            wg.Done()
+        }(i)
+
+        // read goroutines
+        go func(ii int) {
+            shared.RLock()
+            println(ii, "read --- shared.count =>", shared.count)
+            shared.RUnlock()
+
+            wg.Done()
+        }(i)
+
+    }
+}
+读写锁的效果就是，在写锁锁定的时候，会阻塞所有的读锁， 例4.2里面读操作非常快，所以第一次写操作完成之后， 所有的读操作就一次完成了，后面的就只有读操作了
+
+例 3 e4_3.go 去掉了公有数据的读写操作， 模拟了例4.2里面的延迟和锁；本来以为锁会检查逻辑里面的数据修改，发现并不是； 看起来写锁对读锁的阻塞是全局的，只要一个进程内的写锁就会阻塞所有的读锁；
+
+从底层实现上来看，上面的判断应该是准确的:
+
+// src/sync/rwmutex.go#L35
+// RLock locks rw for reading.
+func (rw *RWMutex) RLock() {
+    if race.Enabled {
+        _ = rw.w.state
+        race.Disable()
+    }
+    if atomic.AddInt32(&rw.readerCount, 1) < 0 {
+        // A writer is pending, wait for it.
+        runtime_Semacquire(&rw.readerSem)
+    }
+    if race.Enabled {
+        race.Enable()
+        race.Acquire(unsafe.Pointer(&rw.readerSem))
+    }
+}
+操作系统只对goroutine实际使用的系统线程分配资源，而且goroutine实现了进程中 上线文切换机制，比操作系统级切换系统线程上下文高效；尽管这样，并发过高的情况下 goroutine之间上下文切换也会对程序性能带来比较大的影响;
+
+https://studygolang.com/topics/2145
+
+https://youtrack.jetbrains.com/issue/GO-5764
+
+https://mozillazg.com/2019/04/notes-about-go-lock-mutex.html
+
+
+package main
+
+import "sync"
+
+type Test struct{
+
+}
+
+func (t*Test)getLock()sync.RWMutex  {
+   var mu sync.RWMutex
+   return mu
+}
+
+func (t*Test)getLockPtr()*sync.RWMutex  {
+	return new(sync.RWMutex)
+}
+
+func testMutex(mu sync.RWMutex){
+	mu.Lock()
+}
+
+func testMutexPtr(mu *sync.RWMutex)  {
+	mu.Lock()
+}
+
+func main()  {
+	var t *Test
+	mu1:=t.getLock()
+	mu2:=t.getLock()
+	mu2.Lock()
+	mu1.Lock()
+
+	mu3:=t.getLockPtr()
+	mu4:=t.getLockPtr()
+	mu3.Lock()
+	mu4.Lock()
+	//mu3.Lock()
+/*
+	mu5:=mu2
+	mu5.Lock()
+ */
+/*
+	mu6:=mu4
+	mu6.Lock()
+ */
+	//testMutex(mu1)
+	//testMutexPtr(&mu1)
+}
+
+ go vet main.go 
+# command-line-arguments
+./main.go:11:11: return copies lock value: sync.RWMutex
+./main.go:18:19: testMutex passes lock by value: sync.RWMutex
+
+
+fatal error: all goroutines are asleep - deadlock!
+
+goroutine 1 [semacquire]:
+sync.runtime_SemacquireMutex(0xc00001c0a4, 0x0, 0x1)
+        /usr/local/Cellar/go/1.15.3/libexec/src/runtime/sema.go:71 +0x47
+sync.(*Mutex).lockSlow(0xc00001c0a0)
+        /usr/local/Cellar/go/1.15.3/libexec/src/sync/mutex.go:138 +0x105
+sync.(*Mutex).Lock(...)
+        /usr/local/Cellar/go/1.15.3/libexec/src/sync/mutex.go:81
+
+
+https://blog.lpflpf.cn/passages/golang-noCopy/
+
+
+在我的某些印象中我曾经记得，使用锁不申明为指针是一个代码规范类似的东西
+大多数的（我看过的一些）源码中，没有见过将锁申明为指针的用法
+但是当时我没有办法回答这个 PR，你总不能说我是一厢情愿吧…需要一个更加合理的解释
+仔细分析
+上网搜索一番
+https://www.reddit.com/r/golang/comments/6uyf16/confusion_about_mutex_and_reference/
+
+很多类似的问题都在问（你不用点开，只是举个例子）
+
+问题关键
+sync.Mutex 这个东西不能被 copy！（这个我之前也是知道的，毕竟都分析过源码了）
+
+刨根问底
+虽然这个锁不能被拷贝，那么就应该被申明为指针防止拷贝出现问题吗？
+
+别慌，先写个例子测测看
+
+package main
+
+import (
+	"fmt"
+	"sync"
+)
+
+type Config1 struct {
+	sync.Mutex
+	Name string
+}
+
+type Config2 struct {
+	*sync.Mutex
+	Name string
+}
+
+func main() {
+	c1 := Config1{Name: "1"}
+	cc1 := c1
+	fmt.Println(cc1.Name)
+	cc1.Lock()
+	cc1.Unlock()
+
+	c2 := Config2{
+		Mutex: &sync.Mutex{},
+		Name:  "2",
+	}
+	cc2 := c2
+	fmt.Println(cc2.Name)
+	cc2.Lock()
+	cc2.Unlock()
+}
+上面这个跑起来没问题，但是要注意的是，如果使用指针，你就必须对它初始化，否则会空指针。
+
+看起来好像 copy 没问题啊？难道？让我 vet 看看
+
+
+
+果然有问题，因为有拷贝。
+
+但是结论我认为恰恰相反！！
+
+我的结论
+就应该不应该申明为指针
+
+原因 1
+假设你申明为了指针，go vet 就不会报错，那么其实你在使用的时候，在不知情的情况下你就会“复制”这个锁
+
+原因 2
+在什么时候会使用锁呢？一般是不是有一个单例对象要控制，这个对象或者某个操作要控制并发的时候用对吧。
+
+那什么时候会复制对象呢？那么这个对象一定就不是个单例对不对？（注意这里是复制对象，而不是创建指针对象从而复制指针）
+
+c2 := Config2{
+   Mutex: &sync.Mutex{},
+   Name:  "2",
+}
+cc2 := c2
+这个写法就已经很古怪了，你复制了这个对象，并且用了同一把锁，那么问题来了：
+
+你的想法究竟是 cc2 锁的时候 c2 也要被锁住？=> 如果是这一种，那么就不应该将锁申明在对象内部。
+
+还是 cc2 锁的时候 c2 不要被锁住？=> 如果是这一种，既不能将锁申明为指针，也能进行拷贝，而应该重新申明一个对象，进行对象其他值的赋值操作。
+
+结论
+所以我的结论很明显，不应该申明为指针，申明指针容易在不经意间导致意外。
+
+如果担心拷贝锁的问题，可以使用 go vet 进行分析，现在很多 go 的代码静态分析工具也都提供了这个功能的，其他的也可以。
+
+https://www.linkinstar.wiki/2020/07/18/golang/basic/mutex-use-point-or-not/
+
+https://www.xiayinchang.top/post/6b348626.html
+
+结论：sync.Mutex 不能copy，所以最好不要用指针，因为用指针go vet 检测不出来
+

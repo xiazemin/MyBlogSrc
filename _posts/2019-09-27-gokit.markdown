@@ -1,0 +1,200 @@
+---
+title: Go-kit 熔断器
+layout: post
+category: golang
+author: 夏泽民
+---
+https://github.com/go-kit/kit
+服务雪崩效应
+原因：由于延时或负载过高等导致请求积压，占用大量系统资源，服务器达到性能瓶颈，服务提供者不可用
+现象：上游服务故障导致下游服务瘫痪，出现连锁故障
+应对策略
+扩容
+控制流量
+熔断
+服务降级
+<!-- more -->
+熔断器
+以开关的模式实现，监控服务请求和响应的情况，当出现异常时, 快速给后续请求返回结果, 避免大量的同步等待
+
+熔断器状态机
+
+Close 关闭状态，熔断器的初始化状态，允许请求通过
+Open 开放状态，即熔断状态，不允许请求通过
+HalfOpen 半开放状态，允许部分请求通过
+
+go-kit中有三种熔断处理方法，分别是gobreaker，handy和hystrix-go
+
+一、gobreaker
+下面代码段中，Counts是熔断器记录的请求统计数据，CircuitBreaker存储熔断器的相关配置和状态数据
+
+type Counts struct {
+    Requests             uint32
+    TotalSuccesses       uint32
+    TotalFailures        uint32
+    ConsecutiveSuccesses uint32
+    ConsecutiveFailures  uint32
+}
+type CircuitBreaker struct {
+    name          string
+    maxRequests   uint32
+    interval      time.Duration
+    timeout       time.Duration
+    readyToTrip   func(counts Counts) bool
+    onStateChange func(name string, from State, to State)
+
+    mutex      sync.Mutex
+    state      State
+    generation uint64   
+    counts     Counts
+    expiry     time.Time
+}
+maxRequests 在半开放状态下允许通过的请求数，默认为1
+interval 是在熔断器关闭状态下定期清除Counts计数的循环周期，如果Interval为0，则close状态下不会清除计数
+timeout 是CircuitBreaker从open状态切换到halfopen状态的周期，默认为60s
+ReadyToTrip 函数在请求失败时调用，当返回true时，CircuitBreaker切换到open状态，此函数可自定义，默认为连续失败请求数超过5个时返回true
+onStateChange 在状态变化时调用
+mutex 为判断状态变更时的并发控制锁
+generation 每当状态变化一次，该值增加一次，如果设置了interval，则在闭合状态时，每隔interval时间，也增加一次。如果一个请求在运行前后的generation值不同，那么这个请求数据是无效的，会被丢弃掉
+expiry 记录了一个时间点，在close状态下记录的是下次刷新Counts数据的时间点，在open状态下记录的是下次切换到半开放状态的时间点 gobreaker状态变更条件
+
+二、handy
+handy共有四个模块：breaker，metric，handler和transport
+
+breaker 校验接口是否允许通过，控制熔断器状态变更，上报请求响应的情况
+metric 记录breaker传来的数据，计算失败率
+handler 以熔断器为中间件封装handler.ServeHTTP方法，应用于服务端响应请求时
+transport 以熔断器为中间件封装transport.RoundTrip方法，应用于客户端发起请求时
+1. breaker
+如下图所示 handy breaker中新增加了两个状态reset和tripped，事实上与三态的情况并无太大区别，reset状态下将metric中的数据重置后便会立即切换到closed状态，tripped状态下在重置timeout后也会立即切换到open状态。
+
+面是handy breaker中定义的两个重要的结构体
+
+type breaker struct {
+    force   chan states
+    allow   chan bool
+    success chan time.Duration
+    failure chan time.Duration
+
+    config breakerConfig
+}
+
+type breakerConfig struct {
+    FailureRatio float64 
+    failure** 
+    Window          time.Duration
+    Cooldown        time.Duration
+    MinObservations uint
+
+    Now   func() time.Time
+    After func(time.Duration) <-chan time.Time
+}
+handy breaker中控制请求数据的存储和更新，应用了go中的channel特性。
+
+channel可实现go中goroutine之间的通信，用chan关键字定义，分为无缓冲和有缓冲两种，无缓冲的channel需要接收和发送动作同时发生，否则将一直阻塞，有缓冲的channel有一定的容量，当channel通道满的时候发送者会阻塞，当channel通道空的时候接收者会阻塞。
+
+handy breaker中应用的一系列channel都是无缓冲的，这样能够保证在请求发生时用作判断的这些数据都是即时有效的。
+
+force 中存储类型为熔断器状态的数据，可通过调用breaker.trip()或breaker.reset()方法向此通道写入状态，并强行改变熔断器的状态
+allow 中存储着标记当前请求是否可通过的布尔值。breaker.Allow()方法将从allow通道中读出数据返回，当有请求进来时，调用breaker.Allow()方法，allow通道发送方将不再阻塞，goroutine根据当前熔断器的状态像此通道中写入对应的数据，即open状态写入false，closed和halfopen状态写入true（halfopen状态下写完数据后会立即切换到open状态，只允许一个请求通过）
+success 中存储请求开始到结束的时间段（这个只是请求成功与否的标记，实际数值并没有其实并没有用到），在handler和transport中有各自的校验发放validator来判断请求是否成功，成功后将数据写入此通道，并有goroutine上报给metric做统计
+failure 与success通道应用相同
+2. metric
+metric模块统计请求数据并计算失败率，以循环列表的方式存储每秒钟请求的成功数和失败数，统计的时间范围由窗口参数Window决定，close状态下有失败请求时，调用metric.Summary()方法，根据所有bucket中的数据计算失败率，决定是否开启熔断器。
+
+这种实现方法与gobreaker中规定interval计数周期的方法相比，提高了数据的有效性和准确性，对于无请求的时间段不计入数据的统计中，也保证统计数据能够达到的一定的量级。
+
+三、hystrix
+hystrix中除了对熔断处理外，还实现了对服务的隔离检测、请求并发量控制、请求延时控制和服务降级处理功能。
+
+主要以下几个模块：setting，hystrix，circuit，metrics，pool和eventstream
+
+setting 用来管理熔断器的配置，包括存储，新增和读取
+hystrix 是熔断器的主要部分，对外提供同步和异步的方法，对内上报请求事件以及fallback降级处理
+circuit 用来管理熔断器的状态变更
+metrics 用来统计和计算请求的响应情况
+pool 用来管理请求池，控制请求池最大数目以及请求ticket的发放和回收
+eventstream 用于各项指标的监控
+1.hystrix
+hystrix中主要包含两个方法，DoC和GoC，分别为同步方法和异步方法，GoC中支持使用goroutine来处理请求，DoC则在GoC外层封装了一下，使用done和errChan两个channel来实现对请求的即时响应。
+
+从以下几个方面来看看GoC方法中做了些什么
+
+熔断处理 使用circuit的AllowRequest方法校验是否允许请求通过
+并发请求数控制 hystrix中使用executorPool来控制最大并发请求数目，其中定义了一个有缓冲的管道Tickets，当有新的请求进来是时，从Tickets中读取数据，请求结束时，向Tickets中写入数据，当读取发生阻塞时，表明Tickets中的数据已空，请求直接返回，控制了服务的并发请求数，也对于请求延时而新的请求又以未减少的速度进来而增大服务压力这种情况做了有效的控制，这也是pool模块的主要功能
+延时处理 GoC中执行两个goroutine，分别是对请求的处理和延时的处理，使用finished管道来同步两者，延时的goroutine中定义了一个定时器，如果定时器的阻塞结束在finished之前，将立即按请求超时返回
+fallbak降级处理 请求失败后将调用tryFallback方法并记录结果
+请求结果上报 无论请求结果如何，都会调用将Ticket返回给pool和上报请求结果的方法，这里应用了golang中的sync.Once，它可以保证该方法仅被执行一次。上报数据分别为请求执行结果cmd.events，开始时间和执行时长，这里定义的cmd.events是一个字符串数组，其中一般存储了两个数据，events[0]是请求执行的结果，events[1]是fallback的执行结果
+2.circuit
+circuit模块用来管理熔断器的状态，主要提供了以下几个功能
+
+新增，读取和重置 circuit中定义了一个commandName到CircuitBreaker的映射circuitBreakers来存储各个熔断器的数据，并进行单独管理
+状态校验 关闭和半开放状态允许通过，这里的半开放也仅允许一个通过
+状态变更 开放状态下有一个成功响应时close；失败率大于阈值时open
+上报数据处理 计算可用请求数后一并传给metrics处理
+强行开启 用forceOpen数据控制强行打开熔断器
+3.metrics
+metrics模块用来对请求进行统计和计算，与handy一样，使用循环队列存储数据，每秒一个bucket。metrics实现了以下功能：每秒执行请求数及其结果的累计，错误率计算与校验，数据监控。
+
+Middleware的实现
+1、 Hystrix返回Middleware 此中间件会在原来的endPoint包一层Hystrix的endPoint
+
+2、 hystrix通过传入的commanName获取对应的Hystrix的设置，并设置run失败时运行的fallback函数为nil
+
+3、 我们也可以自己实现middleware包装endPoint
+
+func Hystrix(commandName string) endpoint.Middleware {  
+   return func(next endpoint.Endpoint) endpoint.Endpoint {  
+      return func(ctx context.Context, request interface{}) (response interface{}, err error) {  
+         var resp interface{}  
+         if err := hystrix.Do(commandName, func() (err error) {  
+            resp, err = next(ctx, request)  
+            return err  
+         }, nil); err != nil {  
+            return nil, err  
+         }  
+         return resp, nil  
+      }  
+   }  
+}
+客户端hystrix配置
+1、Timeout 【请求超时的时间】
+
+2、ErrorPercentThreshold【允许出现的错误比例】
+
+3、SleepWindow【熔断开启多久尝试发起一次请求】
+
+4、MaxConcurrentRequests【允许的最大并发请求数】
+
+5、RequestVolumeThreshold 【波动期内的最小请求数，默认波动期10S】
+
+commandName := "my-endpoint"  
+hystrix.ConfigureCommand(commandName, hystrix.CommandConfig{  
+  Timeout: 1000 * 30,  
+  ErrorPercentThreshold: 1,  
+  SleepWindow: 10000,  
+  MaxConcurrentRequests: 1000,  
+  RequestVolumeThreshold: 5,  
+})
+增加熔断中间件的包装
+
+breakerMw := circuitbreaker.Hystrix(commandName)
+//增加熔断中间件  
+reqEndPoint = breakerMw(reqEndPoint)
+
+https://github.com/raysonxin/gokit-article-demo
+
+https://gokit.io/
+
+go-kit自上而下采用三层架构方式：Transport、Endpoint、Service。Transport层主要负责与传输协议HTTP、gRPC、Thrift等相关的逻辑；Endpoint层主要负责request／response格式的转换，以及公用拦截器相关的逻辑；Service层则专注于业务逻辑。Endpoint层作为go-kit的核心，采用类似洋葱的模型，提供了对日志、限流、熔断、链路追踪、服务监控等方面的扩展能力。为了帮助开发者构建微服务，go-kit提供了对consul、etcd、zookeeper、eureka等注册中心的支持。
+
+
+初始的时候熔断器是关闭的，一旦请求失败会触发熔断检测，熔断检测就是进行对应的计算来决定是否打开熔断器，当熔断器打开的时候会熔断所有和此熔断器相关联的请求，直到冷却时间结束 冷却时间是当你的熔断器被打开的时候，冷却时间就开始计时，当冷却时间到了之后会默认进入半开放状态，就是说我先试试看看能不能恢复正常工作。在半开放状态时每隔一段周期熔断器都会放请求出去，熔断器中有一个int类型的halfopensuccess当熔断器在半开放状态并且进行请求成功的时候这个数值会进行加1。默认当这个值变为2的时候也就是请求两次之后熔断器就会关闭。目前在做的是单个指令在10s内请求总量大于3000就会进行熔断检测。
+
+ 
+
+第二个是限流 限流更加容易理解，通俗的来说一个后端server会对很多client提供服务，但是如果说某一个client突然流量飙升，就必须要对他进行限流，如果不限流还是可能将服务器打挂所以就要限制这个client的流量。目前做的事user+cmd维度来进行限流，redis里边存放的是每个cmd限流参数。默认情况下每个user+cmd被限流的粒度是10ms。
+
+ 
+
+当一个请求来到网关之后请求会通过路由，然后获得对应的请求id，cmd等等信息，然后进行熔断检测，看当前对应的cmd是否开启了熔断器，然后进行登录检查，通过之后进入黑名单，限流检测等等  熔断统计的是一个cmd下的调用错误率，限流统计的是用户+cmd维度下的流量是否超过了阈值，之后请求才会进入到我们的后端调用接口。

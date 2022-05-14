@@ -1,0 +1,119 @@
+---
+title: composer source 和 dist。
+layout: post
+category: php
+author: 夏泽民
+---
+下载包的方式有两种： source 和 dist。
+
+对于稳定版本 composer 将默认使用 dist 方式，而 source 表示版本控制源 。
+ –prefer-source：composer 将从 source 安装（如果有的话）。如果想要使用一个 bugfix 到你的项目，这是非常有用的。并且可以直接从本地的版本库直接获取依赖关系。
+
+–prefer-dist：与 –prefer-source 相反，composer 将尽可能的从 dist 获取，这将大幅度的加快在 build servers 上的安装。这也是一个回避 git 问题的途径，如果你不清楚如何正确的设置。
+
+ 
+
+source   可以理解成直接从git服务器(比如：github)获取源代码，这样如果git有提交，那么可以迅速获得最新代码，但是下载速度会慢，国内你懂的。
+
+dist        可以理解成composer有编译服务器，如果从编译服务器获取，那么就可以绕开git服务器了，这样下载速度会更快，但是提交的代码会有延迟。
+<!-- more -->
+https://docs.phpcomposer.com/03-cli.html
+
+--prefer-dist 会从github 上下载.zip压缩包，并缓存到本地。下次再安装就会从本地加载，大大加速安装速度。但她没有保留 .git文件夹,没有版本信息。适合基于这个package进行开发。
+
+--prefer-source 会从github 上clone 源代码，不会在本地缓存。但她保留了.git文件夹，从而可以实现版本控制。适合用于修改源代码。
+
+接下来我们进行验证。
+
+1 准备测试环境和数据
+1.1 新建一个测试项目，并指定依赖包 twig
+[ahcj@localhost test]$ mkdir composer-test
+[ahcj@localhost test]$ cd composer-test/
+[ahcj@localhost composer-test]$ composer init --require="twig/twig:1.*" -n --profile
+[6.1MB/0.00s] Memory usage: 6.07MB (peak: 6.17MB), time: 0s
+
+1.2 确定缓存目录 cache-files-dir 为 /home/ahcj/.cache/composer/files
+[ahcj@localhost ~]$ /usr/bin/composer config --list 
+[repositories.packagist.org.type] composer
+[repositories.packagist.org.url] https?://packagist.org
+[repositories.packagist.org.allow_ssl_downgrade] true
+[process-timeout] 300
+[use-include-path] false
+[preferred-install] auto
+[notify-on-install] true
+[github-protocols] [https, ssh]
+[vendor-dir] vendor (/home/ahcj/vendor)
+[bin-dir] {$vendor-dir}/bin (/home/ahcj/vendor/bin)
+[cache-dir] /home/ahcj/.cache/composer
+[data-dir] /home/ahcj/.local/share/composer
+[cache-files-dir] {$cache-dir}/files (/home/ahcj/.cache/composer/files)
+               ....省略....
+
+1.3 查找是否有twig的缓存
+[ahcj@localhost coposertest]$ ll /home/ahcj/.cache/composer/files/twig
+ls: 无法访问/home/ahcj/.cache/composer/files/twig: 没有那个文件或目录
+2 测试 --prefer-source
+2.1 使用 --prefer-source 安装,用了 31.26s
+[ahcj@localhost composer-test]$ composer install --profile --prefer-source
+[6.1MB/0.00s] Loading composer repositories with package information
+[6.4MB/6.08s] Updating dependencies (including require-dev)
+[102.7MB/18.84s] Package operations: 1 install, 0 updates, 0 removals
+[102.7MB/18.84s]   - Installing twig/twig (v1.34.4): [102.8MB/20.76s] Cloning f878bab48e from cache
+[101.3MB/31.26s] Writing lock file
+[101.3MB/31.26s] Generating autoload files
+[101.3MB/31.26s] Memory usage: 101.31MB (peak: 109.88MB), time: 31.26s
+2.2 删除 vendor 目录，重新使用 --prefer-source 安装,用了 33.64s，基本没有差别
+[ahcj@localhost composer-test]$ rm -rf vendor
+[ahcj@localhost composer-test]$ composer install --profile --prefer-source
+[6.2MB/0.01s] Loading composer repositories with package information
+[6.3MB/0.01s] Installing dependencies (including require-dev) from lock file
+[6.8MB/0.02s] Package operations: 1 install, 0 updates, 0 removals
+[6.8MB/0.02s]   - Installing twig/twig (v1.34.4): [6.9MB/12.90s] Cloning f878bab48e from cache
+[6.8MB/33.64s] Generating autoload files
+[6.8MB/33.64s] Memory usage: 6.82MB (peak: 6.98MB), time: 33.64s
+2.3 查看发现没有缓存，都是直接下载的麻。
+[ahcj@localhost composer-test]$ ll /home/ahcj/.cache/composer/files/twig
+ls: 无法访问/home/ahcj/.cache/composer/files/twig: 没有那个文件或目录
+2.4 发现了版本控制信息
+[ahcj@localhost composer-test]$ find -name .git
+./vendor/twig/twig/.git
+[ahcj@localhost composer-test]$ cd ./vendor/twig/twig/
+[ahcj@localhost twig]$ git log | less
+            ....好多，通通省略....
+3 使用 --prefer-dist 安装
+3.1 使用 --prefer-dist 安装,用了 20.34s
+[ahcj@localhost composer-test]$ rm -rf vendor
+[ahcj@localhost composer-test]$ composer install --profile --prefer-dist
+[6.2MB/0.00s] Loading composer repositories with package information
+[6.3MB/0.01s] Installing dependencies (including require-dev) from lock file
+[6.8MB/0.01s] Package operations: 1 install, 0 updates, 0 removals
+[6.8MB/0.01s]   - Installing twig/twig (v1.34.4): [7.0MB/0.01s] D[7.0MB/12.99s] Downloading (0%)[7.0MB/12.99s]               [7.0MB/14.48s] Downloading (5%[7.0MB/15.35s] Downloading (10[7.1MB/16.00s] Downloading (15[7.1MB/16.44s] Downloading (20%)[7.[7.1MB/16.86s] Downloading (25[7.1MB/17.08s] Downloading (30[7.2MB/17.50s] Downloading (35[7.2MB/17.71s] Downloading (40%)[7.[7.2MB/17.73s] Downloading (45[7.3MB/17.95s] Downloading (50[7.3MB/18.14s] Downloading (55[7.3MB/18.17s] Downloading (60%)[7.[7.3MB/18.36s] Downloading (65[7.4MB/18.38s] Downloading (70[7.4MB/18.57s] Downloading (75[7.4MB/18.59s] Downloading (80%)[7.[7.5MB/18.61s] Downloading (85[7.5MB/18.80s] Downloading (90[7.5MB/18.82s] Downloading (95[7.5MB/18.86s] Downloading (100%)[7.0MB/18.86s] 
+[6.8MB/20.34s] Generating autoload files
+[6.8MB/20.34s] Memory usage: 6.84MB (peak: 8.12MB), time: 20.34s
+
+3.2 找到了缓存
+[ahcj@localhost composer-test]$ ll /home/ahcj/.cache/composer/files/twig
+ls: 无法访问/home/ahcj/.cache/composer/files/twig: 没有那个文件或目录
+[ahcj@localhost composer-test]$ ll /home/ahcj/.cache/composer/files/twig
+总用量 0
+drwxrwxr-x 2 ahcj ahcj 58 8月  18 12:16 twig
+
+3.3 重新使用 --prefer-dist 安装，这次用了 6.43s，只有上次安装的 1/4 时间
+[ahcj@localhost composer-test]$ rm -rf vendor
+[ahcj@localhost composer-test]$ composer install --profile --prefer-dist
+[6.3MB/0.01s] Loading composer repositories with package information
+[6.4MB/0.01s] Installing dependencies (including require-dev) from lock file
+[6.9MB/0.01s] Package operations: 1 install, 0 updates, 0 removals
+[6.9MB/0.02s]   - Installing twig/twig (v1.34.4): [7.0MB/0.02s] Loading from cache[7.0MB/0.02s] 
+[6.9MB/6.43s] Generating autoload files
+[6.9MB/6.43s] Memory usage: 6.87MB (peak: 7.13MB), time: 6.43s
+3.4 并没有 .git 版本控制信息哟
+[ahcj@localhost composer-test]$ find -name .git
+
+https://docs.phpcomposer.com/articles/aliases.html
+
+ 如果要对一个资源包使用行内别名，这个别名（as 的右边）必须能够使用版本约束。as 左边的部分在这之后将被丢弃。因此，如果 A 依赖 B 而 B 又依赖 monolog/monolog 且版本约束为 dev-bugfix as 1.0.x-dev，那么安装 A 时将使用 B 的版本约束，并识别为 1.0.x-dev，此时必须真实存在一个“分支别名”或“1.0 系列分支”。否则就必须在 A 的 composer.json 文件中再次定义行内别名。
+ 
+ “dev-master”永远大于所有版本号
+ 
+ 嵌套依赖情况可以vcs方式，且 被依赖的包在require 里加上 dev－master

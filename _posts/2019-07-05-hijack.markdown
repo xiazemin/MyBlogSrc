@@ -1,0 +1,228 @@
+---
+title: hijack
+layout: post
+category: golang
+author: 夏泽民
+---
+type Hijacker interface {
+	Hijack() (net.Conn, *bufio.ReadWriter, error)
+}
+//返回连接接口net.Conn和ReadWriter,bufio读写的
+// Hijack lets the caller take over the connection. -----Hijack让调用者管理连接
+
+// After a call to Hijack(), the HTTP server library 
+
+// will not do anything else with the connection.                    
+
+// It becomes the caller's responsibility to manage
+
+// and close the connection.
+
+------------调用Hijack后，HTTP的server不会对连接做多余的处理让用户自己管理和关闭连接
+
+再看一下docker中对hijack的使用
+
+         dial, err := cli.dial()  //设置TCP keepAlive做长连接
+	// When we set up a TCP connection for hijack, there could be long periods
+	// of inactivity (a long running command with no output) that in certain
+	// network setups may cause ECONNTIMEOUT, leaving the client in an unknown
+	// state. Setting TCP KeepAlive on the socket connection will prohibit
+	// ECONNTIMEOUT unless the socket connection truly is broken
+	if tcpConn, ok := dial.(*net.TCPConn); ok {
+		tcpConn.SetKeepAlive(true)
+		tcpConn.SetKeepAlivePeriod(30 * time.Second)
+	}
+	if err != nil {
+		if strings.Contains(err.Error(), "connection refused") {
+return fmt.Errorf("Cannot connect to the Docker daemon. Is 'docker daemon' running on this host?")
+		}
+		return err
+	}
+	clientconn := httputil.NewClientConn(dial, nil) 
+	defer clientconn.Close()
+ 
+	// Server hijacks the connection, error 'connection closed' expected
+	clientconn.Do(req)
+ 
+	rwc, br := clientconn.Hijack() 
+	//清理掉buffer 这步非常重要,返回这个两个参数就是给用户自己管理连接和数据处理
+	defer rwc.Close()
+
+再看看clientconn.Hijack的实现：
+
+func (cc *ClientConn) Hijack() (c net.Conn, r *bufio.Reader) {
+	cc.lk.Lock()
+	defer cc.lk.Unlock()
+	c = cc.c
+	r = cc.r
+	cc.c = nil
+	cc.r = nil
+	return
+}
+//就是在NewClientConn时候保存的net.Conn和bufio.Reader
+func NewClientConn(c net.Conn, r *bufio.Reader) *ClientConn {
+	if r == nil {
+		r = bufio.NewReader(c)
+	}
+	return &ClientConn{
+		c:        c,
+		r:        r,
+		pipereq:  make(map[*http.Request]uint),
+		writeReq: (*http.Request).Write,
+	}
+}
+总结：hijack就是不用重新建立连接或者重新构造ClientConn设置net.Conn和bufio，然后不断复用net.Conn和bufio，自己管理
+<!-- more -->
+Hijack()可以将HTTP对应的TCP连接取出，连接在Hijack()之后，HTTP的相关操作就会受到影响，调用方需要负责去关闭连接。看一个简单的例子。
+
+func handle1(w http.ResponseWriter, r *http.Request) {
+	hj, _ := w.(http.Hijacker)
+	conn, buf, _ := hj.Hijack()
+	defer conn.Close()
+	buf.WriteString("hello world")
+	buf.Flush()
+}
+
+func handle2(w http.ResponseWriter, r *http.Request) {
+	fmt.Fprintf(w, "hello world")
+}
+问题来了，上面两个handle方法有什么区别呢？很简单，同样是http请求，返回的结果一个遵循http协议，一个不遵循。
+
+➜  ~ curl -i http://localhost:9090/handle1
+hello world%                                                                                                                                                                                                                            ➜  ~ curl -i http://localhost:9090/handle2
+HTTP/1.1 200 OK
+Date: Thu, 14 Jun 2018 07:51:31 GMT
+Content-Length: 11
+Content-Type: text/plain; charset=utf-8
+
+hello world%
+分别是以上两者的返回，可以看到，hijack之后的返回，虽然body是相同的，但是完全没有遵循http协议。（废话，别人都说了hijack之后返回了body然后直接关闭了，哪来的headers = = ）
+
+但我们还是要看看为啥..
+
+func (c *conn) serve(ctx context.Context) {
+	...
+  	serverHandler{c.server}.ServeHTTP(w, w.req)
+    w.cancelCtx()
+    if c.hijacked() {
+      return
+    }
+    w.finishRequest()
+  	...
+}
+这是net/http包中的方法，也是http路由的核心方法。调用ServeHTTP（也就是上边的handle方法）方法，如果被hijack了就直接return了，而一般的http请求会经过后边的finishRequest方法，加入headers等并关闭连接。
+上边我们说了Hijack方法，一般在在创建连接阶段使用HTTP连接，后续自己完全处理connection。符合这样的使用场景的并不多，基于HTTP协议的rpc算一个，从HTTP升级到WebSocket也算一个。
+
+RPC中的应用
+go中自带的rpc可以直接复用http server处理请求的那一套流程去创建连接，连接创建完毕后再使用Hijack方法拿到连接。
+
+// ServeHTTP implements an http.Handler that answers RPC requests.
+func (server *server) servehttp(w http.responsewriter, req *http.request) {
+	if req.method != "connect" {
+		w.header().set("content-type", "text/plain; charset=utf-8")
+		w.writeheader(http.statusmethodnotallowed)
+		io.writestring(w, "405 must connect\n")
+		return
+	}
+	conn, _, err := w.(http.hijacker).hijack()
+	if err != nil {
+		log.print("rpc hijacking ", req.remoteaddr, ": ", err.error())
+		return
+	}
+	io.writestring(conn, "http/1.0 "+connected+"\n\n")
+	server.serveconn(conn)
+}
+客户端通过向服务端发送method为connect的请求创建连接，创建成功后即可开始rpc调用。
+
+websocket中的应用
+// ServeHTTP implements the http.Handler interface for a WebSocket
+func (s Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+	s.serveWebSocket(w, req)
+}
+
+func (s Server) serveWebSocket(w http.ResponseWriter, req *http.Request) {
+	rwc, buf, err := w.(http.Hijacker).Hijack()
+	if err != nil {
+		panic("Hijack failed: " + err.Error())
+	}
+	// The server should abort the WebSocket connection if it finds
+	// the client did not send a handshake that matches with protocol
+	// specification.
+	defer rwc.Close()
+	conn, err := newServerConn(rwc, buf, req, &s.Config, s.Handshake)
+	if err != nil {
+		return
+	}
+	if conn == nil {
+		panic("unexpected nil conn")
+	}
+	s.Handler(conn)
+}
+websocket在创建连接的阶段与http使用相同的协议，而在后边的数据传输的过程中使用了他自己的协议，符合了Hijack的用途。通过serveWebSocket方法将HTTP协议升级到Websocket协议。
+
+Grpc Stream
+写过一些 Grpc 的同学应该都了解，在 GRPC 中有四种类型的 RPC，同时 GRPC 是构建在 HTTP/2.0 之上的，那么有没有办法可以通过 HTTP/1.1 来支持 GRPC 的 stream rpc 呢？这里其实就可以通过 hijack 的黑科技来实现，将 Client 和 Server 两端进行 hijack 一番，其实就有点类似于在 TCP 之上通信了。
+
+Websocket 管理
+Websocket 其实也是有点类似，因为 Websocket 第一阶段走的是普通的 HTTP，后面马上就升级为 Websocket 协议了，所以如果你希望作为中间人操作一些事情的话，那么 hijack 或许是一个很重要的选择。
+
+func (c *conn) serve(ctx context.Context) {
+    ...
+    serverHandler{c.server}.ServeHTTP(w, w.req)
+    w.cancelCtx()
+    if c.hijacked() {
+      return
+    }
+    w.finishRequest()
+    ...
+}
+
+这是net/http包中的方法，也是http路由的核心方法。调用ServeHTTP（也就是上边的handle方法）方法，如果被hijack了就直接return了，而一般的http请求会经过后边的finishRequest方法，加入headers等并关闭连接。
+打开方式
+上边我们说了Hijack方法，一般在在创建连接阶段使用HTTP连接，后续自己完全处理connection。符合这样的使用场景的并不多，基于HTTP协议的rpc算一个，从HTTP升级到WebSocket也算一个。
+RPC中的应用
+go中自带的rpc可以直接复用http server处理请求的那一套流程去创建连接，连接创建完毕后再使用Hijack方法拿到连接。
+// ServeHTTP implements an http.Handler that answers RPC requests.
+func (server *server) servehttp(w http.responsewriter, req *http.request) {
+    if req.method != "connect" {
+        w.header().set("content-type", "text/plain; charset=utf-8")
+        w.writeheader(http.statusmethodnotallowed)
+        io.writestring(w, "405 must connect\n")
+        return
+    }
+    conn, _, err := w.(http.hijacker).hijack()
+    if err != nil {
+        log.print("rpc hijacking ", req.remoteaddr, ": ", err.error())
+        return
+    }
+    io.writestring(conn, "http/1.0 "+connected+"\n\n")
+    server.serveconn(conn)
+}
+
+客户端通过向服务端发送method为connect的请求创建连接，创建成功后即可开始rpc调用。
+websocket中的应用
+// ServeHTTP implements the http.Handler interface for a WebSocket
+func (s Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+    s.serveWebSocket(w, req)
+}
+
+func (s Server) serveWebSocket(w http.ResponseWriter, req *http.Request) {
+    rwc, buf, err := w.(http.Hijacker).Hijack()
+    if err != nil {
+        panic("Hijack failed: " + err.Error())
+    }
+    // The server should abort the WebSocket connection if it finds
+    // the client did not send a handshake that matches with protocol
+    // specification.
+    defer rwc.Close()
+    conn, err := newServerConn(rwc, buf, req, &s.Config, s.Handshake)
+    if err != nil {
+        return
+    }
+    if conn == nil {
+        panic("unexpected nil conn")
+    }
+    s.Handler(conn)
+}
+
+websocket在创建连接的阶段与http使用相同的协议，而在后边的数据传输的过程中使用了他自己的协议，符合了Hijack的用途。通过serveWebSocket方法将HTTP协议升级到Websocket协议。

@@ -1,0 +1,865 @@
+I"$t<p>用户空间程序brctl是如何通过ioctl系统调用在kernel空间内创建上述的数据结构。创建网桥，我们不需要预知任何网络设备信息，因此我们通过ioctl来创建网桥时不应该与任何网络设备绑定到一起。网桥模块为此ioctl函数提供了一个恰如其分的名字 br_ioctl_deviceless_stub。Brctl工具使用的ioctl系统调用最终会调用此函数
+<!-- more -->
+ linux网桥是个内核进程，加载模块首先执行模块初始化</p>
+
+<p>复制代码
+{
+    int err;</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>BUILD_BUG_ON(sizeof(struct br_input_skb_cb) &gt; FIELD_SIZEOF(struct sk_buff, cb));
+
+err = stp_proto_register(&amp;br_stp_proto);
+if (err &lt; 0) {
+    pr_err("bridge: can't register sap for STP\n");
+    return err;
+}   
+
+err = br_fdb_init(); // 初始化网桥CMA表
+if (err)
+    goto err_out;
+
+err = register_pernet_subsys(&amp;br_net_ops);
+if (err)
+    goto err_out1;
+
+err = br_nf_core_init();
+if (err)
+    goto err_out2;
+
+err = register_netdevice_notifier(&amp;br_device_notifier);
+if (err)
+    goto err_out3;
+
+err = register_switchdev_notifier(&amp;br_switchdev_notifier);
+if (err)
+    goto err_out4;
+
+err = br_netlink_init(); // 初始化组播表、端口操作
+if (err)
+    goto err_out5;
+
+brioctl_set(br_ioctl_deviceless_stub); // 用户态添加删除网桥操作
+</code></pre></div></div>
+
+<p>#if IS_ENABLED(CONFIG_ATM_LANE)
+    br_fdb_test_addr_hook = br_fdb_test_addr;
+#endif</p>
+
+<p>#if IS_MODULE(CONFIG_BRIDGE_NETFILTER)
+    pr_info(“bridge: filtering via arp/ip/ip6tables is no longer available “
+        “by default. Update your scripts to load br_netfilter if you “
+        “need this.\n”);
+#endif</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>return 0;
+</code></pre></div></div>
+
+<p>err_out5:
+    unregister_switchdev_notifier(&amp;br_switchdev_notifier);
+err_out4:
+    unregister_netdevice_notifier(&amp;br_device_notifier);
+err_out3:
+    br_nf_core_fini();
+err_out2:
+    unregister_pernet_subsys(&amp;br_net_ops);
+err_out1:
+    br_fdb_fini();
+err_out:
+    stp_proto_unregister(&amp;br_stp_proto);
+    return err;
+}
+复制代码
+ 二 CMA表</p>
+
+<p>当网桥收到一个数据包时，它会获取该数据的源MAC地址，然后对数据库进行更新。如果该MAC地址不在数库中，则创新一个数据项。如果存在，更新它的年龄。数据库使用hash表的结构方式，便于高效查询。</p>
+
+<p>说明：</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>  1. 其中最左边的net_device是一个代表网桥的虚拟设备结构，它关联了一个net_bridge结构，这是网桥设备所特有的数据结构。
+
+  2.  在net_bridge结构中，port_list成员下挂一个链表，链表中的每一个节点（net_bridge_port结构）关联到一个真实的网口设备的net_device。网口设备也通过其br_port指针做反向的关联（那么显然，一个网口最多只能同时被绑定到一个网桥）。
+
+  3. net_bridge结构中还维护了一个hash表，是用来处理地址学习的。当网桥准备转发一个报文时，以报文的目的Mac地址为key，如果可以在 hash表中索引到一个net_bridge_fdb_entry结构，通过这个结构能找到一个网口设备的net_device，于是报文就应该从这个网 口转发出去；否则，报文将从所有网口转发。
+</code></pre></div></div>
+
+<p>三 网桥数据包的处理流程</p>
+
+<p>　　1.  在一个接口上接收的包不会再在那个接口上发送这个数据包；</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>  2.  每个接收到的数据包都要学习其源地址；
+
+  3.  如果数据包是多播或广播包，则要在同一个网段中除了接收端口外的其他所有端口发送这个数据包，如果上层协议栈对多播包感兴趣，则需要把数据包提交给上层协议栈；
+
+   4.  如果数据包的目的MAC地址不能再CAM表中找到，则要在同一个网段中除了接收端口外的其他所有端口发送这个数据包；
+
+   5.  如果能够在CAM表中查询到目的MAC地址，则在特定的端口上发送这个数据包，如果发送端口和接收端口是同一端口则不发送；
+</code></pre></div></div>
+
+<p>四 添加删除网桥</p>
+
+<p>brctl add-br br0 发生了什么？</p>
+
+<p>复制代码
+int br_ioctl_deviceless_stub(struct net <em>net/</em>net namespace*/, unsigned int cmd, void __user *uarg)
+{
+    switch (cmd) {
+    case SIOCGIFBR:
+    case SIOCSIFBR:
+        return old_deviceless(net, uarg);</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>case SIOCBRADDBR:
+case SIOCBRDELBR:
+{   
+    char buf[IFNAMSIZ];
+
+    if (!ns_capable(net-&gt;user_ns, CAP_NET_ADMIN))
+        return -EPERM;
+
+    if (copy_from_user(buf, uarg, IFNAMSIZ))
+        return -EFAULT;
+
+    buf[IFNAMSIZ-1] = 0;
+    if (cmd == SIOCBRADDBR)
+        return br_add_bridge(net, buf); // 新建网桥
+
+    return br_del_bridge(net, buf);
+}   
+}   
+return -EOPNOTSUPP; } 复制代码 复制代码 int br_add_bridge(struct net *net, const char *name) {
+struct net_device *dev;
+int res;
+
+dev = alloc_netdev(sizeof(struct net_bridge), name, NET_NAME_UNKNOWN,
+           br_dev_setup); // br_dev_setup初始化操作钩子
+
+if (!dev)
+    return -ENOMEM;
+
+dev_net_set(dev, net);
+dev-&gt;rtnl_link_ops = &amp;br_link_ops;
+
+res = register_netdev(dev); // 向内核注册此网络设备
+if (res)
+    free_netdev(dev);
+return res; } 复制代码
+</code></pre></div></div>
+
+<p>复制代码
+void br_dev_setup(struct net_device *dev)
+{
+    struct net_bridge *br = netdev_priv(dev); // 获取私有数据</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>eth_hw_addr_random(dev);
+ether_setup(dev);
+
+dev-&gt;netdev_ops = &amp;br_netdev_ops;
+dev-&gt;destructor = br_dev_free;
+dev-&gt;ethtool_ops = &amp;br_ethtool_ops;
+SET_NETDEV_DEVTYPE(dev, &amp;br_type);
+dev-&gt;priv_flags = IFF_EBRIDGE | IFF_NO_QUEUE;
+
+dev-&gt;features = COMMON_FEATURES | NETIF_F_LLTX | NETIF_F_NETNS_LOCAL |
+        NETIF_F_HW_VLAN_CTAG_TX | NETIF_F_HW_VLAN_STAG_TX;
+dev-&gt;hw_features = COMMON_FEATURES | NETIF_F_HW_VLAN_CTAG_TX |
+           NETIF_F_HW_VLAN_STAG_TX;
+dev-&gt;vlan_features = COMMON_FEATURES;
+
+br-&gt;dev = dev;
+spin_lock_init(&amp;br-&gt;lock);
+INIT_LIST_HEAD(&amp;br-&gt;port_list);
+spin_lock_init(&amp;br-&gt;hash_lock);
+
+br-&gt;bridge_id.prio[0] = 0x80;
+br-&gt;bridge_id.prio[1] = 0x00;
+
+ether_addr_copy(br-&gt;group_addr, eth_reserved_addr_base);
+
+br-&gt;stp_enabled = BR_NO_STP;
+br-&gt;group_fwd_mask = BR_GROUPFWD_DEFAULT;
+br-&gt;group_fwd_mask_required = BR_GROUPFWD_DEFAULT;
+
+br-&gt;designated_root = br-&gt;bridge_id;
+br-&gt;bridge_max_age = br-&gt;max_age = 20 * HZ;
+br-&gt;bridge_hello_time = br-&gt;hello_time = 2 * HZ;
+br-&gt;bridge_forward_delay = br-&gt;forward_delay = 15 * HZ;
+br-&gt;bridge_ageing_time = br-&gt;ageing_time = BR_DEFAULT_AGEING_TIME;
+dev-&gt;max_mtu = ETH_MAX_MTU;
+
+br_netfilter_rtable_init(br);
+br_stp_timer_init(br);
+br_multicast_init(br); } 复制代码 dev-&gt;netdev_ops： 复制代码 static const struct net_device_ops br_netdev_ops = {
+.ndo_open        = br_dev_open,
+.ndo_stop        = br_dev_stop,
+.ndo_init        = br_dev_init,
+.ndo_start_xmit      = br_dev_xmit, // 接收网络数据包
+.ndo_get_stats64     = br_get_stats64,
+.ndo_set_mac_address     = br_set_mac_address,
+.ndo_set_rx_mode     = br_dev_set_multicast_list,
+.ndo_change_rx_flags     = br_dev_change_rx_flags,
+.ndo_change_mtu      = br_change_mtu,
+.ndo_do_ioctl        = br_dev_ioctl, // 用户态添加端口到网桥的操作 #ifdef CONFIG_NET_POLL_CONTROLLER
+.ndo_netpoll_setup   = br_netpoll_setup,
+.ndo_netpoll_cleanup     = br_netpoll_cleanup,
+.ndo_poll_controller     = br_poll_controller, #endif
+.ndo_add_slave       = br_add_slave,
+.ndo_del_slave       = br_del_slave,
+.ndo_fix_features        = br_fix_features,
+.ndo_neigh_construct     = netdev_default_l2upper_neigh_construct,
+.ndo_neigh_destroy   = netdev_default_l2upper_neigh_destroy,
+.ndo_fdb_add         = br_fdb_add,
+.ndo_fdb_del         = br_fdb_delete,
+.ndo_fdb_dump        = br_fdb_dump,
+.ndo_bridge_getlink  = br_getlink,
+.ndo_bridge_setlink  = br_setlink,
+.ndo_bridge_dellink  = br_dellink,
+.ndo_features_check  = passthru_features_check, }; 复制代码
+</code></pre></div></div>
+
+<p>五 添加删除端口到网桥</p>
+
+<p>brctl add-if br0 vport0发生了什么？</p>
+
+<p>复制代码
+int br_dev_ioctl(struct net_device *dev, struct ifreq *rq, int cmd)
+{ <br />
+    struct net_bridge *br = netdev_priv(dev);</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>switch (cmd) {
+case SIOCDEVPRIVATE:     
+    return old_dev_ioctl(dev, rq, cmd);
+
+case SIOCBRADDIF:
+case SIOCBRDELIF:
+    return add_del_if(br, rq-&gt;ifr_ifindex, cmd == SIOCBRADDIF); // 添加删除端口
+
+}
+
+br_debug(br, "Bridge does not support ioctl 0x%x\n", cmd);
+return -EOPNOTSUPP; } 复制代码 复制代码 static int add_del_if(struct net_bridge *br, int ifindex, int isadd) {
+struct net *net = dev_net(br-&gt;dev);
+struct net_device *dev;
+int ret;
+
+if (!ns_capable(net-&gt;user_ns, CAP_NET_ADMIN))
+    return -EPERM;
+
+dev = __dev_get_by_index(net, ifindex);
+if (dev == NULL)
+    return -EINVAL;
+
+if (isadd)
+    ret = br_add_if(br, dev);
+else
+    ret = br_del_if(br, dev);
+
+return ret; } 复制代码 复制代码 int br_add_if(struct net_bridge *br, struct net_device *dev) {   
+struct net_bridge_port *p;
+int err = 0;
+unsigned br_hr, dev_hr;
+bool changed_addr;
+
+/* Don't allow bridging non-ethernet like devices, or DSA-enabled
+ * master network devices since the bridge layer rx_handler prevents
+ * the DSA fake ethertype handler to be invoked, so we do not strip off
+ * the DSA switch tag protocol header and the bridge layer just return
+ * RX_HANDLER_CONSUMED, stopping RX processing for these frames.
+ */
+/*--Kernel仅支持以太网网桥--*/
+
+if ((dev-&gt;flags &amp; IFF_LOOPBACK) ||
+    dev-&gt;type != ARPHRD_ETHER || dev-&gt;addr_len != ETH_ALEN ||
+    !is_valid_ether_addr(dev-&gt;dev_addr) ||
+    netdev_uses_dsa(dev))
+    return -EINVAL;
+
+/* No bridging of bridges */
+/*--把网桥接口当作物理接口加入到另一个网桥中，是不行的,逻辑和代码上都会出现 loop--*/
+
+if (dev-&gt;netdev_ops-&gt;ndo_start_xmit == br_dev_xmit)
+    return -ELOOP;
+
+/* Device is already being bridged */
+if (br_port_exists(dev))
+    return -EBUSY;
+
+/* No bridging devices that dislike that (e.g. wireless) */
+if (dev-&gt;priv_flags &amp; IFF_DONT_BRIDGE)
+    return -EOPNOTSUPP;
+
+p = new_nbp(br, dev); // 构造net_bridge_port结构体，分配端口号
+if (IS_ERR(p))
+    return PTR_ERR(p);
+
+call_netdevice_notifiers(NETDEV_JOIN, dev);
+
+err = dev_set_allmulti(dev, 1);
+if (err)
+    goto put_back;
+
+err = kobject_init_and_add(&amp;p-&gt;kobj, &amp;brport_ktype, &amp;(dev-&gt;dev.kobj),
+               SYSFS_BRIDGE_PORT_ATTR); // 在/sys下创建一个kobject的文件，对文件的读写操作由brport_ktype的.sysfs_ops属性指定
+if (err)
+    goto err1;
+
+err = br_sysfs_addif(p);
+if (err)
+    goto err2;
+
+err = br_netpoll_enable(p);
+if (err)
+    goto err3;
+
+err = netdev_rx_handler_register(dev, br_handle_frame, p); // 注册接收数据钩子br_handle_frame到内核处理数据包的handler
+if (err)
+    goto err4;
+
+dev-&gt;priv_flags |= IFF_BRIDGE_PORT;
+
+err = netdev_master_upper_dev_link(dev, br-&gt;dev, NULL, NULL); // 端口添加到网桥
+if (err)
+    goto err5;
+
+err = nbp_switchdev_mark_set(p);
+if (err)
+    goto err6;
+
+dev_disable_lro(dev);
+
+list_add_rcu(&amp;p-&gt;list, &amp;br-&gt;port_list); // 添加到网桥的端口列表
+
+nbp_update_port_count(br);
+
+netdev_update_features(br-&gt;dev);
+
+br_hr = br-&gt;dev-&gt;needed_headroom;
+dev_hr = netdev_get_fwd_headroom(dev);
+if (br_hr &lt; dev_hr)
+    update_headroom(br, dev_hr);
+else
+    netdev_set_rx_headroom(dev, br_hr);
+
+if (br_fdb_insert(br, p, dev-&gt;dev_addr, 0))
+    netdev_err(dev, "failed insert local address bridge forwarding table\n");
+
+err = nbp_vlan_init(p);
+if (err) {
+    netdev_err(dev, "failed to initialize vlan filtering on this port\n");
+    goto err7;
+}
+
+spin_lock_bh(&amp;br-&gt;lock);
+changed_addr = br_stp_recalculate_bridge_id(br);
+
+if (netif_running(dev) &amp;&amp; netif_oper_up(dev) &amp;&amp;
+    (br-&gt;dev-&gt;flags &amp; IFF_UP))
+    br_stp_enable_port(p);
+spin_unlock_bh(&amp;br-&gt;lock);
+
+br_ifinfo_notify(RTM_NEWLINK, p);
+
+if (changed_addr)
+    call_netdevice_notifiers(NETDEV_CHANGEADDR, br-&gt;dev);
+
+dev_set_mtu(br-&gt;dev, br_min_mtu(br));
+br_set_gso_limits(br);
+
+kobject_uevent(&amp;p-&gt;kobj, KOBJ_ADD);
+
+return 0;
+</code></pre></div></div>
+
+<p>err7:
+    list_del_rcu(&amp;p-&gt;list);
+    br_fdb_delete_by_port(br, p, 0, 1);
+    nbp_update_port_count(br);
+err6:
+    netdev_upper_dev_unlink(dev, br-&gt;dev);
+err5:
+    dev-&gt;priv_flags &amp;= ~IFF_BRIDGE_PORT;
+    netdev_rx_handler_unregister(dev);
+err4:
+    br_netpoll_disable(p);
+err3:
+    sysfs_remove_link(br-&gt;ifobj, p-&gt;dev-&gt;name);
+err2:
+    kobject_put(&amp;p-&gt;kobj);
+    p = NULL; /* kobject_put frees */
+err1:
+    dev_set_allmulti(dev, -1);
+put_back:
+    dev_put(dev);
+    kfree(p);
+    return err;
+}
+复制代码</p>
+
+<p>六 linux网桥接收数据包</p>
+
+<p>复制代码
+rx_handler_result_t br_handle_frame(struct sk_buff **pskb)
+{
+    struct net_bridge_port *p;
+    struct sk_buff *skb = *pskb;
+    const unsigned char *dest = eth_hdr(skb)-&gt;h_dest;
+    br_should_route_hook_t *rhook;</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>if (unlikely(skb-&gt;pkt_type == PACKET_LOOPBACK))
+    return RX_HANDLER_PASS;
+
+if (!is_valid_ether_addr(eth_hdr(skb)-&gt;h_source))
+    goto drop;
+
+skb = skb_share_check(skb, GFP_ATOMIC);
+if (!skb)
+    return RX_HANDLER_CONSUMED;
+
+p = br_port_get_rcu(skb-&gt;dev);
+
+if (unlikely(is_link_local_ether_addr(dest))) {
+    u16 fwd_mask = p-&gt;br-&gt;group_fwd_mask_required;
+
+    /*
+     * See IEEE 802.1D Table 7-10 Reserved addresses
+     *
+     * Assignment               Value
+     * Bridge Group Address     01-80-C2-00-00-00
+     * (MAC Control) 802.3      01-80-C2-00-00-01
+     * (Link Aggregation) 802.3 01-80-C2-00-00-02
+     * 802.1X PAE address       01-80-C2-00-00-03
+     *
+     * 802.1AB LLDP         01-80-C2-00-00-0E
+     *
+     * Others reserved for future standardization
+     */
+    switch (dest[5]) {
+    case 0x00:  /* Bridge Group Address */
+        /* If STP is turned off,
+           then must forward to keep loop detection */
+        if (p-&gt;br-&gt;stp_enabled == BR_NO_STP ||
+            fwd_mask &amp; (1u &lt;&lt; dest[5]))
+            goto forward;
+        *pskb = skb;
+        __br_handle_local_finish(skb); // 更新fdb
+        return RX_HANDLER_PASS;
+
+    case 0x01:  /* IEEE MAC (Pause) */
+        goto drop;                    
+
+    case 0x0E:  /* 802.1AB LLDP */
+        fwd_mask |= p-&gt;br-&gt;group_fwd_mask;
+        if (fwd_mask &amp; (1u &lt;&lt; dest[5]))
+            goto forward;
+        *pskb = skb;
+        __br_handle_local_finish(skb); // 更新fdb
+        return RX_HANDLER_PASS;
+
+    default:
+        /* Allow selective forwarding for most other protocols */
+        fwd_mask |= p-&gt;br-&gt;group_fwd_mask;
+        if (fwd_mask &amp; (1u &lt;&lt; dest[5]))
+            goto forward;             
+    }
+
+    /* Deliver packet to local host only */
+    NF_HOOK(NFPROTO_BRIDGE, NF_BR_LOCAL_IN, dev_net(skb-&gt;dev),
+        NULL, skb, skb-&gt;dev, NULL, br_handle_local_finish); // netfilter钩子
+    return RX_HANDLER_CONSUMED;
+}
+</code></pre></div></div>
+
+<p>forward:
+    switch (p-&gt;state) {
+    case BR_STATE_FORWARDING:
+        rhook = rcu_dereference(br_should_route_hook);
+        if (rhook) {
+            if ((<em>rhook)(skb)) {
+                *pskb = skb;
+                return RX_HANDLER_PASS;
+            }
+            dest = eth_hdr(skb)-&gt;h_dest;
+        }
+        /</em> fall through <em>/
+    case BR_STATE_LEARNING:
+　　　　/</em>–
+            当用内核创建一个网桥的同时也会创建一个虚拟的网络设备，它的名字</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>        为网桥的名字，保存在p-&gt;br-&gt;dev指针里。P-&gt;br-&gt;dev和port_list里面的 
+
+        接口共同组成一个网桥。如果该报文是要发往此接，则标记skb-&gt;pkt_type为 
+
+        PACKET_HOST。因为报文最终是要发送到p-&gt;br-&gt;dev的输送队列里面， 
+
+        正如一般的网卡驱动程序将数据包送往到某个net_device的输入队列一样， 
+
+        这样bridge功能充当了虚拟网卡(如例子中的br0)驱动，
+
+        应当设置skb-&gt;pkt_type为PACKET_HOST，
+
+        表明数据包是要发送该接口，而非是因为打开混杂模式而接收到的。
+
+    --*/
+
+    if (ether_addr_equal(p-&gt;br-&gt;dev-&gt;dev_addr, dest))
+        skb-&gt;pkt_type = PACKET_HOST;
+
+    NF_HOOK(NFPROTO_BRIDGE, NF_BR_PRE_ROUTING,
+        dev_net(skb-&gt;dev), NULL, skb, skb-&gt;dev, NULL,
+        br_handle_frame_finish); // netfilter钩子
+    break;
+default: drop:
+    kfree_skb(skb);
+}
+return RX_HANDLER_CONSUMED; } 复制代码  NF_HOOK --用户态通过iptables工具设置的钩子，大致处理如下：
+</code></pre></div></div>
+
+<p>复制代码
+static inline int
+NF_HOOK(uint8_t pf, unsigned int hook, struct net <em>net, struct sock *sk, struct sk_buff *skb,
+    struct net_device *in, struct net_device *out,
+    int (</em>okfn)(struct net <em>, struct sock *, struct sk_buff *))
+{
+    int ret = nf_hook(pf, hook, net, sk, skb, in, out, okfn);
+    if (ret == 1) // 通过规则，raw、mangle、nat等
+        ret = okfn(net, sk, skb); // 执行回调
+    return ret;
+}
+复制代码
+复制代码
+static inline int nf_hook(u_int8_t pf, unsigned int hook, struct net *net,
+              struct sock *sk, struct sk_buff *skb,
+              struct net_device *indev, struct net_device *outdev,
+              int (</em>okfn)(struct net *, struct sock *, struct sk_buff *))
+{
+    struct nf_hook_entry *hook_head;
+    int ret = 1;</p>
+
+<p>#ifdef HAVE_JUMP_LABEL
+    if (__builtin_constant_p(pf) &amp;&amp;
+        __builtin_constant_p(hook) &amp;&amp;
+        !static_key_false(&amp;nf_hooks_needed[pf][hook]))
+        return 1;
+#endif</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>rcu_read_lock();
+hook_head = rcu_dereference(net-&gt;nf.hooks[pf][hook]);
+if (hook_head) {
+    struct nf_hook_state state;
+
+    nf_hook_state_init(&amp;state, hook, pf, indev, outdev,
+               sk, net, okfn);
+
+    ret = nf_hook_slow(skb, &amp;state, hook_head); // 规则过滤
+}
+rcu_read_unlock();
+
+return ret; } 复制代码 复制代码 int nf_hook_slow(struct sk_buff *skb, struct nf_hook_state *state,
+     struct nf_hook_entry *entry) {
+unsigned int verdict;
+int ret;
+
+do {
+    verdict = nf_hook_entry_hookfn(entry, skb, state);
+    switch (verdict &amp; NF_VERDICT_MASK) {
+    case NF_ACCEPT:
+        entry = rcu_dereference(entry-&gt;next);
+        break;
+    case NF_DROP:
+        kfree_skb(skb);
+        ret = NF_DROP_GETERR(verdict);
+        if (ret == 0)
+            ret = -EPERM;
+        return ret;
+    case NF_QUEUE:
+        ret = nf_queue(skb, state, &amp;entry, verdict);
+        if (ret == 1 &amp;&amp; entry) 
+            continue;
+        return ret;
+    default:
+        /* Implicit handling for NF_STOLEN, as well as any other
+         * non conventional verdicts.
+         */ 
+        return 0;
+    }
+} while (entry);
+
+return 1; } 复制代码 回调 br_handle_frame_finish
+</code></pre></div></div>
+
+<p>复制代码
+int br_handle_frame_finish(struct net *net, struct sock *sk, struct sk_buff *skb)
+{
+    struct net_bridge_port *p = br_port_get_rcu(skb-&gt;dev);
+    const unsigned char *dest = eth_hdr(skb)-&gt;h_dest;
+    enum br_pkt_type pkt_type = BR_PKT_UNICAST;
+    struct net_bridge_fdb_entry *dst = NULL;
+    struct net_bridge_mdb_entry *mdst;
+    bool local_rcv, mcast_hit = false;
+    struct net_bridge *br;
+    u16 vid = 0;</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>if (!p || p-&gt;state == BR_STATE_DISABLED)
+    goto drop;
+
+if (!br_allowed_ingress(p-&gt;br, nbp_vlan_group_rcu(p), skb, &amp;vid))
+    goto out;
+
+nbp_switchdev_frame_mark(p, skb);
+</code></pre></div></div>
+
+<p>　　/*
+        对所有报的源MAC地址进行学习，这是网桥的特点之一， 
+          通过对源地址的学习来建立MAC地址到端口的映射。
+    */</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>/* insert into forwarding database after filtering to avoid spoofing */
+br = p-&gt;br;
+if (p-&gt;flags &amp; BR_LEARNING)
+    br_fdb_update(br, p, eth_hdr(skb)-&gt;h_source, vid, false); 　　 　　 /* 如果网桥的虚拟网卡处于混杂模式,那么每个接收到的数据包都需要克隆一份送到
+AF_PACKET协议处理体(网络软中断函数net_rx_action中ptype_all链的处理)*/
+
+local_rcv = !!(br-&gt;dev-&gt;flags &amp; IFF_PROMISC);
+if (is_multicast_ether_addr(dest)) {
+    /* by definition the broadcast is also a multicast address */
+    if (is_broadcast_ether_addr(dest)) {
+        pkt_type = BR_PKT_BROADCAST;
+        local_rcv = true;
+    } else {
+        pkt_type = BR_PKT_MULTICAST;
+        if (br_multicast_rcv(br, p, skb, vid))
+            goto drop;
+    }
+}
+
+if (p-&gt;state == BR_STATE_LEARNING)
+    goto drop;
+
+BR_INPUT_SKB_CB(skb)-&gt;brdev = br-&gt;dev;
+
+if (IS_ENABLED(CONFIG_INET) &amp;&amp; skb-&gt;protocol == htons(ETH_P_ARP))
+    br_do_proxy_arp(skb, br, vid, p);
+
+switch (pkt_type) {
+case BR_PKT_MULTICAST:
+    mdst = br_mdb_get(br, skb, vid);
+    if ((mdst || BR_INPUT_SKB_CB_MROUTERS_ONLY(skb)) &amp;&amp;
+        br_multicast_querier_exists(br, eth_hdr(skb))) {
+        if ((mdst &amp;&amp; mdst-&gt;mglist) ||
+            br_multicast_is_router(br)) {
+            local_rcv = true;
+            br-&gt;dev-&gt;stats.multicast++;
+        }
+        mcast_hit = true;
+    } else {
+        local_rcv = true;
+        br-&gt;dev-&gt;stats.multicast++;
+    }
+    break;
+case BR_PKT_UNICAST:
+    dst = __br_fdb_get(br, dest, vid);
+default:
+    break;
+} 　　 /*--__br_fdb_get函数先查MAC-端口映射表，表中每项是通过结构
+    struct net_bridge_fdb_entry来描述的，这一步是网桥的关键。
+    这个报文应从哪个接口转发出去就看它了。
+    如果这个报文应发往本机，那么skb置空。不需要再转发了
+    因为发往本机接口从逻辑上来说本身就是一个转发，后续有上层协议栈处理
+--*/
+
+if (dst) {
+    if (dst-&gt;is_local)
+        return br_pass_frame_up(skb);
+
+    dst-&gt;used = jiffies;
+</code></pre></div></div>
+
+<p>　　　　
+/<em>–找到MAC映射，则发往对应的目的端口–</em>/</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    br_forward(dst-&gt;dst, skb, local_rcv, false);
+} else { /*--dst==NULL，没有赚到映射，则广播--*/
+
+    if (!mcast_hit)
+        br_flood(br, skb, pkt_type, local_rcv, false);
+    else
+        br_multicast_flood(mdst, skb, local_rcv, false);
+}
+
+if (local_rcv)
+    return br_pass_frame_up(skb);
+</code></pre></div></div>
+
+<p>out:
+    return 0;
+drop:
+    kfree_skb(skb);
+    goto out;
+}</p>
+
+<p>复制代码</p>
+
+<p>复制代码
+static int br_pass_frame_up(struct sk_buff *skb)
+{
+    struct net_device *indev, *brdev = BR_INPUT_SKB_CB(skb)-&gt;brdev;
+    struct net_bridge *br = netdev_priv(brdev);
+    struct net_bridge_vlan_group *vg;
+    struct pcpu_sw_netstats *brstats = this_cpu_ptr(br-&gt;stats);</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>u64_stats_update_begin(&amp;brstats-&gt;syncp);
+brstats-&gt;rx_packets++;
+brstats-&gt;rx_bytes += skb-&gt;len;
+u64_stats_update_end(&amp;brstats-&gt;syncp);
+
+vg = br_vlan_group_rcu(br);
+/* Bridge is just like any other port.  Make sure the
+ * packet is allowed except in promisc modue when someone
+ * may be running packet capture.
+ */
+if (!(brdev-&gt;flags &amp; IFF_PROMISC) &amp;&amp;
+    !br_allowed_egress(vg, skb)) {
+    kfree_skb(skb);
+    return NET_RX_DROP;
+}
+
+indev = skb-&gt;dev;
+skb-&gt;dev = brdev;
+skb = br_handle_vlan(br, vg, skb);
+if (!skb)
+    return NET_RX_DROP;
+/* update the multicast stats if the packet is IGMP/MLD */
+br_multicast_count(br, NULL, skb, br_multicast_igmp_type(skb),
+           BR_MCAST_DIR_TX);
+
+return NF_HOOK(NFPROTO_BRIDGE, NF_BR_LOCAL_IN, /*本地*/
+           dev_net(indev), NULL, skb, indev, NULL,
+           br_netif_receive_skb); // netfilter } 复制代码 通过NF_HOOK在NF_BR_LOCAL_IN挂接点上调用回了netif_receive_skb；
+</code></pre></div></div>
+
+<p>在netif_receive_skb函数中，调用了handle_bridge函数，重新触发了网桥处理流程，现在发往网桥虚拟设备的数据包又回到了netif_receive_skb,那么网桥的处理过程会不会又被调用呢？在linux/net/bridge/br_if.c里面可以看到br_add_if函数，实际上的操作是将某一网口加入网桥组，这个函数调用了new_nbp(br, dev); 用以填充net_bridge以及dev结构的重要成员，里面将dev-&gt;br_port设定为一个新建的net_bridge_port结构，而上面的br_pass_frame_up函数将skb-&gt;dev赋成了br-&gt;dev,实际上skb-&gt;dev变成了网桥建立的虚拟设备，这个设备是网桥本身而不是桥组的某一端口，系统没有为其调用br_add_if，所以这个net_device结构的br_port指针没有进行赋值；br_port为空，不进入网桥处理流程 ；从而进入上层协议栈处理；</p>
+
+<p>复制代码
+void br_forward(const struct net_bridge_port *to,
+        struct sk_buff *skb, bool local_rcv, bool local_orig)
+{
+    if (to &amp;&amp; should_deliver(to, skb)) {
+        if (local_rcv)
+            deliver_clone(to, skb, local_orig);
+        else
+            __br_forward(to, skb, local_orig);
+        return;
+    }</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>if (!local_rcv)
+    kfree_skb(skb); } 复制代码 复制代码 static void __br_forward(const struct net_bridge_port *to,
+         struct sk_buff *skb, bool local_orig) {
+struct net_bridge_vlan_group *vg;
+struct net_device *indev;
+struct net *net;
+int br_hook;
+
+vg = nbp_vlan_group_rcu(to);
+skb = br_handle_vlan(to-&gt;br, vg, skb);
+if (!skb)
+    return;
+
+indev = skb-&gt;dev;
+skb-&gt;dev = to-&gt;dev;  /*--替换报文中的dev为转发端口对应的dev--*/
+
+if (!local_orig) {
+    if (skb_warn_if_lro(skb)) {
+        kfree_skb(skb);
+        return;
+    }
+    br_hook = NF_BR_FORWARD;
+    skb_forward_csum(skb);
+    net = dev_net(indev);
+} else {
+    if (unlikely(netpoll_tx_running(to-&gt;br-&gt;dev))) {
+        if (!is_skb_forwardable(skb-&gt;dev, skb)) {
+            kfree_skb(skb);
+        } else {
+            skb_push(skb, ETH_HLEN);
+            br_netpoll_send_skb(to, skb);
+        }
+        return;
+    }
+    br_hook = NF_BR_LOCAL_OUT;
+    net = dev_net(skb-&gt;dev);
+    indev = NULL;
+}
+
+NF_HOOK(NFPROTO_BRIDGE, br_hook,
+    net, NULL, skb, indev, skb-&gt;dev,
+    br_forward_finish); } 复制代码 复制代码 int br_forward_finish(struct net *net, struct sock *sk, struct sk_buff *skb) {
+return NF_HOOK(NFPROTO_BRIDGE, NF_BR_POST_ROUTING,
+           net, sk, skb, NULL, skb-&gt;dev,
+           br_dev_queue_push_xmit);
+</code></pre></div></div>
+
+<p>}
+复制代码
+复制代码
+int br_dev_queue_push_xmit(struct net *net, struct sock *sk, struct sk_buff *skb)
+{
+    if (!is_skb_forwardable(skb-&gt;dev, skb))
+        goto drop;</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>skb_push(skb, ETH_HLEN);
+br_drop_fake_rtable(skb);
+
+if (skb-&gt;ip_summed == CHECKSUM_PARTIAL &amp;&amp;
+    (skb-&gt;protocol == htons(ETH_P_8021Q) ||
+     skb-&gt;protocol == htons(ETH_P_8021AD))) {
+    int depth;
+
+    if (!__vlan_get_protocol(skb, skb-&gt;protocol, &amp;depth))
+        goto drop;
+
+    skb_set_network_header(skb, depth);
+}
+
+dev_queue_xmit(skb);
+
+return 0;
+</code></pre></div></div>
+
+<p>drop:
+    kfree_skb(skb);
+    return 0;
+}
+复制代码</p>
+
+<p>七 报文处理总结</p>
+
+<p>进入桥的数据报文分为几个类型，桥对应的处理方法也不同：</p>
+
+<ol>
+  <li>
+    <p>报文是本机发送给自己的，桥不处理，交给上层协议栈；</p>
+  </li>
+  <li>
+    <p>接收报文的物理接口不是网桥接口，桥不处理，交给上层协议栈；</p>
+  </li>
+  <li>
+    <p>进入网桥后，如果网桥的状态为Disable，则将包丢弃不处理；</p>
+  </li>
+  <li>
+    <p>报文源地址无效（广播，多播，以及00:00:00:00:00:00），丢包；</p>
+  </li>
+  <li>
+    <p>如果是STP的BPDU包，进入STP处理，处理后不再转发，也不再交给上层协议栈；</p>
+  </li>
+  <li>
+    <p>如果是发给本机的报文，桥直接返回，交给上层协议栈，不转发；</p>
+  </li>
+  <li>
+    <p>需要转发的报文分三种情况：</p>
+  </li>
+</ol>
+
+<p>1） 广播或多播，则除接收端口外的所有端口都需要转发一份；</p>
+
+<p>2） 单播并且在CAM表中能找到端口映射的，只需要网映射端口转发一份即可；</p>
+
+<p>3） 单播但找不到端口映射的，则除了接收端口外其余端口都需要转发；</p>
+:ET

@@ -1,0 +1,186 @@
+---
+title: Kong入口控制器和服务网格Kubernetes设置入口到Istio
+layout: post
+category: k8s
+author: 夏泽民
+---
+https://mp.weixin.qq.com/s/C3gaDJ6YQYTR3SifpPrqNw
+Kubernetes已经成为在服务中编排容器和服务的实际方法。但是我们如何让集群外部的服务访问集群内部的内容呢？Kubernetes附带了Ingress API对象，用于管理对集群内服务的外部访问。
+
+
+
+Ingress（入口）是一组将代理入站连接到后端定义的端点的规则。但是，没有入口控制器，Kubernetes不知道如何处理入口资源，而这正是开源控制器可以发挥作用的地方。在这篇文章中，我们将使用一个选项：Kong Ingress Controller（入口控制器）。一年前，Kong入口控制器开源了，最近的下载量达到了100万次。在最近的0.7版本中，还添加了服务网格支持。该版本的其他功能包括：
+
+内置Kubernetes Admission Controller，它验证自定义资源定义（Custom Resource Definition，CRD）的创建或更新，并拒绝任何无效的配置。
+
+In-memory Mode - 每个pod的控制器主动配置其pod中的Kong容器，这限制了Kong或控制器容器的单个容器的爆炸失效半径到该pod。
+
+原生gRPC路由 - gRPC流量现在可以通过Kong入口控制器路由，支持基于方法的路由。
+<!-- more -->
+如果你想更深入地了解Kong入口控制器0.7版本，请查看GitHub仓库。
+
+https://github.com/Kong/kubernetes-ingress-controller
+
+
+
+但让我们回到服务网格的支持，因为这将是这篇博客文章的主要焦点。服务网格允许组织通过将服务间通信抽象到网格层来解决与安全性、可靠性和可观察性相关的微服务挑战。但是，如果我们的网格层位于Kubernetes中，而我们仍然需要暴露某些服务到集群之外，该怎么办呢？你需要一个入口控制器，比如Kong入口控制器。在这篇博文中，我们将介绍如何将Kong入口控制器作为你的入口层到Istio网格。让我们开始吧：
+
+
+
+
+
+
+
+第0部分：在Kubernetes上设置Istio
+
+本博客假设你已经在Kubernetes上建立了Istio。如果你需要了解这一点，请查看Istio文档。它将引导你在Kubernetes上设置Istio。
+
+https://istio.io/docs/setup/
+
+
+
+1. 安装Bookinfo应用程序
+
+首先，我们需要标记承载应用程序和Kong代理的命名空间。要标记bookinfo应用程序所在的默认命名空间，请运行以下命令：
+
+
+$ kubectl label namespace default istio-injection=enabled
+namespace/default labeled
+然后创建一个新的命名空间，它将承载我们的Kong网关和Ingress控制器：
+
+
+$ kubectl create namespace kong
+namespace/kong created
+因为Kong将位于默认命名空间之外，请确保你还使用启用了istio-injection来标记Kong命名空间：
+
+
+$ kubectl label namespace kong istio-injection=enabled
+namespace/kong labeled
+两个命名空间都标记为istio-injection=enabled是必要的。否则，默认配置将不会将边车容器注入命名空间的pod中。
+
+
+
+现在使用以下命令部署你的BookInfo应用程序：
+
+
+$ kubectl apply -f http://bit.ly/bookinfoapp
+service/details created
+serviceaccount/bookinfo-details created
+deployment.apps/details-v1 created
+service/ratings created
+serviceaccount/bookinfo-ratings created
+deployment.apps/ratings-v1 created
+service/reviews created
+serviceaccount/bookinfo-reviews created
+deployment.apps/reviews-v1 created
+deployment.apps/reviews-v2 created
+deployment.apps/reviews-v3 created
+service/productpage created
+serviceaccount/bookinfo-productpage created
+deployment.apps/productpage-v1 created
+让我们再次检查我们的服务和pod，以确保我们有正确的设置：
+
+
+$ kubectl get services
+NAME          TYPE        CLUSTER-IP       EXTERNAL-IP   PORT(S)    AGE
+details       ClusterIP   10.97.125.254    <none>        9080/TCP   29s
+kubernetes    ClusterIP   10.96.0.1        <none>        443/TCP    29h
+productpage   ClusterIP   10.97.62.68      <none>        9080/TCP   28s
+ratings       ClusterIP   10.96.15.180     <none>        9080/TCP   28s
+reviews       ClusterIP   10.104.207.136   <none>        9080/TCP   28s
+你应该看到四个新服务：details、productpage、ratings和reviews。它们都没有外部IP，因此我们将使用Kong网关来暴露必要的服务。检查pod，运行以下命令：
+
+
+$ kubectl get pods
+NAME                              READY   STATUS    RESTARTS   AGE
+details-v1-c5b5f496d-9wm29        2/2     Running   0          101s
+productpage-v1-7d6cfb7dfd-5mc96   2/2     Running   0          100s
+ratings-v1-f745cf57b-hmkwf        2/2     Running   0          101s
+reviews-v1-85c474d9b8-kqcpt       2/2     Running   0          101s
+reviews-v2-ccffdd984-9jnsj        2/2     Running   0          101s
+reviews-v3-98dc67b68-nzw97        2/2     Running   0          101s
+这个命令输出有用的数据，让我们花点时间来理解它。如果你查看READY列，就会发现每个pod都有两个正在运行的容器：服务和一个Envoy边车被注入其中。另一件要强调的事情是，有三个review pod，但只有一个review服务。Envoy边车将负载平衡到三个不同的包含不同版本的review pod，让我们能够A/B测试我们的变化。也就是说，你现在应该可以访问你的产品页面了！
+
+$ kubectl exec -it $(kubectl get pod -l app=ratings -o jsonpath='{.items[0].metadata.name}') -c ratings -- curl productpage:9080/productpage | grep -o "<title>.*</title>"
+<title>Simple Bookstore App</title>
+
+
+2. Kong Kubernetes入口控制器（没有数据库的）
+
+为了向世界暴露你的服务，我们将Kong部署作为南北流量网关。Kong 1.1发布了带有声明性配置和DB-less模式。声明式配置允许你通过YAML或JSON文件而不是一系列API调用来指定所需的系统状态。使用声明式配置可以降低复杂性、提高自动化程度和提高系统性能。使用Kong入口控制器，应用于集群的任何Ingress规则都将自动配置到Kong代理上。让我们先设置Kong入口控制器和实际的Kong代理，就像这样：
+
+
+$ kubectl apply -f https://bit.ly/k4k8s
+namespace/kong configured
+customresourcedefinition.apiextensions.k8s.io/kongconsumers.configuration.konghq.com created
+customresourcedefinition.apiextensions.k8s.io/kongcredentials.configuration.konghq.com created
+customresourcedefinition.apiextensions.k8s.io/kongingresses.configuration.konghq.com created
+customresourcedefinition.apiextensions.k8s.io/kongplugins.configuration.konghq.com created
+serviceaccount/kong-serviceaccount created
+clusterrole.rbac.authorization.k8s.io/kong-ingress-clusterrole created
+clusterrolebinding.rbac.authorization.k8s.io/kong-ingress-clusterrole-nisa-binding created
+configmap/kong-server-blocks created
+service/kong-proxy created
+service/kong-validation-webhook created
+deployment.apps/ingress-kong created
+要检查Kong pod是否启动并运行，请运行：
+
+
+$ kubectl get pods -n kong
+NAME                               READY   STATUS    RESTARTS   AGE
+pod/ingress-kong-8b44c9856-9s42v   3/3     Running   0          2m26s
+在这个pod里会有三个容器。第一个容器是Kong网关，它将成为集群的入口点。第二个容器是入口控制器。它使用入口资源并更新代理以遵循资源中定义的规则。最后，第三个容器是Istio注入的Envoy代理。Kong将通过Envoy边车代理将流量转至适当的服务。要通过新部署的Kong网关将请求发送到集群，需要设置一个环境变量，该环境变量的URL基于访问Kong的IP地址。
+
+
+$ export PROXY_URL="$(minikube service -n kong kong-proxy --url | head -1)"
+$ echo $PROXY_URL
+http://192.168.99.100:32728
+接下来，我们需要更改一些配置，以便Envoy边车进程能够基于请求的主机/权限头正确地路由请求。运行以下程序来停止保存主机的路由：
+
+
+$ echo "
+apiVersion: configuration.konghq.com/v1
+kind: KongIngress
+metadata:
+    name: do-not-preserve-host
+route:
+  preserve_host: false
+" | kubectl apply -f -
+kongingress.configuration.konghq.com/do-not-preserve-host created
+并注释现有的productpage服务，以将service-upstream设置为true：
+
+
+$ kubectl annotate svc productpage Ingress.kubernetes.io/service-upstream="true"
+service/productpage annotated
+现在一切都设置好了，我们可以看看如何使用入口资源来帮助将外部流量路由到你的Istio网格内的服务。我们将创建一个入口规则，路由所有/路径的流量到我们的productpage服务：
+
+
+$ echo "
+apiVersion: extensions/v1beta1
+kind: Ingress
+metadata:
+  name: productpage
+  annotations:
+    configuration.konghq.com: do-not-preserve-host
+spec:
+  rules:
+  - http:
+      paths:
+      - path: /
+        backend:
+          serviceName: productpage
+          servicePort: 9080
+" | kubectl apply -f -
+ingress.extensions/productpage created
+就像那样，Kong入口控制器能够理解你在入口资源中定义的规则，并将其路由到productpage服务！要查看产品页面服务的GUI，请转到浏览器中的$PROXY_URL/productpage。或者要在命令行中测试它，请尝试：
+
+$ curl $PROXY_URL/productpage
+这就是我这次演练的全部内容。如果你喜欢这篇文章中使用的技术，请查看它们的存储库，因为它们都是开源的，并且希望有更多的贡献者！以下是他们的链接，方便你：
+
+Kong：https://github.com/Kong/kubernetes-ingress-controller
+
+Kubernetes：https://github.com/kubernetes/kubernetes
+
+Istio：https://github.com/istio/istio
+
+Envoy：https://github.com/envoyproxy/envoy

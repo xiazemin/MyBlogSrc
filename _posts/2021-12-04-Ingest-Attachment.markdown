@@ -1,0 +1,234 @@
+---
+title: Ingest-Attachment 对 word和PDF文档的全文搜索
+layout: post
+category: elasticsearch
+author: 夏泽民
+---
+https://github.com/elastic/elasticsearch/tree/master/plugins/ingest-attachment
+https://github.com/RD17/ambar
+https://github.com/dadoonet/fscrawler
+https://www.cnblogs.com/NextNight/p/6904791.html
+
+ElasticSearch只能处理文本，不能直接处理文档。Ingest-Attachment是一个开箱即用的插件，替代了较早版本的Mapper-Attachment插件，使用它可以实现对（PDF,DOC,EXCEL等）主流格式文件的文本抽取及自动导入。
+Elasticsearch5.x新增一个新的特性Ingest Node，此功能支持定义命名处理器管道pipeline，pipeline中可以定义多个处理器，在数据插入ElasticSearch之前进行预处理。而Ingest Attachment Processor Plugin提供了关键的预处理器attachment，支持自动对入库文档的指定字段作为文档文件进行文本抽取。
+由于ElasticSearch是基于JSON格式的文档数据库，所以附件文档在插入ElasticSearch之前必须进行Base64编码。
+
+ElasticSearch-5.4.2下载地址：https://artifacts.elastic.co/downloads/elasticsearch/elasticsearch-5.4.2.zip
+Kibana-5.4.2：https://artifacts.elastic.co/downloads/kibana/kibana-5.4.2-windows-x86.zip
+elasticsearch和kibana的zip包下载之后解压分别去他们的bin目录下双击运行elasticsearch.bat和kibana.bat即可使用简单的单机版，用来测试非常方便。Elasticsearch默认使用的是9200端口，接下来在浏览器中打开链接http://localhost:9200验证是否安装成功。
+
+Ingest-attachment插件下载地址：https://artifacts.elastic.co/downloads/elasticsearch-plugins/ingest-attachment/ingest-attachment-5.4.2.zip
+参考官网（https://www.elastic.co/guide/en/elasticsearch/plugins/5.4/plugin-management-custom-url.html#plugin-management-custom-url ）安装：bin\elasticsearch-plugin install file:///C:\Users\jk\Desktop\ingest-attachment-5.4.2.zip
+Cygwin（用于使用curl和perl脚本的解码功能）
+安装可参考：https://www.cnblogs.com/feipeng8848/p/8555648.html
+
+https://blog.csdn.net/m0_37739193/article/details/86421246
+<!-- more -->
+
+elasticsearch5.x 新增一个比较重要的特性 IngestNode。
+之前如果需要对数据进行加工，都是在索引之前进行处理，比如logstash可以对日志进行结构化和转换，现在直接在es就可以处理了。
+目前es提供了一些常用的诸如convert、grok之类的处理器，在使用的时候，先定义一个pipeline管道，里面设置文档的加工逻辑，在建索引的时候指定pipeline名称，那么这个索引就会按照预先定义好的pipeline来处理了。
+
+Ingest Attachment Processor Plugin
+处理文档附件，替换之前的 mapper attachment plugin。
+默认存储附件内容必须base64编码的数据，不想base64转换，可以使用CBOR（没有试验）
+官网说明：
+
+The source field must be a base64 encoded binary. 
+If you do not want to incur the overhead of converting back and forth between base64, 
+you can use the CBOR format instead of JSON and specify the field as a bytes array instead of a string representation. 
+The processor will skip the base64 decoding then.
+安装
+
+./bin/elasticsearch-plugin install ingest-attachment
+
+1.创建管道single_attachment
+
+PUT _ingest/pipeline/single_attachment
+{
+  "description" : "Extract single attachment information",
+  "processors" : [
+    {
+      "attachment" : {
+        "field": "data",
+        "indexed_chars" : -1,
+        "ignore_missing" : true
+      }
+    }
+  ]
+}
+2.创建index
+
+PUT /index1
+{
+    "mappings" : {
+        "type1" : {
+            "properties" : {
+                "id": {
+                    "type": "keyword"
+                },
+                "filename": {
+                    "type": "text",
+                    "analyzer": "english"
+                },
+                "data":{
+                    "type": "text",
+                    "analyzer": "english"
+                }
+            }
+        }
+    }
+}
+3.索引数据
+
+PUT index1/type1/1?pipeline=single_attachment&refresh=true&pretty=1
+{
+    "id": "1",
+    "filename": "1.txt",
+    "data" : "e1xydGYxXGFuc2kNCkxvcmVtIGlwc3VtIGRvbG9yIHNpdCBhbWV0DQpccGFyIH0="
+}
+PUT index1/type1/2?pipeline=single_attachment&refresh=true&pretty=1
+{
+  "id": "2",
+  "subject": "2.txt",
+  "data": "dGVzdGluZyBteSBmaXJzdCBlbmNvZGVkIHRleHQ="
+}
+4.查看结果
+
+GET index1/type1/1
+GET index1/type1/2
+POST index1/type1/_search?pretty=true
+{
+  "query": {
+    "match": {
+      "attachment.content_type": "text plain"
+    }
+  }
+}
+POST index1/type1/_search?pretty=true
+{
+  "query": {
+    "match": {
+      "attachment.content": "testing"
+    }
+  },
+  "highlight": {
+    "fields": {
+      "attachment.content": {}
+    }
+  }
+}
+
+返回结果
+
+"hits": [
+    {
+        "_index": "index1",
+        "_type": "type1",
+        "_id": "2",
+        "_score": 0.2824934,
+        "_source": {
+            "data": "dGVzdGluZyBteSBmaXJzdCBlbmNvZGVkIHRleHQ=",
+            "attachment": {
+                "content_type": "text/plain; charset=ISO-8859-1",
+                "language": "et",
+                "content": "testing my first encoded text",
+                "content_length": 30
+            },
+            "subject": "2.txt",
+            "id": "2"
+        },
+        "highlight": {
+            "attachment.content": [
+                "<em>testing</em> my first encoded text"
+            ]
+        }
+    }
+]
+用管道处理多个附件示例(Using the Attachment Processor with arrays)
+
+https://www.jianshu.com/p/774e5ed120ba
+
+
+现有的检索解决方案
+经过我的发力工作（Google/baidu）,现在市面上流行这么几种方案
+
+Elasticsearch 官方插件 ingest-attachment
+第三方开源服务 fscrawler
+大数据平台 Ambari
+
+https://yemilice.com/2020/07/29/elasticsearch%E6%A3%80%E7%B4%A2pdf%E5%92%8Coffice%E6%96%87%E6%A1%A3%E7%9A%84%E6%96%B9%E6%A1%88%E6%B5%8B%E8%AF%84/
+
+ambar 官方对ES文件内容提取插件的总结。
+1、Ingest Attachment Plugin。
+官方网站。
+最简单易用的解决方案，它是ElasticSearch官方的插件。可从几乎所有文档类型中提取内容。收录附件无法微调，这就是为什么它不能处理大文件。
+
+2、Apache Tika。
+官方网站
+Apache Tika是从文件中提取内容的实际标准。粗略地说，Tika是提取文件内容的开源库的组合，并合并为一个库。它是开源的，并且具有REST API。您必须具有在服务器上进行设置和配置的经验。您还应该注意，Tika在某些类型的PDF（带有图像的PDF）中不能很好地工作，并且REST API的运行速度比直接Java调用慢得多，即使在本地主机上也是如此。
+那么，您安装了Tika，下一步是什么？您需要创建某种包装器：
+
+下载文件
+调用Tika提取文件内容
+将已解析的内容提交到ElasticSearch
+为了使ElasticSearch快速搜索大文件，您必须自己对其进行调整。 总结起来，Tika是一个很好的解决方案，但是它需要大量的代码编写和微调，尤其是对于边缘情况：对于Tika来说，它是怪异的PDF和OCR。
+3、FsCrawler
+官方网站
+
+FsCrawler是一个“快速而肮脏的”开源解决方案，适用于那些希望通过本地文件系统并通过SSH为文档编制索引的人。它会抓取你的文件系统并为新文件建立索引，更新现有文件并删除旧文件。FsCrawler用Java编写，并且需要一些额外的工作来安装和配置它。它支持定时抓取（例如，每15分钟），还具有一些用于提交文件和定时计划管理的基本API。FsCrawler在内部使用Tika，通常来说，您可以将FsCrawler用作Tika和ElasticSearch之间的粘合剂。
+
+4、Ambar
+官方网站
+
+它可以很好地处理大文件（> 100 MB）
+它从PDF中提取内容（即使格式不佳并带有嵌入式图像），并对图像进行OCR
+它为用户提供了简单易用的REST API和WEB UI
+部署非常容易（感谢Docker）
+它是根据Fair Source 1 v0.9许可开源的
+开箱即用地为用户提供解析和即时搜索体验。
+
+https://www.bianchengquan.com/article/596131.html
+
+Elasticsearch 通常用于为字符串，数字，日期等类型的数据建立索引。但是，如果要直接为 .pdf 或 .doc 等文件建立索引并使其可搜索该怎么办？在 HCM，ERP 和电子商务等应用程序中有这种实时用例的需求。
+
+在今天的这篇文章中我们来讲一下如何实现对 .pdf 或 .doc 文件的搜索。本解决方案使用于 Elasticsearch 5.0 以后的版本。
+
+实现原理
+我们采用如下的方法来实现把一个 .pdf 文件导入到 Elasticsearch 的数据 node 中：
+
+我们首先把我们的.pdf文件进行Base64的处理，然后上传到 Elasticsearch 中的 ingest node 中进行处理。我们可以通过 Ingest attachment plugin 来使得 Elasticsearch 提取通用格式的文件附件比如  PPT, XLS 及 PDF。最终，数据进行倒Elasticsearch 的 data node 中以便让我们进行搜索。
+
+https://blog.csdn.net/UbuntuTouch/article/details/104171230
+https://blog.csdn.net/laoyang360/article/details/78703177
+知识库全文检索问题抛出
+重新审视一个停滞不前的项目，并寻求建议，对数千个“旧”文档进行现代化改造，
+
+最终期望效果：通过网络访问这些文档。
+文档以各种格式存在，有些已经过时：
+- .doc，
+- PageMaker，
+- 硬拷贝hardcopy （OCR），
+- PDF
+
+我将推荐ElasticSearch，我们先解决这个问题并讨论如何实现它：
+
+这有几个部分：
+
+从文档中提取文本以使它们可以索引（indexable），以备检索；
+以全文搜索形式提供此文本；
+高亮显示文档片段；
+知道文档中的哪些段落可用于分页；
+返回完整的文档。
+ElasticSearch可以提供什么：
+
+ElasticSearch（如Solr）使用Tika从各种文档格式中提取文本和元数据；
+Elasticsearch提供了强大的全文搜索功能。它可以配置为以适当的语言分析每个文档，它可以借助boost提高某些字段的权重（例如，标题比内容更重要），ngrams分词等标准Lucene操作；
+Elasticsearch可以高亮显示搜索结果；
+Elasticsearch不知道这些片段在您的文档中出现的位置；
+Elasticsearch可以将原始文档存储为附件，也可以存储并返回提取的文本。但它会返回整个文档，而不是一个页面。
+
+https://blog.csdn.net/laoyang360/article/details/80616320
+https://blog.51cto.com/u_14886891/2516011
+https://www.itread01.com/content/1495708935.html
+https://discuss.elastic.co/t/announcement-fscrawler-2-7-released/280525

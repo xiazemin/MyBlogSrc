@@ -1,0 +1,166 @@
+I"I<p>目前go动态库的生产只支持Linux，Windows下会报这样的错误，<code class="language-plaintext highlighter-rouge">-buildmode=plugin not supported on windows/amd64</code>
+CODE
+plugin.so</p>
+
+<p>package main</p>
+
+<p>import (</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>"fmt"
+
+)
+</code></pre></div></div>
+
+<p>func DCall(){
+    fmt.Println(“plugin.so was called”) 
+}</p>
+
+<p>func DCallWithParam(msg string){
+    fmt.Println(“参数内容为:”,msg) 
+}</p>
+
+<p>func main() {</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>fmt.Println("goroute全部退出")
+</code></pre></div></div>
+
+<p>}
+<!-- more -->
+pluginload.go</p>
+
+<p>package main</p>
+
+<p>import (
+    “plugin”
+)</p>
+
+<p>func main() {</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>//加载动态库
+p, err := plugin.Open("plugin.so")
+if err != nil {
+    panic(err)
+}
+//查找函数   
+f, err := p.Lookup("DCall")
+if err != nil {
+    panic(err)
+}
+//转换类型后调用函数   
+f.(func())()
+
+f2, err := p.Lookup("DCallWithParam")
+if err != nil {
+    panic(err)
+}
+
+//带参函数的调用
+f2.(func(string))("hello world,plugin.so")
+</code></pre></div></div>
+
+<p>}
+编译动态库
+go build –buildmode=plugin plugin.go
+调用动态库
+go run pluginload.go</p>
+
+<p>使用Golang写C的动态库,当前项目目录
+root@working-srv: tree ./
+./
+|– hello
+|   <code class="language-plaintext highlighter-rouge">-- main.go
+</code>– main.c
+1
+2
+3
+4
+5
+6
+7
+root@working-srv: more hello/main.go 
+package main</p>
+
+<p>import “C”</p>
+
+<p>func main() {}</p>
+
+<p>//export Hello
+func Hello() string {
+    return “Hello”
+}</p>
+
+<p>//export Test
+func Test() {
+   println(“export Test”)
+}
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+root@working-srv: more main.c 
+#include<libhello.h>
+#include<stdio.h></stdio.h></libhello.h></p>
+
+<p>void main()
+{
+    GoString str;
+    str=Hello();  <br />
+    Test();
+    printf(“%s\n”,str);
+}
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+首先将hello/main.go编译成动态库,使用下面的命令
+go build -x -v -ldflags “-s -w” -buildmode=c-shared  -o libhello.so hello
+root@working-srv: tree ./
+./
+|– hello
+|   <code class="language-plaintext highlighter-rouge">-- main.go
+|-- libhello.h
+|-- libhello.so
+</code>– main.c
+执行完毕的目录结构到多了libhello.h 和 libhello.so
+使用下面的命令编译C文件.(-L指定动态链接库目录 -l指定动态链接库文件 -I指定头文件目录)
+gcc -I./ -L./ -lhello -o main main.c
+root@working-srv: tree ./
+./
+|– hello
+|   <code class="language-plaintext highlighter-rouge">-- main.go
+|-- libhello.h
+|-- libhello.so
+|-- main
+</code>– main.c
+这里可以看到编译出了main文件.
+root@working-srv: ./main 
+export Test
+Hello</p>
+
+<p>root@working-srv: ./main 
+export Test
+Hello</p>
+
+<p>这里有个注意的地方就是main.go文件中的//export Hello 和 //export Test这个是有作用的,没有这个就不会生成对应的头文件方法.也就是此方法就不会被导出.</p>
+:ET

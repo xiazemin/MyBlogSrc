@@ -1,0 +1,288 @@
+I"�a<p>•gzencode 默认使用ZLIB_ENCODING_GZIP编码，使用gzip压缩格式，实际上是使用defalte 算法压缩数据，然后加上文件头和adler32校验
+•gzdeflate 默认使用ZLIB_ENCODING_RAW编码方式，使用deflate数据压缩算法，实际上是先用 LZ77 压缩，然后用霍夫曼编码压缩
+•gzcompress ；默认使用ZLIB_ENCODING_DEFLATE编码，使用zlib压缩格式，实际上是用 deflate 压缩数据，然后加上 zlib 头和 CRC 校验</p>
+
+<p>这三个函数的比较实质上是三种压缩方法：deflate, zlib, gzip的比较。
+从性能的维度看：deflate 好于 gzip 好于 zlib
+从文本文件默认压缩率压缩后体积的维度看：deflate 好于 zlib 好于 gzip</p>
+
+<p>这三种算法中gzip 、zlib的作者都是Jean-Loup Gailly和 Mark Adler。
+这两种算法以及图形格式png，使用的压缩算法却都是deflate算法。
+deflate算法是同时使用了LZ77算法与哈夫曼编码（Huffman Coding）的一个无损数据压缩算法。
+它最初是由Phil Katz为他的PKZIP归档工具第二版所定义的，后来定义在 RFC 1951规范中。</p>
+
+<p>deflate算法的压缩与解压的实现过程可以在压缩库zlib上找到。
+PHP的压缩实现依赖于zlib，zlib是一个提供了 deflate, zlib, gzip 压缩方法的函数库。
+我们所使用的上面三个函数，将参数中的encoding转为相同，压缩率设置相同，则其最终调用的是同一个函数，效果和性能一样。
+<!-- more -->
+PHP的zlib实现是以扩展的方式存在于ext/zlib目录中。通过deflateInit2() + deflate() + deflateEnd()三个函数配合完成压缩功能，inflateInit2() + inflate() + inflateEnd()三个函数配合完成解压功能。压缩最终都是通过php_zlib_encode函数实现调用，除了输入的字符串，压缩率，结果的输出外，不同的入口函数调用参数不同的是其encoding。deflateInit2的第四个参数指定encoding，PHP定义了三个常量：</p>
+
+<p>复制代码代码如下:</p>
+
+<p>#define PHP_ZLIB_ENCODING_RAW          -0xf      //deflate -15
+#define PHP_ZLIB_ENCODING_GZIP          0x1f      //gzip 15 + 16
+#define PHP_ZLIB_ENCODING_DEFLATE     0x0f      // zlib 15
+三个函数在调用过程可以直接指定encoding使用其它的算法：</p>
+
+<p>复制代码代码如下:</p>
+
+<p>zlib:   ZLIB_ENCODING_DEFLATE
+gzip: ZLIB_ENCODING_GZIP
+deflate: ZLIB_ENCODING_RAW
+此三个函数是三种算法的简单调用方式，以更好的命名展现。三个函数间可以通过指定相同的encoding达到相同的效果，并且PHP也提供zlib_encode函数作为通用的压缩函数。</p>
+
+<p>压缩函数：gzcompress gzdeflate gzencode</p>
+
+<p>解压函数：gzuncompress gzinflate gzdecode</p>
+
+<p>gzdecode是PHP 5.4.0之后才加入的，使用的时候要注意兼容性问题。</p>
+
+<p>这几个函数都以gz开头，让人想到gzip压缩，而光看函数名却又看不出它们之间的区别，只能查文档。</p>
+
+<p>gzcompress gzdeflate gzencode函数的区别在于它们压缩的数据格式不同：</p>
+
+<p>gzcompress使用的是ZLIB格式；</p>
+
+<p>gzdeflate使用的是纯粹的DEFLATE格式；</p>
+
+<p>gzencode使用的是GZIP格式；</p>
+
+<p>但是有一点是相同的，它们压缩数据时都使用了DEFLATE压缩算法（理论上ZLIB和GZIP格式可以使用其他的压缩算法，但是目前实践中只使用DEFLATE算法），ZLIB和GZIP只不过是在DEFLATE的基础之上加了一些头部和尾部而已。</p>
+
+<p>顺便提一下，HTTP协议中的Content-Encoding: deflate使用的是ZLIB格式而不是纯DEFLATE格式。</p>
+
+<p>从PHP 5.4.0开始，gzcompress和gzdeflate函数加入了第三个参数$encoding，可以是三个常量：</p>
+
+<p>ZLIB_ENCODING_RAW 对应于纯DEFLATE格式；</p>
+
+<p>ZLIB_ENCODING_GZIP 对应于GZIP格式；</p>
+
+<p>ZLIB_ENCODING_DEFLATE 对应于ZLIB格式（注意不是纯DEFLATE格式）；</p>
+
+<p>虽然文档没有提及，但是这三个常量也可以用在gzencode函数的第三个参数$encoding_mode中。</p>
+
+<p>其实从PHP 5.4.0开始，这三个函数是一样的，只不过第三个参数的默认值不同；如果调用时传入第三个参数，那么这三个函数返回的数据相同。可以写一个简单的脚本测试：</p>
+
+<p>复制代码代码如下:</p>
+
+<p>&lt;?php
+$url = ‘http://jb51.net’;
+$s1 = gzdeflate($url, 1);
+$s2 = gzencode($url, 1, ZLIB_ENCODING_RAW);
+if (strcmp($s1, $s2) == 0) echo ‘the same’;
+?&gt;
+运行可以看到$s1和$s2是相同的，为什么会这样呢？可以从PHP源码中找到答案，打开php-5.5.4\ext\zip\zlib.c，可以找到这样的代码：</p>
+
+<p>复制代码代码如下:</p>
+
+<p>#define PHP_ZLIB_ENCODE_FUNC(name, default_encoding) <br />
+static PHP_FUNCTION(name) <br />
+{ <br />
+    char *in_buf, *out_buf; <br />
+    int in_len; <br />
+    size_t out_len; <br />
+    long level = -1; <br />
+    long encoding = default_encoding; <br />
+    if (default_encoding) { <br />
+        if (SUCCESS != zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, “s|ll”, &amp;in_buf, &amp;in_len, &amp;level, &amp;encoding)) { <br />
+            return; <br />
+        } <br />
+    } else { <br />
+        if (SUCCESS != zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, “sl|l”, &amp;in_buf, &amp;in_len, &amp;encoding, &amp;level)) { <br />
+            return; <br />
+        } <br />
+    } <br />
+    if (level &lt; -1 || level &gt; 9) { <br />
+        php_error_docref(NULL TSRMLS_CC, E_WARNING, “compression level (%ld) must be within -1..9”, level); <br />
+        RETURN_FALSE; <br />
+    } <br />
+    switch (encoding) { <br />
+        case PHP_ZLIB_ENCODING_RAW: <br />
+        case PHP_ZLIB_ENCODING_GZIP: <br />
+        case PHP_ZLIB_ENCODING_DEFLATE: <br />
+            break; <br />
+        default: <br />
+            php_error_docref(NULL TSRMLS_CC, E_WARNING, “encoding mode must be either ZLIB_ENCODING_RAW, ZLIB_ENCODING_GZIP or ZLIB_ENCODING_DEFLATE”); <br />
+            RETURN_FALSE; <br />
+    } <br />
+    if (SUCCESS != php_zlib_encode(in_buf, in_len, &amp;out_buf, &amp;out_len, encoding, level TSRMLS_CC)) { <br />
+        RETURN_FALSE; <br />
+    } <br />
+    RETURN_STRINGL(out_buf, out_len, 0); <br />
+}</p>
+
+<p>/* NOTE: The naming of these userland functions was quite unlucky <em>/
+/</em> {{{ proto binary gzdeflate(binary data[, int level = -1[, int encoding = ZLIB_ENCODING_RAW])
+   Encode data with the raw deflate encoding <em>/
+PHP_ZLIB_ENCODE_FUNC(gzdeflate, PHP_ZLIB_ENCODING_RAW);
+/</em> }}} */</p>
+
+<p>/* {{{ proto binary gzencode(binary data[, int level = -1[, int encoding = ZLIB_ENCODING_GZIP])
+   Encode data with the gzip encoding <em>/
+PHP_ZLIB_ENCODE_FUNC(gzencode, PHP_ZLIB_ENCODING_GZIP);
+/</em> }}} */</p>
+
+<p>/* {{{ proto binary gzcompress(binary data[, int level = -1[, int encoding = ZLIB_ENCODING_DEFLATE])
+   Encode data with the zlib encoding <em>/
+PHP_ZLIB_ENCODE_FUNC(gzcompress, PHP_ZLIB_ENCODING_DEFLATE);
+/</em> }}} */
+可以看到，gzdeflate gzencode gzcompress三个函数都是用相同的PHP_ZLIB_ENCODE_FUNC宏定义的（是不是有些泛型的意味？），所以它们当然是相同的。</p>
+
+<p>在理解deflate之前, 先理解它的两个组成算法非常重要: Huffman 编码 和 LZ77压缩</p>
+
+<p>Huffman 编码</p>
+
+<p>Huffman编码是一种前缀编码, 你其实知道, 但你可能不觉得. 比如打电话时, 从拨号开始, 你按下一串号码, 或许是5781112 或者别的号码. 一串号码就就能到达另一部特定的电话.  (翻译: 这个比方太罗嗦,本来不想翻译过来的.)</p>
+
+<p>(这一段就不翻译了,没有实际内容.) Now suppose you’re in an office setting with an internal switchboard, as many large companies do. All other phones within the bank only require five numbers to dial, instead of seven — that’s because it’s expected that you’ll be calling those numbers more often. You may still need to call other numbers, though — so all of those numbers have a `9′ added to the front.</p>
+
+<p>…这就是前缀编码. 每一个你想要指定的元素都有一个由数字组成的代码. 由于每个代码都不可能是另外一个代码的前缀, 所以当你输入的时候,不会有歧义.</p>
+
+<p>Huffman 编码是由一个特定算法生成的前缀编码. (翻译: 后面简单介绍如何生成Huffman编码, 都是教课书上的内容, 不翻译了, 自己看图, 直接跳过:) Here, instead of each code being a series of numbers between 0 and 9, each code is a series of bits, either 0 or 1. Instead of each code representing a phone, each code represents an element in a specific “alphabet” (such as the set of ASCII characters, which is the primary but not the only use of Huffman coding in DEFLATE).</p>
+
+<p>A Huffman algorithm starts by assembling the elements of the “alphabet,” each one being assigned a “weight” — a number that represents its relative frequency within the data to be compressed. These weights may be guessed at beforehand, or they may be measured exactly from passes through the data, or some combination of the two. In any case, the elements are selected two at a time, the elements with the lowest weights being chosen. The two elements are made to be leaf nodes of a node with two branches (I really hope you know nodes and trees…) Anyway, suppose we had a set of elements and weights that looked like this:</p>
+
+<p>A 16
+B 32
+C 32
+D 8
+E 8
+We would pick D and E first, and make them branches of a single node — one being the <code class="language-plaintext highlighter-rouge">0′ branch, and one the </code>1′ branch.</p>
+
+<p>( )
+0 / \ 1
+D E</p>
+
+<p>…… (翻译中间省略无数废话,  都是在介绍怎么生成huffman树, 这个上过课的人都知道, 所以就不翻译了, 细节非常繁琐. 下面直接从 课本上没有的另一个算法 Lz77开始:)</p>
+
+<p>LZ77 压缩
+LZ77压缩算法靠查找重复的序列. 这里使用术语:”滑动窗口”, 它的意思是:在任何的数据点上, 都记录了在此之前的字符. 32k的滑动窗口表示压缩器(解压器)能记录前32768个字符. 当下一个需要压缩的字符序列能够在滑动窗口中找到, 这个序列会被两个数字代替: 一个是距离,表示这个序列在窗口中的起始位置离窗口的距离, 一个是长度, 字符串的长度.</p>
+
+<p>我觉得 看 比 说 更容易. 我们看看一些高压缩比的数据:</p>
+
+<p>Blah blah blah blah blah!</p>
+
+<p>字符流开始于: <code class="language-plaintext highlighter-rouge">B,’ </code>l,’ <code class="language-plaintext highlighter-rouge">a,’ </code>h,’ ` ,’ and `b.’ , 看看接下来的5个字符:</p>
+
+<p>vvvvv
+Blah blah blah blah blah!
+^^^^^
+接下来的5个字符正好和已经在数据流中的字符串相等, 而且刚好在当前数据点的前5个字符开始. 在这个case中,我们可以在数据流中输出特殊的字符, 一个长度数字 和一个距离数字.
+目前数据是:
+Blah blah b
+压缩后的格式是:
+Blah b[D=5,L=5]
+压缩还能继续增加, 尽管要利用其全部的优势需要压缩器方面的智慧. 对比这两个相同的字符串, 对比它们各自的下一个字符,都是’l’, 所以,我们可以把长度更新为6, 而不仅仅是5. 如果我们继续比较,发现下一个, 下下一个, 下下下一个都是一样的. 尽管前面的字符换已经延伸覆盖到了后面的字符串(需要压缩的字符串).
+最终我们发现, 有18个字符相等. 当我们解压的时候, 当读到长度和距离对时, 我们并不知道这18个字符将会是什么. 但是如果我们把已有的字符放回去, 我们就知道更多. 而这有会让更多的字符放回去, 或者知道任何长度大于距离的数据对都会不断的重复数据. 所以解压器就可以这样做.
+最终我们的高压缩性的数据能压缩成如下的样子:
+Blah b[D=5, L=18]!
+联合起来(翻译: 指的是把huffman编码和 lz77压缩算法联合起来用):
+deflate 压缩器在怎样压缩数据上有非常大的灵活性. 程序员必须处理设计聪明的算法所面临的问题以做出正确的选择. 但是压缩器的确有一些选择.
+压缩器有三种压缩模型:</p>
+<ol>
+  <li>不压缩数据, 对于已经压缩过的数据,这是一个明智的选择. 这样的数据会会稍稍增加, 但是会小于在其上再应用一种压缩算法.</li>
+  <li>压缩, 先用Lz77, 然后用huffman编码. 在这个模型中压缩的树是Deflate 规范规定定义的, 所以不需要额外的空间来存储这个树.</li>
+  <li>压缩, 先用LZ77, 然后用huffman编码. 压缩树是由压缩器生成的, 并与数据一起存储.</li>
+</ol>
+
+<p>数据被分割成不同的块, 每个块使用单一的压缩模式. 如过压缩器要在这三种压缩模式中相互切换, 必须先结束当前的块, 重新开始一个新的块.</p>
+
+<p>关于Lz77和huffman如何一起工作的细节需要更进一步的检查. 一旦原始数据被转换成了字符和长度距离对组成的串, 这些数据必须由huffman编码表示.
+尽管这不是一个标砖术语, 把开始读数据的点叫”拨号音”, 毕竟在我们的类推中, 拨号音的确是我们指定一个电话的的拨号的开始点. 所以我们把这个起始点叫”拨号音”. 在起始点之后, 只可能有三种元素能出现:字符, 长度距离对, 或者是块的结束标志. 因为我们必须能够区分它是什么. 所有可能的字符(字面量), 表示可能长度的区域, 以及特殊的块结束标记都被合并到同一个字母表中. 这个字母表就是huffman树的基础. 距离不需要包含在字母表中, 因为它只能出现在长度的后面. 一点字面量被解压, 或者长度距离对解压出来, 我们就开始了另一个拨号音, 重新开始读取. 当然,如果遇到块结束标志的话, 就会开始另外一个块,或者到达了压缩数据的末尾.
+长度或者距离的编码实际上可以是: 一个基地址,后面跟上额外的bits(整数的形式,表示基地址后面的偏移),</p>
+
+<p>可能deflate规范中最难理解的部分就是当数据时被特殊的树压缩的时候, 树与数据一起的压缩方式.
+树 通过 编码长度(codelengths)来传输, 正如前面讨论的. 代码长度被全部放在一个由0到15之间的数字组成的序列中(huffman树种,代码长度必须不大于15, 这是最复杂部分, 而不是怎样约束元素的顺序).</p>
+
+<p>并不是所有的元素都必须有一个代码长度. 如果字母表的最后的那些元素代码长度都是0, 他们能并且应该被忽略. 由于每个字母表中元素的个数都会被传输, 所以这两个字母表会被链接成单一的序列.</p>
+
+<p>一旦编码长度序列组合完成,  它会被一种叫做 run-length 的压缩方式压缩. 当一行中的多个元素拥有一样的代码长度(常常是0) 的时候, 特殊的符号会用来表示这个长度的元素的个数.  现在这个序列式0到18之间的数字组成的了(可能带有额外的位组成修改基地址的值).</p>
+
+<p>huffman 树就是为这个0到18的字母表创建的.</p>
+
+<p>huffman树需要包含在数据中, 当然.  正如其他的huffman树一样, 它会被记录代码长度的形式包含进来.   然而, 它们的顺序不是 0, 1, 2, 3, 4 … 16, 17, 18. 而是一个特殊的顺序:16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15.  这背后的逻辑是:越靠近序列末尾的代码,越可能是长度为0. 如果它们的确是0, 就能被省略掉. 直接记录的元素的个数也会包含在数据中.</p>
+
+<p>先说一下deflate算法吧.  deflate是zip压缩文件的默认算法.   其实deflate现在不光用在zip文件中, 在7z, xz等其他的压缩文件中都用.   实际上deflate只是一种压缩数据流的算法. 任何需要流式压缩的地方都可以用.</p>
+
+<p>deflate 还有微型改进版本deflate64. “微型改进型” 这个名词是我发明的, 为什么这么说, 因为改进实在太小了, 而性能提高也非常小. 以至于大名鼎鼎的开源zlib库到现在都不支持deflate64.      http://zlib.net/zlib_faq.html#faq40</p>
+
+<p>开始正题, 原文地址:  http://zlib.net/feldspar.html  ,  我尽量按照原文直译,但是有些地方实在没必要就简单意译了. 有想交流的童鞋欢迎访问我的独立博客留言交流: http://byNeil.com</p>
+
+<p>Deflate 算法的介绍</p>
+
+<p>作者: Antaeus Feldspar   feldspar@netcom.com</p>
+
+<p>在理解deflate之前, 先理解它的两个组成算法非常重要: Huffman 编码 和 LZ77压缩</p>
+
+<p>Huffman 编码</p>
+
+<p>Huffman编码是一种前缀编码, 你其实知道, 但你可能不觉得. 比如打电话时, 从拨号开始, 你按下一串号码, 或许是5781112 或者别的号码. 一串号码就就能到达另一部特定的电话.  (翻译: 这个比方太罗嗦,本来不想翻译过来的.)</p>
+
+<p>(这一段就不翻译了,没有实际内容.) Now suppose you’re in an office setting with an internal switchboard, as many large companies do. All other phones within the bank only require five numbers to dial, instead of seven — that’s because it’s expected that you’ll be calling those numbers more often. You may still need to call other numbers, though — so all of those numbers have a `9′ added to the front.</p>
+
+<p>…这就是前缀编码. 每一个你想要指定的元素都有一个由数字组成的代码. 由于每个代码都不可能是另外一个代码的前缀, 所以当你输入的时候,不会有歧义.</p>
+
+<p>Huffman 编码是由一个特定算法生成的前缀编码. (翻译: 后面简单介绍如何生成Huffman编码, 都是教课书上的内容, 不翻译了, 自己看图, 直接跳过:) Here, instead of each code being a series of numbers between 0 and 9, each code is a series of bits, either 0 or 1. Instead of each code representing a phone, each code represents an element in a specific “alphabet” (such as the set of ASCII characters, which is the primary but not the only use of Huffman coding in DEFLATE).</p>
+
+<p>A Huffman algorithm starts by assembling the elements of the “alphabet,” each one being assigned a “weight” — a number that represents its relative frequency within the data to be compressed. These weights may be guessed at beforehand, or they may be measured exactly from passes through the data, or some combination of the two. In any case, the elements are selected two at a time, the elements with the lowest weights being chosen. The two elements are made to be leaf nodes of a node with two branches (I really hope you know nodes and trees…) Anyway, suppose we had a set of elements and weights that looked like this:</p>
+
+<p>A 16 
+B 32 
+C 32 
+D 8 
+E 8 
+We would pick D and E first, and make them branches of a single node — one being the <code class="language-plaintext highlighter-rouge">0′ branch, and one the </code>1′ branch.</p>
+
+<p>( ) 
+0 / \ 1 
+D E</p>
+
+<p>…… (翻译中间省略无数废话,  都是在介绍怎么生成huffman树, 这个上过课的人都知道, 所以就不翻译了, 细节非常繁琐. 下面直接从 课本上没有的另一个算法 Lz77开始:)</p>
+
+<p>LZ77 压缩 
+LZ77压缩算法靠查找重复的序列. 这里使用术语:”滑动窗口”, 它的意思是:在任何的数据点上, 都记录了在此之前的字符. 32k的滑动窗口表示压缩器(解压器)能记录前32768个字符. 当下一个需要压缩的字符序列能够在滑动窗口中找到, 这个序列会被两个数字代替: 一个是距离,表示这个序列在窗口中的起始位置离窗口的距离, 一个是长度, 字符串的长度.</p>
+
+<p>我觉得 看 比 说 更容易. 我们看看一些高压缩比的数据:</p>
+
+<p>Blah blah blah blah blah!</p>
+
+<p>字符流开始于: <code class="language-plaintext highlighter-rouge">B,’ </code>l,’ <code class="language-plaintext highlighter-rouge">a,’ </code>h,’ ` ,’ and `b.’ , 看看接下来的5个字符:</p>
+
+<p>vvvvv 
+Blah blah blah blah blah! 
+^^^^^ 
+接下来的5个字符正好和已经在数据流中的字符串相等, 而且刚好在当前数据点的前5个字符开始. 在这个case中,我们可以在数据流中输出特殊的字符, 一个长度数字 和一个距离数字. 
+目前数据是: 
+Blah blah b 
+压缩后的格式是: 
+Blah b[D=5,L=5] 
+压缩还能继续增加, 尽管要利用其全部的优势需要压缩器方面的智慧. 对比这两个相同的字符串, 对比它们各自的下一个字符,都是’l’, 所以,我们可以把长度更新为6, 而不仅仅是5. 如果我们继续比较,发现下一个, 下下一个, 下下下一个都是一样的. 尽管前面的字符换已经延伸覆盖到了后面的字符串(需要压缩的字符串). 
+最终我们发现, 有18个字符相等. 当我们解压的时候, 当读到长度和距离对时, 我们并不知道这18个字符将会是什么. 但是如果我们把已有的字符放回去, 我们就知道更多. 而这有会让更多的字符放回去, 或者知道任何长度大于距离的数据对都会不断的重复数据. 所以解压器就可以这样做. 
+最终我们的高压缩性的数据能压缩成如下的样子: 
+Blah b[D=5, L=18]! 
+联合起来(翻译: 指的是把huffman编码和 lz77压缩算法联合起来用): 
+deflate 压缩器在怎样压缩数据上有非常大的灵活性. 程序员必须处理设计聪明的算法所面临的问题以做出正确的选择. 但是压缩器的确有一些选择. 
+压缩器有三种压缩模型:</p>
+<ol>
+  <li>不压缩数据, 对于已经压缩过的数据,这是一个明智的选择. 这样的数据会会稍稍增加, 但是会小于在其上再应用一种压缩算法.</li>
+  <li>压缩, 先用Lz77, 然后用huffman编码. 在这个模型中压缩的树是Deflate 规范规定定义的, 所以不需要额外的空间来存储这个树.</li>
+  <li>压缩, 先用LZ77, 然后用huffman编码. 压缩树是由压缩器生成的, 并与数据一起存储.</li>
+</ol>
+
+<p>数据被分割成不同的块, 每个块使用单一的压缩模式. 如过压缩器要在这三种压缩模式中相互切换, 必须先结束当前的块, 重新开始一个新的块.</p>
+
+<p>关于Lz77和huffman如何一起工作的细节需要更进一步的检查. 一旦原始数据被转换成了字符和长度距离对组成的串, 这些数据必须由huffman编码表示. 
+尽管这不是一个标砖术语, 把开始读数据的点叫”拨号音”, 毕竟在我们的类推中, 拨号音的确是我们指定一个电话的的拨号的开始点. 所以我们把这个起始点叫”拨号音”. 在起始点之后, 只可能有三种元素能出现:字符, 长度距离对, 或者是块的结束标志. 因为我们必须能够区分它是什么. 所有可能的字符(字面量), 表示可能长度的区域, 以及特殊的块结束标记都被合并到同一个字母表中. 这个字母表就是huffman树的基础. 距离不需要包含在字母表中, 因为它只能出现在长度的后面. 一点字面量被解压, 或者长度距离对解压出来, 我们就开始了另一个拨号音, 重新开始读取. 当然,如果遇到块结束标志的话, 就会开始另外一个块,或者到达了压缩数据的末尾. 
+长度或者距离的编码实际上可以是: 一个基地址,后面跟上额外的bits(整数的形式,表示基地址后面的偏移),</p>
+
+<p>可能deflate规范中最难理解的部分就是当数据时被特殊的树压缩的时候, 树与数据一起的压缩方式. 
+树 通过 编码长度(codelengths)来传输, 正如前面讨论的. 代码长度被全部放在一个由0到15之间的数字组成的序列中(huffman树种,代码长度必须不大于15, 这是最复杂部分, 而不是怎样约束元素的顺序).</p>
+
+<p>并不是所有的元素都必须有一个代码长度. 如果字母表的最后的那些元素代码长度都是0, 他们能并且应该被忽略. 由于每个字母表中元素的个数都会被传输, 所以这两个字母表会被链接成单一的序列.</p>
+
+<p>一旦编码长度序列组合完成,  它会被一种叫做 run-length 的压缩方式压缩. 当一行中的多个元素拥有一样的代码长度(常常是0) 的时候, 特殊的符号会用来表示这个长度的元素的个数.  现在这个序列式0到18之间的数字组成的了(可能带有额外的位组成修改基地址的值).</p>
+
+<p>huffman 树就是为这个0到18的字母表创建的.</p>
+
+<p>huffman树需要包含在数据中, 当然.  正如其他的huffman树一样, 它会被记录代码长度的形式包含进来.   然而, 它们的顺序不是 0, 1, 2, 3, 4 … 16, 17, 18. 而是一个特殊的顺序:16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15.  这背后的逻辑是:越靠近序列末尾的代码,越可能是长度为0. 如果它们的确是0, 就能被省略掉. 直接记录的元素的个数也会包含在数据中.</p>
+:ET

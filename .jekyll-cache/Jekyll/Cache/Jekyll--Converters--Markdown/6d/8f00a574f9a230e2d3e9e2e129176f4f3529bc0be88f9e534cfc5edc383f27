@@ -1,0 +1,49 @@
+I"q<p>OverlayFS是一个类似于AUFS 的现代联合文件系统，更快实现简单。</p>
+
+<p>OverlayFS是内核提供的文件系统，overlay和overlay2是docker的存储驱动</p>
+
+<p>overlay原理
+      OverlayFS将单个Linux主机上的两个目录合并成一个目录。这些目录被称为层，统一过程被称为联合挂载。OverlayFS底层目录称为lowerdir， 高层目录称为upperdir。合并统一视图称为merged。当需要修改一个文件时，使用CoW将文件从只读的Lower复制到可写的Upper进行修改，结果也保存在Upper层。在Docker中，底下的只读层就是image，可写层就是Container
+<!-- more -->
+1.4 文件操作
+     读操作</p>
+
+<p>如果文件在容器层不存在，则从lowdir中读取
+只在容器层存在，则直接从容器中读取改文件
+文件存在容器和镜像层，容器层upperdir会覆盖镜像层lowdir中的文件
+    修改</p>
+
+<p>首次写入： 在upperdir中不存在，overlay和overlay2执行copy_up操作，把文件从lowdir拷贝到upperdir，由于overlayfs是文件级别的（即使文件只有很少的一点修改，也会产生的copy_up的行为）
+copy_up操作只发生在文件首次写入，以后都是只修改副本 
+overlayfs只适用两层，因此性能很好，查找搜索都更快</p>
+
+<p>删除文件和目录： 当文件在容器被删除时，在容器层（upperdir）创建whiteout文件，镜像层的文件是不会被删除的，因为他们是只读的，但without文件 会阻止他们展现，当目录在容器内被删除时，在容器层（upperdir）一个不透明的目录，这个和上面whiteout原理一样，阻止用户继续访问，即便镜像层仍然存在</p>
+
+<p>重命名
+      这个系统调用只在源和目标都在顶层，否则会报 error (“cross-device link not permitted”)</p>
+
+<p>性能问题
+      页缓存：overlayfs支持页缓存共享，也就是说如果多个容器访问同一个文件，可以共享同一个页缓存。这使得overlay/overlay2驱动高效地利用了内存 
+      copy_up:aufs和overlayfs，由于第一次写入都会导致copy_up，尤其是大文件，会导致写延迟，以后的写入不会有问题。由于overlayfs层级 比aufs的多，所以ovelayfs的拷贝高于aufs 
+      inode限制：使用overlay存储驱动可能导致inode过度消耗，特别是当容器和镜像很多的情况下，所以建议使用overlay2.</p>
+
+<p>2 overlay2介绍
+    overlay的改进版，只支持4.0以上内核添加了Multiple lower layers in overlayfs的特性，所以overlay2可以直接造成muitiple lower layers不用像overlay一样要通过硬链接的方式(最大128层) centos的话支持3.10.0-514及以上内核版本也有此特性，所以消耗更少的inode</p>
+
+<p>docker官方overlay2的PR:
+https://github.com/moby/moby/pull/22126</p>
+
+<p>LINUX KERNERL 4.0 release说明：
+https://kernelnewbies.org/Linux_4.0</p>
+
+<p>overlay和overlay2的区别
+    本质区别是镜像层之间共享数据的方法不同</p>
+
+<p>overlay共享数据方式是通过硬连接，只挂载一层,其他层通过最高层通过硬连接形式共享(增加了磁盘inode的负担)
+而overlay2是通过每层的 lower文件</p>
+
+<p>为什么overlay相比overlay2要更加占用inode？
+      overlay只支持两层lowerdir和upperdir，并且只支持一个lowerdir，所以如果你的容器镜像有多层的话，层与层之前的数据共享是通过硬链接来实现的，我们也知道硬链接本身是同一个inode但不同的文件名而已，但为什么还是会大量消耗inode这里简单做的实验</p>
+
+<p>https://blog.csdn.net/zhonglinzhang/article/details/80970411</p>
+:ET

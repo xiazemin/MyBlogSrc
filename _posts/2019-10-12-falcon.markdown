@@ -1,0 +1,143 @@
+---
+title: open-falcon
+layout: post
+category: golang
+author: 夏泽民
+---
+https://github.com/g4zhuj/go-metrics-falcon
+https://github.com/open-falcon/falcon-plus
+指标统计是实现APM（Application performance management)的基础，通常通过一些指标的统计以及上报，我们可以了解程序的运行状况，及时发现程序的问题，提前预估系统瓶颈．
+指标(metric)目前的实现有metrics,这是java的实现，可以直接引入程序作为库使用．go语言的实现见go-metrics.
+另外，这里只是将指标在内存中进行处理及计算，如果我们想要展示，需要将数据抛出来，这里可以抛到日志里，也可以抛到时序数据库，最简单的做法就是直接抛到监控系统进行绘图或者报警．
+<!-- more -->
+2.指标统计方式
+2.1 Meters
+用于计算一段时间内的计量，通常用于计算接口调用频率，如QPS(每秒的次数)，主要分为rateMean,Rate1/Rate5/Rate15等指标．
+
+RateMean
+单位时间内发生的次数，如一分钟发送100次，则该值为100/60.
+Rate1/Rate5/Rate15
+1分钟/5分钟/15分钟内的滑动平均值(moving average),
+
+2.2 Gauges
+用于对瞬时值的测量，如我们可以过一段时间就对内存的使用量进行统计，并上报，那么所有的数据点集就是对应时间点的内存值，Gauges只有value指标．也就是上报的是什么就是什么．
+2.3 Counter
+计数类统计，可以进行加或减，也可以进行归零操作，所有的操作都是在旧值的基础上进行的．这里可以通过每天归零，然后新增注册用户时加1来统计每天的注册用户．
+2.4 Histograms
+主要用于对数据集中的值分布情况进行统计，典型的应用场景为接口耗时，接口每次调用都会产生耗时，记录每次调用耗时来对接口耗时情况进行分析显然不现实．因此将接口一段时间内的耗时看做数据集，并采集Count，Min, Max, Mean, Median, 75%, 95%, 99%等指标．以相对较小的资源消耗，来尽可能反应数据集的真实情况．
+
+Count
+距离上次清理后产生的样本数量．
+Min
+样本中的最小值
+Max
+样本中的最大值
+Mean
+所有样本的求得的平均值
+Median
+样本中的中间位置的值．
+75%
+样本中的%75位置的值．
+95%
+样本中的%95位置的值．
+99%
+样本中的%99位置的值．
+
+1.5 Timers
+对某个代码模块同时进行统计调用频率以及调用耗时统计．指标就是Histograms以及Meters两种统计方式的合集．
+3.使用方式
+更对详细用法见go-metric文档
+3.1 Counter
+c := metrics.NewCounter()
+metrics.Register("foo", c)
+//进行加操作
+c.Inc(47)
+
+//进行减操作
+c.Dec(1)
+
+//获取出值
+c.Count()
+
+复制代码3.2 Gauge
+g := metrics.NewGauge()
+metrics.Register("bar", g)
+//更新瞬时值
+g.Update(47)
+
+//获取出瞬时值
+g.Value()
+复制代码3.3 Meters
+
+m := metrics.NewMeter()
+metrics.Register("quux", m)
+//写入数据集
+m.Mark(47)
+//获取数据集只读快照
+m := metric.Snapshot()
+//数据集大小
+m.Count()
+//1分钟滑动平均值
+m.Rate1()
+//5分钟滑动平均值
+m.Rate5()
+//15分钟滑动平均值
+m.Rate15()
+//平均值
+m.RateMean()
+
+复制代码3.4 Histograms
+h := metrics.NewHistogram(s)
+metrics.Register("baz", h)
+//写入数据集
+h.Update(47)
+//获取数据集只读快照
+h := metric.Snapshot()
+//数据集大小
+h.Count()
+//最小值
+h.Min()
+//最大值
+h.Max()
+//平均值
+h.Mean()
+ps := h.Percentiles([]float64{0.5, 0.75, 0.95, 0.99})
+//中位数
+ps[0]
+//75%的数
+ps[1]
+//95%的数
+ps[2]
+//99%的数
+ps[3]
+
+复制代码3.5 Timer
+t := metrics.NewTimer()
+metrics.Register("bang", t)
+
+t.Time(func() {
+    //do some thing
+})
+t.Update(47)
+
+//获取方式同meter以及Histograms
+复制代码4. 指标上报到open-falcon
+4.1 上报方式
+代码及使用方式见 go-metrics-falcon
+实现数据上报open-falcon，只需要将所有数据取出，按open-falcon格式上报即可，这里有涉及到上报json的定义，具体如下．
+{
+	"endpoint": "$endpoint",
+	"metric": "$name",
+	"value": 2.2,
+	"step": 60,
+	"counterType": "GAUGE",
+	"tags": "project=$projectName,metricType=meter,valueType=ratemean",
+	"timestamp": 1524724608
+}
+复制代码endpoint: 这一个一般是主机hostname，用于标注是哪台机器．
+metric: 指标名，由用户定义
+value: 指标的值
+step: 上报的时间周期
+counterType: 上报的类型,这里open-falcon只支持GAUGE以及COUNTER,因此统一使用GAUGE.
+tags: 标签，用于却别指标，包含指标类型，值类型，项目名三项．
+timestamp: 指标上报的时间戳，单位秒．

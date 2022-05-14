@@ -1,0 +1,445 @@
+I"�V<p>C/C++程序员在写程序时，总是默认程序是从main函数开始的，我们会认为这理所当然，但事实上，当程序在执行到main函数时，很多事情已经完成了。我们可以看看一下几个例子：</p>
+
+<p>#include <stdio.h>
+int a = 10;
+int main(int argc, const char * argv[]) {
+    printf("%d\n", argc);
+    printf("%d\n", a);
+    return 0;
+}
+在运行main函数的时候，全局变量a已经初始化完成，并且main的两个参数argc与argv已经被传了进来。</stdio.h></p>
+
+<p>#include <stdio.h>
+__attribute((constructor)) void before_main()
+{
+    printf("%s\n",__FUNCTION__);
+}</stdio.h></p>
+
+<p><strong>attribute((destructor)) void after_main()
+{
+    printf(“%s\n”,__FUNCTION</strong>);
+}
+int main(int argc, const char * argv[]) {
+    return 0;
+}</p>
+
+<p>执行结果：</p>
+
+<p>before_main
+main
+after_main
+构造函数before_main会在main函数开始之前被调用，析构函数after_main会在main函数结束之后被调用。</p>
+
+<p>而C++中，main函数之前所能执行的代码还会更多。所以，main函数既不是一个程序的开始，也不是一个程序的结束。
+<!-- more -->
+Linux内核装载ELF过程
+当我们在Linux系统的bash下输入一个命令执行某个ELF程序时，bash进程会调用fork系统调用创建一个新的进程，然后新的进程会调用exec系统调用执行指定的ELF文件。</p>
+
+<p>在进入exec系统调用之后会触发Linux中的sys_execve，它会进入内核为新进程的运行做一些准备工作，然后调用do_execve。do_execve会首先查找被执行的文件，然后将文件的前128个字符读入内存中，判断文件的格式。之后会调用search_binary_handler去搜索和匹配合适的可执行文件装载处理过程。所以ELF可执行文件的装载处理过程load_elf_binary被调用。</p>
+
+<p>内核读取ELF的头部检查文件格式的有效性，之后寻找动态链接的.interp段，由于我们只讨论静态链接，所以没有这个段。然后内核根据ELF可执行文件的程序头表的描述，将程序的段映射到内存中。调用create_elf_tables初始化环境变量，并把参数放入栈中。最后系统调用返回的地址被修改成ELF可执行文件的入口点，对于静态链接的ELF文件，这个程序入口就是ELF文件的文件头中e_entry所知的地址。</p>
+
+<p>当load_elf_binary执行完毕，返回至do_execve再返回至sys_execve时，系统调用返回的地址已经被改成了被装载的ELF程序的入口地址了。所以当sys_execve从内核返回到用户态是，rsp寄存器直接跳转到了ELF程序的入口地址，于是新的程序喀什执行，ELF可执行文件装载完成。</p>
+
+<p>入口函数
+Linux中的glibc的子目录csu/中有关于程序启动的代码。</p>
+
+<p>一般情况下，系统链接器程序ld会将编译器产生的可重定位目标文件构建成完全链接的可执行目标文件。而ld链接器的链接脚本默认地指定_start为程序的入口。</p>
+
+<p>以下面这个简单的程序为例，我们来探查一下该程序编译后的入口函数：</p>
+
+<p>int main() {
+    return 0;
+}
+编译:</p>
+
+<p>$ gcc main.c
+查看产生的可执行文件的ELF头部信息：</p>
+
+<p>$ readelf -h a.out</p>
+
+<p>ELF Header:
+  Magic:   7f 45 4c 46 02 01 01 00 00 00 00 00 00 00 00 00 
+  Class:                             ELF64
+  …
+  Entry point address:               0x4004d0
+  …
+我们只关心它的入口地址，但是这个入口地址指的是哪里呢？查看a.out的反汇编代码：</p>
+
+<p>$ objdump -d a.out</p>
+
+<p>…</p>
+
+<p>00000000004004d0 <_start>:
+  4004d0:   31 ed                   xor    %ebp,%ebp
+  4004d2:   49 89 d1                mov    %rdx,%r9
+  4004d5:   5e                      pop    %rsi
+  4004d6:   48 89 e2                mov    %rsp,%rdx
+  4004d9:   48 83 e4 f0             and    $0xfffffffffffffff0,%rsp
+  4004dd:   50                      push   %rax
+  4004de:   54                      push   %rsp
+  4004df:   49 c7 c0 90 06 40 00    mov    $0x400690,%r8
+  4004e6:   48 c7 c1 20 06 40 00    mov    $0x400620,%rcx
+  4004ed:   48 c7 c7 04 06 40 00    mov    $0x400604,%rdi
+  4004f4:   e8 a7 ff ff ff          callq  4004a0 &lt;__libc_start_main@plt&gt;
+  4004f9:   f4                      hlt    
+  4004fa:   66 0f 1f 44 00 00       nopw   0x0(%rax,%rax,1)</_start></p>
+
+<p>…
+可以看到0x4004d0就是这个程序中_start的地址。xor是异或运算，ebp指向栈底，所以与自身做异或运算会把ebp设置为零，表面当前是程序的最外层函数。rdx中其实存放的是rtld_fini的函数指针，并将其存入r9。pop将argc存入rsi中，然后将站指针指向argv，再通过mov将该地址存入rdx中。栈指针寄存器与掩码进行and运算来重置自己。接下来，我们通过查看反编译的代码，会发现0x400690是__libc_csu_fini的地址，被存入r8中，0x400620是__libc_csu_init的地址，被存入rcx中，0x400604是main的地址，被存入rdi中。最后代码调用__libc_start_main，这个函数才是实际执行代码的函数，而之前的那些对寄存器的设置其实就是对__libc_start_main的函数参数的设置。</p>
+
+<p>x86-64的_start的实现在sysdeps/x86_86/Start.S中，我们其中的参数与相应地址和寄存器匹配：</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>main:       %rdi &lt;-- 0x400604
+argc:       %rsi &lt;-- [RSP]
+argv:       %rdx &lt;-- [RSP + 0x8]
+init:       %rcx &lt;-- 0x400620
+fini:       %r8  &lt;-- 0x400690
+rtld_fini:  %r9 &lt;-- rdx on entry
+stack_end:  stack &lt;-- rsp __libc_start_main csu/libc-start.c中定义了__libc_start_main函数：
+</code></pre></div></div>
+
+<p>int LIBC_START_MAIN
+    (int (<em>main) (int, char **, char ** MAIN_AUXVEC_DECL),
+    int argc,
+    char **argv,
+    __typeof (main) init,
+    void (</em>fini) (void),
+    void (*rtld_fini) (void),
+    void *stack_end)
+这里可以看到其实main函数有三个参数，除了argc与argv外还有一个环境变量表，这个环境表参数是由exec传入的。事实上，三个参数的main函数的出现只是历史遗留问题，我们可以直接使用全局变量environ来获取这个环境表的数组指针。</p>
+
+<p>__libc_start_main函数的具体实现中关于函数指针参数的使用顺序是：</p>
+
+<ol>
+  <li>__cxa_atexit ((void (*) (void *)) rtld_fini, NULL, NULL);</li>
+  <li>__cxa_atexit ((void (*) (void *)) fini, NULL, NULL);</li>
+  <li>(*init) (argc, argv, __environ MAIN_AUXVEC_PARAM);</li>
+  <li>result = main (argc, argv, __environ MAIN_AUXVEC_PARAM);</li>
+  <li>exit (result);
+__cxa_atexit函数是glibc的内部函数，用于将注册的函数在main结束之后，即被exit函数调用，注册顺序与调用顺序相反。在静态链接程序中__cxa_atexit(func, NULL, NULL)与atexit(func)作用相同。所以，函数的执行顺序为init -&gt; main -&gt; fini -&gt; rtld_fini。我们甚至可以猜出这些函数的作用：</li>
+</ol>
+
+<p>init：main调用前的初始化工作。
+fini：main结束后的收尾工作。
+rtld_fini：和动态加载有关的收尾工作，rtld是runtime loader的缩写。
+我们再回过头看看之前的反汇编代码，就会发现init就是代码中的__libc_csu_init，而fini是__libc_csu_fini。至于rtld_fini的函数指针，是通过rdx寄存器传入_start中的。</p>
+
+<p>所以__libc_start_main函数进行了如下的操作：</p>
+
+<p>确定环境变量在栈的何处。
+如果需要，准备辅助向量（auxiliary vector）。
+初始化线程相关的功能（比如pthread，TLS等）。
+记录某些安全相关的信息（这不是一个独立的步骤，而是遍及整个函数）。
+初始化libc。
+为执行的退出函数注册fini，rtld_fini。
+通过传入的指针（init）调用程序初始化函数。
+调用main (argc, argv, envp)。
+以main的结果作为退出码调用exit。
+exit相关
+由__libc_start_main函数的实现可以看出，程序在执行完main函数后都会执行exit函数（具体实现在stdlib/exit.c中）。所以，在main函数中返回一个整型数值与在main末尾用该值调用exit函数是等价的。exit会执行通过atexit注册过的函数，然后调用_exit来直接结束进程。进程正常结束有两种情况：</p>
+
+<p>main正常返回，由__libc_start_main来调用exit函数。
+程序中直接使用exit退出。
+这样一来，进程在__libc_start_main函数末尾直接通过exit结束，所以在main函数中，我们可以不用return。</p>
+
+<p>\ main1.c
+int main() {</p>
+
+<p>}
+\ main2.c
+int main() {
+    return 0;
+}
+我们先编译这两个文件并运行，然后通过echo $?来打印终止状态。查看结果会得到main1.c的终止状态是一个随机值，而main2.c的终止状态是0。为了进一步了解其中的差异，我们再使用objdump分别进行反汇编，对比汇编代码，我们会发现在main函数的汇编代码里，main2.c多了一个操作：</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>mov    $0x0, %eax 所以，return语句只是为eax寄存器赋值，而终止状态就存在这个寄存器中，在main1.c中，由于没有return语句，所以最终由eax寄存器得到的值是一个默认值。
+</code></pre></div></div>
+
+<p>c99规定，如果main函数最后没有使用return语句，那么编译器要在生成的目标文件中自动加入return 0。C++编译器也同样如此。</p>
+
+<p>还有一个问题，之前提到的反汇编代码中为什么在调用__libc_start_main后还会有一个hlt操作呢？</p>
+
+<p>事实上，在Linux里，进程必须使用exit系统调用结束。一旦exit被调用，程序的运行就会终止，因此__libc_start_main永远不会返回，所以_start末尾的hlt不会执行。但是如果__libc_start_main没有调用exit，即函数返回了，那么hlt指令就可以发挥作用强行把程序给停下来。</p>
+
+<p>补充
+在本文开头提到的在main函数前执行的那些特殊代码，会由链接器负责插入到__libc_csu_init函数中，然后由它调用。__libc_csu_fini也是如此。然而这两个函数在程序以_start为入口时会被调用，但是我们将程序入口换成其他函数，会发生什么呢？</p>
+
+<p>我们先看个例子：</p>
+
+<p>#include <stdlib.h>
+#include <stdio.h>
+int foo() {
+    printf("%s\n",__FUNCTION__);
+    return 0;
+}</stdio.h></stdlib.h></p>
+
+<p>void bar() {
+    printf(“%s\n”,<strong>FUNCTION</strong>);
+    exit(0);
+}</p>
+
+<p><strong>attribute((constructor)) void before_main()
+{
+    printf(“%s\n”,__FUNCTION</strong>);
+}</p>
+
+<p><strong>attribute((destructor)) void after_main()
+{
+    printf(“%s\n”,__FUNCTION</strong>);
+}</p>
+
+<p>int main() {
+    printf(“%s\n”,<strong>FUNCTION</strong>);
+}
+强行把foo函数换成程序的入口，并读取a.out的ELF文件头部，然后进行反编译：</p>
+
+<p>$  gcc -e foo main.c
+$  readelf -h a.out</p>
+
+<p>ELF Header:
+  Magic:   7f 45 4c 46 02 01 01 00 00 00 00 00 00 00 00 00 
+  Class:                             ELF64
+…
+  Entry point address:               0x4005d7
+…</p>
+
+<p>$  objdump -d a.out</p>
+
+<p>…
+00000000004005d7 <foo>:
+...
+此时foo函数已经代替_start成为程序入口，执行程序：</foo></p>
+
+<p>$  ./a.out</p>
+
+<p>foo
+Segmentation fault (core dumped)
+可以看到，没有了_start函数，也就不会执行__libc_start_main，所以构造函数和析构函数并没有被执行，而且由于程序没有用exit来结束，所以产生了一个段错误。</p>
+
+<p>再将程序入口换为bar：</p>
+
+<p>$  gcc -e bar main.c
+$  ./a.out</p>
+
+<p>bar
+程序成功运行，而且成功退出，但是同样没有调用构造函数和析构函数。至此，我们就明白了main函数执行前的初始化工作和结束后的收尾工作到底是谁在执行了。</p>
+
+<p>内核通过exec运行一个进程，在C start-up routine中，系统会自动调用一些初始化函数，再执行main函数，然后通过调用exit，先执行那些通过atexit注册的函数，再进行一些收尾工作，最后使用_exit结束进程。</p>
+
+<p>一个程序的运行步骤如下：</p>
+
+<p>操作系统在在创建进程后，把控制权交给了程序的入口，这个入口一般是运行库中的某个入口函数</p>
+
+<p>入口函数对运行库和程序运行环境进行初始化，包括堆、I/O、线程、全局变量构造等</p>
+
+<p>入口函数完成初始化后，调用main函数，正式开始执行程序主体部分</p>
+
+<p>main函数执行完毕后，返回到入口函数，入口函数进行清理工作，包括全局变量析构、堆销毁、关闭I/O等，然后进行系统调用结束进程</p>
+
+<p>接下来具体分析的是基于glibc 2.6.1中静态链接的、用于可执行文件的情况</p>
+
+<p>第一步：glibc的程序入口为_start（这个入口是有ld链接器默认的链接脚本指定的，可以通过相关参数设定入口）</p>
+
+<p>_start由汇编实现且和平台相关</p>
+
+<p>//将汇编改写为伪代码
+void start()
+{
+    %ebp = 0;//使ebp为0，证明其是最外层函数
+    int argc = pop from stack;//从栈中获取argc，隐含envp
+    char **argv = top from stack;//从栈中获取argv
+    //调用_libc_start_main()函数
+    _libc_start_main(main, argc, argv, _libc_csu_init, _libc_csu_fini, edx, top of stack);
+}
+栈分布情况</p>
+
+<p>第二步：调用_libc_start_main()函数，下面对_libc_start_main()函数进行源码分析</p>
+
+<p>源码分析</p>
+
+<p>//glibc-2.6.1\csu\Libc-start.c
+//为使结构条理更加清晰，删减了部分代码
+/*
+_libc_start_main()参数说明
+main
+argc
+ubp_av:包括argv和envp
+函数指针init：main调用前的初始化工作
+函数指针fini：main结束后的收尾工作
+函数指针rtld_fini：动态加载有关的收尾工作（runtime loader）
+stack_end：指明栈地址，即最高的栈地址
+<em>/
+STATIC int
+LIBC_START_MAIN (int (</em>main) (int, char <em>*, char ** MAIN_AUXVEC_DECL),
+         int argc, 
+         char *<strong>unbounded *__unbounded ubp_av,
+         __typeof (main) init,
+         void (*fini) (void),
+         void (*rtld_fini) (void), 
+         void *__unbounded stack_end)
+{
+    #if __BOUNDED_POINTERS</strong>
+      char **argv;
+    #else
+    # define argv ubp_av
+    #endif
+      /</em> Result of the ‘main’ function.  */
+      int result;</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>......
+
+#ifndef SHARED
+  char *__unbounded *__unbounded ubp_ev = &amp;ubp_av[argc + 1];
+  INIT_ARGV_and_ENVIRON;//将宏展开得到 __environ = ubp_ev，即让__environ指针指向envp
+  /* Store the lowest stack address.  This is done in ld.so if this is
+     the code for the DSO.  */
+  __libc_stack_end = stack_end;
+
+......
+
+# ifdef DL_SYSDEP_OSCHECK
+  if (!__libc_multiple_libcs)
+    {
+      /* This needs to run to initiliaze _dl_osversion before TLS
+     setup might check it.  */
+      DL_SYSDEP_OSCHECK (__libc_fatal);//检查操作系统版本
+    }
+# endif
+
+......
+
+__pthread_initialize_minimal ();
+//__cxa_atexit()为glibc内部函数，等同于atexit
+//rtld_fini在main函数结束后调用
+__cxa_atexit ((void (*) (void *)) rtld_fini, NULL, NULL);
+__libc_init_first (argc, argv, __environ);
+//fini在main函数结束后调用
+__cxa_atexit ((void (*) (void *)) fini, NULL, NULL);
+(*init) (argc, argv, __environ MAIN_AUXVEC_PARAM);
+
+......
+
+result = main (argc, argv, __environ MAIN_AUXVEC_PARAM);//开始执行main函数，result为退出码
+
+......
+
+exit (result);//程序开始退出 }
+</code></pre></div></div>
+
+<p>栈分布情况</p>
+
+<p>第三步：调用exit()函数，下面对exit()函数进行源码分析</p>
+
+<p>//glibc-2.6.1\stdlib\Exit.c
+void exit (int status)
+{
+    //__exit_funcs存储由cxa_atexit和atexit注册的函数链表
+    //遍历该链表并逐个调用注册函数
+    while (__exit_funcs != NULL)
+    {</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    struct exit_function_list *old;
+
+    ......
+
+    old = __exit_funcs;
+    __exit_funcs = __exit_funcs-&gt;next;//依次指向节点
+    if (__exit_funcs != NULL)
+        free (old);
+}
+
+......
+
+_exit (status); } 第四步：调用_exit()函数，下面对_exit()函数进行源码分析
+</code></pre></div></div>
+
+<p>// glibc-2.6.1\sysdeps\mach\hurd\Dl-sysdep.c
+//<em>exit函数调用后，进程就会直接结束
+//程序正常结束的两种情况
+//1.通过main函数正常返回
+//2.程序代码中使用exit
+void weak_function attribute_hidden _exit (int status)
+{
+    __proc_mark_exit (_dl_hurd_data-&gt;portarray[INIT_PORT_PROC], W_EXITCODE (status, 0), 0);
+    while (__task_terminate (__mach_task_self ()))
+        __mach_task_self</em> = (__mach_task_self) ();
+}</p>
+
+<p>经过对源代码的分析，可以肯定”Hello World“程序的确不是从main函数开始执行的！</p>
+
+<p>综上所述，函数调用过程如下：
+start -&gt; libc_start_main -&gt; exit -&gt; _exit</p>
+
+<p>linux系统下压板程序的入口是”_start”，这个函数是linux系统库（Glibc）的一部分，当我们的程序和Glibc链接在一起形成最终的可执行文件的之后，这个函数就是程序执行初始化的入口函数。
+程序初始化部分完成一系列初始化过程之后，会调用main函数来执行程序的主体。在main函数执行完成以后，再返回到初始化部分，进行一些清理工作，然后结束进程。
+对C++而言：（ELF文件为其定义了两个特殊的段）
+.init 该段保存的是可执行的命令，它构成了进程的初始化代码。因此，当一个程序开始运行的时候，在main函数被调用之前，Glibc的初始化部分安排执行这个段中的代码
+.fini 该段保存着进程终止命令代码。因此，当一个程序的main函数正常退出的时候，Glibc会安排执行这个段中的代码。
+这两个段的存在有特别的目的，如果一个函数放到.init段，在mai函数执行前系统就会执行它（就是因为它在这个段）。同理，如果一个函数放到.fini段，在main函数返回后该函数就会被执行。利用这两个特性，C++实现了全局构造和析构函数。
+一个典型程序的大致运行步骤
+操作系统创建进程后，把控制权交到了程序入口，这个入口往往是程序运行库中的某个入口函数。
+入口函数对运行库和程序运行环境进行初始化，包括堆、I/O、线程、全局变量的构造等等。
+入口函数在完成初始化之后，调用main函数，正式开始执行函数主体部分。
+main函数执行完毕之后，返回到入口函数，入口函数进行清理工作，包括全局变量析构、堆销毁、关闭I/O等，然后进行系统调用结束进程。
+入口函数的实现
+Glibc的入口函数
+_start函数
+  该入口是由ld链接器默认的链接脚本指定的，当然用户也可以通过参数进行设定。_start由汇编代码实现。大致用如下伪代码表示：
+void _start()
+{
+　　%ebp = 0;
+　　int argc = pop from stack
+　　char ** argv = top of stack;
+　　__libc_start_main(main, argc, argv, __libc_csu_init, __linc_csu_fini,
+　　edx, top of stack);
+}
+具体过程可以参见下图：</p>
+
+<p>  在调用_start之前，装载器就会将用户的参数和环境变量压入栈中，如图所示，栈顶元素是argc，接着就是argv和环境变量的数组。
+  其中argv除了指向参数表外，还隐含紧接着环境变量表。这个环境变量表要在__libc_start_main里从argv内提取出来。
+  实际执行代码的是__libc_start_main。</p>
+<ul>
+  <li>__libc_start_main函数
+    <ul>
+      <li>函数头
+```
+int __libc_start_main(
+  int (<em>main)(int, char **, char *),
+  char * __unbounded *__unbounded ubp_av,
+  __typeof(main) init,
+  void (</em>fini)(void),
+  void (*rtld_fini)(void),
+  viud *__unbounded stack_end)
+    可以啊看出，一共有7个参数，其中main由第一个参数传入，紧接着就是argc和argv（这里叫做ubp_av，应为其中还包括了环境变量表）。此外的3个函数指针：
+  （1）init：main调用之前的初始化工作；
+  （2）fini：main结束之后的收尾工作；
+  （3）rtld_fini：和动态加载有关的收尾工作。
+  最后的stack_end标明了栈底的位置，即最高的栈地址。
+        <ul>
+          <li>__libc_start_main代码中的一个特殊的宏（宏INIT_ARGV_and_ENVIRON）
+  宏展开之后如下：
+  <code class="language-plaintext highlighter-rouge">char **ubp_rv = &amp;ubp_av[argc+1];</code>
+  <code class="language-plaintext highlighter-rouge">__environ = ubo_ev;</code>
+  <code class="language-plaintext highlighter-rouge">__libc_stack_end = stack_end;</code>
+    上述代码实际上就是从_start源代码分析得到的栈布局，重点是让_environ指针指向紧跟子啊argv数组后面的环境变量数组。如下图：
+  <img src="http://7xl3j2.com1.z0.glb.clouddn.com/cxy-21.png" alt="" /></li>
+          <li>__libc_start_main代码中的一系列重要的函数
+  ```
+__pthread_initialize_minimal();
+  __cxa_atexit(rtld_fini, NULL, NULL);
+  __libc_init_first(argc, argv, __environ);
+  __cxa_atexit(fini, NULL, NULL);
+  (*init)(argc, argv, __environ);</li>
+          <li>__cxa_atexit函数是glibc的内部函数，等同于atexit，在main之后调用。</li>
+          <li>所以可以看出，参数传入的fini和rtld_fini均是用于main结束之后调用的。在__libc_start_main末尾，关键是如下两行的代码：
+  <code class="language-plaintext highlighter-rouge">result = main(argc, argv, _environ);</code>
+  <code class="language-plaintext highlighter-rouge">exit(result);</code>
+  main函数最终被调用，并退出。
+  【补充】程序正常结束有两种情况：main函数正常返回；程序中exit()退出。但是在__libc_start_main中可以看出，即使main正常返回了，exit还是会被调用。所以说exit()是程序退出的必经之路。</li>
+        </ul>
+      </li>
+    </ul>
+  </li>
+</ul>
+:ET

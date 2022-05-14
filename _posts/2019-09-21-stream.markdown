@@ -1,0 +1,140 @@
+---
+title: stream
+layout: post
+category: storage
+author: 夏泽民
+---
+在Stream之前，Redis PUB/SUB亦可可实现消息的传递及广播，但消息不支持持久化，不记录消费端状态，并且“Fire and Forgot”，可靠性无法保证。
+<!-- more -->
+stream与pub/sub的比较：
+
+pub/sub
+
+stream
+
+不能持久化消息
+
+可以持久化，支持RDB和AOF两种持久化机制
+
+没有消息队列中群组的概念
+
+引入了消费组的概念，
+
+redis客户端断线重连会丢失中间的数据
+
+支持position，能够消费历史消息。断线后支持消息继续从上次的时间点读取，不会丢失消息，也可以直接读取最新消息
+
+redis断线后需要重新订阅
+
+不存在这个问题
+
+没有ack机制
+
+有ACK机制，能够一定程度保证消息“at least once” 消费
+
+1.stream简介
+
+Redis Stream借鉴了Kafka的设计，支持多播和消费群组机制，支持消息持久化。底层基于基数树(radix-tree)和listpack实现，保证高效的内存利用及消息获取。另外，Stream机制不仅对消息进行持久化，对消费组状态也有持久化及主备同步，即使发生服务重启或主备切换，消费组的状态也能持续。
+
+Redis Stream对应的命令字如下：
+
+命令字
+
+说明
+
+XADD
+
+追加一条消息到Stream
+
+XLEN
+
+获取Stream的消息记录数量
+
+XRANGE
+
+按ID范围查询Stream的消息记录
+
+XREVRANGE
+
+按ID范围反向查找Stream的消息记录
+
+XREAD
+
+从Stream读取消息，支持阻塞模式
+
+XGROUP
+
+消费组管理：创建/销毁消费组；消费组成员管理；消费ID管理等
+
+XREADGROUP
+
+以消费群成员的身份从Stream消费消息
+
+XPENDING
+
+查询消费组已占有但未确认完成的消息记录
+
+XCLAIM
+
+更改已被占有但未确认完成的消息记录的拥有者
+
+XINFO
+
+Stream状态信息监控
+
+XTRIM
+
+裁剪指定Stream的记录到指定数量
+
+DEL
+
+删除一个Stream
+
+2、主要数据结构
+2.1. 消息ID streamID 
+消息ID是一个time-seq的结构，时间戳是毫秒的时间，seq是在同一毫秒内消息的seq。
+
+
+2.2. 消息队列stream 
+
+stream消息队列用stream结构表示，队列名字就是db里面的key。
+
+
+2. 3消费组 streamCG 
+
+
+2.4 消费者streamConsumer
+
+2.5
+
+Stream的结构如上图所示，消息内容存储在消息链表里，每个消息都有一个唯一的streamID及消息内容。Stream都有唯一的名称，也就是Redis的key，在第一次使用xadd指令时自动创建。在调用xadd的指令时可以指定stream消息队列最大长度maxlen。当消息数量超过maxlen，会将老的消息淘汰掉，以确保Stream的消息链表不会过长。
+
+Stream都可以挂多个消费组，每个消费组会有游标last_id表示当前消费组已经消费到哪条消息了。消费组名称唯一，需要使用xgroup create进行创建，需要指定从哪个消息ID开始消费，并用这个ID用来初始化last_id变量。
+
+每个消费组内可以有多个消费者(Consumer)，同组内的消费者之间是竞争关系，每个消费者消费的消息是不同的，任意一个消费者读取了消息都会使游标last_id往前移动。
+
+消费者(Consumer)内部的pending_list，记录了已经被读取但没有ACK的消息。如果客户端没有ack，这个变量里面的消息ID会越来越多，一旦某个消息被ack，它就开始减少。这个pending_ids变量在Redis官方被称之为PEL，也就是Pending Entries List，这是一个很核心的数据结构，它用来确保客户端至少消费了消息一次，而不会在网络传输的中途丢失了没处理
+
+redis的pubsub也有缺点，那就是如果某个消费者突然崩溃，那么这段时间多播的消息对于该消费者来说就是永久错过了，如果redis宕机，那么所有的消息都会直接被丢弃，redis5中引入了一个持久化消息队列stream来解决这个问题。
+SUBSCRIBE、UNSUBSCRIBE和PUBLISH 三个命令实现了发布与订阅信息泛型（Publish/Subscribe messaging paradigm），在这个实现中， 发送者（发送信息的客户端）不是将信息直接发送给特定的接收者（接收信息的客户端）， 而是将信息发送给频道（channel）， 然后由频道将信息转发给所有对这个频道感兴趣的订阅者。也就是说发送者无须知道任何关于订阅者的信息， 而订阅者也无须知道是那个客户端给它发送信息， 它只要关注自己感兴趣的频道即可。
+
+  对发布者和订阅者进行解构（decoupling），可以极大地提高系统的扩展性（scalability），并得到一个更动态的网络拓扑（network topology）。
+二、原理
+  RedisServer包含两个重要的结构：
+
+channels：实际上就是一个key-value的Map结构,key为订阅地频道，value为Client的List
+patterns:存放模式+client地址的列表
+
+**流程：**从pubsub_channels中找出跟publish中channel相符的clients-list，然后再去pubsub_patterns中找出每一个相符的pattern和client。向这些客户端发送publish的消息。
+
+三、信息格式：
+  频道转发的每条信息都是一条带有三个元素的多条批量回复（multi-bulk reply）。信息的第一个元素标识了信息的类型：
+
+subscribe ： 表示当前客户端成功地订阅了第二个元素所指示的频道，而信息的第三个元素则记录了目前客户端已订阅频道的总数。
+unsubscribe ： 表示当前客户端成功地退订了第二个元素所指示的频道，信息的第三个元素记录了客户端目前仍在订阅的频道数量。当客户端订阅的频道数量降为 0 时， 客户端不再订阅任何频道， 它可以像往常一样， 执行任何 Redis 命令。
+message ： 表示这条信息是由某个客户端执行 PUBLISH 命令所发送的真正的信息。 信息的第二个元素是信息来源的频道， 而第三个元素则是信息的内容。
+  当然，Redis 的发布与订阅实现也支持模式匹配（pattern matching）： 客户端可以订阅一个带 * 号的模式， 如果某个/某些频道的名字和这个模式匹配， 那么当有信息发送给这个/这些频道的时候， 客户端也会收到这个/这些频道的信息。
+
+redis > PSUBSCRIBE news.*
+
+  客户端将收到来自 news.art.figurative 、 news.music.jazz 等频道的信息。

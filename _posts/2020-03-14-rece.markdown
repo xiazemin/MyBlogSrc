@@ -1,0 +1,805 @@
+---
+title: race 
+layout: post
+category: golang
+author: 夏泽民
+---
+https://xargin.com/map-concurrent-throw/
+某系统中有类似下面这样的代码：
+
+package main
+
+import (
+	"sync"
+	"time"
+)
+
+type resp struct {
+	k string
+	v string
+}
+
+func main() {
+	res := fetchData()
+    log.Print(res)
+}
+
+func rpcwork() resp {
+	// do some rpc work
+	return resp{}
+}
+
+func fetchData() (map[string]string, error) {
+	var result = map[string]string{} // result is k -> v
+	var keys = []string{"a", "b", "c"}
+	var wg sync.WaitGroup
+	var m sync.Mutex
+	for i := 0; i < len(keys); i++ {
+		wg.Add(1)
+
+		go func() {
+			m.Lock()
+			defer m.Unlock()
+			defer wg.Done()
+
+			// do some rpc
+			resp := rpcwork()
+
+			result[resp.k] = resp.v
+		}()
+	}
+
+	waitTimeout(&wg, time.Second)
+	return result, nil
+}
+
+func waitTimeout(wg *sync.WaitGroup, timeout time.Duration) bool {
+	c := make(chan struct{})
+	go func() {
+		defer close(c)
+		wg.Wait()
+	}()
+	select {
+	case <-c:
+		return false // completed normally
+	case <-time.After(timeout):
+		return true // timed out
+	}
+}
+
+线上会偶现崩溃(concurrent write and iteration)，但其负责人声称一定是离职员工的锅，连代码都不愿意看。
+
+这里的代码我已经简化过了，相信你大概可以看出来，这里的 waitgroup 使用不恰当，若下游系统发生超时时，该 waitgroup 其实并没有完成，这也就意味着，其子任务也并没有全部完成。虽然在 fetchData 内部对 map 的修改加了写锁，但若下游超时，在 fetchData 返回后，fetchData 内部启动的 goroutine 仍然可能对返回的 map 进行修改。
+
+当 map 对象同时进行加锁的 write 和不加锁的读取时，也会发生崩溃。不加锁的读取发生在什么地方呢？其实就是这里例子的 log.Print。如果你做个 json.Marshal 之类的，效果也差不多。
+
+至于为什么是偶发，超时本来也不是经常发生的，看起来这个 bug 就变成了一个偶现 bug。
+
+和这个 bug 类似的还有在打印 context 对象的时候，参考这里。
+
+我们再顺便控诉一下 Go 本身，这种 map 并发崩溃的 bug 对很多人造成了困扰，按说崩溃的时候会打印导致崩溃的 goroutine 栈，但为什么还是一个值得总结的问题呢？
+
+是因为 Go 在崩溃时，其实并不能完整地打印导致崩溃的因果关系，参考这里。
+
+这个 issue 中同时也给了下面这段代码，只有在 go run -race 时，才能看到导致 throw 的真正原因。
+
+package main
+
+import (
+	"sync"
+)
+
+var x map[int]string = make(map[int]string)
+
+func f(s string, wg *sync.WaitGroup) {
+	x[0] = s
+	wg.Done()
+}
+
+func g(s string, wg *sync.WaitGroup) {
+	x[1] = s
+	wg.Done()
+}
+
+func main() {
+	for {
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go f("Hello", &wg)
+		go g("Playground", &wg)
+		wg.Wait()
+	}
+}
+下面这个崩溃栈只能看到 main.g(你运行的时候，也可能只能看到 main.f)。
+
+~/test ❯❯❯ go run mmmm.go
+fatal error: concurrent map writes
+
+goroutine 48 [running]:
+runtime.throw(0x1074091, 0x15)
+	/usr/local/go/src/runtime/panic.go:774 +0x72 fp=0xc000030758 sp=0xc000030728 pc=0x1024fb2
+runtime.mapassign_fast64(0x1060d00, 0xc000064000, 0x1, 0xc000066048)
+	/usr/local/go/src/runtime/map_fast64.go:101 +0x350 fp=0xc000030798 sp=0xc000030758 pc=0x100dcd0
+main.g(0x1072f92, 0xa, 0xc0000680f0)
+	/Users/didi/test/mmmm.go:15 +0x46 fp=0xc0000307c8 sp=0xc000030798 pc=0x10525f6
+runtime.goexit()
+	/usr/local/go/src/runtime/asm_amd64.s:1357 +0x1 fp=0xc0000307d0 sp=0xc0000307c8 pc=0x104c001
+created by main.main
+	/Users/didi/test/mmmm.go:24 +0xbb
+
+goroutine 1 [semacquire]:
+sync.runtime_Semacquire(0xc0000680f8)
+	/usr/local/go/src/runtime/sema.go:56 +0x42
+sync.(*WaitGroup).Wait(0xc0000680f0)
+	/usr/local/go/src/sync/waitgroup.go:130 +0x64
+main.main()
+	/Users/didi/test/mmmm.go:25 +0xc9
+exit status 2
+下面这样才能看到真正的原因：
+
+~/test ❯❯❯ go run -race mmmm.go                                      
+==================
+WARNING: DATA RACE
+Write at 0x00c00008c000 by goroutine 7:
+  runtime.mapassign_fast64()
+      /usr/local/go/src/runtime/map_fast64.go:92 +0x0
+  main.g()
+      /Users/didi/test/mmmm.go:15 +0x63
+
+Previous write at 0x00c00008c000 by goroutine 6:
+  runtime.mapassign_fast64()
+      /usr/local/go/src/runtime/map_fast64.go:92 +0x0
+  main.f()
+      /Users/didi/test/mmmm.go:10 +0x63
+
+Goroutine 7 (running) created at:
+  main.main()
+      /Users/didi/test/mmmm.go:24 +0xee
+
+Goroutine 6 (finished) created at:
+  main.main()
+      /Users/didi/test/mmmm.go:23 +0xb7
+==================
+fatal error: concurrent map writes
+
+goroutine 67286 [running]:
+runtime.throw(0x10ad440, 0x15)
+	/usr/local/go/src/runtime/panic.go:774 +0x72 fp=0xc000094750 sp=0xc000094720 pc=0x105c272
+runtime.mapassign_fast64(0x1099c20, 0xc00008c000, 0x0, 0x0)
+	/usr/local/go/src/runtime/map_fast64.go:176 +0x364 fp=0xc000094790 sp=0xc000094750 pc=0x1044ed4
+main.f(0x10abea9, 0x5, 0xc00017ffa0)
+	/Users/didi/test/mmmm.go:10 +0x64 fp=0xc0000947c8 sp=0xc000094790 pc=0x108b184
+runtime.goexit()
+	/usr/local/go/src/runtime/asm_amd64.s:1357 +0x1 fp=0xc0000947d0 sp=0xc0000947c8 pc=0x1084651
+created by main.main
+	/Users/didi/test/mmmm.go:23 +0xb8
+
+goroutine 1 [semacquire]:
+sync.runtime_Semacquire(0xc00017ffa8)
+	/usr/local/go/src/runtime/sema.go:56 +0x42
+sync.(*WaitGroup).Wait(0xc00017ffa0)
+	/usr/local/go/src/sync/waitgroup.go:130 +0xb1
+main.main()
+	/Users/didi/test/mmmm.go:25 +0xfd
+exit status 2
+如若在实践中碰到了类似的 bug，只能好好读代码，别无他法，甩锅给离职员工是解决不了问题的。
+
+如果你手边的代码抽象程度比较高，比如函数的参数都是一些 interface，由运行期来决定，那可能要定位这种 bug 就更费劲一些。
+<!-- more -->
+http://xiaorui.cc/archives/5919
+https://github.com/golang/go/issues/26703
+https://mp.weixin.qq.com/s?__biz=MzAxMTA4Njc0OQ==&mid=2651437803&idx=1&sn=fe69335648dde77395659d2bb88bf832&chksm=80bb6419b7cced0fd4eca56ae5a7a928990e189dd9c94aaae75950be70b73f9523ad1351e8e5&scene=21#wechat_redirect
+https://mp.weixin.qq.com/s?__biz=MzAxMTA4Njc0OQ==&mid=2651436434&idx=1&sn=33143ae7dea378157f1555fa4a213dba&chksm=80bb6b60b7cce2764ad7b0152f47ea26971c5ce9a9980aa65a0e0daa9a079ba596117109401f&scene=21#wechat_redirect
+
+当我意识到我一直在处理和解决的问题有一个专有名词描述的时候，我总会觉得这事十分有趣。这次出现这种情况的是竞争条件(Race Conditions)。当你处理多个 routine 共享某类资源的时候，不可避免的需要考虑到这个。如果你未曾在你的代码中考虑过这个问题，现在就是一个不错的时候。
+
+竞争条件是：当两个或两个以上的 routines 访问相同资源的时候，例如一个变量或者结构体，并且在不考虑其他 Gorutines 的情况下对资源进行读/写。这类代码能够造成你所能见到的最令人头疼，最随机的 bugs。通常需要大量的日志和一些运气才能找到这些类型的错误。这么多年来，我完善了我的日志的技能，以便识别这些问题。
+
+Go 工具套件在 Go 版本 1.1 引入了一个竞态检测工具(race detector)。这个竞态检测工具是在编译流程中内置到你程序的代码。一旦你的程序开始运行，它能够发现和报告任何他所检测到的竞态情况。这是非常棒的功能, 为识别缺陷代码做出了非常重要的工作。
+
+让我们写一个非常的简单的包含竞态条件内置竞态检测代码的程序。
+
+package main
+
+import (
+   "fmt"
+   "sync"
+)
+
+var Wait sync.WaitGroup
+var Counter int = 0
+
+func main() {
+
+   for routine := 1; routine <= 2; routine++ {
+
+       Wait.Add(1)
+       go Routine(routine)
+  }
+
+   Wait.Wait()
+   fmt.Printf("Final Counter: %d\n", Counter)
+}
+
+func Routine(id int) {
+
+   for count := 0; count < 2; count++ {
+
+       value := Counter
+       value++
+       Counter = value
+  }
+
+   Wait.Done()
+}
+这个程序看起来没有问题。它创建了两个协程，每一个协程都会增加全局变量 Counter 两次。当他们都运行结束后，程序显示全局变量 Counter 的值。当我运行这个程序的时候，他会显示正确答案 4。所以这个程序工作正常,但真的吗？
+
+让我们通过 Go 竞态检测运行这个代码，看看它会发现什么？在代码所在的目录打开终端，以 -race 参数编译代码。
+
+go build -race
+然后程序输出
+
+==================
+WARNING: DATA RACE
+Read by goroutine 5:
+main.Routine()
+    /Users/bill/Spaces/Test/src/test/main.go:29 +0x44
+gosched0()
+    /usr/local/go/src/pkg/runtime/proc.c:1218 +0x9f
+
+Previous write by goroutine 4:
+main.Routine()
+    /Users/bill/Spaces/Test/src/test/main.go:33 +0x65
+gosched0()
+    /usr/local/go/src/pkg/runtime/proc.c:1218 +0x9f
+
+Goroutine 5 (running) created at:
+main.main()
+    /Users/bill/Spaces/Test/src/test/main.go:17 +0x66
+runtime.main()
+    /usr/local/go/src/pkg/runtime/proc.c:182 +0x91
+
+Goroutine 4 (finished) created at:
+main.main()
+    /Users/bill/Spaces/Test/src/test/main.go:17 +0x66
+runtime.main()
+    /usr/local/go/src/pkg/runtime/proc.c:182 +0x91
+
+==================
+Final Counter: 4
+Found 1 data race(s)
+看起来，工具在代码中检测到竞争条件。如果你查看上面的竞争条件报告，你会看到针对程序的输出。全局变量 Counter 的值是 4。这就是这类的 bug 的难点所在，代码大部分情况是工作正常的，但错误的情况会随机产生。竞争检测告诉我们隐藏在代码中的糟糕问题。
+
+警告报告告诉我们问题发生的准确位置:
+
+Read by goroutine 5:
+main.Routine()
+    /Users/bill/Spaces/Test/src/test/main.go:29 +0x44
+gosched0()
+    /usr/local/go/src/pkg/runtime/proc.c:1218 +0x9f
+
+      value := Counter
+
+Previous write by goroutine 4:
+main.Routine()
+    /Users/bill/Spaces/Test/src/test/main.go:33 +0x65
+gosched0()
+    /usr/local/go/src/pkg/runtime/proc.c:1218 +0x9f
+
+      Counter = value
+
+Goroutine 5 (running) created at:
+main.main()
+    /Users/bill/Spaces/Test/src/test/main.go:17 +0x66
+runtime.main()
+    /usr/local/go/src/pkg/runtime/proc.c:182 +0x91
+
+      go Routine(routine)
+你能发现竞争检测器指出两行读和写全局变量 Counter 的代码。同时也指出生成协程的代码。
+
+让我们对代码进行简单修改，让竞争情况更容易暴露出来。
+
+package main
+
+import (
+   "fmt"
+   "sync"
+   "time"
+)
+
+var Wait sync.WaitGroup
+var Counter int = 0
+
+func main() {
+
+   for routine := 1; routine <= 2; routine++ {
+
+       Wait.Add(1)
+       go Routine(routine)
+  }
+
+   Wait.Wait()
+   fmt.Printf("Final Counter: %d\n", Counter)
+}
+
+func Routine(id int) {
+
+   for count := 0; count < 2; count++ {
+
+       value := Counter
+       time.Sleep(1 * time.Nanosecond)
+       value++
+       Counter = value
+  }
+
+   Wait.Done()
+}
+我在循环中增加了一个纳秒的暂停。这个暂停正好位于协程读取全局变量 Couter 存储到本地副本之后。让我们运行这个程序看看在这种修改之后，全局变量 Counter 的值是什么？
+
+Final Counter: 2
+循环中的暂停导致程序的失败。Counter 变量的值不再是 4 而是 2。发生了什么？让我们深挖代码看看为什么这个纳秒的暂停会导致这个 Bug。
+
+在没有暂停的情况下，代码运行如下图：
+
+
+
+没有暂停的情况下，第一个协程被生成，并且完成执行，紧接着第二个协程才开始运行。这就是为什么程序看起来像正确运行的原因，因为它在我的电脑上运行速度非常快，以至于代码自行排队运行。
+
+让我们看看在有暂停的情况下，代码如何运行:
+
+
+
+上图已经展示了所有必要的信息，因此我就没有把他全部画出来。这个暂停导致运行的两个协程之间进行了一次上下文切换。这次我们有一个完全不同的情况。让我们看看图中展示的代码:
+
+value := Counter
+
+time.Sleep(1 * time.Nanosecond)
+
+value++
+
+Counter = value
+在每一次循环的迭代过程中，全局变量 Counter 的值都被暂存到本地变量 value，本地的副本自增后，最终写回全局变量 Counter。如果这三行代码在没有中断的情况下，没有立即运行，那么程序就会出现问题。上面的图片展示了全局变量 Counter 的读取和上下文切换是如何导致问题的。
+
+在这幅图中，在被协程 1 增加的变量被写回全局变量 Counter 之前，协程 2 被唤醒并读取全局变量 Counter。实质上，这两个协程对全局Counter变量执行完全相同的读写操作，因此最终的结果才是 2。
+
+为了解决这个问题，你也许认为我们只需要将增加全局变量 Counter 的三行代码改写减少到一行即可。
+
+package main
+
+import (
+   "fmt"
+   "sync"
+   "time"
+)
+
+var Wait sync.WaitGroup
+var Counter int = 0
+
+func main() {
+
+   for routine := 1; routine <= 2; routine++ {
+
+       Wait.Add(1)
+       go Routine(routine)
+  }
+
+   Wait.Wait()
+   fmt.Printf("Final Counter: %d\n", Counter)
+}
+
+func Routine(id int) {
+
+   for count := 0; count < 2; count++ {
+
+       Counter = Counter + 1
+       time.Sleep(1 * time.Nanosecond)
+  }
+
+   Wait.Done()
+}
+当我们运行这个版本的代码的时候，我们会再次得到正确的结果:
+
+Final Counter: 4
+如果我们启动竞争检测来运行该代码，上面出现的问题应该会消失:
+
+go build -race
+并且输出为:
+
+==================
+WARNING: DATA RACE
+Write by goroutine 5:
+main.Routine()
+    /Users/bill/Spaces/Test/src/test/main.go:30 +0x44
+gosched0()
+    /usr/local/go/src/pkg/runtime/proc.c:1218 +0x9f
+
+Previous write by goroutine 4:
+main.Routine()
+    /Users/bill/Spaces/Test/src/test/main.go:30 +0x44
+gosched0()
+    /usr/local/go/src/pkg/runtime/proc.c:1218 +0x9f
+
+Goroutine 5 (running) created at:
+main.main()
+    /Users/bill/Spaces/Test/src/test/main.go:18 +0x66
+runtime.main()
+    /usr/local/go/src/pkg/runtime/proc.c:182 +0x91
+
+Goroutine 4 (running) created at:
+main.main()
+    /Users/bill/Spaces/Test/src/test/main.go:18 +0x66
+runtime.main()
+    /usr/local/go/src/pkg/runtime/proc.c:182 +0x91
+
+==================
+Final Counter: 4
+Found 1 data race(s)
+然而，在这三十行代码的程序中，我们仍然检测到一个竞争条件。
+
+Write by goroutine 5:
+main.Routine()
+    /Users/bill/Spaces/Test/src/test/main.go:30 +0x44
+gosched0()
+    /usr/local/go/src/pkg/runtime/proc.c:1218 +0x9f
+
+      Counter = Counter + 1
+
+Previous write by goroutine 4:
+main.Routine()
+    /Users/bill/Spaces/Test/src/test/main.go:30 +0x44
+gosched0()
+    /usr/local/go/src/pkg/runtime/proc.c:1218 +0x9f
+
+      Counter = Counter + 1
+
+Goroutine 5 (running) created at:
+main.main()
+    /Users/bill/Spaces/Test/src/test/main.go:18 +0x66
+runtime.main()
+    /usr/local/go/src/pkg/runtime/proc.c:182 +0x91
+
+      go Routine(routine)
+使用一行代码进行增加操作的程序正确地运行了。但为什么代码仍然有一个竞态条件？不要被我们用于递增 Counter 变量的一行Go代码所欺骗。让我们看看这一行代码生成的汇编代码:
+
+0064 (./main.go:30) MOVQ Counter+0(SB),BX ; Copy the value of Counter to BX
+0065 (./main.go:30) INCQ ,BX             ; Increment the value of BX
+0066 (./main.go:30) MOVQ BX,Counter+0(SB) ; Move the new value to Counter
+实际上是执行这三行汇编代码增加 counter 变量。他们十分诡异地看起来像最初的 Go 代码。上下文切换可能发生在这三行汇编的中的任意一行后面。尽管这个程序正常工作了，但严格来说，Bug 仍然存在。
+
+尽管我使用的例子非常简单，它还是体现发现这种 Bug 的复杂性。任何一行由 Go 编译器产生的汇编代码都有可能因为下文切换而停止运行。我们的 Go 代码也许看起来能够安全地访问资源，实际上底层汇编代码可能漏洞百出。
+
+为了解决这类问题，我们需要确保读写全局变量 Counter 总是在任何其他协程访问该变量之前完成。管道(channle)能够帮助我们有序地访问资源。这一次，我会使用一个互斥锁(Mutex):
+
+package main
+
+import (
+   "fmt"
+   "sync"
+   "time"
+)
+
+var Wait sync.WaitGroup
+var Counter int = 0
+var Lock sync.Mutex
+
+func main() {
+
+   for routine := 1; routine <= 2; routine++ {
+
+       Wait.Add(1)
+       go Routine(routine)
+  }
+
+   Wait.Wait()
+   fmt.Printf("Final Counter: %d\n", Counter)
+}
+
+func Routine(id int) {
+
+   for count := 0; count < 2; count++ {
+
+       Lock.Lock()
+
+       value := Counter
+       time.Sleep(1 * time.Nanosecond)
+       value++
+       Counter = value
+
+       Lock.Unlock()
+  }
+
+   Wait.Done()
+}
+以竞态检测的模式，编译程序，查看运行结果:
+
+go build -race
+./test
+
+Final Counter: 4
+这一次，我们得到了正确的结果，并且没有发现任何竞态条件。这个程序是没有问题的。互斥锁保护了在 Lock 和 Unlock 之间的代码，确保了一次只有一个协程执行该段代码。
+
+你可以通过以下文章学习更多例子，更好地理解 Go 竞态检测器：
+
+http://blog.golang.org/race-detector
+
+如果你使用了多个协程，那么使用竞态检测器测试你的代码是个不错的建议。它会在单元测试和质量保证测试中，为你节省大量的时间和麻烦。Go 开发人员能有这样的工具是很幸运地，所以值得学习一下。
+
+https://mp.weixin.qq.com/s?__biz=MzAxMTA4Njc0OQ==&mid=2651437922&idx=4&sn=7950c36dc1c53c4cd7f3f619459cd3b9&chksm=80bb6590b7ccec861b15ac40e54856add76bb0befd1a186d7e07c3d4767ce4f521c3060420ff&scene=21#wechat_redirect
+
+https://mp.weixin.qq.com/s?__biz=MzAxMTA4Njc0OQ==&mid=2651437922&idx=4&sn=7950c36dc1c53c4cd7f3f619459cd3b9&chksm=80bb6590b7ccec861b15ac40e54856add76bb0befd1a186d7e07c3d4767ce4f521c3060420ff&scene=21#wechat_redirect
+
+Any race is a bug
+我在接手其他同事的 golang 项目时，一般都会习惯性的做一个竞态检测。有时总会得到一些“惊喜”，比如像下面这段代码：
+
+package
+ main
+
+
+
+import
+ 
+(
+
+    
+"fmt"
+
+    
+"runtime"
+
+    
+"time"
+
+)
+
+
+
+var
+ i 
+=
+ 
+0
+
+
+
+func main
+()
+ 
+{
+
+    runtime
+.
+GOMAXPROCS
+(
+2
+)
+
+
+
+    go func
+()
+ 
+{
+
+        
+for
+ 
+{
+
+            fmt
+.
+Println
+(
+"i is"
+,
+ i
+)
+
+            time
+.
+Sleep
+(
+time
+.
+Second
+)
+
+        
+}
+
+    
+}()
+
+
+
+    
+for
+ 
+{
+
+        i 
++=
+ 
+1
+
+    
+}
+
+}
+
+当通过 go run-race cmd.go 执行时，可以看到有明显的竞态出现：
+
+==================
+
+WARNING
+:
+ DATA RACE
+
+Read
+ at 
+0x0000005e4600
+ 
+by
+ goroutine 
+6
+:
+
+  main
+.
+main
+.
+func1
+()
+
+      
+/
+root
+/
+gofourge
+/
+src
+/
+lab
+/
+cmd
+.
+go
+:
+15
+ 
++
+0x63
+
+
+
+Previous
+ write at 
+0x0000005e4600
+ 
+by
+ main goroutine
+:
+
+  main
+.
+main
+()
+
+      
+/
+root
+/
+gofourge
+/
+src
+/
+lab
+/
+cmd
+.
+go
+:
+20
+ 
++
+0x7b
+
+
+
+Goroutine
+ 
+6
+ 
+(
+running
+)
+ created at
+:
+
+  main
+.
+main
+()
+
+      
+/
+root
+/
+gofourge
+/
+src
+/
+lab
+/
+cmd
+.
+go
+:
+13
+ 
++
+0x4f
+
+==================
+
+i 
+is
+:
+ 
+8212
+
+i 
+is
+:
+ 
+54959831
+
+i 
+is
+:
+ 
+109202117
+
+我觉得不同的 goroutine 并发读写同一个变量，需要加锁，这应该是天经地义的常识。但是总有人以为，不加锁导致的问题最多就是读取的数据是修改前的数据，不能保证原子性罢了。是这样的吗？从上面的输出来看，似乎也差不多，其实这些都是典型的误解。
+
+有些朋友可能不知道，在 Go（甚至是大部分语言）中，一条普通的赋值语句其实并不是一个原子操作（语言规范同样没有定义 i++ 是原子操作, 任何变量的赋值都不是原子操作）。例如，在 32 位机器上写 int64类型的变量是有中间状态的，它会被拆成两次写操作 MOV —— 写低 32 位和写高 32 位，如下图所示：
+
+
+
+如果一个线程刚写完低 32 位，还没来得及写高 32 位时，另一个线程读取了这个变量，那它得到的就是一个毫无逻辑的中间变量，这很有可能使我们的程序出现诡异的 Bug。
+
+而在 Go 的内存模型中，有 race 的 Go 程序的行为是未定义行为，理论上出现什么情况都是正常的。就拿上面的代码来说，当去掉 -race 参数执行时，大概率会得到这样的输出：
+
+i 
+is
+:
+ 
+0
+
+i 
+is
+:
+ 
+0
+
+i 
+is
+:
+ 
+0
+
+i 
+is
+:
+ 
+0
+
+而用较老的 go 版本执行时，基本上执行一段时间，程序就会 HANG 住。所以讨论为什么出现这种现象实际上没有任何意义，不要依赖这种行为。
+
+Mutex vs Atomic
+解决 race 的问题时，无非就是上锁。可能很多人都听说过一个高逼格的词叫「无锁队列」。都一听到加锁就觉得很 low，那无锁又是怎么一回事？其实就是利用 atomic 特性，那 atomic 会比 mutex 有什么好处呢？Benign Data Races: What Could Possibly Go Wrong? 的作者总结了这两者的一个区别：
+
+Mutexes do no scale. Atomic loads do.
+
+mutex 由操作系统实现，而 atomic 包中的原子操作则由底层硬件直接提供支持。在 CPU 实现的指令集里，有一些指令被封装进了 atomic 包，这些指令在执行的过程中是不允许中断（interrupt）的，因此原子操作可以在 lock-free 的情况下保证并发安全，并且它的性能也能做到随 CPU 个数的增多而线性扩展。
+
+若实现相同的功能，后者通常会更有效率，并且更能利用计算机多核的优势。所以，以后当我们想并发安全的更新一些变量的时候，我们应该优先选择用 atomic 来实现。

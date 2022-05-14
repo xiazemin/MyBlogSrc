@@ -1,0 +1,203 @@
+I"�<p>https://github.com/edenhill/librdkafka
+https://github.com/arnaud-lb/php-rdkafka
+https://github.com/weiboad/kafka-php
+<!-- more -->
+一、安装以及使用shell命令终端操作kafka
+环境配置
+1、下载最新版本的kafka： kafka_2.11-1.0.0.tgz
+http://mirrors.shu.edu.cn/apache/kafka/1.0.0/kafka_2.11-1.0.0.tgz</p>
+
+<p>2、配置,解压后进入config目录
+2.1、配置zookeeper.properties
+默认监听端口2181</p>
+
+<p>2.2、配置server.properties
+开启监听端口，比如监听本地
+listeners=PLAINTEXT://10.168.1.99:9092</p>
+
+<p>3、启动
+3.1、启动zookeeper
+./bin/zookeeper-server-start.sh config/zookeeper.properties</p>
+
+<p>3.2、启动server
+./bin/kafka-server-start.sh config/server.properties</p>
+
+<p>此处启动server时报错内存不足，解决方案要么加大系统内存，要么调小kafka需求内存
+我这是调小kafka启动所需内存大小
+vim kafka-server-start.sh
+把其中:export KAFKA_HEAP_OPTS=”-Xmx1G -Xms1G”
+改为：export KAFKA_HEAP_OPTS=”-Xmx512M -Xms512M”</p>
+
+<p>4、启动测试的消费者，并监听topic的test
+./bin/kafka-console-consumer.sh –zookeeper 10.168.1.99:2181 –topic test –from-beginning</p>
+
+<p>5、启动测试的生产者，并监听topic的test
+./bin/kafka-console-producer.sh –broker-list 10.168.1.99:9092 –topic test</p>
+
+<p>此时，在生产者中输入数据后回车后，在消费者终端可以看到生产者产生的信息</p>
+
+<p>二、使用PHP操作kafka</p>
+
+<p>1、安装kafka的扩展php-rdkafka
+1.1、在安装php-rdkafka之前，需要先安装librdkafka
+git clone https://github.com/edenhill/librdkafka.git
+./configure
+make &amp;&amp; make install</p>
+
+<p>1.2、安装php-rdkafka
+git clone https://github.com/arnaud-lb/php-rdkafka.git
+cd php-rdkafka
+phpize
+./configure
+make &amp;&amp; make install</p>
+
+<p>2、编写kafka生产者和消费者类</p>
+
+<p>&lt;?php
+/**</p>
+<ul>
+  <li>Kafka.php.</li>
+  <li>User: lvfk</li>
+  <li>Date: 2018/2/7 0007</li>
+  <li>Time: 11:04</li>
+  <li>Desc: Kafka服务
+ */</li>
+</ul>
+
+<p>namespace app\models;</p>
+
+<p>use yii\base\InvalidConfigException;</p>
+
+<p>class Kafka
+{
+    public $broker_list = ‘10.168.1.99:9092’;//配置kafka，可以用逗号隔开多个kafka
+    public $topic = ‘topic’;
+    public $partition = 0;</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>protected $producer = null;
+protected $consumer = null;
+ 
+public function __construct()
+{
+    if (empty($this-&gt;broker_list)) {
+        throw new InvalidConfigException("broker not config");
+    }
+    $rk = new \RdKafka\Producer();
+    if (empty($rk)) {
+        throw new InvalidConfigException("producer error");
+    }
+    $rk-&gt;setLogLevel(LOG_DEBUG);
+    if (!$rk-&gt;addBrokers($this-&gt;broker_list)) {
+        throw new InvalidConfigException("producer error");
+    }
+    $this-&gt;producer = $rk;
+}
+ 
+/**
+ * 生产者
+ * @param array $messages
+ * @return mixed
+ */
+public function send($messages = [])
+{
+    $topic = $this-&gt;producer-&gt;newTopic($this-&gt;topic);
+    return $topic-&gt;produce(RD_KAFKA_PARTITION_UA, $this-&gt;partition, json_encode($messages));
+}
+ 
+/**
+ * 消费者
+ */
+public function consumer($object, $callback){
+    $conf = new \RdKafka\Conf();
+    $conf-&gt;set('group.id', 0);
+    $conf-&gt;set('metadata.broker.list', $this-&gt;broker_list);
+ 
+    $topicConf = new \RdKafka\TopicConf();
+    $topicConf-&gt;set('auto.offset.reset', 'smallest');
+ 
+    $conf-&gt;setDefaultTopicConf($topicConf);
+ 
+    $consumer = new \RdKafka\KafkaConsumer($conf);
+ 
+    $consumer-&gt;subscribe([$this-&gt;topic]);
+ 
+    echo "waiting for messages.....\n";
+    while(true) {
+        $message = $consumer-&gt;consume(120*1000);
+        switch ($message-&gt;err) {
+            case RD_KAFKA_RESP_ERR_NO_ERROR:
+                echo "message payload....";
+                $object-&gt;$callback($message-&gt;payload);
+                break;
+        }
+        sleep(1);
+    }
+} }
+</code></pre></div></div>
+
+<p>3、配置
+//配置kafka生产者
+‘asyncLog’ =&gt; [
+    ‘class’ =&gt; ‘\app\models\Kafka’,
+    ‘broker_list’ =&gt; ‘10.168.1.99:9092’,
+    ‘topic’ =&gt; ‘asynclog’
+]</p>
+
+<p>4、在业务代码中生产消息
+\Yii::$app-&gt;asyncLog-&gt;send([‘this is IndexController,’.date(‘y-md H:i:s’,time())]);</p>
+
+<p>5、在yii的command中消费</p>
+
+<p>5.1、编写KafkaController.php</p>
+
+<p>&lt;?php
+/**</p>
+<ul>
+  <li>@link http://www.yiiframework.com/</li>
+  <li>@copyright Copyright (c) 2008 Yii Software LLC</li>
+  <li>@license http://www.yiiframework.com/license/
+ */</li>
+</ul>
+
+<p>namespace app\commands;</p>
+
+<p>use yii\console\Controller;</p>
+
+<p>/**</p>
+<ul>
+  <li>This command echoes the first argument that you have entered.
+ *</li>
+  <li>This command is provided as an example for you to learn how to create console commands.
+ *</li>
+  <li>@author Qiang Xue <a href="mailto:qiang.xue@gmail.com">qiang.xue@gmail.com</a></li>
+  <li>@since 2.0
+ */
+class KafkaController extends Controller
+{
+ /**
+    <ul>
+      <li>This command echoes what you have entered as the message.</li>
+      <li>@param string $message the message to be echoed.
+  */
+ public function actionConsume()
+ {
+ \Yii::$app-&gt;asyncLog-&gt;consumer($this, ‘callback’);</li>
+    </ul>
+
+    <p>}</p>
+
+    <p>public function callback($message)
+ {
+     \Yii::info($message, ‘testkafka’);
+     \Yii::$app-&gt;log-&gt;setflushInterval(1);
+ }</p>
+  </li>
+</ul>
+
+<p>}</p>
+
+<p>5.2、运行:
+./yii kafka/consume</p>
+
+<p>6、当第4步中生产数据后，在第5步的终端可以消费数据</p>
+:ET

@@ -1,0 +1,1353 @@
+I"��<p>在优化ac自动机时发现在匹配过程中有大量时间消耗在GC里面，通过pprof发现match过程有很多的临时变量逃逸到heap里，增加了很多的GC压力，简要记录下问题定位的过程。</p>
+
+<p>问题定位</p>
+
+<p>首先需要在测试程序添加生成pprof数据的代码段。</p>
+
+<p>f, err := os.Create(“benchmark.prof”)
+  if err != nil {
+  	log.Fatal(err)
+  }
+  defer f.Close()
+  pprof.StartCPUProfile(f)
+  defer pprof.StopCPUProfile()</p>
+
+<p>go func() {
+  	http.ListenAndServe(“:8787”, http.DefaultServeMux)
+  }()</p>
+
+<p>…
+  // 等待一段时间做问题分析
+  fmt.Println(“nCTL+C exit http pprof”)
+  time.Sleep(15 * time.Minute)
+查看各函数调用申请的内存对象大小。</p>
+
+<p>go tool pprof -alloc_space -svg http://localhost:8787/debug/pprof/heap &gt; ~/Desktop/go_heap.svg
+image</p>
+
+<p>我们发现matchOf申请了大量的内存，于是怀疑matchOf可能存在变量逃逸，使用-gcflags -m重新生成测试程序发现确实存在MatchToken临时变量逃逸到heap。</p>
+
+<table>
+  <tbody>
+    <tr>
+      <td>go build -gcflags -m</td>
+      <td>grep escape</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>../acmatcher.go:165: &amp;MatchToken literal escapes to heap
+  ../acmatcher.go:165: &amp;MatchToken literal escapes to heap
+​</p>
+
+<p>问题修复</p>
+
+<p>使用interface{}实现的泛型fixedbuf存在变量逃逸情况，直接使用slice做固定的buf.</p>
+
+<p>// FixedBuffer fixed reuse buffer for zero alloc
+  type FixedBuffer struct {
+  	b   interface{}
+  	idx int
+  	cap int
+  	op  iBufferOP
+  }</p>
+
+<p>type iBufferOP interface {
+  	assign(fb *FixedBuffer, val interface{})
+  	init(fb *FixedBuffer, n int)
+  }</p>
+
+<p>func (fb *FixedBuffer) push(t interface{}) {
+  	if fb.idx &gt;= fb.cap {
+  		panic(“ERROR buffer overflow”)
+  	}
+  	fb.op.assign(fb, t)
+  	fb.idx++
+  }</p>
+
+<p>func (fb *FixedBuffer) reset() {
+  	fb.idx = 0
+  }</p>
+
+<p>func NewFixedBuffer(n int, op iBufferOP) *FixedBuffer {
+  	fb := &amp;FixedBuffer{
+  		// b:   make([]interface{}, n),
+  		idx: 0,
+  		cap: n,
+  		op:  op,
+  	}
+  	fb.op.init(fb, n)
+  	return fb
+  }
+优化后，函数调用完全ZeroAlloc，达到了使用fixedbuffer的预期.</p>
+
+<p>type mbuf struct {
+  	token  []MatchToken
+  	at     []matchAt
+  	ti, ai int
+  }</p>
+
+<p>func (mb *mbuf) reset() {
+  	mb.ai, mb.ti = 0, 0
+  }</p>
+
+<p>func (mb *mbuf) addToken(mt MatchToken) {
+  	if mb.ti &gt;= TokenBufferSize {
+  		panic(“ERROR buffer overflow”)
+  	}
+  	mb.token[mb.ti] = mt
+  	mb.ti++
+  }</p>
+
+<p>func (mb *mbuf) addAt(mt matchAt) {
+  	if mb.ai &gt;= MatchBufferSize {
+  		panic(“ERROR buffer overflow”)
+  	}
+  	mb.at[mb.ai] = mt
+  	mb.ai++
+  }
+问题原因</p>
+
+<p>首先我们来看下面这个变量逃逸示例</p>
+
+<p>func main() {
+	lc := 1
+	s := make([]interface{}, lc)
+	s[0] = lc
+}</p>
+
+<p>func main2() {
+	lc := 1
+	s := make([]*int, lc)
+	s[0] = &amp;lc
+}</p>
+
+<p>go run -gcflags=’-m -m’ sample2.go
+./sample2.go:5: make([]interface {}, lc) escapes to heap
+./sample2.go:6: lc escapes to heap
+make从堆申请，这点无可厚非，我们把interface{}改为int类型后</p>
+
+<p>func main() {
+	lc := 1
+	s := make([]int, lc)
+	s[0] = lc
+}</p>
+
+<p>go run -gcflags=’-m -m’ sample2.go
+./sample2.go:5: make([]interface {}, lc) escapes to heap
+make得到的slice是在堆申请的，生命周期比函数更长，当slice里为引用时变量会转移到堆，而interface{}能接收任意类型，在做逃逸分析时，保守的认为输入的值可能是引用，所以把变量移到堆里去了。stackoverflow相关资料：</p>
+
+<p>make for a slice returns a slice descriptor struct (pointer to underlying array, length, and capacity) and allocates an underlying slice element array. The underlying array is generally allocated on the heap: make([]<em>int, lc) escapes to heap from make([]</em>int, lc).</p>
+
+<p>s[0] = &amp;v stores a reference to the variable v (&amp;v) in the underlying array on the heap: &amp;v escapes to heap from s[0] (slice-element-equals), moved to heap: v. The reference remains on the heap, after the function ends and its stack is reclaimed, until the underlying array is garbage collected.</p>
+
+<p>If the make slice capacity is a small (compile time) constant, make([]*int, 1) in your example, the underlying array may be allocated on the stack. However, escape analysis does not take this into account.</p>
+
+<p>https://www.dazhuanlan.com/2020/03/09/5e65cb2d01af6/
+<!-- more -->
+package main</p>
+
+<p>import (
+    “fmt”
+)</p>
+
+<p>func main(){
+    s := []byte(“”)</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>s1 := append(s, 'a')
+s2 := append(s, 'b')
+
+// 如果有此行，打印的结果是 a b，否则打印的结果是b b
+// fmt.Println(s1, "===", s2)
+fmt.Println(string(s1), string(s2)) }
+</code></pre></div></div>
+
+<p>诡异的现象：如果有行 14 的代码，则行 15 打印的结果为 a b， 否则打印的结果为b b ，本文分析的go版本：</p>
+
+<p>$ go version
+go version go1.9.2 darwin/amd64
+初步分析
+首先我们分析在没有行14的情况下，为什么打印的结果是 b b，这个问题相对比较简单，只要熟悉 slice 的实现原理，简单分析一下 append 的实现原理即可得出结论。</p>
+
+<p>slice 结构分析
+如果熟悉 slice 的原理可以跳过该章节。</p>
+
+<p>首先对于 slice 结构进行一个简单的了解 结构定义 slice对应的runtime 包的相关源码参见： https://golang.org/src/runtime/slice.go</p>
+
+<p>type slice struct {
+    array unsafe.Pointer
+    len   int
+    cap   int
+}</p>
+
+<p>var slice []int 定义的变量内部结构如下：</p>
+
+<p>slice.array = nil
+slice.len = 0
+slice.cap = 0
+如果我们声明了一下变量 slice := []int{} 或 slice := make([]int, 0) 的内部结构如下：</p>
+
+<p>slice.array = 0xxxxxxxx  // 分配了地址
+slice.len = 0
+slice.cap = 18208800
+如果使用 make([]byte, 5) 定义的话，结构如下图：</p>
+
+<p>如果使用 s := s[2:4]，则结构如下图：</p>
+
+<p>通过分析 slice 的反射de 实现：Go Slices: usage and internals，也能够在程序中进行分析。slice 反射中对应的结构体</p>
+
+<p>// slice 对应的结构体
+type SliceHeader struct {
+        Data uintptr
+        Len  int
+        Cap  int
+}</p>
+
+<p>// string 对应结构体
+type StringHeader struct {
+        Data uintptr
+        Len  int
+}
+下面的函数可以直接获取 slice 的底层指针：</p>
+
+<p>func bytePointer(b []byte) unsafe.Pointer {
+   // slice 的指针本质是<em>reflect.SliceHeader
+  p := (</em>reflect.SliceHeader)(unsafe.Pointer(&amp;b))
+  return unsafe.Pointer(p.Data)
+}
+append 原理实现
+Append 的实现伪代码，代码默认已经支持了 slice 为 nil 的情况</p>
+
+<p>func Append(slice, data []byte) []byte {
+    l := len(slice)
+    if l + len(data) &gt; cap(slice) {  // reallocate
+        // Allocate double what’s needed, for future growth.
+        newSlice := make([]byte, (l+len(data))*2)
+        // The copy function is predeclared and works for any slice type.
+        copy(newSlice, slice)
+        slice = newSlice
+    }
+    slice = slice[0:l+len(data)]
+    copy(slice[l:], data)
+    return slice
+}
+append 函数原型如下，其中 T 为通用类型。</p>
+
+<p>func append(s []T, x …T) []T
+展开分析
+为了方便程序分析的，我们在程序中添加打印信息，代码和结果如下：</p>
+
+<p>package main</p>
+
+<p>import (
+    “fmt”
+)</p>
+
+<p>func main() {
+    s := []byte(“”)
+    println(s) // 添加用于打印信息, println() print() 为go内置函数，直接输出到 stderr 无缓存</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>s1 := append(s, 'a')
+s2 := append(s, 'b')
+
+// fmt.Println(s1, "===", s2)
+fmt.Println(string(s1), string(s2)) }
+</code></pre></div></div>
+
+<p>运行程序结果如下：</p>
+
+<p>$ go run q.go
+[0/32]0xc420045ef8
+b b
+结果运行后 s := []byte(“”) 初始化以后结构内部如下：</p>
+
+<p>s.len = 0 
+s.cap = 32
+s.ptr = 0xc420045ef8
+我们分析以下两行代码调用会发生什么：</p>
+
+<p>s1 := append(s, ‘a’)
+s2 := append(s, ‘b’)
+s1 := append(s, ‘a’) 代码调用分析：</p>
+
+<p>// slice = s  data = <code class="language-plaintext highlighter-rouge">a</code>   slice.len = 0 slice.cap = 32    <br />
+func Append(slice, data []byte) []byte {
+    l := len(slice) // l = 0</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>// l = 0 len(data) = 1  cap(slice) = 32   1 + 1 &gt; 32 false
+if l + len(data) &gt; cap(slice) { 
+    newSlice := make([]byte, (l+len(data))*2)
+    copy(newSlice, slice)
+    slice = newSlice
+}
+// l = 0 len(data) = 1
+slice = slice[0:l+len(data)] // slice = slice[0:1]
+copy(slice[l:], data)  // 调用变成： copy(slice[0:], 'a') 
+return slice // 由于未涉及到重分配，因此返回的还是原来的 slice 对象 } s2 := append(s, 'b') 的分析完全一样。
+</code></pre></div></div>
+
+<p>简化 apend 函数的处理路径，在没有进行 slice 重新分配内存情况下，直接进行展开分析：</p>
+
+<p>s1 := append(s, ‘a’)
+s2 := append(s, ‘b’)
+等价于</p>
+
+<p>s1 := copy(s[0:], ‘a’)
+s2 := copy(s[0:], ‘b’) // 直接覆盖了上的赋值
+基于上述分析，能够很好地解释代码输出b b的情况。但是如何避免出现这种类型的情况呢？问题出现在这条语句上</p>
+
+<p>s := []byte(“”)
+语句执行后 s.len = 0 s.cap = 32，导致了 append 的工作不能够正常工作，那么正常如何使用？只要将 s.len = s.cap = 0 则会导致 slice 在 append 中重新进行分配则可以避免这种情况的发生。</p>
+
+<p>正确的写法应该为：</p>
+
+<p>func main() {
+    // Notice []byte(“”) -&gt;  []byte{}    或者  var s []byte
+    s := []byte{}</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>s1 := append(s, 'a')
+s2 := append(s, 'b')
+
+// fmt.Println(s1, "===", s2)
+fmt.Println(string(s1), string(s2)) } 由此也可以看出一个良好的编程习惯是可以规避很多莫名其妙的问题排查。
+</code></pre></div></div>
+
+<p>深入分析
+那么既然 bug 出现在了 s := []byte(““)这句话中，那么这条语句为什么会导致 s.cap = 32 呢？这条语句背后隐藏的逻辑是什么呢?</p>
+
+<p>s := []byte(“”) 等价于以下代码：</p>
+
+<p>// 初始化字符串
+str := “”</p>
+
+<p>// 将字符串转换成 []byte
+s := []byte(str)
+在go语言中 s := []byte(str) 的底层其实是调用了 stringtoslicebyte 实现的，该函数位于 go 的 runtime包中。</p>
+
+<p>const tmpStringBufSize = 32</p>
+
+<p>type tmpBuf [tmpStringBufSize]byte</p>
+
+<p>func stringtoslicebyte(buf *tmpBuf, s string) []byte {
+    var b []byte
+    // 如果字符串 s 的长度内部长度不超过 32， 那么就直接分配一个 32 直接的大小
+    if buf != nil &amp;&amp; len(s) &lt;= len(buf) { 
+        *buf = tmpBuf{}
+        b = buf[:len(s)]
+    } else {
+        b = rawbyteslice(len(s))
+    }
+    copy(b, s)
+    return b
+}
+如果字符串的大小没有超过 32 长度的大小，则默认分配一个 32 长度的 buf，这也是我们上面分析 s.cap = 32 的由来。</p>
+
+<p>到此为止，我们仍然没有分析问题中 fmt.Println(s1, “===”, s2) 这句打印注释掉就能够正常工作的原因？那么最终到底是什么样的情况呢？</p>
+
+<p>最终分析
+最后我们来启用魔法的开关 fmt.Println(s1, “===”, s2), 来进行最后谜底的揭晓：</p>
+
+<p>package main</p>
+
+<p>import (
+    “fmt”
+)</p>
+
+<p>func main() {
+    s := []byte(“”)
+    println(s) // 添加用于打印信息</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>s1 := append(s, 'a')
+s2 := append(s, 'b')
+
+fmt.Println(s1, "===", s2)
+fmt.Println(string(s1), string(s2)) } $ go run q.go [0/0]0x115b820   # 需要注意 s.len = 0 s.cap = 0 [97] === [98]    # 取消了打印的注释 a b              # 打印一切正常 $ go run -gcflags '-S -S' q.go ....
+0x0032 00050 (q.go:8)   MOVQ    $0, (SP)
+0x003a 00058 (q.go:8)   MOVQ    $0, 8(SP)
+0x0043 00067 (q.go:8)   MOVQ    $0, 16(SP)
+0x004c 00076 (q.go:8)   PCDATA  $0, $0
+0x004c 00076 (q.go:8)   CALL    runtime.stringtoslicebyte(SB)
+0x0051 00081 (q.go:8)   MOVQ    32(SP), AX
+0x0056 00086 (q.go:8)   MOVQ    AX, "".s.len+96(SP)
+0x005b 00091 (q.go:8)   MOVQ    40(SP), CX
+0x0060 00096 (q.go:8)   MOVQ    CX, "".s.cap+104(SP)
+0x0065 00101 (q.go:8)   MOVQ    24(SP), DX
+0x006a 00106 (q.go:8)   MOVQ    DX, "".s.ptr+136(SP)
+</code></pre></div></div>
+
+<p>….
+通过分析发现底层调用的仍然是 runtime.stringtoslicebyte(), 但是行为却发生了变化 s.len = s.cap = 0，很显然由于 fmt.Println(s1, “===”, s2) 行的出现导致了 s := []byte(““)内存分配的情况发生了变化。</p>
+
+<p>我们可以通过 go build 提供的内存分配工具进行分析：</p>
+
+<p>$ go build -gcflags “-m -m” q.go</p>
+<h1 id="command-line-arguments">command-line-arguments</h1>
+<p>./q.go:7:6: cannot inline main: non-leaf function
+./q.go:14:13: s1 escapes to heap
+./q.go:14:13:   from … argument (arg to …) at ./q.go:14:13
+./q.go:14:13:   from *(… argument) (indirection) at ./q.go:14:13
+./q.go:14:13:   from … argument (passed to call[argument content escapes]) at ./q.go:14:13
+./q.go:8:13: ([]byte)(“”) escapes to heap
+./q.go:8:13:    from s (assigned) at ./q.go:8:4
+./q.go:8:13:    from s1 (assigned) at ./q.go:11:5
+./q.go:8:13:    from s1 (interface-converted) at ./q.go:14:13
+./q.go:8:13:    from … argument (arg to …) at ./q.go:14:13
+./q.go:8:13:    from *(… argument) (indirection) at ./q.go:14:13
+./q.go:8:13:    from … argument (passed to call[argument content escapes]) at ./q.go:14:13</p>
+
+<p>以上输出中的 s1 escapes to heap 和 ([]byte)(“”) escapes to heap 表明，由于 fmt.Println(s1, “===”, s2) 代码的引入导致了变量分配模型的变化。简单点讲就是从栈中逃逸到了堆上。内存逃逸的分析我们会在后面的章节详细介绍。问题到此，大概的思路已经有了，但是我们如何通过代码层面进行验证呢? 通过搜索 go 源码实现调用的函数 runtime.stringtoslicebyte 的地方进行入手。通过搜索发现调用的文件在 cmd/compile/internal/gc/walk.go</p>
+
+<p>关于 string到[]byte 分析调用的代码如下</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>case OSTRARRAYBYTE:
+    a := nodnil()  // 分配到堆上的的默认行为
+
+    if n.Esc == EscNone {
+        // Create temporary buffer for slice on stack.
+        t := types.NewArray(types.Types[TUINT8], tmpstringbufsize)
+
+        a = nod(OADDR, temp(t), nil)  // 分配在栈上，大小为32
+    }
+
+    n = mkcall("stringtoslicebyte", n.Type, init, a, conv(n.Left, types.Types[TSTRING])) OSTRARRAYBYTE 定义
+</code></pre></div></div>
+
+<p>OSTRARRAYBYTE    // Type(Left) (Type is []byte, Left is a string)
+上述代码中的 n.Esc == EscNone 条件分析则表明了发生内存逃逸和不发生内存逃逸的情况下，初始化的方式是不同的。 EscNone 的定义：</p>
+
+<p>EscNone           // Does not escape to heap, result, or parameters.
+通过以上分析，我们总算找到了魔法的最终谜底。 以上分析的go语言版本基于 1.9.2，不同的go语言的内存分配机制可能不同，具体可以参见我同事更加详细的分析 Go中string转[]byte的陷阱.md</p>
+
+<p>Go 内存管理
+Go 语言能够自动进行内存管理，避免了 C 语言中的内存自己管理的麻烦，但是同时对于代码的内存管理和回收细节进行了封装，也潜在增加了系统调试和优化的难度。同时，内存自动管理也是一项非常困难的事情，比如函数的多层调用、闭包调用、结构体或者管道的多次赋值、切片和MAP、CGO调用等多种情况综合下，往往会导致自动管理优化机制失效，退化成原始的管理状态；go 中的内存回收（GC）策略也在不断地优化过程。Golang 从第一个版本以来，GC 一直是大家诟病最多的，但是每一个版本的发布基本都伴随着 GC 的改进。下面列出一些比较重要的改动。</p>
+
+<p>v1.1 STW
+v1.3 Mark STW, Sweep 并行
+v1.5 三色标记法
+v1.8 hybrid write barrier
+预热基础知识：How do I know whether a variable is allocated on the heap or the stack?</p>
+
+<p>逃逸分析-Escape Analysis
+更深入和细致的了解建议阅读 William Kennedy 的 4 篇 Post</p>
+
+<p>go 没有像 C 语言那样提供精确的堆与栈分配控制，由于提供了内存自动管理的功能，很大程度上模糊了堆与栈的界限。例如以下代码：</p>
+
+<p>package main</p>
+
+<p>func main() {
+    str := GetString()
+    _ = str
+}</p>
+
+<p>func GetString() *string {
+    var s string
+    s = “hello”
+    return &amp;s
+}
+行 10 中的变量 s = “hello” 尽管声明在了 GetString() 函数内，但是在 main 函数中却仍然能够访问到返回的变量；这种在函数内定义的局部变量，能够突破自身的范围被外部访问的行为称作逃逸，也即通过逃逸将变量分配到堆上，能够跨边界进行数据共享。</p>
+
+<p>Escape Analysis 技术就是为该场景而存在的；通过 Escape Analysis 技术，编译器会在编译阶段对代码做了分析，当发现当前作用域的变量没有跨出函数范围，则会自动分配在 stack 上，反之则分配在 heap 上。 go 的内存回收针对的也是堆上的对象。go 语言中 Escape Analysis还未看到官方 spec 的文档，因此很多特性需要进行代码尝试和分析才能得出结论，而且 go Escape Analysis 的实现还存在很多不完善的地方。</p>
+
+<p>stack allocation is cheap and heap allocation is expensive.</p>
+
+<p>Go 语言逃逸分析实现
+更多内存建议阅读 Allocation efficiency in high-performance Go services</p>
+
+<p>2.go</p>
+
+<p>package main</p>
+
+<p>import “fmt”</p>
+
+<p>func main() {
+        x := 42
+        fmt.Println(x)
+}
+go build 工具中的 flag -gcflags ‘-m’ 可以用来分析内存逃逸的情况汇总，最多可以提供 4 个 “-m”, m 越多则表示分析的程度越详细，一般情况下我们可以采用两个 m 分析。</p>
+
+<p>$ go build -gcflags ‘-m -l’ 2.go</p>
+<h1 id="command-line-arguments-1">command-line-arguments</h1>
+<p>./2.go:7:13: x escapes to heap
+./2.go:7:13: main … argument does not escape</p>
+
+<h1 id="-l-disable-inline-也可以调用的函数前添加注释">-l disable inline， 也可以调用的函数前添加注释</h1>
+<p>$ go build -gcflags ‘-m -m -l’ 2.go</p>
+<h1 id="command-line-arguments-2">command-line-arguments</h1>
+<p>./2.go:7:13: x escapes to heap
+./2.go:7:13:    from … argument (arg to …) at ./2.go:7:13
+./2.go:7:13:    from *(… argument) (indirection) at ./2.go:7:13
+./2.go:7:13:    from … argument (passed to call[argument content escapes]) at ./2.go:7:13
+./2.go:7:13: main … argument does not escape
+上例中的 x escapes to heap 则表明了变量 x 变量逃逸到了堆（heap）上。其中 -l 表示不启用 inline 模式调用，否则会使得分析更加复杂，也可以在函数上方添加注释 //go:noinline禁止函数 inline调用。至于调用 fmt.Println()为什么会导致 x escapes to heap，可以参考 Issue #19720 和 Issue #8618，对于上述 fmt.Println() 的行为我们可以通过以下代码进行简单模拟测试，效果基本一样：</p>
+
+<p>package main</p>
+
+<p>type pp struct {
+    arg interface{}
+}</p>
+
+<p>func MyPrintln(a …interface{}) {
+    Fprintln(a…)
+}</p>
+
+<p>func Fprintln(a …interface{}) (n int, err error) {
+    pp := new(pp)
+    pp.arg = a  // 此处导致了内存的逃逸
+    return
+}</p>
+
+<p>func main() {
+    x := 42
+    MyPrintln(x)
+}
+内存逃逸分析结果如下：</p>
+
+<p>$ go build -gcflags ‘-m -m -l’ 3.go</p>
+<h1 id="command-line-arguments-3">command-line-arguments</h1>
+<p>./3.go:13:9: a escapes to heap
+./3.go:13:9:    from pp.arg (star-dot-equals) at ./3.go:13:9
+./3.go:11:45: leaking param: a
+./3.go:11:45:   from a (interface-converted) at ./3.go:13:9
+./3.go:11:45:   from pp.arg (star-dot-equals) at ./3.go:13:9
+./3.go:12:11: Fprintln new(pp) does not escape
+./3.go:7:21: leaking param: a
+./3.go:7:21:    from a (passed to call[argument escapes]) at ./3.go:8:10
+./3.go:19:11: … argument escapes to heap
+./3.go:19:11:   from … argument (passed to call[argument escapes]) at ./3.go:19:11
+./3.go:19:11: x escapes to heap
+./3.go:19:11:   from … argument (arg to …) at ./3.go:19:11
+./3.go:19:11:   from … argument (passed to call[argument escapes]) at ./3.go:19:11
+逃逸的常见情况分析参见： http://www.agardner.me/golang/garbage/collection/gc/escape/analysis/2015/10/18/go-escape-analysis.html</p>
+
+<p>主要原因如下：变量 x 虽为 int 类型，但是在传递给函数 MyPrintln函数中被转换成 interface{} 类型，因为 interface{} 类型中包含指向数据的地址，因此 x 在传递到函数 MyPrintln过程中进行了一个内存重新分配的过程，由于 pp.arg = a 结构体中的字段赋值的引用，导致了后续变量的逃逸到了堆上。如果将上述 pp.arg = a 注释掉，则不会出现内存逃逸的情况。</p>
+
+<p>导致内存逃逸的情况比较多，有些可能还是官方未能够实现精确的分析逃逸情况的 bug，简单一点来讲就是如果变量的作用域不会扩大并且其行为或者大小能够在编译的时候确定，一般情况下都是分配到栈上，否则就可能发生内存逃逸分配到堆上。</p>
+
+<p>简单总结一下有以下几类情况：</p>
+
+<p>发送指针的指针或值包含了指针到 channel 中，由于在编译阶段无法确定其作用域与传递的路径，所以一般都会逃逸到堆上分配。
+slices 中的值是指针的指针或包含指针字段。一个例子是类似[] *string 的类型。这总是导致 slice 的逃逸。即使切片的底层存储数组仍可能位于堆栈上，数据的引用也会转移到堆中。</p>
+
+<p>slice 由于 append 操作超出其容量，因此会导致 slice 重新分配。这种情况下，由于在编译时 slice 的初始大小的已知情况下，将会在栈上分配。如果 slice 的底层存储必须基于仅在运行时数据进行扩展，则它将分配在堆上。</p>
+
+<p>调用接口类型的方法。接口类型的方法调用是动态调度 - 实际使用的具体实现只能在运行时确定。考虑一个接口类型为 io.Reader 的变量 r。对 r.Read(b) 的调用将导致 r 的值和字节片b的后续转义并因此分配到堆上。 参考 http://npat-efault.github.io/programming/2016/10/10/escape-analysis-and-interfaces.html</p>
+
+<p>尽管能够符合分配到栈的场景，但是其大小不能够在在编译时候确定的情况，也会分配到堆上</p>
+
+<p>关于指针
+关于指针的使用多数情况下我们会受一个前提影响：“指针传递过程不涉及到底层数据拷贝，因此效率更高”，而且一般情况下也的确是如此。</p>
+
+<p>但是由于指针的访问是间接寻址，也就是说访问到了指针保存的地址后，还需要根据保存的地址再进行一次访问，才能获取到指针所指向的数据，另外一种情况对于指针在使用的时候还需要进行 nil 情况的判断，以防止 panic 的发生，更重要的是指针所指向的地址多数是保存在堆上，在涉及到内存收回的情况下，指针的存在可能会让程序的性能大打折扣。除此之外由于指针的间接访问，还会导致缓存的优化失效，可以参考 Locality of reference，当前在缓存中拷贝少量数据与指针的访问相比，性能上基本上可以等同。</p>
+
+<p>综上所述，指针的使用也不是没有代价的，需要合理进行使用。</p>
+
+<p>“the garbage collector will skip regions of memory that it can prove will contain no pointers”</p>
+
+<p>简单点讲，如果在堆上分配的结构中指针比较少，回收的机制会比较简单，应该会提升回收的效率，需要通过了解 go 回收算法进行相关测试 。 TODO</p>
+
+<p>关于接口转换
+接口实现参见： Go Data Structures: Interfaces Go interfaces: static vs dynamic binding</p>
+
+<p>上图展示了一个 Binary 对象转换成一个 Stringer 接口后的数据结构。检查类型是否匹配 s.tab-&gt;type 即可。</p>
+
+<p>go 语言中的 interface 接口，在编译时候的时候会进行隐式转换的静态检查，但是显示的 interface 到 interface 的转换可以在运行时查询方法集，动态检测比如：</p>
+
+<p>type Stringer interface {
+    String() string
+}</p>
+
+<p>if v, ok := any.(Stringer); ok {
+        return v.String()
+ }
+关于 Itab 结构的计算，由于（interface、type）对的不确定性，go 编译器或者链接器不可能在编译的时候计算两者的对应关系，而且即使能够计算出来也可能是绝大多数的对应关系在实际中不适用；因此 go 编译器会在编译的过程中对于 interface 和 type 中的方法生成一个相关的描述结构，分别记录 interface 和 type 各自对应的方法集合，go 语言会在 type 实际的动态转换成 interface 过程中，将 interafce 中定义的方法在 type 中一一进行对比查找，并完善 Itab 结构，并将 Itab 结构进行缓存提升性能。</p>
+
+<p>综上所述，go 中的接口类型的方法调用是动态调度，因此不能够在编译阶段确定，所有类型结构转换成接口的过程会涉及到内存逃逸的情况发生。如果对于性能要求比较高且访问频次比较高的函数调用，应该尽量避免使用接口类型。</p>
+
+<p>以下样例参考：http://npat-efault.github.io/programming/2016/10/10/escape-analysis-and-interfaces.html</p>
+
+<p>package main</p>
+
+<p>// go build -gcflags ‘-m -m -l’ 5.go</p>
+
+<p>type S struct {
+    s1 int
+}</p>
+
+<p>func (s *S) M1(i int) { s.s1 = i }</p>
+
+<p>type I interface {
+    M1(int)
+}</p>
+
+<p>func main() {
+    var s1 S // this escapes
+    var s2 S // this does not</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>f1(&amp;s1)
+f2(&amp;s2) }
+</code></pre></div></div>
+
+<p>func f1(s I)  { s.M1(42) }
+func f2(s *S) { s.M1(42) }
+逃逸分析确认：</p>
+
+<p>go build -gcflags ‘-m -m -l’ 5.go</p>
+<h1 id="command-line-arguments-4">command-line-arguments</h1>
+<p>./5.go:9:18: (*S).M1 s does not escape
+./5.go:23:11: leaking param: s
+./5.go:23:11:   from s.M1(42) (receiver in indirect call) at ./5.go:23:21
+./5.go:24:12: f2 s does not escape
+./5.go:19:5: &amp;s1 escapes to heap
+./5.go:19:5:    from &amp;s1 (passed to call[argument escapes]) at ./5.go:19:4
+./5.go:19:5: &amp;s1 escapes to heap
+./5.go:19:5:    from &amp;s1 (interface-converted) at ./5.go:19:5
+./5.go:19:5:    from &amp;s1 (passed to call[argument escapes]) at ./5.go:19:4
+./5.go:16:6: moved to heap: s1
+./5.go:20:5: main &amp;s2 does not escape</p>
+<autogenerated>:1:0: leaking param: .this
+<autogenerated>:1:0:    from .this.M1(.anon0) (receiver in indirect call) at <autogenerated>:1:0
+性能测试分析：
+
+package main_test
+
+import "testing"
+
+// go test -bench . --benchmem -gcflags "-N -l" 5_test.go
+
+type S struct {
+    s1 int
+}
+
+func (s *S) M1(i int) {
+    s.s1 = i
+}
+
+type I interface {
+    M1(int)
+}
+
+func f1(s I)  { s.M1(86) }
+func f2(s *S) { s.M1(86) }
+
+func BenchmarkTestInterface(b *testing.B) {
+    var s1 S
+    for i := 0; i &lt; b.N; i++ {
+        f1(&amp;s1)
+    }
+}
+
+func BenchmarkTestNoInterface(b *testing.B) {
+    var s2 S
+    for i := 0; i &lt; b.N; i++ {
+        f2(&amp;s2)
+    }
+}
+禁止使用 inline 方式的函数调用性能报告：
+
+# 禁止使用 inline
+$ go test -bench . --benchmem -gcflags "-N -l" 5_test.go
+goos: darwin
+goarch: amd64
+BenchmarkTestInterface-8        300000000            4.50 ns/op        0 B/op          0 allocs/op
+BenchmarkTestNoInterface-8      500000000            3.80 ns/op        0 B/op          0 allocs/op
+PASS
+ok      command-line-arguments  4.094s
+
+启用了 inline 方式的函数调用性能报告：
+
+# 如果启用了 inline，性能差别非常明显
+$ go test -bench . --benchmem  5_test.go
+goos: darwin
+goarch: amd64
+BenchmarkTestInterface-8        500000000            3.45 ns/op        0 B/op          0 allocs/op
+BenchmarkTestNoInterface-8      2000000000           0.29 ns/op        0 B/op          0 allocs/op
+PASS
+ok      command-line-arguments  2.685s
+
+关于切片
+由于切片一般都是使用在函数传递的场景下，而且切片在 append 的时候可能会涉及到重新分配内存，如果切片在编译期间的大小不能够确认或者大小超出栈的限制，多数情况下都会分配到堆上。
+
+大小验证
+package main
+
+func main() {
+    s := make([]byte, 1, 1*1024)
+    _ = s
+}
+$ go build -gcflags "-m -m" slice_esc.go
+# command-line-arguments
+./slice_esc.go:3:6: can inline main as: func() { s := make([]byte, 1, 1 * 1024); _ = s }
+./slice_esc.go:4:11: main make([]byte, 1, 1 * 1024) does not escape
+如果 slice 大小超过 64k，则会分配到堆上 （go 1.9.2)
+
+package main
+
+func main() {
+    s := make([]byte, 1, 64*1024) // 64k
+    _ = s
+}
+$ go build -gcflags "-m -m" slice_esc.go
+# command-line-arguments
+./slice_esc.go:3:6: can inline main as: func() { s := make([]byte, 1, 64 * 1024); _ = s }
+./slice_esc.go:4:11: make([]byte, 1, 64 * 1024) escapes to heap
+./slice_esc.go:4:11:    from make([]byte, 1, 64 * 1024) (too large for stack) at ./slice_esc.go:4:11
+
+指针类型切片验证
+package main
+
+func main() {
+    s := make([]*string, 1, 100)
+    str := "hello"
+    s = append(s, &amp;str)
+    _ = s
+}
+$ go build -gcflags "-m -m -l" slice_esc.go
+# command-line-arguments
+./slice_esc.go:6:16: &amp;str escapes to heap
+./slice_esc.go:6:16:    from append(s, &amp;str) (appended to slice) at ./slice_esc.go:6:12
+./slice_esc.go:5:9: moved to heap: str
+./slice_esc.go:4:11: main make([]*string, 1, 100) does not escape
+
+对于保存在 []*string 中的字符串都会直接在堆上分配。
+
+package main
+
+import "math/rand"
+
+func main() {
+    randSize := rand.Int()
+    s := make([]*string, 0, randSize)
+    str := "hello"
+    s = append(s, &amp;str)
+    _ = s
+}
+$ go build -gcflags "-m -m -l" slice_esc.go
+# command-line-arguments
+./slice_esc.go:7:11: make([]*string, 0, randSize) escapes to heap
+./slice_esc.go:7:11:    from make([]*string, 0, randSize) (too large for stack) at ./slice_esc.go:7:11
+./slice_esc.go:9:16: &amp;str escapes to heap
+./slice_esc.go:9:16:    from append(s, &amp;str) (appended to slice) at ./slice_esc.go:9:12
+./slice_esc.go:8:9: moved to heap: str
+由于 s := make([]*string, 0, randSize) 大小不能编译确定，所以会逃逸到堆上。
+
+参考
+Golang 内存逃逸分析
+深入解析 Go 中 Slice 底层实现 ***
+以C视角来理解Go内存逃逸
+golang string和[]byte的对比
+Go Slices: usage and internals
+Where is append() implementation?
+SliceTricks ***
+Variadic func changes []byte(s) cap #24972
+spec: clarify that conversions to slices don't guarantee slice capacity? #24163
+Golang escape analysis ***
+Go Escape Analysis Flaws
+Escape Analysis for Java
+Language Mechanics On Escape Analysis 中文 中文2
+Allocation efficiency in high-performance Go services ***
+Profiling Go Programs
+https://github.com/mushroomsir/blog/blob/master/Go%E4%B8%ADstring%E8%BD%AC%5B%5Dbyte%E7%9A%84%E9%99%B7%E9%98%B1.md
+the-go-programming-language-report
+https://golang.org/doc/faq
+年终盘点！2017年超有价值的Golang文章
+Golang 垃圾回收剖析
+深入Golang之垃圾回收
+
+https://www.do1618.com/archives/1328/go-%E5%86%85%E5%AD%98%E9%80%83%E9%80%B8%E8%AF%A6%E7%BB%86%E5%88%86%E6%9E%90/
+
+下面这段程序会输出什么？
+
+package main
+import "fmt"
+func f(s []string, level int) {
+        if level &gt; 5 {
+               return
+        }
+        s = append(s, fmt.Sprint(level))
+        f(s, level+1)
+        fmt.Println("level:", level, "slice:", s)
+}
+
+func main() {
+        f(nil, 0)
+}
+其输出为：
+
+level: 5 slice: [0 1 2 3 4 5]
+level: 4 slice: [0 1 2 3 4]
+level: 3 slice: [0 1 2 3]
+level: 2 slice: [0 1 2]
+level: 1 slice: [0 1]
+level: 0 slice: [0]
+如果对输出结果有一些疑惑,你需要了解这篇文章的内容
+
+如果你知道了结果,你仍然需要了解这篇文章的内容,因为本文完整介绍了
+
+切片的典型用法
+
+切片的陷阱
+
+切片的逃逸分析
+
+切片的扩容
+
+切片在编译与运行时的研究
+
+如果你啥都知道了,请直接滑动最下方,双击666.
+
+切片基本操作
+切片是某种程度上和其他语言(例如C语言)中的数组在使用中有许多相似之处,但是go语言中的切片有许多独特之处
+
+Slice（切片）代表变长的序列，序列中每个元素都有相同的类型。
+
+一个slice类型一般写作[]T，其中T代表slice中元素的类型；slice的语法和数组很像，但是没有固定长度。
+
+数组和slice之间有着紧密的联系。一个slice是一个轻量级的数据结构，提供了访问数组子序列（或者全部）元素的功能。一个slice在运行时由三个部分构成：指针、长度和容量。
+
+type SliceHeader struct {
+    Data uintptr
+    Len  int
+    Cap  int
+}
+指针指向第一个slice元素对应的底层数组元素的地址
+
+长度对应slice中元素的数目；长度不能超过容量
+
+容量一般是从slice的开始位置到底层数据的结尾位置的长度
+
+切片的声明
+//切片的声明1  //nil
+var slice1 []int
+
+//切片的声明2
+var slice2 []int = make([]int,5)
+var slice3 []int = make([]int,5,7)
+numbers:= []int{1,2,3,4,5,6,7,8}
+切片的截取
+numbers:= []int{1,2,3,4,5,6,7,8}
+//从下标1一直到下标4，但是不包括下标4
+numbers1 :=numbers[1:4]
+//从下标0一直到下标3，但是不包括下标3
+numbers2 :=numbers[:3]
+//从下标3一直到结束
+numbers3 :=numbers[3:]
+切片的长度与容量
+内置的len和cap函数分别返回slice的长度和容量
+
+    slice6 := make([]int,0)
+    fmt.Printf("len=%d,cap=%d,slice=%v\n",len(slice4),cap(slice4),slice4)
+切片与数组的拷贝对比
+数组的拷贝是副本拷贝。对于副本的改变不会影响到原来的数组
+
+但是，切片的拷贝很特殊，切片的拷贝只是对于运行时切片结构体的拷贝,切片的副本仍然指向了相同的数组。所以，对于副本的修改会影响到原来的切片。
+
+下面用一个简单的例子来说明
+
+    //数组是值类型
+    a := [4]int{1, 2, 3, 4}
+
+    //切片是引用类型
+    b := []int{100, 200, 300}
+
+    c := a
+    d := b
+
+    c[1] = 200
+    d[0] = 1
+    //output: c[1 200 3 4] a[1 2 3 4]
+    fmt.Println("a=", a, "c=", c)
+    //output: d[1 200 300]  b[1 200 300]
+    fmt.Println("b=", b, "d=", d)
+切片追加元素：append
+numbers := make([]int, 0, 20)
+
+
+//append一个元素
+numbers = append(numbers, 0)
+
+//append多个元素
+numbers = append(numbers, 1, 2, 3, 4, 5, 6, 7)
+
+
+//append添加切片
+s1 := []int{100, 200, 300, 400, 500, 600, 700}
+numbers = append(numbers, s1...)
+
+//now:[0 1 2 3 4 5 6 7 100 200 300 400 500 600 700]
+经典案例: 切片删除
+//    删除第一个元素
+numbers = numbers[1:]
+
+// 删除最后一个元素
+numbers = numbers[:len(numbers)-1]
+
+// 删除中间一个元素
+a := int(len(numbers) / 2)
+numbers = append(numbers[:a], numbers[a+1:]...)
+经典案例：切片反转
+// reverse reverses a slice of ints in place.
+func reverse(s []int) {
+    for i, j := 0, len(s)-1; i &lt; j; i, j = i+1, j-1 {
+        s[i], s[j] = s[j], s[i]
+    }
+}
+切片在编译时的特性
+编译时新建一个切片,切片内元素的类型是在编译期间确定的
+
+func NewSlice(elem *Type) *Type {
+    if t := elem.Cache.slice; t != nil {
+        if t.Elem() != elem {
+            Fatalf("elem mismatch")
+        }
+        return t
+    }
+
+    t := New(TSLICE)
+    t.Extra = Slice{Elem: elem}
+    elem.Cache.slice = t
+    return t
+}
+切片的类型
+
+// Slice contains Type fields specific to slice types.
+type Slice struct {
+    Elem *Type // element type
+}
+编译时：字面量初始化
+当我们使用字面量 []int{1, 2, 3} 创建新的切片时，会创建一个array数组([3]int{1,2,3})存储于静态区中。同时会创建一个变量。
+
+核心逻辑位于slicelit函数
+
+// go/src/cmd/compile/internal/gc/sinit.go
+func slicelit(ctxt initContext, n *Node, var_ *Node, init *Nodes)
+其抽象的过程如下:
+
+var vstat [3]int
+vstat[0] = 1
+vstat[1] = 2
+vstat[2] = 3
+var vauto *[3]int = new([3]int)
+*vauto = vstat
+slice := vauto[:]
+源码中的注释如下：
+
+// recipe for var = []t{...}
+// 1. make a static array
+//    var vstat [...]t
+// 2. assign (data statements) the constant part
+//    vstat = constpart{}
+// 3. make an auto pointer to array and allocate heap to it
+//    var vauto *[...]t = new([...]t)
+// 4. copy the static array to the auto array
+//    *vauto = vstat
+// 5. for each dynamic part assign to the array
+//    vauto[i] = dynamic part
+// 6. assign slice of allocated heap to var
+//    var = vauto[:]
+编译时：make 初始化
+例如make([]int,3,4)
+
+使用make 关键字,在typecheck1类型检查阶段,节点Node的op操作变为OMAKESLICE,并且左节点存储长度3, 右节点存储容量4
+
+func typecheck1(n *Node, top int) (res *Node) {
+switch t.Etype {
+case TSLICE:
+    if i &gt;= len(args) {
+        yyerror("missing len argument to make(%v)", t)
+        n.Type = nil
+        return n
+    }
+
+    l = args[i]
+    i++
+    l = typecheck(l, ctxExpr)
+    var r *Node
+    if i &lt; len(args) {
+        r = args[i]
+        i++
+        r = typecheck(r, ctxExpr)
+    }
+
+    if l.Type == nil || (r != nil &amp;&amp; r.Type == nil) {
+        n.Type = nil
+        return n
+    }
+    if !checkmake(t, "len", l) || r != nil &amp;&amp; !checkmake(t, "cap", r) {
+        n.Type = nil
+        return n
+    }
+    n.Left = l
+    n.Right = r
+    n.Op = OMAKESLICE
+下面来分析一下编译时内存的逃逸问题,如果make初始化了一个太大的切片，这个空间会逃逸到堆中,由运行时分配。如果一个空间比较小,会在栈中分配。
+
+此临界值值定义在/usr/local/go/src/cmd/compile/internal/gc，可以被flag smallframes更新,默认为64KB。
+
+所以make([]int64,1023) 与make([]int64,1024)的效果是截然不同的，这是不是压倒骆驼的最后一根稻草？
+
+// maximum size of implicit variables that we will allocate on the stack.
+    //   p := new(T)          allocating T on the stack
+    //   p := &amp;T{}            allocating T on the stack
+    //   s := make([]T, n)    allocating [n]T on the stack
+    //   s := []byte("...")   allocating [n]byte on the stack
+    // Note: the flag smallframes can update this value.
+    maxImplicitStackVarSize = int64(64 * 1024)
+核心逻辑位于go/src/cmd/compile/internal/gc/walk.go，n.Esc代表变量是否逃逸
+
+func walkexpr(n *Node, init *Nodes) *Node{
+case OMAKESLICE:
+    ...
+    if n.Esc == EscNone {
+        // var arr [r]T
+        // n = arr[:l]
+        i := indexconst(r)
+        if i &lt; 0 {
+            Fatalf("walkexpr: invalid index %v", r)
+        }
+        t = types.NewArray(t.Elem(), i) // [r]T
+        var_ := temp(t)
+        a := nod(OAS, var_, nil) // zero temp
+        a = typecheck(a, ctxStmt)
+        init.Append(a)
+        r := nod(OSLICE, var_, nil) // arr[:l]
+        r.SetSliceBounds(nil, l, nil)
+        r = conv(r, n.Type) // in case n.Type is named.
+        r = typecheck(r, ctxExpr)
+        r = walkexpr(r, init)
+        n = r
+    } else {
+        if t.Elem().NotInHeap() {
+            yyerror("%v is go:notinheap; heap allocation disallowed", t.Elem())
+        }
+
+        len, cap := l, r
+
+        fnname := "makeslice64"
+        argtype := types.Types[TINT64]
+
+        m := nod(OSLICEHEADER, nil, nil)
+        m.Type = t
+
+        fn := syslook(fnname)
+        m.Left = mkcall1(fn, types.Types[TUNSAFEPTR], init, typename(t.Elem()), conv(len, argtype), conv(cap, argtype))
+        m.Left.SetNonNil(true)
+        m.List.Set2(conv(len, types.Types[TINT]), conv(cap, types.Types[TINT]))
+
+        m = typecheck(m, ctxExpr)
+        m = walkexpr(m, init)
+        n = m
+    }
+对上面代码具体分析，如果没有逃逸，分配在栈中。
+
+抽象为：
+
+arr := [r]T
+ss := arr[:l]
+如果发生了逃逸，运行时调用makeslice64或makeslice分配在堆中,当切片的长度和容量小于int类型的最大值，会调用makeslice,反之调用makeslice64创建切片。
+
+makeslice64最终也是调用了makeslice,比较简单，最后调用mallocgc申请的内存大小为类型大小 * 容量cap
+
+// go/src/runtime/slice.go
+func makeslice(et *_type, len, cap int) unsafe.Pointer {
+    mem, overflow := math.MulUintptr(et.size, uintptr(cap))
+    if overflow || mem &gt; maxAlloc || len &lt; 0 || len &gt; cap {
+        // NOTE: Produce a 'len out of range' error instead of a
+        // 'cap out of range' error when someone does make([]T, bignumber).
+        // 'cap out of range' is true too, but since the cap is only being
+        // supplied implicitly, saying len is clearer.
+        // See golang.org/issue/4085.
+        mem, overflow := math.MulUintptr(et.size, uintptr(len))
+        if overflow || mem &gt; maxAlloc || len &lt; 0 {
+            panicmakeslicelen()
+        }
+        panicmakeslicecap()
+    }
+
+    return mallocgc(mem, et, true)
+}
+
+func makeslice64(et *_type, len64, cap64 int64) unsafe.Pointer {
+    len := int(len64)
+    if int64(len) != len64 {
+        panicmakeslicelen()
+    }
+
+    cap := int(cap64)
+    if int64(cap) != cap64 {
+        panicmakeslicecap()
+    }
+
+    return makeslice(et, len, cap)
+}
+切片的扩容
+Go 中切片append表示添加元素,但不是使用了append就需要扩容,如下代码不需要扩容
+
+a:= make([]int,3,4)
+append(a,1)
+当Go 中切片append当容量超过了现有容量,才需要进行扩容,例如：
+
+a:= make([]int,3,3)
+append(a,1)
+核心逻辑位于go/src/runtime/slice.go growslice函数
+
+func growslice(et *_type, old slice, cap int) slice {
+    newcap := old.cap
+    doublecap := newcap + newcap
+    if cap &gt; doublecap {
+        newcap = cap
+    } else {
+        if old.len &lt; 1024 {
+            newcap = doublecap
+        } else {
+
+            for 0 &lt; newcap &amp;&amp; newcap &lt; cap {
+                newcap += newcap / 4
+            }
+
+            if newcap &lt;= 0 {
+                newcap = cap
+            }
+        }
+    }
+    ...
+}
+上面的代码显示了扩容的核心逻辑,Go 中切片扩容的策略是这样的：
+
+首先判断，如果新申请容量（cap）大于2倍的旧容量（old.cap），最终容量（newcap）就是新申请的容量（cap）
+
+否则判断，如果旧切片的长度小于1024，则最终容量(newcap)就是旧容量(old.cap)的两倍，即（newcap=doublecap）
+
+否则判断，如果旧切片长度大于等于1024，则最终容量（newcap）从旧容量（old.cap）开始循环增加原来的1/4，即（newcap=old.cap,for {newcap += newcap/4}）直到最终容量（newcap）大于等于新申请的容量(cap)，即（newcap &gt;= cap）
+
+如果最终容量（cap）计算值溢出，则最终容量（cap）就是新申请容量（cap）
+
+接着根据切片类型的大小,确定不同的内存分配大小。其主要是用作内存的对齐。因此，申请的内存可能会大于实际的et.size * newcap
+
+    switch {
+    case et.size == 1:
+        lenmem = uintptr(old.len)
+        newlenmem = uintptr(cap)
+        capmem = roundupsize(uintptr(newcap))
+        overflow = uintptr(newcap) &gt; maxAlloc
+        newcap = int(capmem)
+    case et.size == sys.PtrSize:
+        lenmem = uintptr(old.len) * sys.PtrSize
+        newlenmem = uintptr(cap) * sys.PtrSize
+        capmem = roundupsize(uintptr(newcap) * sys.PtrSize)
+        overflow = uintptr(newcap) &gt; maxAlloc/sys.PtrSize
+        newcap = int(capmem / sys.PtrSize)
+    case isPowerOfTwo(et.size):
+        var shift uintptr
+        if sys.PtrSize == 8 {
+            // Mask shift for better code generation.
+            shift = uintptr(sys.Ctz64(uint64(et.size))) &amp; 63
+        } else {
+            shift = uintptr(sys.Ctz32(uint32(et.size))) &amp; 31
+        }
+        lenmem = uintptr(old.len) &lt;&lt; shift
+        newlenmem = uintptr(cap) &lt;&lt; shift
+        capmem = roundupsize(uintptr(newcap) &lt;&lt; shift)
+        overflow = uintptr(newcap) &gt; (maxAlloc &gt;&gt; shift)
+        newcap = int(capmem &gt;&gt; shift)
+    default:
+        lenmem = uintptr(old.len) * et.size
+        newlenmem = uintptr(cap) * et.size
+        capmem, overflow = math.MulUintptr(et.size, uintptr(newcap))
+        capmem = roundupsize(capmem)
+        newcap = int(capmem / et.size)
+    }
+最后核心是申请内存。要注意的是，新的切片不一定意味着新的地址。
+
+根据切片类型et.ptrdata是否为指针,需要执行不同的逻辑。
+
+    if et.ptrdata == 0 {
+        p = mallocgc(capmem, nil, false)
+        // The append() that calls growslice is going to overwrite from old.len to cap (which will be the new length).
+        // Only clear the part that will not be overwritten.
+        memclrNoHeapPointers(add(p, newlenmem), capmem-newlenmem)
+    } else {
+        // Note: can't use rawmem (which avoids zeroing of memory), because then GC can scan uninitialized memory.
+        p = mallocgc(capmem, et, true)
+        if lenmem &gt; 0 &amp;&amp; writeBarrier.enabled {
+            // Only shade the pointers in old.array since we know the destination slice p
+            // only contains nil pointers because it has been cleared during alloc.
+            bulkBarrierPreWriteSrcOnly(uintptr(p), uintptr(old.array), lenmem)
+        }
+    }
+    memmove(p, old.array, lenmem)
+
+    return slice{p, old.len, newcap}
+当切片类型不是指针,分配内存后只需要将内存的后面的值清空,memmove(p, old.array, lenmem) 函数用于将old切片的值赋值给新的切片
+
+整个过程的抽象抽象表示如下
+
+old = make([]int,3,3)
+new = append(old,1) =&gt; new = malloc(newcap * sizeof(int))   a[4]  = 0
+new[1] = old[1]
+new[2] = old[2]
+new[3] = old[3]
+当切片类型为指针,指针需要写入当前协程缓冲区中,这个地方涉及到GC 回收机制中的写屏障,后面介绍。
+
+切片的截取
+对于数组下标的截取,如下所示，可以从多个维度证明,切片的截取生成了一个新的切片,但是底层数据源却是使用的同一个。
+
+    old := make([]int64,3,3)
+    new := old[1:3]
+    fmt.Printf("%p %p",arr,slice)
+输出为:
+
+0xc000018140 0xc000018148
+二者的地址正好相差了8个字节，这不是偶然的,而是因为二者指向了相同的数据源，刚好相差int64的大小。
+另外我们也可以从生成的汇编的过程查看到到一些端倪
+
+GOSSAFUNC=main GOOS=linux GOARCH=amd64 go tool compile main.go
+
+image
+在ssa的初始阶段start,old := make([]int64,3,3)对应的是SliceMake &lt;[]int&gt; v10 v15 v15, SliceMake操作￿需要传递数组的指针、长度、容量。
+而 new := old[1:3] 对应SliceMake &lt;[]int&gt; v34 v28 v29。传递的指针v34正好的原始的Ptr + 8个字节后的位置
+
+下面列出一张图比较形象的表示切片引用相同数据源的图：
+
+image
+切片的复制
+由于切片的复制不会改变指向的底层数据源。但是我们有些时候希望建一个新的数组，连底层数据源也是全新的。这个时候可以使用copy函数
+
+切片进行值拷贝：copy
+
+// 创建目标切片
+numbers1 := make([]int, len(numbers), cap(numbers)*2)
+// 将numbers的元素拷贝到numbers1中
+count := copy(numbers1, numbers)
+切片转数组
+
+slice := []byte("abcdefgh")
+var arr [4]byte
+copy(arr[:], slice[:4])
+//或者直接如下,这涉及到一个特性,即只会拷贝min(len(arr),len(slice)
+copy(arr[:], slice)
+copy函数在编译时会决定使用哪一种方式，普通的方式会直接调用memmove
+
+func copyany(n *Node, init *Nodes, runtimecall bool) *Node {
+    ...
+    if runtimecall {
+        if n.Right.Type.IsString() {
+            fn := syslook("slicestringcopy")
+            fn = substArgTypes(fn, n.Left.Type, n.Right.Type)
+            return mkcall1(fn, n.Type, init, n.Left, n.Right)
+        }
+
+        fn := syslook("slicecopy")
+        fn = substArgTypes(fn, n.Left.Type, n.Right.Type)
+        return mkcall1(fn, n.Type, init, n.Left, n.Right, nodintconst(n.Left.Type.Elem().Width))
+    }
+    ...
+    fn := syslook("memmove")
+    fn = substArgTypes(fn, nl.Type.Elem(), nl.Type.Elem())
+    nwid := temp(types.Types[TUINTPTR])
+    setwid := nod(OAS, nwid, conv(nlen, types.Types[TUINTPTR]))
+    ne.Nbody.Append(setwid)
+    nwid = nod(OMUL, nwid, nodintconst(nl.Type.Elem().Width))
+    call := mkcall1(fn, nil, init, nto, nfrm, nwid)
+}
+抽象表示为：
+
+ init {
+   n := len(a)
+   if n &gt; len(b) { n = len(b) }
+   if a.ptr != b.ptr { memmove(a.ptr, b.ptr, n*sizeof(elem(a))) }
+ }
+除非是协程调用的方式go copy(numbers1, numbers) 或者（加入了race等检测 &amp;&amp; 不是在编译go运行时代码） 会转而调用运行时slicestringcopy 或 slicecopy .
+
+case OCOPY:
+    n = copyany(n, init, instrumenting &amp;&amp; !compiling_runtime)
+case OGO:
+    switch n.Left.Op {
+    case OCOPY:
+        n.Left = copyany(n.Left, &amp;n.Ninit, true)
+slicestringcopy 或 slicecopy 本质上仍然是调用了memmove只是进行了额外的race冲突等判断。
+
+func slicecopy(to, fm slice, width uintptr) int {
+    ...
+    if raceenabled {
+        callerpc := getcallerpc()
+        pc := funcPC(slicecopy)
+        racewriterangepc(to.array, uintptr(n*int(width)), callerpc, pc)
+        racereadrangepc(fm.array, uintptr(n*int(width)), callerpc, pc)
+    }
+    if msanenabled {
+        msanwrite(to.array, uintptr(n*int(width)))
+        msanread(fm.array, uintptr(n*int(width)))
+    }
+
+    size := uintptr(n) * width
+    if size == 1 { // common case worth about 2x to do here
+        // TODO: is this still worth it with new memmove impl?
+        *(*byte)(to.array) = *(*byte)(fm.array) // known to be a byte pointer
+    } else {
+        memmove(to.array, fm.array, size)
+    }
+    return n
+}
+总结
+切片是go语言中重要的数据结果,其和其他语言不同的是，其维护了底层的内存，以及长度和容量
+
+切片与数组的赋值拷贝有明显区别,切片在赋值拷贝与下标截断时引用了相同的底层数据
+
+如果要完全复制切片,使用copy函数。其逻辑是新建一个新的内存,并拷贝过去。在极端情况需要考虑其对性能的影响
+
+切片字面量的初始化，数组存储于静态区。切片make的初始化方式时,如果make初始化了一个大于64KB的切片，这个空间会逃逸到堆中,在运行时调用makeslice创建。小于64KB的切片在栈中初始化
+
+Go 中切片append当容量超过了现有容量,需要进行扩容,其策略是：
+
+首先判断，如果新申请容量（cap）大于2倍的旧容量（old.cap），最终容量（newcap）就是新申请的容量（cap）
+
+否则判断，如果旧切片的长度小于1024，则最终容量(newcap)就是旧容量(old.cap)的两倍，即（newcap=doublecap）
+
+否则判断，如果旧切片长度大于等于1024，则最终容量（newcap）从旧容量（old.cap）开始循环增加原来的1/4，即（newcap=old.cap,for {newcap += newcap/4}）直到最终容量（newcap）大于等于新申请的容量(cap)，即（newcap &gt;= cap）
+
+如果最终容量（cap）计算值溢出，则最终容量（cap）就是新申请容量（cap）
+
+Go 中切片append后返回的切片地址并不一定是原来的、也不一定是新的内存地址,因此必须小心其可能遇到的陷阱。一般会使用a = append(a,T)的方式保证安全。
+
+前文
+golang快速入门[1]-go语言导论
+
+golang快速入门[2.1]-go语言开发环境配置-windows
+
+golang快速入门[2.2]-go语言开发环境配置-macOS
+
+golang快速入门[2.3]-go语言开发环境配置-linux
+
+golang快速入门[3]-go语言helloworld
+
+golang快速入门[4]-go语言如何编译为机器码
+
+golang快速入门[5.1]-go语言是如何运行的-链接器
+
+golang快速入门[5.2]-go语言是如何运行的-内存概述
+
+golang快速入门[5.3]-go语言是如何运行的-内存分配
+
+golang快速入门[6.1]-集成开发环境-goland详解
+
+golang快速入门[6.2]-集成开发环境-emacs详解
+
+golang快速入门[7.1]-项目与依赖管理-gopath
+
+golang快速入门[7.2]-北冥神功—go module绝技
+
+golang快速入门[8.1]-变量类型、声明赋值、作用域声明周期与变量内存分配
+
+golang快速入门[8.2]-自动类型推断的秘密
+
+golang快速入门[8.3]-深入理解浮点数
+
+golang快速入门[8.4]-常量与隐式类型转换
+
+golang快速入门[9.1]--深入字符串的存储、编译与运行
+
+golang快速入门[9.2]-深入数组用法、陷阱与编译时
+
+https://mp.weixin.qq.com/s?__biz=MzU1NjY0MDk3NQ==&amp;mid=2247484222&amp;idx=1&amp;sn=feee698e4c3a32c47e2203bb76685e62&amp;chksm=fbc0bc9eccb7358868b3745a6f6bf21fe3a12a7e59d5fe7c224a1cebf7769f94b9b64d369431&amp;mpshare=1&amp;scene=1&amp;srcid=&amp;sharer_sharetime=1587341167469&amp;sharer_shareid=8bc5c9f63486c7f1a0dc0c828de4b59b&amp;exportkey=ASllTw2sQCJzKPe6CqzWF54%3D&amp;pass_ticket=Xi4ovRoiqyRYOgFcVJvsZm%2Bj%2FbCpBkw%2B87QzEXYMWgQ8gmz%2FqPY8EuqR3690VyRi#rd
+</autogenerated></autogenerated></autogenerated>
+:ET

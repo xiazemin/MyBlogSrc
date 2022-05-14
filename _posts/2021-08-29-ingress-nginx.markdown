@@ -1,0 +1,18 @@
+---
+title: ingress-nginx
+layout: post
+category: k8s
+author: 夏泽民
+---
+https://github.com/kubernetes/ingress-nginx/
+Name-based vs. IP-based Virtual Hosts
+IP-based virtual hosts use the IP address of the connection to determine the correct virtual host to serve. Therefore you need to have a separate IP address for each host. With name-based virtual hosting, the server relies on the client to report the hostname as part of the HTTP headers. Using this technique, many different hosts can share the same IP address.
+https://blog.csdn.net/u010620626/article/details/46054713
+<!-- more -->
+https://kubernetes.io/docs/concepts/services-networking/ingress/
+Ingress exposes HTTP and HTTPS routes from outside the cluster to services within the cluster. Traffic routing is controlled by rules defined on the Ingress resource.
+
+https://kubernetes.github.io/ingress-nginx/deploy/
+
+https://github.com/kubernetes/ingress-nginx/blob/main/docs/troubleshooting.md
+

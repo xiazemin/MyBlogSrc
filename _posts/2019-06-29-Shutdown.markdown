@@ -1,0 +1,360 @@
+---
+title: graceful Shutdown
+layout: post
+category: golang
+author: 夏泽民
+---
+如何优雅的关闭http服务在Go Web开发中一直被提及和讨论的话题，今天Go 1.8的发布终于为我们带来了这个特性。
+
+文档中是这样介绍的：
+
+func (srv *Server) Shutdown(ctx context.Context) error
+Shutdown 将无中断的关闭正在活跃的连接，然后平滑的停止服务。处理流程如下：
+
+首先关闭所有的监听
+
+然后关闭所有的空闲连接
+
+然后无限期等待连接处理完毕转为空闲，并关闭
+
+如果提供了 带有超时的Context，将在服务关闭前返回 Context的超时错误
+
+需要注意的是，Shutdown 并不尝试关闭或者等待 hijacked连接，如 WebSockets。如果需要的话调用者需要分别处理诸如长连接类型的等待和关闭。
+
+其实，你只要调用 Shutdown 方法就好了。
+
+https://github.com/facebookarchive/grace
+https://github.com/fvbock/endless
+https://github.com/jpillora/overseer
+<!-- more -->
+grace例子 https://github.com/facebookgo/grace/blob/master/gracedemo/demo.go
+endless例子 https://github.com/fvbock/endless/tree/master/examples
+overseer例子 https://github.com/jpillora/overseer/tree/master/example
+我们参考官方的例子分别来写下用来对比的例子：
+
+grace
+package main
+
+import (
+    "time"
+    "net/http"
+    "github.com/facebookgo/grace/gracehttp"
+)
+
+func main() {
+    gracehttp.Serve(
+        &http.Server{Addr: ":5001", Handler: newGraceHandler()},
+        &http.Server{Addr: ":5002", Handler: newGraceHandler()},
+    )
+}
+
+func newGraceHandler() http.Handler {
+    mux := http.NewServeMux()
+    mux.HandleFunc("/sleep", func(w http.ResponseWriter, r *http.Request) {
+        duration, err := time.ParseDuration(r.FormValue("duration"))
+        if err != nil {
+            http.Error(w, err.Error(), 400)
+            return
+        }
+        time.Sleep(duration)
+        w.Write([]byte("Hello World"))
+    })
+    return mux
+}
+endless
+package main
+
+import (
+    "log"
+    "net/http"
+    "os"
+    "sync"
+    "time"
+
+    "github.com/fvbock/endless"
+    "github.com/gorilla/mux"
+)
+
+func handler(w http.ResponseWriter, r *http.Request) {
+    duration, err := time.ParseDuration(r.FormValue("duration"))
+    if err != nil {
+        http.Error(w, err.Error(), 400)
+        return
+    }
+    time.Sleep(duration)
+    w.Write([]byte("Hello World"))
+}
+
+func main() {
+    mux1 := mux.NewRouter()
+    mux1.HandleFunc("/sleep", handler)
+
+    w := sync.WaitGroup{}
+    w.Add(2)
+    go func() {
+        err := endless.ListenAndServe(":5003", mux1)
+        if err != nil {
+            log.Println(err)
+        }
+        log.Println("Server on 5003 stopped")
+        w.Done()
+    }()
+    go func() {
+        err := endless.ListenAndServe(":5004", mux1)
+        if err != nil {
+            log.Println(err)
+        }
+        log.Println("Server on 5004 stopped")
+        w.Done()
+    }()
+    w.Wait()
+    log.Println("All servers stopped. Exiting.")
+
+    os.Exit(0)
+}
+overseer
+package main
+
+import (
+    "fmt"
+    "net/http"
+    "time"
+
+    "github.com/jpillora/overseer"
+)
+
+//see example.sh for the use-case
+
+// BuildID is compile-time variable
+var BuildID = "0"
+
+//convert your 'main()' into a 'prog(state)'
+//'prog()' is run in a child process
+func prog(state overseer.State) {
+    fmt.Printf("app#%s (%s) listening...\n", BuildID, state.ID)
+    http.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        duration, err := time.ParseDuration(r.FormValue("duration"))
+        if err != nil {
+            http.Error(w, err.Error(), 400)
+            return
+        }
+        time.Sleep(duration)
+        w.Write([]byte("Hello World"))
+        fmt.Fprintf(w, "app#%s (%s) says hello\n", BuildID, state.ID)
+    }))
+    http.Serve(state.Listener, nil)
+    fmt.Printf("app#%s (%s) exiting...\n", BuildID, state.ID)
+}
+
+//then create another 'main' which runs the upgrades
+//'main()' is run in the initial process
+func main() {
+    overseer.Run(overseer.Config{
+        Program: prog,
+        Addresses: []string{":5005", ":5006"},
+        //Fetcher: &fetcher.File{Path: "my_app_next"},
+        Debug:   false, //display log of overseer actions
+    })
+}
+对比
+对比示例的操作步骤
+分别构建上面的示例，并记录pid
+调用API，在其未返回时，修改内容(Hello World -> Hello Harry)，重新构建。查看旧API是否返回旧的内容
+调用新API，查看返回的内容是否是新的内容
+查看当前运行的pid，是否与之前一致
+下面给一下操作命令
+
+# 第一次构建项目
+go build grace.go
+# 运行项目，这时就可以做内容修改了
+./grace &
+# 请求项目，60s后返回
+curl "http://127.0.0.1:5001/sleep?duration=60s" &
+# 再次构建项目，这里是新内容
+go build grace.go
+# 重启，2096为pid
+kill -USR2 2096
+# 新API请求
+curl "http://127.0.0.1:5001/sleep?duration=1s"
+
+
+# 第一次构建项目
+go build endless.go
+# 运行项目，这时就可以做内容修改了
+./endless &
+# 请求项目，60s后返回
+curl "http://127.0.0.1:5003/sleep?duration=60s" &
+# 再次构建项目，这里是新内容
+go build endless.go
+# 重启，22072为pid
+kill -1 22072
+# 新API请求
+curl "http://127.0.0.1:5003/sleep?duration=1s"
+
+
+# 第一次构建项目
+go build -ldflags '-X main.BuildID=1' overseer.go
+# 运行项目，这时就可以做内容修改了
+./overseer &
+# 请求项目，60s后返回
+curl "http://127.0.0.1:5005/sleep?duration=60s" &
+# 再次构建项目，这里是新内容，注意版本号不同了
+go build -ldflags '-X main.BuildID=2' overseer.go
+# 重启，28300为主进程pid
+kill -USR2 28300
+# 新API请求
+curl "http://127.0.0.1:5005/sleep?duration=1s"
+对比结果
+示例	旧API返回值	新API返回值	旧pid	新pid	结论
+grace	Hello world	Hello Harry	2096	3100	旧API不会断掉，会执行原来的逻辑，pid会变化
+endless	Hello world	Hello Harry	22072	22365	旧API不会断掉，会执行原来的逻辑，pid会变化
+overseer	Hello world	Hello Harry	28300	28300	旧API不会断掉，会执行原来的逻辑，主进程pid不会变化
+原理分析
+可以看出grace和endless是比较像的。
+
+监听信号
+收到信号时fork子进程（使用相同的启动命令），将服务监听的socket文件描述符传递给子进程
+子进程监听父进程的socket，这个时候父进程和子进程都可以接收请求
+子进程启动成功之后，父进程停止接收新的连接，等待旧连接处理完成（或超时）
+父进程退出，升级完成
+overseer是与grace和endless有些不同，主要是两点：
+
+overseer添加了Fetcher，当Fetcher返回有效的二进位流(io.Reader) 时，主进程会将它保存到临时位置并验证它，替换当前的二进制文件并启动。
+Fetcher运行在一个goroutine中，预先会配置好检查的间隔时间。Fetcher支持File、GitHub、HTTP和S3的方式。详细可查看包package fetcher
+overseer添加了一个主进程管理平滑重启。子进程处理连接，能够保持主进程pid不变。
+
+自己实现
+我们下面来尝试自己实现下第一种处理，代码如下，代码来自《热重启golang服务器》：
+
+package main
+import (
+    "context"
+    "errors"
+    "flag"
+    "log"
+    "net"
+    "net/http"
+    "os"
+    "os/exec"
+    "os/signal"
+    "syscall"
+    "time"
+)
+
+var (
+    server   *http.Server
+    listener net.Listener
+    graceful = flag.Bool("graceful", false, "listen on fd open 3 (internal use only)")
+)
+
+func sleep(w http.ResponseWriter, r *http.Request) {
+    duration, err := time.ParseDuration(r.FormValue("duration"))
+    if err != nil {
+        http.Error(w, err.Error(), 400)
+        return
+    }
+    time.Sleep(duration)
+    w.Write([]byte("Hello World"))
+}
+
+func main() {
+    flag.Parse()
+
+    http.HandleFunc("/sleep", sleep)
+    server = &http.Server{Addr: ":5007"}
+
+    var err error
+    if *graceful {
+        log.Print("main: Listening to existing file descriptor 3.")
+        // cmd.ExtraFiles: If non-nil, entry i becomes file descriptor 3+i.
+        // when we put socket FD at the first entry, it will always be 3(0+3)
+        f := os.NewFile(3, "")
+        listener, err = net.FileListener(f)
+    } else {
+        log.Print("main: Listening on a new file descriptor.")
+        listener, err = net.Listen("tcp", server.Addr)
+    }
+
+    if err != nil {
+        log.Fatalf("listener error: %v", err)
+    }
+
+    go func() {
+        // server.Shutdown() stops Serve() immediately, thus server.Serve() should not be in main goroutine
+        err = server.Serve(listener)
+        log.Printf("server.Serve err: %v\n", err)
+    }()
+    signalHandler()
+    log.Printf("signal end")
+}
+
+func reload() error {
+    tl, ok := listener.(*net.TCPListener)
+    if !ok {
+        return errors.New("listener is not tcp listener")
+    }
+
+    f, err := tl.File()
+    if err != nil {
+        return err
+    }
+
+    args := []string{"-graceful"}
+    cmd := exec.Command(os.Args[0], args...)
+    cmd.Stdout = os.Stdout
+    cmd.Stderr = os.Stderr
+    // put socket FD at the first entry
+    cmd.ExtraFiles = []*os.File{f}
+    return cmd.Start()
+}
+
+func signalHandler() {
+    ch := make(chan os.Signal, 1)
+    signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM, syscall.SIGUSR2)
+    for {
+        sig := <-ch
+        log.Printf("signal: %v", sig)
+
+        // timeout context for shutdown
+        ctx, _ := context.WithTimeout(context.Background(), 100*time.Second)
+        switch sig {
+        case syscall.SIGINT, syscall.SIGTERM:
+            // stop
+            log.Printf("stop")
+            signal.Stop(ch)
+            server.Shutdown(ctx)
+            log.Printf("graceful shutdown")
+            return
+        case syscall.SIGUSR2:
+            // reload
+            log.Printf("reload")
+            err := reload()
+            if err != nil {
+                log.Fatalf("graceful restart error: %v", err)
+            }
+            server.Shutdown(ctx)
+            log.Printf("graceful reload")
+            return
+        }
+    }
+    
+ 原理
+热重启的原理非常简单，但是涉及到一些系统调用以及父子进程之间文件句柄的传递等等细节比较多。
+处理过程分为以下几个步骤：
+
+监听信号（USR2）
+收到信号时fork子进程（使用相同的启动命令），将服务监听的socket文件描述符传递给子进程
+子进程监听父进程的socket，这个时候父进程和子进程都可以接收请求
+子进程启动成功之后，父进程停止接收新的连接，等待旧连接处理完成（或超时）
+父进程退出，升级完成
+细节
+父进程将socket文件描述符传递给子进程可以通过命令行，或者环境变量等
+子进程启动时使用和父进程一样的命令行，对于golang来说用更新的可执行程序覆盖旧程序
+server.Shutdown()优雅关闭方法是go1.8的新特性
+server.Serve(l)方法在Shutdown时立即返回，Shutdown方法则阻塞至context完成，所以Shutdown的方法要写在主goroutine中
+
+systemd & supervisor
+父进程退出之后，子进程会挂到1号进程上面。这种情况下使用systemd和supervisord等管理程序会显示进程处于failed的状态。解决这个问题有两个方法：
+
+使用pidfile，每次进程重启更新一下pidfile，让进程管理者通过这个文件感知到mainpid的变更。
+起一个master来管理服务进程，每次热重启master拉起一个新的进程，把旧的kill掉。这时master的pid没有变化，对于进程管理者来说进程处于正常的状态。

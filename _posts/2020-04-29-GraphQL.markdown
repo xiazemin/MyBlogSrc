@@ -1,0 +1,716 @@
+---
+title: GraphQL
+layout: post
+category: golang
+author: 夏泽民
+---
+GraphQL背景
+REST API的使用方式是，server定义一系列的接口，client调用自己需要的接口，获取目标数据进行整合。REST API开发中遇到的问题：
+
+扩展性 ，随着API的不断发展，REST API的接口会变得越来臃肿。
+无法按需获取 ，一个返回id, name, age, city, addr, email的接口，如果仅获取部分信息，如name, age，却必须返回接口的全部信息，然后从中提取自己需要的。坏处不仅会增加网络传输量，并且不便于client处理数据
+一个请求无法获取所需全部资源 ，例如client需要显示一篇文章的内容，同时要显示评论，作者信息，那么就需要调用文章、评论、用户的接口。坏处造成服务的的维护困难，以及响应时间变长 。
+原因： REST API通常由多个端点组成，每个端点代表一种资源。所以，当client需要多个资源是，它需要向REST API发起多个请求，才能获取到所需要的数据。
+REST API不好处理的问题 ， 比如确保client提供的参数是类型安全的，如何从代码生成API的文档等。
+GraphQL解决的问题：
+
+请求你的数据不多不少 ：GraphQL查询总是能准确获得你想要的数据，不多不少，所以返回的结果是可预测的。
+获取多个资源只用一个请求 ：GraphQL查询不仅能够获得资源的属性，还能沿着资源间进一步查询，所以GraphQL可以通过一次请求就获取你应用所需的所有数据。
+描述所有的可能类型系统： GraphQL API基于类型和字段的方式进行组成，使用类型来保证应用只请求可能的类型，同时提供了清晰的辅助性错误信息。
+使用你现有的数据和代码： GraphQL让你的整个应用共享一套API，通过GraphQL API能够更好的利用你的现有数据和代码。GraphQL 引擎已经有多种语言实现，GraphQL不限于某一特定数据库，可以使用已经存在的数据、代码、甚至可以连接第三方的APIs。
+API 演进无需划分版本： 给GraphQL API添加字段和类型而无需影响现有查询。老旧字段可以废弃，从工具中隐藏。
+<!-- more -->
+    // Args is a map of arguments for current GraphQL request
+    Args map[string]interface{}
+
+    // Info is a collection of information about the current execution state.
+    Info ResolveInfo
+
+    // Context argument is a context value that is provided to every resolve function within an execution.
+    // It is commonly
+    // used to represent an authenticated user, or request-specific caches.
+    Context context.Context
+}
+
+值得注意的是，Resolver内部实现对于GraphQL完全是黑盒状态。这意味着Resolver如何返回数据、返回什么样的数据、从哪里返回数据，完全取决于Resolver本身。GraphQL在实际使用中常常作为中间层来使用，**数据的获取通过Resolver来封装，内部数据获取的实现可能基于RPC、REST、WS、SQL等多种不同的方式。
+
+GraphQL例子
+下面这部分将会展示一个用graphql-go实现的用户管理的例子，包括获取全部用户信息、获取指定用户信息、修改用户名称、删除用户的功能，以及如何创建枚举类型的功能，完整代码在这里。
+
+生成后的schema文件内容如下：
+type Mutation {
+  """[用户管理] 修改用户名称"""
+  changeUserName(
+    """用户ID"""
+    userId: Int!
+
+    """用户名称"""
+    userName: String!
+  ): Boolean
+
+  """[用户管理] 创建用户"""
+  createUser(
+    """用户名称"""
+    userName: String!
+
+    """用户邮箱"""
+    email: String!
+
+    """用户密码"""
+    pwd: String!
+
+    """用户联系方式"""
+    phone: Int
+  ): Boolean
+
+  """[用户管理] 删除用户"""
+  deleteUser(
+    """用户ID"""
+    userId: Int!
+  ): Boolean
+}
+
+type Query {
+  """[用户管理] 获取指定用户的信息"""
+  UserInfo(
+    """用户ID"""
+    userId: Int!
+  ): userInfo
+
+  """[用户管理] 获取全部用户的信息"""
+  UserListInfo: [userInfo]!
+}
+
+"""用户信息描述"""
+type userInfo {
+  """用户email"""
+  email: String
+
+  """用户名称"""
+  name: String
+
+  """用户手机号"""
+  phone: Int
+
+  """用户密码"""
+  pwd: String
+
+  """用户状态"""
+  status: UserStatusEnum
+
+  """用户ID"""
+  userID: Int
+}
+
+"""用户状态信息"""
+enum UserStatusEnum {
+  """用户可用"""
+  EnableUser
+
+  """用户不可用"""
+  DisableUser
+}
+
+注意
+
+GraphQL基于golang实现的例子比较少
+GraphQL的schema可以自动生成，具体操作可查看graphq-cli文档，步骤大致包括npm包的安装、graphql-cli工具的安装，配置文件的更改（此处需要指定服务对外暴露的地址） ，执行graphql get-schema 命令。
+GraphQL API以及Rsolve函数定义
+
+type UserInfo struct {
+    UserID uint64               `json:"userID"`
+    Name   string               `json:"name"`
+    Email  string               `json:"email"`
+    Phone  int64                `json:"phone"`
+    Pwd    string               `json:"pwd"`
+    Status model.UserStatusType `json:"status"`
+}
+//这段内容是如何使用GraphQL定义枚举类型
+var UserStatusEnumType = graphql.NewEnum(graphql.EnumConfig{
+    Name:        "UserStatusEnum",
+    Description: "用户状态信息",
+    Values: graphql.EnumValueConfigMap{
+        "EnableUser": &graphql.EnumValueConfig{
+            Value:       model.EnableStatus,
+            Description: "用户可用",
+        },
+        "DisableUser": &graphql.EnumValueConfig{
+            Value:       model.DisableStatus,
+            Description: "用户不可用",
+        },
+    },
+})
+
+var UserInfoType = graphql.NewObject(graphql.ObjectConfig{
+    Name:        "userInfo",
+    Description: "用户信息描述",
+    Fields: graphql.Fields{
+        "userID": &graphql.Field{
+            Description: "用户ID",
+            Type:        graphql.Int,
+        },
+        "name": &graphql.Field{
+            Description: "用户名称",
+            Type:        graphql.String,
+        },
+        "email": &graphql.Field{
+            Description: "用户email",
+            Type:        graphql.String,
+        },
+        "phone": &graphql.Field{
+            Description: "用户手机号",
+            Type:        graphql.Int,
+        },
+        "pwd": &graphql.Field{
+            Description: "用户密码",
+            Type:        graphql.String,
+        },
+        "status": &graphql.Field{
+            Description: "用户状态",
+            Type:        UserStatusEnumType,
+        },
+    },
+})
+
+query与mutation的定义
+var MutationType = graphql.NewObject(graphql.ObjectConfig{
+    Name: "Mutation",
+    Fields: graphql.Fields{
+        "createUser": &graphql.Field{
+            Type:        graphql.Boolean,
+            Description: "[用户管理] 创建用户",
+            Args: graphql.FieldConfigArgument{
+                "userName": &graphql.ArgumentConfig{
+                    Description: "用户名称",
+                    Type:        graphql.NewNonNull(graphql.String),
+                },
+                "email": &graphql.ArgumentConfig{
+                    Description: "用户邮箱",
+                    Type:        graphql.NewNonNull(graphql.String),
+                },
+                "pwd": &graphql.ArgumentConfig{
+                    Description: "用户密码",
+                    Type:        graphql.NewNonNull(graphql.String),
+                },
+                "phone": &graphql.ArgumentConfig{
+                    Description: "用户联系方式",
+                    Type:        graphql.Int,
+                },
+            },
+            Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+                userId, _ := strconv.Atoi(GenerateID())
+                user := &model.User{
+                  //展示如何解析传入的参数
+                    Name: p.Args["userName"].(string),
+                    Email: sql.NullString{
+                        String: p.Args["email"].(string),
+                        Valid:  true,
+                    },
+                    Pwd:    p.Args["pwd"].(string),
+                    Phone:  int64(p.Args["phone"].(int)),
+                    UserID: uint64(userId),
+                    Status: int64(model.EnableStatus),
+                }
+                if err := model.InsertUser(user); err != nil {
+                    log.WithError(err).Error("[mutaition.createUser] invoke InserUser() failed")
+                    return false, err
+                }
+                return true, nil
+
+            },
+        },
+
+    },
+})
+
+var QueryType = graphql.NewObject(graphql.ObjectConfig{
+    Name: "Query",
+    Fields: graphql.Fields{
+        "UserListInfo": &graphql.Field{
+            Description: "[用户管理] 获取指定用户的信息",
+          //定义了非空的list类型
+            Type:        graphql.NewNonNull(graphql.NewList(UserInfoType)),
+            Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+                users, err := model.GetUsers()
+                if err != nil {
+                    log.WithError(err).Error("[query.UserInfo] invoke InserUser() failed")
+                    return false, err
+                }
+                usersList := make([]*UserInfo, 0)
+                for _, v := range users {
+                    userInfo := new(UserInfo)
+                    userInfo.Name = v.Name
+                    userInfo.Email = v.Email.String
+                    userInfo.Phone = v.Phone
+                    userInfo.Pwd = v.Pwd
+                    userInfo.Status = model.UserStatusType(v.Status)
+                    usersList = append(usersList, userInfo)
+
+                }
+                return usersList, nil
+
+            },
+        },
+    },
+})
+
+注意：
+
+此处仅展示了部分例子
+此处笔者仅列举了query、mutation类型的定义
+如何定义服务main函数
+type ServerCfg struct {
+    Addr      string
+    MysqlAddr string
+}
+
+func main() {
+    //load config info
+    m := multiconfig.NewWithPath("config.toml")
+    svrCfg := new(ServerCfg)
+    m.MustLoad(svrCfg)
+    //new graphql schema
+    schema, err := graphql.NewSchema(
+        graphql.SchemaConfig{
+            Query:    object.QueryType,
+            Mutation: object.MutationType,
+        },
+    )
+    if err != nil {
+        log.WithError(err).Error("[main] invoke graphql.NewSchema() failed")
+        return
+    }
+
+    model.InitSqlxClient(svrCfg.MysqlAddr)
+    h := handler.New(&handler.Config{
+        Schema:   &schema,
+        Pretty:   true,
+        GraphiQL: true,
+    })
+    http.HandleFunc("/graphql", func(w http.ResponseWriter, r *http.Request) {
+        ctx := context.Background()
+        //read user_id from gateway
+        userIDStr := r.Header.Get("user_id")
+        if len(userIDStr) > 0 {
+            userID, err := strconv.Atoi(userIDStr)
+            if err != nil {
+                w.WriteHeader(http.StatusBadRequest)
+                w.Write([]byte(err.Error()))
+                return
+            }
+            ctx = context.WithValue(ctx, "ContextUserIDKey", userID)
+        }
+        h.ContextHandler(ctx, w, r)
+
+    })
+    log.Fatal(http.ListenAndServe(svrCfg.Addr, nil))
+}
+展示下GraphQL自带的GraphiQL调试工具
+
+https://blog.csdn.net/phantom_111/article/details/79932759
+
+
+https://zhuanlan.zhihu.com/p/35792985
+
+
+
+Golang
+
+Go 是Google开发的一种静态强类型、编译型、并发型，并具有垃圾回收功能的编程语言。为了方便搜索和识别，有时会将其称为Golang。
+GraphQL
+
+GraphQL 既是一种用于 API 的查询语言也是一个满足你数据查询的运行时。
+Gin
+
+Gin is a HTTP web framework written in Go (Golang).
+为什么要用GraphQL？
+
+为了让api具有更强的适应性，采用graphql来编写查询接口是个不错的选择。现在的api需要适应的场景太多了，而且迭代节奏也很快，RESTful的查询接口在一些复杂的场景下显得特别的繁杂，如多重嵌套的资源。
+
+为什么要用Go？
+
+在 Go 语言出现之前，开发者们总是面临非常艰难的抉择，究竟是使用执行速度快但是编译速度并不理想的语言（如：C++），还是使用编译速度较快但执行效率不佳的语言（如：.NET、Java），或者说开发难度较低但执行速度一般的动态语言呢？显然，Go 语言在这 3 个条件之间做到了最佳的平衡：快速编译，高效执行，易于开发。
+
+为什么要用Gin？
+
+因为Gin够简洁，适合定制合适自己风格的框架。
+
+
+
+在这里主要记录集成GraphQL的部分，对于Gin的目录结构组织因人而异，就不做详细介绍。
+
+在Go里面集成graphql需要用到graphql-go这个package，当然可以参考GraphQL文档提供的其他。
+
+// 从schema开始
+// schema/schema.go
+package schema
+
+// 引入包graphql-go
+import (
+	"github.com/graphql-go/graphql"
+)
+
+// 定义跟查询节点
+var rootQuery = graphql.NewObject(graphql.ObjectConfig{
+	Name: "RootQuery",
+	Description: "Root Query",
+	Fields: graphql.Fields{
+		"hello": &queryHello, // queryHello 参考schema/hello.go
+	},
+})
+
+// 定义Schema用于http handler处理
+var Schema, _ = graphql.NewSchema(graphql.SchemaConfig{
+	Query:    rootQuery,
+	Mutation: nil, // 需要通过GraphQL更新数据，可以定义Mutation
+})
+
+
+// schema/hello.go
+package schema
+
+import (
+	"golesson/model"
+
+	"github.com/graphql-go/graphql"
+)
+
+// 定义查询对象的字段，支持嵌套
+var helloType = graphql.NewObject(graphql.ObjectConfig{
+	Name: "Hello",
+	Description: "Hello Model",
+	Fields: graphql.Fields{
+		"id": &graphql.Field{
+			Type: graphql.Int,
+		},
+		"name": &graphql.Field{
+			Type: graphql.String,
+		},
+	},
+})
+
+// 处理查询请求
+var queryHello = graphql.Field{
+	Name: "QueryHello",
+	Description: "Query Hello",
+	Type: graphql.NewList(helloType),
+        // Args是定义在GraphQL查询中支持的查询字段，
+        // 可自行随意定义，如加上limit,start这类
+	Args: graphql.FieldConfigArgument{
+		"id": &graphql.ArgumentConfig{
+			Type: graphql.Int,
+		},
+		"name": &graphql.ArgumentConfig{
+			Type: graphql.String,
+		},
+	},
+        // Resolve是一个处理请求的函数，具体处理逻辑可在此进行
+	Resolve: func(p graphql.ResolveParams) (result interface{}, err error) {
+                // Args里面定义的字段在p.Args里面，对应的取出来
+                // 因为是interface{}的值，需要类型转换，可参考类型断言(type assertion): https://zengweigang.gitbooks.io/core-go/content/eBook/11.3.html
+		id, _ := p.Args["id"].(int)
+		name, _ := p.Args["name"].(string)
+		
+                // 调用Hello这个model里面的Query方法查询数据
+		return (&model.Hello{}).Query(id, name)
+	},
+}
+
+
+// 准备好了GraphQL在Go里面需要的东西之后，来看看如何跟Gin结合
+// controller/graphql/graphql.go
+package graphql
+
+import (
+	"golesson/schema"
+
+	"github.com/gin-gonic/gin"
+	"github.com/graphql-go/handler"
+)
+
+func GraphqlHandler() gin.HandlerFunc{
+	h := handler.New(&handler.Config{
+		Schema: &schema.Schema,
+		Pretty: true,
+		GraphiQL: true,
+	})
+
+        // 只需要通过Gin简单封装即可
+	return func(c *gin.Context) {
+		h.ServeHTTP(c.Writer, c.Request)
+	}
+}
+
+
+// route/router.go
+package router
+
+import (
+	"golesson/controller/graphql"
+	
+	"github.com/gin-gonic/gin"
+)
+
+var Router *gin.Engine
+
+func init() {
+	Router = gin.Default()
+}
+
+func SetRouter() {
+        // GET方法用于支持GraphQL的web界面操作
+        // 如果不需要web界面，可根据自己需求用GET/POST或者其他都可以
+	Router.POST("/graphql", graphql.GraphqlHandler())
+	Router.GET("/graphql", graphql.GraphqlHandler())
+}
+
+
+// main.go
+package main
+
+import "golesson/route"
+
+func main () {
+	r := router.Router
+
+	router.SetRouter()
+
+	r.Run(":1234")
+}
+
+
+运行之后的web界面
+
+
+https://graphql.cn/
+https://github.com/graphql-go/graphql
+https://graphql.cn/code/#go
+https://github.com/CNBlackJ/golesson
+https://www.golangtc.com/t/5da020ffb17a82694c2da368
+https://github.com/graphql-go/graphql
+https://studygolang.com/articles/12644
+
+https://studygolang.com/articles/12644
+https://studygolang.com/articles/19225?fr=sidebar
+
+Github提供的GraphQL接口非常全面，那么我们该如何搭建出自己的接口呢？好在GraphQL提供了很多语言的解决方案。本文主要阐述如何用go搭建自己的GraphQL服务器。如果了解GraphQL建议先阅读GraphQL — API查询语言 或相关资料。
+
+graphql-go
+An implementation of GraphQL in Go. Follows the official reference implementation graphql-js.
+
+一套比较完善的框架，众所周知go的结构体对json非常友好，所以并不需要对数据有特殊的处理，还是很方便的。打开终端输入命令
+
+go get github.com/graphql-go/graphql
+
+Object
+在服务端编程中，编写的一切都可以称之为对象（Object）。例如一个商品（goods）的实例可以有商品名（name）、价格（price）、购买链接（url）三个字段。此时商品可以很自然的被称为一个object，查询的语句可以写成：
+
+{
+    goods{
+        name
+        price
+        url
+    }
+}
+如果此时我们要查询商品和文章两种object的信息:
+
+/* query 可以省去 */
+query{ 
+    goods{
+        name
+    }
+    article{
+        name
+    }
+}
+是否你已经发觉，query像一个大的object，它有goods和article两个字段。除此之外，mutation也是如此：
+
+mutation{
+    addGoods(input:goodsInput){
+        name
+    }
+}
+这里的addGoods可以看做是一个可以处理参数的对象，也就是某种意义上的函数。
+
+总之，GraphQL服务端的编程就是一个又一个的对象将形成的嵌套结构（schema）组织起来，并对外提供服务。
+
+query&mutation
+为了防止低级错误的发生，在当前pkg下新建一个名为query.go（随便起）的文件。
+
+import (
+    "github.com/graphql-go/graphql"
+    "errors"
+)
+定义good object
+
+type Goods struct {
+    ID    string `json:"id"`
+    Name  string `json:"name"`
+    Price float64`json:"price"`
+    Url   string `json:"url"`
+}
+
+var goodsType = graphql.NewObject(
+    graphql.ObjectConfig{
+        Name: "Goods",
+        Fields: graphql.Fields{
+            "id": &graphql.Field{
+                Type: graphql.String,
+            },
+            "name": &graphql.Field{
+                Type: graphql.String,
+            },
+            "price": &graphql.Field{
+                Type: graphql.Float,
+            },
+            "url": &graphql.Field{
+                Type: graphql.String,
+            },
+        },
+    },
+)
+var goodsListType = graphql.NewList(goodsType)
+注意：数组相当于新的object类型。
+
+定义query object
+
+var queryType = graphql.NewObject(
+    graphql.ObjectConfig{
+        Name: "Query",
+        Fields: graphql.Fields{
+            // 无需处理参数
+            "goodsList": &graphql.Field{
+                Type:goodsListType,
+                // 处理结构体的回调函数，直接返回处理完成的结构体即可
+                Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+                    return result, err
+                },
+            },
+            // 参数是id
+            "goods": &graphql.Field{
+                Type: goodsType,
+                Args: graphql.FieldConfigArgument{
+                    "id": &graphql.ArgumentConfig{
+                        Type: graphql.String,
+                    },
+                },
+                Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+                    // 获取参数
+                    idQuery, isOK := p.Args["id"].(string)
+                    if isOK {
+                        return result, nil
+                    }
+                    err := errors.New("Field 'goods' is missing required arguments: id. ")
+                    return nil, err
+                },
+            },
+        },
+    },
+)
+mutation定义基本相同，新建一个名为mutation.go的文件：
+
+定义input object
+
+var goodsInputType = graphql.NewInputObject(
+    graphql.InputObjectConfig{
+        Name: "goodsInput",
+        Fields: graphql.InputObjectConfigFieldMap{
+            "name": &graphql.InputObjectFieldConfig{
+                Type: graphql.String,
+            },
+            "price": &graphql.InputObjectFieldConfig{
+                Type: graphql.Float,
+            },
+            "url": &graphql.InputObjectFieldConfig{
+                Type: graphql.String,
+            },
+        },
+    },
+)
+定义 mutation object
+
+var mutationType = graphql.NewObject(
+   graphql.ObjectConfig{
+      Name: "Mutation",
+      Fields: graphql.Fields{
+      "addGoods":&graphql.Field{
+                Type:goodsType,
+                Args:graphql.FieldConfigArgument{
+                    "input":&graphql.ArgumentConfig{
+                        Type:goodsInputType,
+                    },
+                },
+                Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+                    input,isOk := p.Args["input"].(map[string]string)
+                    if !isOk{
+                        err := errors.New("Field 'addGoods' is missing required arguments: input. ")
+                        return nil,err
+                    }
+                    result := Goods{
+                        Name:input["name"].(string),
+                        Price:input["price"].(float64),
+                        Url:input["url"].(string),
+                    }
+                    // 处理数据
+                    return result,err
+                },
+            },
+        },
+    },
+)
+然而，input类型并不能直接转换为struct，而是一个map[string]interface{}类型，还需要进行手动转换。
+
+定义schema
+
+var schema, _ = graphql.NewSchema(
+   graphql.SchemaConfig{
+      Query:    queryType,
+      Mutation: mutationType,
+   },
+)
+至此，我们的全部的object定义完成。
+
+提供服务
+graphql-go为我们提供了一个方便的接口，封装好的handler可以直接与go自带的http包绑定。
+
+package api
+import "github.com/graphql-go/handler"
+
+func Register() *handler.Handler {
+   h := handler.New(&handler.Config{
+      Schema:   &schema,
+      Pretty:   true,
+      GraphiQL: true,
+   })
+   return h
+}
+func main() {
+   h := api.Register()
+   handler := cors.Default().Handler(h)
+   http.Handle("/graphql", handler)
+   fmt.Println("The api server will run on port : ", apiPort)
+   http.ListenAndServe(apiPort, nil)
+}
+打开浏览器，访问http://localhost:apiPort/graphql, 查看你自己的GraphiQL界面吧！
+
+结束语
+如果你觉得这样的代码谈不上优雅，甚至非常丑陋，那就对了。因为我也这样觉得，看一看隔壁python的实现方式：
+
+import graphene
+
+class Query(graphene.ObjectType):
+  hello = graphene.String()
+
+  def resolve_hello(self, args, context, info):
+    return 'Hello world!'
+
+schema = graphene.Schema(query=Query)
+有没有涌来一口老血。
+
+可能是受限与golang本身反射系统并不够完善，没有python各种各样的魔术方法，没有泛型，或者说go本身不太适合编写框架类的代码。在编写的过程中，冗余非常多，当然也可能是框架本身的问题
+
+不可否认的是，go确实是非常不错的一门语言，虽然开发效率无法与python媲美，但是在多并发环境下，go表现出非常出色，同时拥有与C级别的运行速度和丰富的生态。
+
+https://zhuanlan.zhihu.com/p/43615163
+https://tutorialedge.net/golang/go-graphql-beginners-tutorial/
+https://tutorialedge.net/golang/go-graphql-beginners-tutorial-part-2/

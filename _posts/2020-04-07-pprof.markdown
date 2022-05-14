@@ -1,0 +1,43 @@
+---
+title: pprof 时间点对比
+layout: post
+category: golang
+author: 夏泽民
+---
+https://gocn.vip/topics/10189
+<!-- more -->
+Redis 的 Proxy 的项目，其中利用 Redis 6.0 新加的 tracking 功能实现客户端缓存的功能，可以为某些特定的 redis 使用场景提高吞吐和延迟。
+
+当然，cache 的实现也是有代价的。首先，cache 的大小不能无限制的大，否则总有一点会把内存撑爆的；其次，cache 的淘汰算法有多种方式，LRU、LFU 等等，具体可以参考 Cache replacement policies，不同的场景下各种淘汰算法的效果是不一样的；第三，对于大并发情况实现 cache 是有代价的，因为并发情况下对 cache 的访问需要加锁，而加锁就意味着有性能的损失。
+
+我在实现这个 cache 的过程中稍微偷了一下懒, 想尽量的减少锁的 scope,结果导致内存泄漏的问题。本来 cache 占用的最大内存我设置为 10GB, 结果过了个周末发现程序已经占用了 80GB 的内存了。
+
+当然本文不是要介绍这个项目的内存泄漏原因，而是介绍一下 Go pprof 工具查找内存泄漏的一个不太常用的方法。
+
+检查 Go 程序内存的使用情况最常用的就是 Go 标准库自带的 pprof 库了，可以通过 http 暴露出这个 profile, 然后通过go tool pprof或者pprof工具命令行/web方式查看。
+
+比如下面的命令， 可以获取服务器http://ip:port的堆信息，并且在本机 9090 端口启动一个服务器展示堆的信息。
+
+go tool pprof -http :9090 http://ip:port/debug/pprof/heap
+在堆信息中你可以查看分配的堆的大小和对象数量，或者当前没有释放的占用的堆的大小和对象数量。
+
+
+
+正常情况下使用这个方式就可以比较直观的看到哪一段代码分配的内存比较多，然后确定那里容易产生内存泄漏。
+
+但是, 分配堆内存比较多的地方并不一定产生内存泄漏，只能说明这个地方"曾经/正在"分配的堆内存比较大,或者分配的堆内存比较频繁俄安，这些分配的内存可能在之后就回收掉了。
+
+像 Java 的一些 profiler 工具一样， pprof 也可以比较两个时间点的分配的内存的差值，通过比较差值，就容易看到哪些地方产生的内存"残留"的比较多，没有被内存释放，极有可能是内存泄漏的点。
+
+你可以通过下面的方式产生两个时间点的堆的 profile,之后使用 pprof 工具进行分析。
+
+首先确保你已经配置了 pprof 的 http 路径， 可以访问http://ip:port/debug/pprof/查看 (如果你没有修改默认的 pprof 路径)
+导出时间点 1 的堆的profile: curl -s http://127.0.0.1:8080/debug/pprof/heap > base.heap, 我们把它作为基准点
+喝杯茶，等待一段时间后导出时间点 2 的堆的profile: curl -s http://127.0.0.1:8080/debug/pprof/heap > current.heap
+现在你就可以比较这两个时间点的堆的差异了: go tool pprof --base base.heap current.heap
+操作和正常的go tool pprof操作一样， 比如使用 top 查看使用堆内存最多的几处地方的内存增删情况：
+
+
+使用web命令会生成一个 SVG 文件，可能你需要使用浏览器打开它。
+
+或者你直接使用命令打开 web 界面: go tool pprof --http :9090 --base base.heap current.heap。

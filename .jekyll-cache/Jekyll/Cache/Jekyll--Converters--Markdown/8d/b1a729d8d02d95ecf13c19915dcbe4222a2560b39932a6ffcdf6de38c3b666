@@ -1,0 +1,736 @@
+I"�m<p>Golang map实现原理是hash map（核心元素是桶，key通过哈希算法被归入不同的bucket中），key是无序的，很多应用场景可能需要map key有序（例如交易所订单撮合），C++ 的stl map 实现了key有序，实际上是TreeMap是基于树（红黑树）的实现方式，即添加到一个有序列表，在O(log n)的复杂度内通过key值找到value，优点是空间要求低，但在时间上不如HashMap。</p>
+
+<p>闲来用go map + slice切片，实现了一套key有序map数据结构，就是空间换时间的玩法， 实质是map 负责存k v， slice负责维护k的有序索引位置(查找key采用的是2分法)，实现后赠改删时间负责度是 O(log2n), 。
+优化的一点思考：实际上主要就是在slice上维护k位置时的增改删费操作，这时候我们可根据具体应用在2分查找上下点文章。 例如可能所存的数据结构频繁操作的节点只有前面一部分，这时候我们可以加个逻辑，操作时slice时先2查找 slice子集（例如头部热点），这样可能很多增改删操作在第一时间就解决了，整体性能会有很大提升， 最好根据应用场景来具体分析解决</p>
+
+<p>https://github.com/iancoleman/orderedmap
+<!-- more -->
+package Order_Map</p>
+
+<p>func findIndexByBinarySearch(s []int, k int) (int, bool) {</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>lo, hi := 0, len(s)
+
+var m int
+
+max := len(s)
+
+if max == 0 {
+
+    return 0, false
+
+}
+
+res := false
+
+for lo &lt;= hi {
+
+    m = (lo + hi) &gt;&gt; 1
+
+    if m == 0 &amp;&amp; s[0] &gt; k {
+
+        return 0, res
+
+    }
+
+    if m == max-1 &amp;&amp; s[max-1] &lt; k {
+
+        return m + 1, res
+
+    }
+
+    if s[m] &lt; k &amp;&amp; s[m+1] &gt; k {
+
+        return m + 1, res
+
+    }
+
+    if s[m] &gt; k &amp;&amp; s[m-1] &lt; k {
+
+        return m, res
+
+    }
+
+    if s[m] &lt; k {
+
+        lo = m + 1
+
+    } else if s[m] &gt; k {
+
+        hi = m - 1
+
+    } else {
+
+        return m, true
+
+    }
+
+}
+
+return -1, false
+</code></pre></div></div>
+
+<p>}</p>
+
+<p>type Int_Map struct {</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>dataMap  map[int]interface{}
+
+keyArray []int
+</code></pre></div></div>
+
+<p>}</p>
+
+<p>func NewIntMap(cap int) *Int_Map {</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>return &amp;Int_Map{
+
+    dataMap:  make(map[int]interface{}),
+
+    keyArray: make([]int, 0, cap),
+
+}
+</code></pre></div></div>
+
+<p>}</p>
+
+<p>func (m *Int_Map) Exists(key int) bool {</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>_, exists := m.dataMap[key]
+
+return exists
+</code></pre></div></div>
+
+<p>}</p>
+
+<p>func (m *Int_Map) Insert(key int, data interface{}) bool {</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>m.dataMap[key] = data
+
+index, res := findIndexByBinarySearch(m.keyArray, key)
+
+if index == -1 {
+
+    return false
+
+}
+
+if res == true { //存在则直接返回
+
+    return true
+
+}
+
+if len(m.keyArray) == 0 {
+
+    m.keyArray = append(m.keyArray, key)
+
+    return true
+
+}
+
+//追加末尾
+
+if index &gt;= len(m.keyArray) {
+
+    m.keyArray = append(m.keyArray[0:], []int{key}...)
+
+} else if index == 0 { //追加头部
+
+    m.keyArray = append([]int{key}, m.keyArray[:len(m.keyArray)]...)
+
+} else { //插入
+
+    rear := append([]int{}, m.keyArray[index:]...)
+
+    m.keyArray = append(m.keyArray[0:index], key)
+
+    m.keyArray = append(m.keyArray, rear...)
+
+}
+
+return true
+</code></pre></div></div>
+
+<p>}</p>
+
+<p>func (m *Int_Map) Erase(key int) {</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>if !m.Exists(key) {
+
+    return
+
+}
+
+index, res := findIndexByBinarySearch(m.keyArray, key)
+
+if res == false {
+
+    return
+
+}
+
+delete(m.dataMap, key)
+
+if index == 0 {
+
+    m.keyArray = m.keyArray[1:]
+
+} else if index == len(m.keyArray) {
+
+    m.keyArray = m.keyArray[:len(m.keyArray)-2]
+
+} else {
+
+    m.keyArray = append(m.keyArray[:index], m.keyArray[index+1:]...)
+
+}
+</code></pre></div></div>
+
+<p>}</p>
+
+<p>func (m *Int_Map) Size() int {</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>return len(m.keyArray)
+</code></pre></div></div>
+
+<p>}</p>
+
+<p>func (m *Int_Map) GetByOrderIndex(index int) (int, interface{}, bool) {</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>if index &lt; 0 || index &gt;= len(m.keyArray) {
+
+    return -1, nil, false
+
+}
+
+key := m.keyArray[index]
+
+return key, m.dataMap[key], true
+</code></pre></div></div>
+
+<p>}</p>
+
+<p>package main</p>
+
+<p>import (</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>"Order_Map"
+
+"fmt"
+
+
+"math/rand"
+
+
+"reflect"
+
+"time"
+</code></pre></div></div>
+
+<p>)</p>
+
+<p>func main() {</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>t := time.Now()
+
+r := rand.New(rand.NewSource(time.Now().UnixNano()))
+
+testmap := Order_Map.NewIntMap(10000)
+
+t1 := t.Second()
+
+for i := 0; i &lt; 10000; i++ {
+
+    testmap.Insert(r.Intn(10000), r.Intn(10000))
+
+}
+
+t = time.Now()
+
+t2 := t.Second()
+
+fmt.Println("insert  time  span", t2-t1)
+
+testmap.Erase(88)
+
+for i := 0; i &lt; testmap.Size(); i++ {
+
+    k, v, _ := testmap.GetByOrderIndex(i)
+
+    tmp_v := reflect.ValueOf(v)
+
+    fmt.Println("k:", k, "---", "value:", tmp_v)
+
+}
+
+
+t = time.Now()
+
+t3 := t.Second()
+
+fmt.Println("range  time  span:", t3-t2)
+</code></pre></div></div>
+
+<p>}</p>
+
+<p>golang 如何返回一个有序的map类型的数据
+两种场景：
+1.自己程序内的话尽量是按照结构体子段排序，走sort接口自定义结构体排序规则就可以了。
+2.如果是由于业务，和其他模块交互场景必须对map排序返回有序的json字符串，可以考虑从序列化入手，想省事的话可以直接用第三方库github.com/iancoleman/orderedmap</p>
+
+<p>是的， 默认情况下，向一个hash表插入的元素是没有固定顺序的。但是因为很多原因，比如有一些帖子就指出了不是所有的map都是hash表（而且有些语言还有有顺序的hash表，比如java的TreeMap）， 我还是能够了解为什么很多人（尤其是对Go map实现机制比较了解的人）会假定遍历map元素的顺序和向map插入元素的顺序是相同的。</p>
+
+<p>我原来的例子是我自己想出来的，并没有演示出大多数版本的Go关于这方面的特点（尽管我听说对于1.3版本可能是可以工作的）。所以我把代码更新了一下，你可以把代码复制到你的编辑器或者Go Playground来看看效果。</p>
+
+<p>Go确实是从随机偏移位置来开始map的元素遍历的，并不是没有规律可循。</p>
+
+<p>好了，现在回来看看这个文章。</p>
+
+<p>过去几周，我看到的人们对Go语言的热情和语言的发展势头真是让我无比惊叹。这里面的一部分原因可能是和Gophercon 2014有关，在我写这篇文章的时候，刚刚举办完。我对那些能参加的人真是羡慕，嫉妒，恨啊！从会议计划和讨论话题来看，会议确实很棒。另外能够去和Rob Pike神搞个基，以及看看那些家伙用Go创造出来的好东西也是很不错的。另外我感觉最近关于Go的博客数量也爆发了。而且，很多人开始重点地将Go在他们的服务中使用。比如Digital Ocean，大规模云计算创业公司，刚刚宣布他们把一大坨Perl代码改为Go实现，并且极大地改进了诸如响应时间等问题。</p>
+
+<p>我从来不会写那种屌丝级必备的“哇塞，我用Golang两周了，真的好棒啊！”这种文章。因为我觉得这些文章没有啥意思，零价值。但是，最近我遇到了一个Go特性，而且我认为这个特性非常酷，并且在我看来反映出了Go作为一门牛逼语言的基本姿态。</p>
+
+<p>Go的map元素遍历顺序(使用range关键字)是随机的，而不是遵循元素的添加顺序。这是什么意思？很特别么？</p>
+
+<p>Maps
+Map的简单介绍。
+从Andrew Gerrand的关于maps的文章直接偷过来用。</p>
+
+<p>计算机科学里面最有用的数据结构之一就是hash表。不同的hash表实现提供了很多独特的特性。但是基本上都包括元素查询，添加和删除。Go提供了一个内置的类型map，这个类型实现了hash表的基本功能。</p>
+
+<p>所以在Go语言里面如果你需要使用hash表，那么就用map吧。因为Go是强类型语言，所以你必须为map的键和对应的值指定具体的类型。这些键或值的类型可以是字符串，整型，指向结构体的指针等。一个常见的用法就是键和值都是字符串类型。
+go m := make(map[string]string)</p>
+
+<p>使用方法很简单。在元素被赋值之前，key可以不存在，甚至在被取值的时候也可以不存在（这样就返回零值，零值对于不同的类型是不同的，比如整型是0，而字符串是空字符串”“）。</p>
+
+<p>m[“bandName”] = “Funny Bones”             // “create”
+websiteTitle := m[“bandName”] + “ Music”  // “read”
+m[“bandName”] = “Moon Taxi”               // “update”
+delete(m, “bandName”)                     // “delete”
+fmt.Printf(m[“bandName”])                 // prints nothing since m[“bandName”] == “”
+可以使用range关键字来遍历map的所有元素。</p>
+
+<p>for key, value := range m {
+  fmt.Println(“Key:”, key, “Value:”, value)
+}
+遍历顺序
+第一眼看上去，Go程序员或许会以为下面的代码输出：</p>
+
+<p>package main</p>
+
+<p>import “fmt”</p>
+
+<p>func main() {
+  blogArticleViews := map[string]int{
+      “unix”: 0,
+      “python”: 1,
+      “go”: 2,
+      “javascript”: 3,
+      “testing”: 4,
+      “philosophy”: 5,
+      “startups”: 6,
+      “productivity”: 7,
+      “hn”: 8,
+      “reddit”: 9,
+      “C++”: 10,
+  }
+  for key, views := range blogArticleViews {
+      fmt.Println(“There are”, views, “views for”, key)
+  }
+}
+会是这样的：</p>
+
+<p>$ go run map_iteration_order.go
+There are 0 views for unix
+There are 1 views for python
+There are 2 views for go
+There are 3 views for javascript
+There are 4 views for testing
+There are 5 views for philosophy
+There are 6 views for startups
+There are 7 views for productivity
+There are 8 views for hn
+There are 9 views for reddit
+There are 10 views for C++
+但从Go 1版本开始，map的遍历顺序是随机的。也就是说下面的结果更有可能：</p>
+
+<p>$ go run map_iteration_order.go
+There are 3 views for javascript
+There are 5 views for philosophy
+There are 10 views for C++
+There are 0 views for unix
+There are 1 views for python
+There are 2 views for go
+There are 4 views for testing
+There are 6 views for startups
+There are 7 views for productivity
+There are 8 views for hn
+There are 9 views for reddit
+Go语言的设计者们注意到人们过于依赖这种通常情况下key的存储顺序和key的添加顺序一致的特性。所以他们把key的遍历顺序随机化了。因此，如果你希望key的输出顺序和添加顺序一致的话，你需要自己去追踪哪个值存储在哪个位置，就像这样：</p>
+
+<p>package main</p>
+
+<p>import (
+    “fmt”
+    “sort”
+)</p>
+
+<p>func main() {
+    var m = map[string]int{
+        “unix”:         0,
+        “python”:       1,
+        “go”:           2,
+        “javascript”:   3,
+        “testing”:      4,
+        “philosophy”:   5,
+        “startups”:     6,
+        “productivity”: 7,
+        “hn”:           8,
+        “reddit”:       9,
+        “C++”:          10,
+    }
+    var keys []string
+    for k := range m {
+        keys = append(keys, k)
+    }
+    sort.Strings(keys)
+    for _, k := range keys {
+        fmt.Println(“Key:”, k, “Value:”, m[k])
+    }
+}
+上面的代码是又一次厚颜无耻地从Andrew 的大作偷过来直接用的。</p>
+
+<p>我觉得大家对这个特性的态度可以分为两类。
+第一类人会有各种反应，从不明白为什么要这么做，到有点不爽，甚至是强烈反对。这些人大部分是喜欢弄些有潜在危险性的或者小技巧的代码，并且他们希望Go语言的设计者也能满足他们的愿望。
+另一类人倒是能够完全接受，而且很感激Go设计者们能够为他们着想，不断完善和改进Go语言。</p>
+
+<p>为什么这很特别？</p>
+
+<p>一句话：态度。</p>
+
+<p>这个无伤大雅的语言特性在我看来恰是作为通用语言哲学的一个闪光点。没有过于灵活地允许马马虎虎的代码，Go强迫你从一开始就把事情弄得直接一点。Go程序员参考里面说如果他们的程序可以编译（而且代码符合Go的风格），那么代码有很大的可能可以像预期的那样工作，这种模模糊糊却不错的感觉也有Go严谨性的贡献。没有诡异的类型bug，丢失分号等等错误。</p>
+
+<p>尤其是，在Andrew的参考文章中，他指出这是Go的设计者们所作出的改变。他们不再允许人们依赖于那些破破烂烂的假设。我最痛恨的一点就是那些破烂的，到处是bug的功能（这发生在交付的产品中，或者是编程语言，等等很多地方），通过权衡，接受，从而变成了一个特性，另外尝试修复这些”特性”真的是很恶心。很明显的，PHP和JavaScript的语言文化就是因为各种原因往这个方向发展的（他们使用它，但是注定要付出代价，而且很多东西到最后都是没有解决的）。</p>
+
+<p>例如，PHP的一个最大的缺点是，针与干草堆的问题（在干草堆里面找针）。我理想中的语言所应该具有的特点和这种不一致性格格不入。这也是为什么我发现Go的设计者拒绝糟糕的异常和泛型设计。他们就是想做正确的事情，当然他们知道这需要花费时间。他们不着急，而且向语言中添加特性比删除特性容易多了。</p>
+
+<p>总结
+Go是一种令人愉悦的语言，而且很多方面都是经过深思熟虑的。不要因为它缺少一些你常用的功能，比如泛型和动态类型，而急于去评断和批评它。如果你自己愿意试一试，你会发现你不一定需要这些功能。而且，你通过使用简单的并行功能会写出更简单，整洁，优雅的代码。</p>
+
+<p>Go一直在坚定地成长和发展中，这也是Go所能带来的乐趣之一。它绝对是可靠的，而且可以用于生产环境中。同时Go的性能和稳定性也在不断地提高。看看下面由Rob Pike最近贴出来的对比Go 1和最新版（快1.3了）的对比。</p>
+
+<p>benchmark                          old ns/op      new ns/op      delta 
+BenchmarkBinaryTree17              7102124000     5790215308     -18.47% 
+BenchmarkFannkuch11                7139655000     4361664854     -38.91% 
+BenchmarkFmtFprintfEmpty           177            104            -41.24% 
+BenchmarkFmtFprintfString          575            312            -45.74% 
+BenchmarkFmtFprintfInt             424            230            -45.75% 
+BenchmarkFmtFprintfIntInt          682            403            -40.91% 
+BenchmarkFmtFprintfPrefixedInt     661            394            -40.39% 
+BenchmarkFmtFprintfFloat           907            598            -34.07% 
+BenchmarkFmtManyArgs               2787           1663           -40.33% 
+BenchmarkGobDecode                 31284200       10693446       -65.82% 
+BenchmarkGobEncode                 13900550       6919498        -50.22% 
+BenchmarkGzip                      636714400      704154254      +10.59% 
+BenchmarkGunzip                    275620600      139906588      -49.24% 
+BenchmarkHTTPClientServer          144041         71739          -50.20% 
+BenchmarkJSONEncode                83472200       32969241       -60.50% 
+BenchmarkJSONDecode                391968600      120858167      -69.17% 
+BenchmarkMandelbrot200             9540360        6062905        -36.45% 
+BenchmarkGoParse                   10007700       6760226        -32.45% 
+BenchmarkRegexpMatchEasy0_32       198            168            -15.15% 
+BenchmarkRegexpMatchEasy0_1K       540            479            -11.30% 
+BenchmarkRegexpMatchEasy1_32       175            149            -14.86% 
+BenchmarkRegexpMatchEasy1_1K       1353           1414           +4.51%
+BenchmarkRegexpMatchMedium_32      311            307            -1.29% 
+BenchmarkRegexpMatchMedium_1K      108924         126452         +16.09%
+BenchmarkRegexpMatchHard_32        4972           5681           +14.26%
+BenchmarkRegexpMatchHard_1K        157354         181042         +15.05%
+BenchmarkRevcomp                   1362067000     1162752845     -14.63% 
+BenchmarkTemplate                  714330000      144396424      -79.79% 
+BenchmarkTimeParse                 1651           669            -59.48% 
+BenchmarkTimeFormat                3215           714            -77.79%</p>
+
+<p>http://play.golang.org/p/ppIvkgAGL1</p>
+
+<p>先来看一段 Golang 生成 json 的代码，首先定义了一个 map[string]interface{}  的变量，然后存一些值，这里要注意的是 previews 字段，为了浏览器获取到的 json 数据是有序的，所以定义了一个 map[int]map[string]string 的类型，加上了一个表示顺序的键：</p>
+
+<p>?
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+list := make(map[string]interface{})
+list[“id”] = detail[“id”]
+list[“game_name”] = detail[“game_name”]
+list[“game_logo”] = detail[“game_m_logo”]
+gameTags, _ := utils.InterfaceToStr(detail[“game_tags”])
+list[“game_tags”] = strings.Split(gameTags, “,”)
+list[“game_desc”] = detail[“game_long_desc”]
+list[“play_total_times”] = 33333
+testImages := make(map[int]map[string]string)
+testImages[1] = map[string]string{“video”: “xxx”}
+testImages[2] = map[string]string{“image”: “yyy1”}
+testImages[3] = map[string]string{“image”: “yyy2”}
+testImages[5] = map[string]string{“image”: “yyy5”}
+testImages[4] = map[string]string{“image”: “yyy3”}
+list[“previews”] = testImages</p>
+
+<p>fmt.Println(“test list:”, list)
+但实际上，对于 Golang 来说，previews 字段并非因此就变成是有序的，通过打印就可以知道了，但是浏览器会自动对带有 int 型主键的 json 数据进行排序，从而实现了目的。</p>
+
+<p>生成的 json 格式数据如下，按照 int 从小到大排列了：</p>
+
+<p>?
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29
+30
+31
+{
+ “data”: {
+  “game_desc”: “从秀才一路前进，你最终能官居几品？ 为了完成父亲的遗愿，你走上了这条漫漫升官路。 最终你会成为什么样的人？ “,
+  “game_logo”: “http://image.egret.com/game/gameIcon/181/90681/icon_200.jpg?1472698847”,
+  “game_name”: “官居几品”,
+  “game_tags”: [
+   “呵呵”
+  ],
+  “id”: “3”,
+  “play_total_times”: 33333,
+  “previews”: {
+   “1”: {
+    “video”: “xxx”
+   },
+   “2”: {
+    “image”: “yyy1”
+   },
+   “3”: {
+    “image”: “yyy2”
+   },
+   “4”: {
+    “image”: “yyy3”
+   },
+   “5”: {
+    “image”: “yyy5”
+   }
+  }
+ },
+ “msg”: “ok”,
+ “result”: 0
+}
+这样的话有个缺点，本来可以输出更为简洁的数据结构，但因为 map 的无序不得不加一个主键，让前端解析增加了麻烦。</p>
+
+<p>Golang map如何生成有序的json数据详解</p>
+
+<p>map是必不可少的数据结构，在Golang中，使用map或多或少会遇到与其他语言不一样的体验，比如访问不存在的元素会返回其类型的空值、map的大小究竟是多少，为什么会报”cannot take the address of”错误，遍历map的随机性等等。
+本文希望通过研究map的底层实现，以解答这些疑惑。
+基于Golang 1.8.3</p>
+
+<ol>
+  <li>数据结构及内存管理
+hashmap的定义位于 src/runtime/hashmap.go 中，首先我们看下hashmap和bucket的定义：</li>
+</ol>
+
+<p>type hmap struct {
+    count     int    // 元素的个数
+    flags     uint8  // 状态标志
+    B         uint8  // 可以最多容纳 6.5 * 2 ^ B 个元素，6.5为装载因子
+    noverflow uint16 // 溢出的个数
+    hash0     uint32 // 哈希种子</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>buckets    unsafe.Pointer // 桶的地址
+oldbuckets unsafe.Pointer // 旧桶的地址，用于扩容
+nevacuate  uintptr        // 搬迁进度，小于nevacuate的已经搬迁
+overflow *[2]*[]*bmap  } 其中，overflow是一个指针，指向一个元素个数为2的数组，数组的类型是一个指针，指向一个slice，slice的元素是桶(bmap)的地址，这些桶都是溢出桶；为什么有两个？因为Go map在hash冲突过多时，会发生扩容操作，为了不全量搬迁数据，使用了增量搬迁，[0]表示当前使用的溢出桶集合，[1]是在发生扩容时，保存了旧的溢出桶集合；overflow存在的意义在于防止溢出桶被gc。
+</code></pre></div></div>
+
+<p>// A bucket for a Go map.
+type bmap struct {
+    // 每个元素hash值的高8位，如果tophash[0] &lt; minTopHash，表示这个桶的搬迁状态
+    tophash [bucketCnt]uint8
+    // 接下来是8个key、8个value，但是我们不能直接看到；为了优化对齐，go采用了key放在一起，value放在一起的存储方式，
+    // 再接下来是hash冲突发生时，下一个溢出桶的地址
+}
+tophash的存在是为了快速试错，毕竟只有8位，比较起来会快一点。</p>
+
+<p>从定义可以看出，不同于STL中map以红黑树实现的方式，Golang采用了HashTable的实现，解决冲突采用的是链地址法。也就是说，使用数组+链表来实现map。特别的，对于一个key，几个比较重要的计算公式为:</p>
+
+<p>key	hash	hashtop	bucket index
+key	hash := alg.hash(key, uintptr(h.hash0))	top := uint8(hash » (sys.PtrSize*8 - 8))	bucket := hash &amp; (uintptr(1)«h.B - 1)，即 hash % 2^B
+例如，对于B = 3，当hash(key) = 4时， hashtop = 0， bucket = 4，当hash(key) = 20时，hashtop = 0， bucket = 4；这个例子我们在搬迁过程还会用到。</p>
+
+<p>内存布局类似于这样：</p>
+
+<p>hashmap-buckets</p>
+<ol>
+  <li>创建 - makemap
+map的创建比较简单，在参数校验之后，需要找到合适的B来申请桶的内存空间，接着便是穿件hmap这个结构，以及对它的初始化。</li>
+</ol>
+
+<p>makemap</p>
+<ol>
+  <li>访问 - mapaccess
+对于给定的一个key，可以通过下面的操作找到它是否存在</li>
+</ol>
+
+<p>image.png
+方法定义为</p>
+
+<p>// returns key, if not find, returns nil
+func mapaccess1(t *maptype, h *hmap, key unsafe.Pointer) unsafe.Pointer</p>
+
+<p>// returns key and exist. if not find, returns nil, false
+func mapaccess2(t *maptype, h *hmap, key unsafe.Pointer) (unsafe.Pointer, bool)</p>
+
+<p>// returns both key and value. if not find, returns nil, nil
+func mapaccessK(t *maptype, h *hmap, key unsafe.Pointer) (unsafe.Pointer, unsafe.Pointer)
+可见在找不到对应key的情况下，会返回nil</p>
+
+<ol>
+  <li>分配 - mapassign
+为一个key分配空间的逻辑，大致与查找类似；但增加了写保护和扩容的操作；注意，分配过程和删除过程都没有在oldbuckets中查找，这是因为首先要进行扩容判断和操作；如下：</li>
+</ol>
+
+<p>assign
+扩容是整个hashmap的核心算法，我们放在第6部分重点研究。</p>
+
+<p>新建一个溢出桶，并将其拼接在当前桶的尾部，实现了类似链表的操作：</p>
+
+<p>// 获取当前桶的溢出桶
+func (b *bmap) overflow(t *maptype) *bmap {
+    return *(**bmap)(add(unsafe.Pointer(b), uintptr(t.bucketsize)-sys.PtrSize))
+}</p>
+
+<p>// 设置当前桶的溢出桶
+func (h <em>hmap) setoverflow(t *maptype, b, ovf *bmap) {
+    h.incrnoverflow()
+    if t.bucket.kind&amp;kindNoPointers != 0 {
+        h.createOverflow()
+        //重点，这里讲溢出桶append到overflow[0]的后面
+        *h.overflow[0] = append(</em>h.overflow[0], ovf)
+    }
+    *(**bmap)(add(unsafe.Pointer(b), uintptr(t.bucketsize)-sys.PtrSize)) = ovf
+}</p>
+<ol>
+  <li>删除 - mapdelete
+删除某个key的操作与分配类似，由于hashmap的存储结构是数组+链表，所以真正删除key仅仅是将对应的slot设置为empty，并没有减少内存；如下：</li>
+</ol>
+
+<p>mapdelete</p>
+<ol>
+  <li>扩容 - growWork
+首先，判断是否需要扩容的逻辑是</li>
+</ol>
+
+<p>func (h *hmap) growing() bool {
+    return h.oldbuckets != nil
+}
+何时h.oldbuckets不为nil呢？在分配assign逻辑中，当没有位置给key使用，而且满足测试条件(装载因子&gt;6.5或有太多溢出通)时，会触发hashGrow逻辑：</p>
+
+<p>func hashGrow(t *maptype, h *hmap) {
+    //判断是否需要sameSizeGrow，否则”真”扩
+    bigger := uint8(1)
+    if !overLoadFactor(int64(h.count), h.B) {
+        bigger = 0
+        h.flags |= sameSizeGrow
+    }
+        // 下面将buckets复制给oldbuckets
+    oldbuckets := h.buckets
+    newbuckets := newarray(t.bucket, 1«(h.B+bigger))
+    flags := h.flags &amp;^ (iterator | oldIterator)
+    if h.flags&amp;iterator != 0 {
+        flags |= oldIterator
+    }
+    // 更新hmap的变量
+    h.B += bigger
+    h.flags = flags
+    h.oldbuckets = oldbuckets
+    h.buckets = newbuckets
+    h.nevacuate = 0
+    h.noverflow = 0
+        // 设置溢出桶
+    if h.overflow != nil {
+        if h.overflow[1] != nil {
+            throw(“overflow is not nil”)
+        }
+// 交换溢出桶
+        h.overflow[1] = h.overflow[0]
+        h.overflow[0] = nil
+    }
+}
+OK，下面正式进入重点，扩容阶段；在assign和delete操作中，都会触发扩容growWork：</p>
+
+<p>func growWork(t *maptype, h *hmap, bucket uintptr) {
+    // 搬迁旧桶，这样assign和delete都直接在新桶集合中进行
+    evacuate(t, h, bucket&amp;h.oldbucketmask())
+        //再搬迁一次搬迁过程中的桶
+    if h.growing() {
+        evacuate(t, h, h.nevacuate)
+    }
+}
+6.1 搬迁过程
+一般来说，新桶数组大小是原来的2倍(在!sameSizeGrow()条件下)，新桶数组前半段可以”类比”为旧桶，对于一个key，搬迁后落入哪一个索引中呢？</p>
+
+<p>假设旧桶数组大小为2^B， 新桶数组大小为2*2^B，对于某个hash值X
+若 X &amp; (2^B) == 0，说明 X &lt; 2^B，那么它将落入与旧桶集合相同的索引xi中；
+否则，它将落入xi + 2^B中。
+例如，对于旧B = 3时，hash1 = 4，hash2 = 20，其搬迁结果类似这样。</p>
+
+<p>example.png
+源码中有些变量的命名比较简单，容易扰乱思路，我们注明一下便于理解。</p>
+
+<p>变量	释义
+x *bmap	桶x表示与在旧桶时相同的位置，即位于新桶前半段
+y *bmap	桶y表示与在旧桶时相同的位置+旧桶数组大小，即位于新桶后半段
+xi int	桶x的slot索引
+yi int	桶y的slot索引
+xk unsafe.Pointer	索引xi对应的key地址
+yk unsafe.Pointer	索引yi对应的key地址
+xv unsafe.Pointer	索引xi对应的value地址
+yv unsafe.Pointer	索引yi对应的value地址
+搬迁过程如下：</p>
+
+<p>evacuate
+总结
+到目前为止，Golang的map实现细节已经分析完毕，但不包含迭代器相关操作。通过分析，我们了解了map是由数组+链表实现的HashTable，其大小和B息息相关，同时也了解了map的创建、查询、分配、删除以及扩容搬迁原理。总的来说，Golang通过hashtop快速试错加快了查找过程，利用空间换时间的思想解决了扩容的问题，利用将8个key(8个value)依次放置减少了padding空间等等。</p>
+:ET

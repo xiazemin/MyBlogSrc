@@ -1,0 +1,246 @@
+---
+title: 进程ID、父进程ID、进程组ID、会话和控制终端
+layout: post
+category: linux
+author: 夏泽民
+---
+进程基本属性
+
+1.进程ID（PID）
+函数定义：
+     #include <sys/types.h>
+     #include <unistd.h>
+     pid_t getpid(void);
+函数说明：
+    每一个进程都有一个非负整型表示的唯一进程ID（PID）.好比方我们的身份证一样,每一个人的身份证号是唯一的.由于进程ID标示符总是唯一的，常将其用来做其它标示符的一部分以保证其唯一性。进程ID（PID）是无法在用户层改动的.
+<!-- more -->
+在Linux系统中，PID为0 的进程一般是调度进程。经常被称为交换进程，也是第一个系统进程.第一个用户进程是init进程。其PID为1.
+    在应用编程中。调用getpid()函数能够获得当前进程的PID，此函数没有參数，假设运行成功返回当前进程的PID。失败返回-1。出错原因存储于errno.
+样例1：打印自己的进程ID（PID）.
+#include <unistd.h>
+#include <stdio.h>
+int main()
+{
+        pid_t pid; //pid_t 事实上是int
+        pid = getpid();
+        printf("the current program's pid is %d\n",pid);
+        while(1);
+        return 0;
+}
+执行后使用“ps u”命令查看对比一下.
+
+2.父进程ID（PPID）
+函数定义：
+     #include <sys/types.h>
+     #include <unistd.h>
+     pid_t getppid(void);
+函数说明：
+    不论什么进程（除init进程）都是由还有一个进程创建。该进程称为被创建进程的父进程。被创建的进程称为子进程。父进程ID无法在用户层改动.父进程的进程ID即为子进程的父进程ID（PPID）.
+    用户能够通过调用getppid()函数来获得当前进程的父进程ID（PPID）.此函数没有參数，假设运行成功返回当前进程的父进程ID（PPID）。失败返回-1，出错原因存储于errno.
+样例1：打印自己的父进程PPID.
+#include <unistd.h>
+#include <stdio.h>
+int main()
+{
+        pid_t ppid; //pid_t 事实上是int
+        ppid = getppid();
+        printf("the current program's ppid is %d\n",ppid);
+        while(1);
+        return 0;
+}
+执行后使用“ps u”命令查看对比一下.
+
+3.进程组ID（process group ID PGID）
+函数定义：
+    #include <unistd.h>
+    int setpgid(pid_t pid, pid_t pgid);
+    pid_t getpgid(pid_t pid);
+    pid_t getpgrp(void);                 /* POSIX.1 version */
+    pid_t getpgrp(pid_t pid);            /* BSD version */
+    int setpgrp(void);                   /* System V version */
+    int setpgrp(pid_t pid, pid_t pgid);  /* BSD version */
+函数说明：
+    在Linux系统中。每一个用户都实用户ID（UID）和用户组ID（GUID）.相同，进程也拥有自己的进程ID（PID）和进程组ID（PGID）. 进程组是一个或多个进程的集合;他们与同一作业相关联.每一个进程组都有唯一的进程组ID（PGID），进程组ID（PGID）能够在用户层改动.比方。将某个进程加入到还有一个进程组，就是使用setpgid()函数改动其进程组ID.
+    用户能够通过调用getpgid()函数来获得当前进程的进程组ID（PGID）.若此參数为0表示获取当前进程的进程组ID，假设运行成功返回当前进程的进程组ID（PGID）。失败返回-1。出错原因存储于errno. 建议使用POSIX.1规定中的无參数getprgp()函数替代getpgid(pid)函数.
+    进程组ID（PGID）也能够通过函数getpgrp()获得.通过fork()函数产生的子进程会继承它的父进程的进程组ID（PGID）.
+    每一个进程组都能够有一个组长进程，组长进程的进程组ID等于其进程ID.但组长进程能够先退出。即仅仅要在某个进程组中有一个进程存在，则该进程组就存在，与其组长进程是否存在无关.进程组的最后进程能够退出或转移到其它组.
+    能够将某个进程增加到某个进程组中，调用系统函数setpgid().其第一个參数为欲改动进程组ID（PGID）的进程ID（PID），第二參数为新的进程组ID（PGID），假设这两个參数相等，则由pid指定的进程变为该进程组组长。假设pid为0，则使用调用者的进程ID（即改动当前进程的进程组ID（PGID为指定的pgid））；假设pgid是0，则由pid指定的进程ID（PID）。用做进程组ID(PGID)（即：pid所指进程作为进程组的组长进程）.
+    一个进程仅仅能为自己或子进程设置进程组ID（PGID），假设在它的子进程中调用了exec()等系列函数，就不再能改变该子进程的进程组ID（PGID）.
+#include <unistd.h>
+#include <stdio.h>
+int main()
+{
+        int i;
+        printf("\t pid \tppid \t pgid\n");
+        printf("parent:\t%d\t%d\t%d\n",getpid(),getppid(),getpgid(0));
+        for(i=0; i<2; i++)
+        {
+                if(fork()==0)
+                {
+                        printf("child:\t%d\t%d\t%d\n",getpid(),getppid(),getpgid(0));
+                }
+        }
+        sleep(500);
+        return 0;
+
+}
+输出：
+
+
+
+4.会话（session）
+函数定义：
+    #include <unistd.h>
+    pid_t getsid(pid_t pid);
+    pid_t setsid(void);
+函数说明：
+    会话是一个或多个进程组的集合.系统调用函数getsid()用来获取某个进程的会话ID(SID).
+    假设pid是0。返回调用进程的会话SID，一般说来。改制等于进程组ID（PGID）.假设pid并不属于调用者所在的会话。则调用者就无法获取SID.
+    某个进程的会话ID也是能够改动的。调用函数setsid()用来创建一个新的会话.
+    假设调用进程已经是一个进程组的组长，则此函数返回错误.假设不是，则返回一个新的会话.
+（1）该进程变成新会话首进程。会话首进程是创建该会话的进程。此时，该进程是新会话唯一的进程.
+（2）该进程成为一个新的进程组的组长进程.新的进程组ID（PGID）是该调用进程的PID.
+（3）该进程没有控制终端.假设在调用setsid()之前该进程就有一个控制终端，那么这样的联系也会中断.
+ 
+图1 进程组合会话的进程安排
+
+5.控制终端（controlling terminal）
+函数定义：
+    #include <unistd.h>
+    pid_t tcgetpgrp(int fd);
+    int tcsetpgrp(int fd, pid_t pgrp);
+函数说明：
+    会话和进程组的关系：
+（1）一个会话能够有一个控制终端，建立于控制终端相连接的会话首进程被称为控制进程.
+（2）一个会话中的几个进程组可被分为一个前台进程组和几个后台进程组，假设一个会话有一个控制终端，则他有一个前台进程组.
+（3）不管何时键入终端的中断键，都会将中断信ID发送给前台进程组的全部会话。不管何时键入终端的退出键，都会将退出信ID发送给前台进程组的全部会话.
+假设终端监測到调制解调器（或网络）已经断开连接，则将挂断信ID发送给控制进程（会话首进程）.
+    调用函数tcgetgrpt()获取与打开的终端相关联的前台进程组的进程组ID.
+    调用函数tcsetgrpt()设置某个进程组是前台进程还是后台进程组.
+    假设进程有一个控制终端，则将前台进程组ID设置为pgrp，pgrp的值应该在同一会话中的一个进程组的ID。fd为控制终端的文件描写叙述符.
+    假设调用tcsetpgrp()函数的是会话中的后台进程组的进程，则该进程不会堵塞，或者忽略SIGTTOU信号.信号SIGTTOU将会发送给该进程组的全部进程.
+    当fd是指向进程的控制终端，函数tcgetpgrp()返回终端的前台进程组的进程组ID，该ID值是一个大于1且没有使用的值.假设fd指向的不是进程的终端，则函数返回-1,并设置errno指示出错.
+    
+    需要有一种方法来通知内核哪一个进程组是前台进程组，这样，终端设备驱动程序就能了解将终端输入和终端产生的信号送到何处。
+
+复制代码
+#include <unistd.h>
+
+pid_t tcgetpgrp( int filedes );
+返回值：若成功则返回前台进程组的进程组ID，若出错则返回-1
+
+int tcsetpgrp( int filedes, pid_t pgrpid );
+返回值：若成功则返回0，若出错则返回-1
+复制代码
+函数tcgetpgrp返回前台进程组的进程组ID，该前台进程组与在filedes上打开的终端相关联。
+
+如果进程有一个控制终端，则该进程可以调用tcsetpgrp将前台进程组ID设置为pgrpid。pgrpid的值应当是在同一个会话中的一个进程组的ID。filedes必须引用该会话的控制终端。
+
+大多数应用程序并不直接调用这两个函数。它们通常由作业控制shell调用。
+
+Single UNIX Specification定义了称为tcgetsid的XSI扩展，给出控制TTY的文件描述符，应用程序就能获得会话首进程的进程组ID。
+
+#include <termios.h>
+pid_t tcgetsid( int filedes );
+返回值：若成功则返回会话首进程的进程组ID，若出错则返回-1
+需要管理控制终端的应用程序可以调用tcgetsid函数识别出控制终端的会话首进程的会话ID（它等价于会话首进程的进程组ID）。
+
+函数tcgetpgrp返回前台进程组的进程组ID，该进程组与filedes上打开的终端相关联。
+如果进程有一个控制终端，则该进程可以调用tcsetpgrp将前台进程组ID设置为pgrpid。pgrpid的值应当是在同一会话中的
+
+一个进程组的ID，filedes必须引用该会话的控制终端。比如我们在执行fg命令时，就是shell调用tcsetpgrp函数将后台进程
+
+改为前台进程。
+
+给出控制tty的文件描述符，应用程序能获得会话首进程的进程组ID：
+
+[cpp] view plain copy
+#include <termios.h>  
+pid_t tcgetsid(int filedes); //若成功则返回会话首进程进程组ID，出错则返回-1. 
+
+在tcsetpgrp之前需要将原来的控制全台进程组ID保存下来，程序结束前重新设置回该进程组ID。
+原话如下：
+
+因为你修改了控制终端给你的进程组，如果当前进程组没有进程则进程组生命周期结束，控制终端释放，所以在程序结束前
+
+应该把控制终端还给原来的进程组。
+
+
+
+为什么这边要处理SIGTTOU信号呢，请看下面man说明：
+
+If tcsetpgrp() is called by a member of a background process  group  in
+
+its  session, and the calling process is not blocking or ignoring SIGT‐TOU, 
+
+a SIGTTOU signal is sent to all members of this background processgroup.
+
+
+
+https://linux.die.net/man/3/tcsetpgrp
+
+The function tcgetpgrp() returns the process group ID of the foreground process group on the terminal associated to fd, which must be the controlling terminal of the calling process.
+The function tcsetpgrp() makes the process group with process group ID pgrp the foreground process group on the terminal associated to fd, which must be the controlling terminal of the calling process, and still be associated with its session. Moreover, pgrp must be a (nonempty) process group belonging to the same session as the calling process.
+
+If tcsetpgrp() is called by a member of a background process group in its session, and the calling process is not blocking or ignoring SIGTTOU, a SIGTTOU signal is sent to all members of this background process group.
+
+Return Value
+When fd refers to the controlling terminal of the calling process, the function tcgetpgrp() will return the foreground process group ID of that terminal if there is one, and some value larger than 1 that is not presently a process group ID otherwise. When fd does not refer to the controlling terminal of the calling process, -1 is returned, and errno is set appropriately.
+
+unix环境下，当一个进程以后台形式启动，但尝试去读写控制台终端时，将会触发SIGTTIN（读）和SIGTTOU（写）信号量，接着，进程将会暂停（linux默认情况下），read/write将会返回错误。这个时候，shell将会发送通知给用户，提醒用户切换此进程为前台进程，以便继续执行。由后台切换至前台的方式是fg命令，前台转为后台则为CTRL+Z快捷键。
+
+那么问题来了，如何才能在不把进程切换至前台的情况下，读写控制器不会被暂停？答案：只要忽略SIGTTIN和SIGTTOU信号量即可：signal(SIGTTOU, SIG_IGN)。
+
+stty stop/-stop命令是用于设置收到SIGTTOU信号量后是否执行暂停，因为有些系统的默认行为不一致，比如mac是默认忽略，而linux是默认启用。stty -a可以查看当前tty的配置参数。
+
+SIGTTIN信号
+因为只有前台进程才可以接受终端的输入，如果后台作业试图读终端，终端驱动程序检测这种情况，并且发送一个特定信号SIGTTIN给后台作业，该信号会停止此后台作业，而shell则向有关用户发出这种情况的通知
+演示案例
+第一步：从标准输入读取数据，然后重定向到temp.foo文件中。但是我们选择将此任务丢到后台运行(变为后台作业)
+当我们再次按下回车之后，可以看到后台任务变为Stopped状态，并且将信息通知到控制台中
+
+SIGTTOU信号
+后台作业如果有标准输出，那么默认标准输出会显示到前台的终端上。我们也可以通过流重定向到别处
+如果我们不希望后台进程有标准输出，则可以使用stty命令禁止后台作业向终端输出。如果有后台作业向终端输出，就会向该作业发送SIGTTOU信号，此时此作业就会处于阻塞状态（Stopped）
+演示案例
+①我们没有使用stty命令，则后台任务有标准输出就会打印到终端上
+
+
+②使用stty命令，禁止后台作业输出到控制终端。之后再cat文件，发现任务已经被Stopped了
+
+stty tostop
+
+<img src="{{site.url}}{{site.baseurl}}/img/sigttou.png"/>
+
+Processes in the foreground job of a controlling terminal have unrestricted access to that terminal; background proesses do not. This section describes in more detail what happens when a process in a background job tries to access its controlling terminal.
+
+When a process in a background job tries to read from its controlling terminal, the process group is usually sent a SIGTTIN signal. This normally causes all of the processes in that group to stop (unless they handle the signal and don't stop themselves). However, if the reading process is ignoring or blocking this signal, then read fails with an EIO error instead.
+
+Similarly, when a process in a background job tries to write to its controlling terminal, the default behavior is to send a SIGTTOU signal to the process group. However, the behavior is modified by the TOSTOP bit of the local modes flags (see section Local Modes). If this bit is not set (which is the default), then writing to the controlling terminal is always permitted without sending a signal. Writing is also permitted if the SIGTTOU signal is being ignored or blocked by the writing process.
+
+Most other terminal operations that a program can do are treated as reading or as writing. (The description of each operation should say which.)
+
+TOSTOP 控制后台任务是否能写终端，
+
+stty tostop; (sleep 5; echo hello, world) &
+tostop 被设置，任务试图写终端时，SIGTTOU 信号发送给该进程，进程停止。需 kill -9.
+
+stty -tostop; (sleep 5; echo hello, world) &
+取消 tostop，后台任务可以发送 hello, world 到终端。
+
+$ stty -a
+speed 38400 baud; rows 51; columns 151; line = 0;
+intr = ^C; quit = ^\; erase = ^?; kill = ^U; eof = ^D; eol = <undef>; eol2 = <undef>; swtch = <undef>; start = ^Q; stop = ^S; susp = ^Z; rprnt = ^R;
+werase = ^W; lnext = ^V; discard = ^O; min = 1; time = 0;
+-parenb -parodd -cmspar cs8 -hupcl -cstopb cread -clocal -crtscts
+-ignbrk brkint -ignpar -parmrk -inpck -istrip -inlcr -igncr icrnl ixon -ixoff -iuclc -ixany imaxbel -iutf8
+opost -olcuc -ocrnl onlcr -onocr -onlret -ofill -ofdel nl0 cr0 tab0 bs0 vt0 ff0
+isig icanon iexten echo echoe echok -echonl -noflsh -xcase -tostop -echoprt echoctl echoke -flusho -extproc
+可以看到 ubuntu 16.04 的默认设置是 -tostop.
+
+参考资料
+Access to the Controlling Terminal
+The TTY demystified
+
+
+

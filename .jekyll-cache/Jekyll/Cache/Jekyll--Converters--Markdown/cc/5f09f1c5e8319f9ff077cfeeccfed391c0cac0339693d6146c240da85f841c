@@ -1,0 +1,113 @@
+I"�<p>select为golang提供了多路IO复用机制，和其他IO复用一样，用于检测是否有读写事件是否ready。
+golang 的 select 的功能和 select, poll, epoll 相似， 就是监听 IO 操作，当 IO 操作发生时，触发相应的动作。</p>
+
+<p>select 和 switch 是 Go语言中进行分支操作的两个方式，各有各的应用场景。</p>
+
+<p>select
+select只能应用于channel的操作，既可以用于channel的数据接收，也可以用于channel的数据发送。</p>
+
+<p>如果select的多个分支都满足条件，则会随机的选取其中一个满足条件的分支， 如语言规范中所说：</p>
+
+<p>If multiple cases can proceed, a uniform pseudo-random choice is made to decide which single communication will execute.</p>
+
+<p>｀case｀语句的表达式可以为一个变量或者两个变量赋值。</p>
+
+<p>有default语句。
+<!-- more -->
+实现原理
+golang实现select的时候，实际上为每一个case语句定义了一个数据结构，select语句块执行的时候，实际上可以类比成对一个case数组处理的代码块（或者函数），然后程序流程转到选中的case块。</p>
+
+<p>case数据结构
+源码包src/runtime/select.go:scase定义了表示case语句的数据结构：
+type scase struct {
+    c           *hchan         // chan
+    kind        uint16
+    elem        unsafe.Pointer // data element
+}
+　　scase.c表示当前case语句操作的chan指针，这也表明一个case只能监听一个chan。</p>
+
+<p>　　scase.kind表示当前的chan是可读还是可写channel或者是default。三种类型分别由常量定义：</p>
+
+<p>caseRecv：case语句中尝试读取scase.c中的数据；
+caseSend：case语句中尝试向scase.c中写入数据；
+caseDefault： default语句
+　　scase.elem表示缓冲区地址，跟据scase.kind不同，有不同的用途：</p>
+
+<p>scase.kind == caseRecv ： scase.elem表示读出channel的数据存放地址；
+scase.kind == caseSend ： scase.elem表示将要写入channel的数据存放地址；
+select实现逻辑
+源码包src/runtime/select.go:selectgo()定义了select选择case的函数：
+// selectgo implements the select statement.
+//
+// *sel is on the current goroutine’s stack (regardless of any
+// escaping in selectgo).
+//
+// selectgo returns the index of the chosen scase, which matches the
+// ordinal position of its respective select{recv,send,default} call.
+func selectgo(sel *hselect) int {<br />
+}
+　　其中数据结构hselect如下：
+// Select statement header.
+// Known to compiler.
+// Changes here must also be made in src/cmd/internal/gc/select.go’s selecttype.
+type hselect struct {
+    tcase     uint16   // total count of scase[]
+    ncase     uint16   // currently filled scase[]
+    pollorder *uint16  // case poll order
+    lockorder *uint16  // channel lock order
+    scase     [1]scase // one per case (in order of appearance)
+}
+hselect.tcase存的是scase总数。</p>
+
+<p>hselect.pollorder是保存scase的随机后的序列。以达到随机检测case的目的。</p>
+
+<p>hselect.lockorder是保存的channel地址。所有case语句中channel序列，以达到去重防止对channel加锁时重复加锁的目的。</p>
+
+<p>selectgo返回int，表示选中的scase，也就是ready的channel index。</p>
+
+<p>该函数执行逻辑大致如下：</p>
+
+<ol>
+  <li>
+    <p>锁定scase语句中所有的channel</p>
+  </li>
+  <li>
+    <p>按照随机顺序检测scase中的channel是否ready</p>
+  </li>
+</ol>
+
+<p>　　2.1 如果case可读，则读取channel中数据，解锁所有的channel，然后返回(case index)</p>
+
+<p>　　2.2 如果case可写，则将数据写入channel，解锁所有的channel，然后返回(case index)</p>
+
+<p>　　2.3 所有case都未ready，则解锁所有的channel，然后返回（default index）</p>
+
+<ol>
+  <li>所有case都未ready，且没有default语句</li>
+</ol>
+
+<p>　　 3.1 将当前协程加入到所有channel的等待队列</p>
+
+<p>　　3.2 当将协程转入阻塞，等待被唤醒</p>
+
+<ol>
+  <li>唤醒后返回channel对应的case index</li>
+</ol>
+
+<p>　　4.1 如果是读操作，解锁所有的channel，然后返回(case index)</p>
+
+<p>　　4.2 如果是写操作，解锁所有的channel，然后返回(case index)</p>
+
+<p>一、switch语句
+switch语句提供了一个多分支条件执行的方法。每一个case可以携带一个表达式或一个类型说明符。前者又可被简称为case表达式。因此，Go语言的switch语句又分为表达式switch语句和类型switch语句。
+1、表达式switch语句
+Go会依照从上至下的顺序对每一条case语句中case表达式进行求值，只要被发现其表达式与switch表达式的结果相同，该case语句就会被选中。其余的case语句会被忽略。
+2、类型switch语句
+类型switch语句与一般形式有两点差别。第一点，紧随case关键字的不是表达式，而是类型说明符。类型说明符由若干个类型字面量组成，且多个类型字面量之间由英文逗号分隔。第二点，它的switch表达式是非常特殊的。这种特殊的表达式也起到了类型断言的作用，但其表现形式很特殊，如：v.(type) , 其中v必须代表一个接口类型的值。该类表达式只能出现在类型switch语句中，且只能充当switch表达式。</p>
+
+<p>case int, int8, int16, int32, int64: 
+ fmt.Println(“A signed integer:%d. The type is %T. \n”, v, i)</p>
+
+<p>最后说一下fallthrough。它既是一个关键字，又可以代表一条语句。fallthrough语句可被包含在表达式switch语句中的case语句中。它的作用是使控制权流转到下一个case。不过要注意fallthrough语句仅能作为case语句中的最后一条语句出现。并且，包含它的case语句不是其所属switch语句的最后一条case语句。</p>
+
+:ET

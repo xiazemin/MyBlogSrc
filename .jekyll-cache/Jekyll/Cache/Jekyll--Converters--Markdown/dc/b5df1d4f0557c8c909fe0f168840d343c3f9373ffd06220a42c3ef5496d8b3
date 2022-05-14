@@ -1,0 +1,36 @@
+I"<p>TCP建立连接是要进行三次握手，但是否完成三次握手后，服务器就处理（accept）呢？</p>
+
+<p>　　backlog其实是一个连接队列，在Linux内核2.2之前，backlog大小包括半连接状态和全连接状态两种队列大小。</p>
+
+<p>　　半连接状态为：服务器处于Listen状态时收到客户端SYN报文时放入半连接队列中，即SYN queue（服务器端口状态为：SYN_RCVD）。</p>
+
+<p>　　全连接状态为：TCP的连接状态从服务器（SYN+ACK）响应客户端后，到客户端的ACK报文到达服务器之前，则一直保留在半连接状态中；当服务器接收到客户端的ACK报文后，该条目将从半连接队列搬到全连接队列尾部，即 accept queue （服务器端口状态为：ESTABLISHED）。</p>
+
+<p>　　在Linux内核2.2之后，分离为两个backlog来分别限制半连接（SYN_RCVD状态）队列大小和全连接（ESTABLISHED状态）队列大小。</p>
+
+<p>　　SYN queue 队列长度由 /proc/sys/net/ipv4/tcp_max_syn_backlog 指定，默认为2048。</p>
+
+<p>　　Accept queue 队列长度由 /proc/sys/net/core/somaxconn 和使用listen函数时传入的参数，二者取最小值。默认为128。在Linux内核2.4.25之前，是写死在代码常量 SOMAXCONN ，在Linux内核2.4.25之后，在配置文件 /proc/sys/net/core/somaxconn 中直接修改，或者在 /etc/sysctl.conf 中配置 net.core.somaxconn = 128 
+<!-- more -->
+当backlog为某128时，accept queue队列塞满后，TCP建立的三次握手完成，连接进入ESTABLISHED状态，客户端（nginx）发送给PHP-FPM的数据，FPM处理不过来，没有调用accept将其从accept quque队列取出时，那么就没有ACK包返回给客户端nginx，nginx那边根据TCP 重传机制会再次发从尝试…报了“111: Connection refused”错。当SYNS QUEUE满了时，TCPDUMP的结果，不停重传SYN包。</p>
+
+<p>backlog大小设置为多少合适？
+这跟FPM的处理能力有关，backlog太大了，导致FPM处理不过来，nginx那边等待超时，断开连接，报504 gateway timeout错。同时FPM处理完准备write 数据给nginx时，发现TCP连接断开了，报“Broken pipe”。backlog太小的话，NGINX之类client，根本进入不了FPM的accept queue，报“502 Bad Gateway”错。所以，这还得去根据FPM的QPS来决定backlog的大小。计算方式最好为QPS=backlog。对了这里的QPS是正常业务下的QPS，千万别用echo hello world这种结果的QPS去欺骗自己。当然，backlog的数值，如果指定在FPM中的话，记得把操作系统的net.core.somaxconn设置的起码比它大。另外，ubuntu server 1404上/proc/sys/net/core/somaxconn 跟/proc/sys/net/ipv4/tcp_max_syn_backlog 默认值都是128</p>
+
+<p>backlog参数设置:
+既可以在linux内核参数设置(修改文件/etc/sysctl相关参数)
+也可以在socket系统调用listen函数时设置(第二个参数)，
+这二者区别是:
+前者为全局性的，影响所有socket，
+后者为局部性的，影响当前socket。</p>
+
+<p>https://github.com/php/php-src/commit/ebf4ffc9354f316f19c839a114b26a564033708a</p>
+
+<p>查看SYN queue 溢出
+netstat -s | grep LISTEN 
+102324 SYNs to LISTEN sockets dropped</p>
+
+<p>查看Accept queue 溢出
+netstat -s | grep TCPBacklogDrop 
+TCPBacklogDrop: 2334</p>
+:ET

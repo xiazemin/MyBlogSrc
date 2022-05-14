@@ -1,0 +1,876 @@
+I"1�<p>CGI：即通用网关接口，是一种协议，定义了web服务器和应用程序交互数据的基本格式。例如一个请求发送到nginx后，nginx应该按照CGI协议将请求按照规定的格式处理好后（标准的请求头信息，查询字符串，请求路径等等），然后启用相应的应用程序解析器（php就是php解释器，python就是python解释器），然后把数据传输给解析器，这个时候解析器就可以定位到我们编写的处理代码对请求进行处理，处理完以后按照CGI协议规定的数据格式将结果返回给web服务器，最后退出进程。
+fastcgi：fastcgi可以看作是cgi协议的改良版，cgi是通过启用一个解释器进程来处理每个请求，耗时且耗资源，而fastcgi则是通过master-woker形式来处理每个请求，即启动一个master主进程，然后根据配置启动几个worker进程，当请求进来时，master从worker进程中选择一个去处理请求，这样就避免了重复的开启和结束进程带来频繁cpu上下文切换而导致耗时。所以fastcgi也是一种规定了如何实现web服务器和应用程序通信的协议，但是比cgi协议更先进。
+<!-- more -->
+通过cgi实现
+用户请求http://www.baidu.com?key=码农&amp;platform=linux。
+省略一系列DNS解析然后将数据传输到nginx监听的端口上。
+nginx根据配置文件判断该请求是否是静态文件，是的话直接从文件系统读取返回给浏览器。不是的话将接收到的数据进行处理（按照CGI或者fastcgi协议规定的格式），提取出请求头，请求参数，资源路径等信息。
+nginx通过配置文件启动一个cgi程序，例如php_cgi，由于php_cgi程序是实现了cgi协议的，所以它能够识别出nginx传过来的数据，然后去执行相应的php文件。
+php_cgi将执行后的结果返回给nginx，然后进程退出。
+nginx将获得的结果按照http协议规范处理后返回给浏览器。
+通过fastcgi实现
+Web Server启动时载入FastCGI进程管理器（IIS ISAPI，Apache Module或者php-fpm)
+FastCGI进程管理器自身初始化，启动多个CGI解释器进程(多个php-cgi)并等待WebServer的连接。
+当客户端请求到达Web Server时，FastCGI进程管理器选择并连接到一个CGI解释器。 Web server将CGI环境变量和标准输入发送到FastCGI子进程php-cgi。
+FastCGI子进程完成处理后将标准输出和错误信息从同一连接返回Web Server。当FastCGI子进程关闭连接时，请求便告处理完成。FastCGI子进程接着等待并处理来自FastCGI进程管理器(运行在Web Server中)的下一个连接。</p>
+
+<p>https://github.com/zuo369301826/HTTP_Project/tree/master/wwwroot/cgi</p>
+
+<p>一. 项目介绍
+利用掌握的TCP/IP协议构建服务器，根据http协议格式解析从客户端接收的请求，处理请求，构造响应并发送给客户端，支持CGI协议，通过设置环境变量和读写标准输入输出的方式进行参数的传递。</p>
+
+<p>二. 技术特点
+使用 socket套接字完成构建TCP/IP服务器</p>
+
+<p>使用到 epoll 模型，提高了并发的速度</p>
+
+<p>支持CGI程序，通过设置环境变量和标准输入输出流的方式，进行数据获取</p>
+
+<p>支持HTTP协议的GET和POST请求，且对这两个请求有不同的处理方法</p>
+
+<p>対路径做基本处理：用户给的路径不完整时，可以补充为默认路径</p>
+
+<p>涉及到的技术点：socket套接字，文件操作，管道，进程创建，进程替换，环境变量</p>
+
+<p>三. HTTP协议</p>
+<ol>
+  <li>http协议介绍
+HTTP协议（HyperText Transfer Protocol，超文本传输协议）是因特网上应用最为广泛的一种网络传输协议，所有的WWW文件都必须遵守这个标准</li>
+</ol>
+
+<p>HTTP协议基于TCP/IP通信协议来传递数据（HTML 文件, 图片文件, 查询结果等）</p>
+
+<p>HTTP是一个应用层协议，由请求和响应构成，是一个标准的客户端服务器模型。</p>
+
+<p>HTTP是一个无状态的协议，对事务处理是没有记忆的和独立的</p>
+
+<p>HTTP默认的端口号为80，HTTPS的端口号为443。</p>
+
+<ol>
+  <li>短链接和长链接
+短链接：服务器每次连接只处理一个用户请求，并且客户端接受服务器应答后立刻断开连接，如果客户端没有发出请求，服务器不会专门等待，也不会在完成一个请求后还保持原来的请求，而是会立即断开这次连接</li>
+</ol>
+
+<p>长链接： 服务器在发送响应后一段时间内仍然保持这条连接，允许在这条连接上进行多次请求与响应。</p>
+
+<p>本项目的服务器采用的短链接方式，客户端发送请求，服务端进行请求处理，在服务端完成响应后，会主动断开连接，不会保持请求。</p>
+
+<ol>
+  <li>http请求与响应过程
+从用户在一个浏览器中输入一个网址，到获取到整个页面，中间发生了什么？</li>
+</ol>
+
+<p>域名解析</p>
+
+<p>首先浏览器会查询本地 hosts 文件，找相应的域名解析
+在hosts文件中没有找到，就会在浏览器的缓存中查找是否有该域名的缓存
+没有找到的话，就会去DNS中获取该域名对应的ip地址
+建立连接</p>
+
+<p>得到ip地址后，客户端通过路由找到服务器端
+客户端会先尝试通过TCP/IP协议来和服务器建立连接（三次握手）
+获取数据</p>
+
+<p>连接建立完成，客户端向服务器端发起请求
+服务器得到请求，做出相应的业务处理，构造http响应并传回客户端
+浏览器接收到数据后，根据http协议格式分析响应，并将结果展示到页面上
+断开连接</p>
+
+<p>服务器在发送数据后会主动断开连接（四次挥手）
+客服端在接收到数据后会断开连接
+这样一次从浏览器到客户端的请求和相应也就完成了。</p>
+
+<ol>
+  <li>http协议的报文格式
+请求报文格式</li>
+</ol>
+
+<p>请求首行：方法，url，版本号，三部分中间用空格分离
+请求头部：以键值对的方式构成，每一个键值对占一行，描述本次协议的属性
+空行：用来分割body
+body： 请求的内容，GRT方法的请求没有body，POST请求有body
+响应报文格式</p>
+
+<p>响应首行：版本号，状态码，状态对应的内容，三部分中间用空格分离
+响应头部：同请求格式一样
+空行：分割body
+body： 响应的内容</p>
+<ol>
+  <li>get和post方法
+http协议的方法有很多：</li>
+</ol>
+
+<p>GET 获取资源
+POST 向服务器端发送数据，传输实体主体
+PUT 传输文件
+HEAD 获取报文首部
+OPTIONS 询问支持的方法
+TRACE 追踪路径
+比较常用的两个方法</p>
+
+<p>GET方法</p>
+
+<p>GET方法没有body，如果GET方法请求的是CGI程序，就要求客户端将参数以键值对的方式放到url中，并且以？将参数与CGI程序的路径分割开来，如/cgi？a=1&amp;b=2&amp;c=3</p>
+
+<p>因此在url中可以看到？的就是GET方法，但是GET是不安全的，因为参数在url中，因此用户也是可见的，在传输密码敏感信息是时不合适的。</p>
+
+<p>另外GET方式也不适用于传送大量数据，因为浏览器的地址栏一般最多只能识别1024个字符，因此当需要传递大量数据时，GET也不适用。</p>
+
+<p>POST方法</p>
+
+<p>POST方法从客户向服务器传送数据，允许客户端给服务器提供的数据更多，POST请求将数据封装到请求包体行中，数据之间用&amp;分隔，POST方法可以传输大量数据，没有大小限制，而且不会在url中显示</p>
+
+<p>一般在网页中利用表单的方式，发送POST请求</p>
+
+<ol>
+  <li>url解析
+url格式：</li>
+</ol>
+
+<p>在GET方法中：参数以键值对的方式跟文件路径之后，且用?分割，每个键值对间用&amp;分割</p>
+
+<p>我们将?后面的参数集合成为：query_string，获取query_string 也是一个重点</p>
+
+<p>四. CGI协议
+CGI(Common Gateway Interface)：是HTTP服务器与你的或其它机器上的程序进行“交谈”的一种工具，其程序须运行在网络服务器上。</p>
+
+<p>CGI处理步骤：</p>
+
+<p>通过Internet把用户请求送到服务器
+服务器接收用户请求并交给CGI程序处理
+CGI程序把处理结果传送给服务器
+服务器把结果送回到用户
+CGI参数获取与结果传递</p>
+
+<p>参数获取：在通过提前设置环境变量，或者使用管道的方式从标准输入中读取</p>
+
+<p>结果传递：重定向标准输出到管道的输入端口，通过管道将数据发送给服务器
+https://blog.csdn.net/xiaozuo666/article/details/81806637</p>
+
+<p>在用PHP开发的过程中，我们常常使用Nginx或者Apache作为我们的Web服务器。但是PHP是如何与这些Web服务器通信的呢？</p>
+
+<p>Apache把PHP作为一个模块集成到Apache进程(httpd)运行,这种mod_php的运行模式与PHP-CGI没有任何关系。</p>
+
+<p>Nginx是通过PHP-FPM（PHP-FPM实现了FastCGI协议)来实现与PHP的通信。</p>
+
+<p>要谈FastCGI就必须先说说CGI。那什么是CGI？</p>
+
+<p>CGI(Common Gateway Interface:通用网关接口)是Web 服务器运行时外部程序的规范,按CGI 编写的程序可以扩展服务器功能。CGI 应用程序能与浏览器进行交互,还可通过数据库API 与数据库服务器等外部数据源进行通信,从数据库服务器中获取数据。–百度百科</p>
+
+<p>CGI协议同 HTTP 协议一样是一个「应用层」协议，它的 功能 是为了解决 Web 服务器与 PHP 应用（或其他 Web 应用）之间的通信问题。</p>
+
+<p>既然它是一个「协议」，换言之它与语言无关，即只要是实现类 CGI 协议的应用就能够实现相互的通信。</p>
+
+<p>深入CGI协议
+我们已经知道了 CGI 协议是为了完成 Web 服务器和应用之间进行数据通信这个问题。那么，这一节我们就来看看究竟它们之间是如何进行通信的。</p>
+
+<p>简单来讲 CGI 协议它描述了 Web 服务器和应用程序之间进行数据传输的格式，并且只要我们的编程语言支持标准输入（STDIN）、标准输出（STDOUT）以及环境变量等处理，你就可以使用它来编写一个 CGI 程序。</p>
+
+<p>CGI的运行原理
+当用户访问我们的 Web 应用时，会发起一个 HTTP 请求。最终 Web 服务器接收到这个请求。</p>
+
+<p>Web 服务器创建一个新的 CGI 进程。在这个进程中，将 HTTP 请求数据已一定格式解析出来，并通过标准输入和环境变量传入到 URL 指定的 CGI 程序（PHP 应用 $_SERVER）。</p>
+
+<p>Web 应用程序处理完成后将返回数据写入到标准输出中，Web 服务器进程则从标准输出流中读取到响应，并采用 HTTP 协议返回给用户响应。</p>
+
+<p>一句话就是 Web 服务器中的 CGI 进程将接收到的 HTTP 请求数据读取到环境变量中，通过标准输入转发给 PHP 的 CGI 程序；当 PHP 程序处理完成后，Web 服务器中的 CGI 进程从标准输出中读取返回数据，并转换回 HTTP 响应消息格式，最终将页面呈献给用户。然后 Web 服务器关闭掉这个 CGI 进程。</p>
+
+<p>可以说 CGI 协议特别擅长处理 Web 服务器和 Web 应用的通信问题。然而，它有一个严重缺陷，对于每个请求都需要重新 fork 出一个 CGI 进程，处理完成后立即关闭。</p>
+
+<p>CGI协议的缺陷
+每次处理用户请求，都需要重新 fork CGI 子进程、销毁 CGI 子进程。</p>
+
+<p>一系列的 I/O 开销降低了网络的吞吐量，造成了资源的浪费，在大并发时会产生严重的性能问题。</p>
+
+<p>深入FastCGI协议
+从功能上来讲，CGI 协议已经完全能够解决 Web 服务器与 Web 应用之间的数据通信问题。但是由于每个请求都需要重新 fork 出 CGI 子进程导致性能堪忧，所以基于 CGI 协议的基础上做了改进便有了 FastCGI 协议，它是一种常驻型的 CGI 协议。</p>
+
+<p>本质上来将 FastCGI 和 CGI 协议几乎完全一样，它们都可以从 Web 服务器里接收到相同的数据，不同之处在于采取了不同的通信方式。</p>
+
+<p>再来回顾一下 CGI 协议每次接收到 HTTP 请求时，都需要经历 fork 出 CGI 子进程、执行处理并销毁 CGI 子进程这一系列工作。</p>
+
+<p>而 FastCGI 协议采用 进程间通信(IPC) 来处理用户的请求，下面我们就来看看它的运行原理。</p>
+
+<p>FastCGI协议运行原理
+FastCGI 进程管理器启动时会创建一个 主（Master） 进程和多个 CGI 解释器进程（Worker 进程），然后等待 Web 服务器的连接。</p>
+
+<p>Web 服务器接收 HTTP 请求后，将 CGI 报文通过 套接字（UNIX 或 TCP Socket）进行通信，将环境变量和请求数据写入标准输入,转发到 CGI 解释器进程。</p>
+
+<p>CGI 解释器进程完成处理后将标准输出和错误信息从同一连接返回给 Web 服务器。</p>
+
+<p>CGI 解释器进程等待下一个 HTTP 请求的到来。</p>
+
+<p>为什么是 FastCGI 而非 CGI 协议
+如果仅仅因为工作模式的不同，似乎并没有什么大不了的。并没到非要选择 FastCGI 协议不可的地步。</p>
+
+<p>然而，对于这个看似微小的差异，但意义非凡，最终的结果是实现出来的 Web 应用架构上的差异。</p>
+
+<p>CGI 与 FastCGI 架构
+在 CGI 协议中，Web 应用的生命周期完全依赖于 HTTP 请求的声明周期。</p>
+
+<p>对每个接收到的 HTTP 请求，都需要重启一个 CGI 进程来进行处理，处理完成后必须关闭 CGI 进程，才能达到通知 Web 服务器本次 HTTP 请求处理完成的目的。</p>
+
+<p>但是在 FastCGI 中完全不一样。</p>
+
+<p>FastCGI 进程是常驻型的，一旦启动就可以处理所有的 HTTP 请求，而无需直接退出。</p>
+
+<p>再看 FastCGI 协议
+通过前面的讲解，我们相比已经可以很准确的说出来 FastCGI 是一种通信协议 这样的结论。现在，我们就将关注的焦点挪到协议本身，来看看这个协议的定义。</p>
+
+<p>同 HTTP 协议一样，FastCGI 协议也是有消息头和消息体组成。</p>
+
+<p>消息头信息
+主要的消息头信息如下:</p>
+
+<p>Version: 用于表示 FastCGI 协议版本号。</p>
+
+<p>Type: 用于标识 FastCGI 消息的类型 - 用于指定处理这个消息的方法。</p>
+
+<p>RequestID: 标识出当前所属的 FastCGI 请求。</p>
+
+<p>Content Length: 数据包包体所占字节数。</p>
+
+<p>消息类型定义
+BEGIN_REQUEST: 从 Web 服务器发送到 Web 应用，表示开始处理新的请求。</p>
+
+<p>ABORT_REQUEST: 从 Web 服务器发送到 Web 应用，表示中止一个处理中的请求。比如，用户在浏览器发起请求后按下浏览器上的「停止按钮」时，会触发这个消息。</p>
+
+<p>END_REQUEST: 从 Web 应用发送给 Web 服务器，表示该请求处理完成。返回数据包里包含「返回的代码」，它决定请求是否成功处理。</p>
+
+<p>PARAMS: 「流数据包」，从 Web 服务器发送到 Web 应用。此时可以发送多个数据包。发送结束标识为从 Web 服务器发出一个长度为 0 的空包。且 PARAMS 中的数据类型和 CGI 协议一致。即我们使用 $_SERVER 获取到的系统环境等。</p>
+
+<p>STDIN: 「流数据包」，用于 Web 应用从标准输入中读取出用户提交的 POST 数据。</p>
+
+<p>STDOUT: 「流数据报」，从 Web 应用写入到标准输出中，包含返回给用户的数据。</p>
+
+<p>Web 服务器和 FastCGI 交互过程
+Web 服务器接收用户请求，但最终处理请求由 Web 应用完成。此时，Web 服务器尝试通过套接字（UNIX 或 TCP 套接字，具体使用哪个由 Web 服务器配置决定）连接到 FastCGI 进程。</p>
+
+<p>FastCGI 进程查看接收到的连接。选择「接收」或「拒绝」连接。如果是「接收」连接，则从标准输入流中读取数据包。</p>
+
+<p>如果 FastCGI 进程在指定时间内没有成功接收到连接，则该请求失败。否则，Web 服务器发送一个包含唯一的RequestID 的 BEGIN_REQUEST 类型消息给到 FastCGI 进程。后续所有数据包发送都包含这个 RequestID。 然后，Web 服务器发送任意数量的 PARAMS 类型消息到 FastCGI 进程。一旦发送完毕，Web 服务器通过发送一个空PARAMS 消息包，然后关闭这个流。 另外，如果用户发送了 POST 数据 Web 服务器会将其写入到 标准输入（STDIN） 发送给 FastCGI 进程。当所有 POST 数据发送完成，会发送一个空的 标准输入（STDIN） 来关闭这个流。</p>
+
+<p>同时，FastCGI 进程接收到 BEGINREQUEST 类型数据包。它可以通过响应 ENDREQUEST 来拒绝这个请求。或者接收并处理这个请求。如果接收请求，FastCGI 进程会等待接收所有的 PARAMS 和 标准输入数据包。 然后，在处理请求并将返回结果写入 标准输出（STDOUT） 流。处理完成后，发送一个空的数据包到标准输出来关闭这个流，并且会发送一个 END_REQUEST 类型消息通知 Web 服务器，告知它是否发生错误异常。</p>
+
+<p>为什么需要在消息头发送 RequestID 这个标识？
+如果是每个连接仅处理一个请求，发送 RequestID 则略显多余。</p>
+
+<p>但是我们的 Web 服务器和 FastCGI 进程之间的连接可能处理多个请求，即一个连接可以处理多个请求。所以才需要采用数据包协议而不是直接使用单个数据流的原因：以实现「多路复用」。</p>
+
+<p>因此，由于每个数据包都包含唯一的 RequestID，所以 Web 服务器才能在一个连接上发送任意数量的请求，并且 FastCGI 进程也能够从一个连接上接收到任意数量的请求数据包。</p>
+
+<p>另外我们还需要明确一点就是 Web 服务器 与 FastCGI 进程间通信是 无序的。即使我们在交互过程中看起来一个请求是有序的，但是我们的 Web 服务器也有可能在同一时间发出几十个 BEGIN_REQUEST 类型的数据包，以此类推。</p>
+
+<p>PHP-FPM
+PHP-FPM即PHP-FastCGI Process Manager.</p>
+
+<p>PHP-FPM是FastCGI的实现，并提供了进程管理的功能。</p>
+
+<p>进程包含 master 进程和 worker 进程两种进程。</p>
+
+<p>master 进程只有一个，负责监听端口，接收来自 Web Server 的请求，而 worker 进程则一般有多个(具体数量根据实际需要配置)，每个进程内部都嵌入了一个 PHP 解释器，是 PHP 代码真正执行的地方。</p>
+
+<p>PHP-FPM 是 FastCGI 进程管理器（PHP FastCGI Process Manager）(http://php.net/manual/zh/install.fpm.php)，用于替换 PHP 内核的 FastCGI 的大部分附加功能（或者说一种替代的 PHP FastCGI 实现），对于高负载网站是非常有用的。</p>
+
+<p>PHP-FPM如何工作的？
+PHP-FPM 进程管理器有两种进程组成，一个 Master 进程和多个 Worker 进程。Master 进程负责监听端口，接收来自 Web 服务器的请求，然后指派具体的 Worker 进程处理请求；worker 进程则一般有多个 (依据配置决定进程数)，每个进程内部都嵌入了一个 PHP 解释器，用来执行 PHP 代码。</p>
+
+<p>Nginx 服务器如何与 FastCGI 协同工作
+Nginx 服务器无法直接与 FastCGI 服务器进行通信，需要启用 ngx_http_fastcgi_module 模块进行代理配置，才能将请求发送给 FastCGI 服务。</p>
+
+<p>https://www.cnblogs.com/itbsl/archive/2018/10/22/9828776.html</p>
+
+<p>https://datatracker.ietf.org/doc/rfc3875/</p>
+
+<p>https://github.com/zhenbianshu/tinyServer</p>
+
+<p>https://www.rfc-editor.org/rfc/rfc3875.html</p>
+
+<p>作为一个服务器，基本要求是能受理请求，提取信息并将消息分发给 CGI 解释器，再将解释器响应的消息包装后返回客户端。在这个过程中，除了和客户端 socket 之间的交互，还要牵扯到第三个实体 - 请求解释器。</p>
+
+<p>如上图所示，客户端负责封装请求和解析响应，服务器的主要职责是管理连接、数据转换、传输和分发客户端请求，而真正进行数据文档处理与数据库操作的就是请求解释器，这个解释器，在 PHP 中一般是 PHP-FPM，JAVA 中是 Servlet。</p>
+
+<p>我们之前进行的处理多在客户端和服务器之间的通信，以及服务器的内部调整，这次更新的内容主要是后面两个实体之间的进程间通信。</p>
+
+<p>进程间通信牵涉到三个方面，即方式和形式和内容。</p>
+
+<p>方式指的是进程间通信的传输媒介，如 Nginx 中实现的 TCP 方式和 Unix Domain Socket，它们分别有跨机器和高效率的优点，还有我实现的服务器用了很 low 的popen方式。</p>
+
+<p>而形式就是数据格式了，我认为它并无定式，只要服务器容易组织数据，解释器能方便地接收并解析，最好也能节约传输资源，提高传输效率。目前的解决方案有经典的 xml，轻巧易理解的 json 和谷歌高效率的 protobuf。它们各有优点，我选择了 json，主要是因为有CJson库的存在，数据在 C 中方便组织，而在PHP中，一个json_decode()方法就完成了数据解析。</p>
+
+<p>至于应该传输哪些内容呢？CGI 描述了一套协议：</p>
+
+<p>CGI
+通用网关接口（Common Gateway Interface/CGI）是一种重要的互联网技术，可以让一个客户端，从网页浏览器向执行在网络服务器上的程序请求数据。CGI描述了服务器和请求处理程序之间传输数据的一种标准。</p>
+
+<p>CGI 是服务器与解释器交互的接口，服务器负责受理请求，并将请求信息解释为一条条基本的请求信息（在文档中被称为“元数据”），传送给解释器来解释执行，而解释器响应文档和数据库操作信息。</p>
+
+<p>之前看了一下 CGI 的 RFC 文档，总结了几个重要点，有兴趣的可以看下底部参考文献。常见规范（信息太多，只考虑 MUST 的情况）如下：</p>
+
+<p>CGI请求
+服务器根据 以 / 分隔的路径选择解释器；
+如果有 AUTH 字段，需要先执行 AUTH，再执行解释器; 
+服务器确认 CONTENT-LENGTH 表示的是数据解析出来的长度，如果附带信息体，则必须将长度字段传送到解释器；
+如果有 CONTENT-TYPE 字段，服务器必须将其传给解释器；若无此字段，但有信息体，则服务器判断此类型或抛弃信息体；
+服务器必须设置 QUERY_STRING 字段，如果客户端没有设置，服务端要传一个空字符串“”
+服务器必须设置 REMOTE_ADDR，即客户端请求IP；
+REQUEST_METHOD 字段必须设置， GET POST 等，大小写敏感；
+SCRIPT_NAME 表示执行的解释器脚本名，必须设置；
+SERVER_NAME 和 SERVER_PORT 代表着大小写敏感的服务器名和服务器受理时的TCP/IP端口；
+SERVER_PROTOCOL 字段指示着服务器与解释器协商的协议类型，不一定与客户端请求的SCHEMA 相同，如’https://’可能为HTTP；
+在 CONTENT-LENGTH 不为 NULL 时，服务器要提供信息体，此信息体要严格与长度相符，即使有更多的可读信息也不能多传；
+服务器必须将数据压缩等编码解析出来；
+CGI响应
+CGI解释器必须响应 至少一行头 + 换行 + 响应内容；
+解释器在响应文档时，必须要有 CONTENT-TYPE 头；
+在客户端重定向时，解释器除了 client-redir-response=绝对url地址，不能再有其他返回，然后服务器返回一个 302 状态码；
+解释器响应 三位数字状态码，具体配置可自行搜索；
+服务器必须将所有解释器返回的数据响应给客户端，除非需要压缩等编码，服务器不能修改响应数据；
+Nginx和PHP的CGI实现
+介绍完了 CGI，我们来参考一下当前服务器 CGI 协议实现的成熟方案，这里挑选我熟悉的 Nginx 和 PHP。</p>
+
+<p>在 Nginx 和 PHP 的配合中，Nginx 自然是服务器，而解释器是 PHP 的 SAPI。</p>
+
+<p>SAPI
+SAPI: Server abstraction API，指的是 PHP 具体应用的编程接口，它使得 PHP 可以和其他应用进行交互数据。</p>
+
+<p>PHP 脚本要执行可以通过很多种方式，通过 Web 服务器，或者直接在命令行下，也可以嵌入在其他程序中。常见的 sapi 有apache2handler、fpm-fcgi、cli、cgi-fcgi，可以通过 PHP 函数php_sapi_name()来查看当前 PHP 执行所使用的 sapi。</p>
+
+<p>PHP5.3 之前使用的与服务器交互的 sapi 是cgi，它实现基本的 CGI 协议，由于它每次处理请求都要创建一个进程、初始化进程、处理请求、销毁进程，消耗过大，使得系统性能大大下降。</p>
+
+<p>这时候便出现了 CGI 协议的升级版本 Fast-CGI。</p>
+
+<p>PHP-FPM
+快速通用网关接口（Fast Common Gateway Interface／FastCGI）是一种让交互程序与Web服务器通信的协议。FastCGI是早期通用网关接口（CGI）的增强版本。</p>
+
+<p>Fast-CGI 提升效率主要靠将 CGI 解释器长驻内存重现，避免了进程反复加载的损耗。PHP 的 sapi cgi-fcgi实现了 Fast-CGI 协议，提升了 PHP 处理 Web 请求的效率。</p>
+
+<p>那么我们常见的 php-fpm 是什么呢？它是一种进程管理器（PHP-FastCGI Process Manager），它负责管理实现 Fast-CGI 的那些进程（worker进程），它加载php.ini信息，初始化 worker 进程，并实现平滑重启和其他高级功能。</p>
+
+<p>Nginx 将请求都交给 php-fpm，fpm 选择一个空闲工作进程来处理请求。</p>
+
+<p>纠偏
+这里总结一下几个名字，以防混淆：</p>
+
+<p>sapi，是 PHP 与外部进程交互的接口；
+CGI/Fast-CGI（大写）是一种协议；
+本节中出现的 cgi（小写），是指 PHP 的 sapi，即实现 CGI 协议的一种接口。
+php-fpm 是管理实现了Fast-CGI协议的进程的一个进程。
+代码实现
+介绍完了高端的Nginx服务器，说一下我的实现：</p>
+
+<p>服务器解析 http 报文，实现 CGI 协议，将数据包装成 json 格式，通过 PHP 的cli sapi 发送至 PHP 进程，PHP 进程解析后响应 json 格式数据，服务器解析响应数据后包装成 http 响应报文发送给客户端。</p>
+
+<p>http_parser
+首要任务是解析 http 报文，C 中没有很丰富字符串函数，我也没有封装过常用的函数库，所以只好临时自己实现了一个util_http.c，这里介绍几个处理 http 报文时好用的字符串函数。</p>
+
+<p>strtok(char str[], const *delimeter)，将 delimeter 设置为 “\n”，分行处理 http 报文头正好适合。</p>
+
+<p>sscanf(const *str, format, dest1[,dest…])，它从字符串中以特定格式读取字符串，读取时的分隔符是空格，用它来处理 http 请求行十分方便。</p>
+
+<p>至于解析 http 报文头的键值对应，没想到好方法，只好使用字符遍历来判断。</p>
+
+<p>cJSON
+cJSON 是一个 C 实现的用以生成和解析 json 格式数据的函数库，在 GitHub 上可以轻松搜到，只用两个文件 cJSON.c和cJSON.h即可。</p>
+
+<p>需要注意：C 作为强类型语言，往 json 内添加不同类型的数据要使用不同的方法，cJSON 支持 string, bool, number, cJSON object等类型。</p>
+
+<p>这里简单地介绍一下生成和解析的一般方法；</p>
+
+<p>生成：</p>
+
+<p>cJSON *root; // 声明cJSON格式数据
+root = cJSON_CreateObject(); // 创建一个cJSON对象
+cJSON_AddStringToObject(root, “key”, “value”) // 往cJSON对象内添加键值对
+char *output = cJSON_PrintUnformatted(root); // 生成json字符串
+cJSON_Delete(root); // 别忘记释放内存
+解析：</p>
+
+<p>cJSON *json = cJSON_Parse(response_json);
+value = cJSON_GetObjectItem(cJSON, “key”);
+当然，也可以声明 cJSON 类型的数据进行嵌套；</p>
+
+<p>https://www.cnblogs.com/zhenbianshu/p/6958794.html</p>
+
+<p>https://yq.aliyun.com/live/956?do=login</p>
+
+<p>2.1.参数列表
+通过默认web服务器创建一个参数列表包含单个元素，应用的名字，作为可运行路径名的最后一个组件。web服务器可提供一种方式去说明啊一个不同的应用名或一个更多复杂的参数列表。标记文件执行通过web服务器可能被一个编译器文件（一个文本文件以字符#!开始），在这种情况下应用的参数是构建作为描述的在execve主页。</p>
+
+<p>2.2.文件描述符
+web服务器只留下一个文件描述符，CGI_LISTENSOCK_FILENO，当应用开始执行时打开，这个描述符涉及如去监听由web服务器创建的socket。FCGI_LISTENSOCK_FILENO等于STDIN_FILENO，标准的描述符STDIN_FILENO和STDERR_FILENO被关闭当应用开始执行。一个可靠的方法对于应用是决定是否它是被引用用CGI或FastCGI是去调用getpeername（FCGI_LISTENSOCK_FILENO），当返回-1并设置errno为ENOTCONN 对于FastCGI应用。web服务器的可靠的传输选择，Unix流通道（AF_UNIX）或TCP/IP（AF_INET）对于FastCGI应用。</p>
+
+<p>2.3.环境变量
+web服务器可用环境变量来传输参数给应用，这个说明定义一个例如FCGI_WEB_SERVER_ADDRS；我们期望更多的被定义随着规范的发展和进步。web服务器可提供一种方式去绑定其他的环境变量，例如PATH变量。</p>
+
+<p>2.4.其他状态
+web服务器可提供一种方式去说明一个应用初始化进程状态的其他组件，例如进程的优先级，用户ID,组ID，根目录和工作目录。</p>
+
+<p>3.协议基础
+3.1.表达式
+3.1表达式
+我们用C语言表达定义协议消息格式，所以的结构元素被定义在项目的无符号字符类型，是被安置在其中以至ISO C编译器放置它们在明显的方法中，没有覆盖。第一个字节定义在结构中是传输的第一次，第二个字节是第二次，以此类推。我们用两个约定去缩写我们的定义。
+第一，当两个相邻的结构组件是被命名表示性的期望为前缀“B1”和“B2”，它意味着两个组件可被看作为一个数字，计算为B1«8+B0。这个单个数字的名字是组件的名字，减去前缀。这个约定的概括在一个明显方式去处理这个数字代表在超过两个字节。第二，为扩展C结构允许格式</p>
+
+<p>struct {
+            unsigned char mumbleLengthB1;
+            unsigned char mumbleLengthB0;
+            … /* other stuff */
+            unsigned char mumbleData[mumbleLength];
+};
+意味着一个可变长度的结构，这里的组件长度是通过表明更早的组件或组件组被决定。</p>
+
+<p>3.2.接受传输连接
+一个FastCGI应用调用函数accept()在socket引用上通过文件描述符FCGI_LISTENSOCK_FILENO去接受新的传输连接。如果accept()成功，FCGI_WEB_SERVER_ADDRS 环境变量被绑定，应用立刻表现如下特殊的操作：</p>
+
+<p>FCGI_WEB_SERVER_ADDRS ：值是个ip地址的有些列表对于web服务器。如果FCGI_WEB_SERVER_ADDRS 被绑定，应用在列表中检查新的连接的通道ip地址以获取成员。如果检查失败（包括可能的连接不能用 TCP/IP传输），应用响应通过关闭连接。
+FCGI_WEB_SERVER_ADDRS是被表达作为一个逗号分隔列的IP地址，每一个ip地址是被写作为一个四个数字在范围0-255用小数点分隔。所以对于这个表里FCGI_WEB_SERVER_ADDRS绑定的合法变量是199.170.183.28.199,199.170.183.71。
+一个应用可能接受几个并行的传输连接，但是它不必要如此。
+3.3.记录
+应用执行请求需要从web服务器用一个简单协议。协议的详细依赖在应用的角色，
+但是粗略的说web服务器第一次发送参数和其他数据给应用，应用发送结果数据给web服务器和最后地应用发送给web服务器一个这个请求结束的标志。</p>
+
+<p>所有流通通过传输连接的数据是被传输在FastCGI记录。FastCGI记录完成两个事情，第一，记录复用传输连接在多个独立的FastCGI请求。这个多路复用支持应用有能力去处理并行请求用事件驱动或多线程编程技术。第二，记录提供多个独立的数据流在每个方向在一个请求内，这个方式，举个例子，stdout和stderr数据能通过单个传输连接从应用到web服务器，而不是用不同的连接。</p>
+
+<p>typedef struct {
+            unsigned char version;
+            unsigned char type;
+            unsigned char requestIdB1;
+            unsigned char requestIdB0;
+            unsigned char contentLengthB1;
+            unsigned char contentLengthB0;
+            unsigned char paddingLength;
+            unsigned char reserved;
+            unsigned char contentData[contentLength];
+            unsigned char paddingData[paddingLength];
+        } FCGI_Record;
+一个FastCGI记录由一个固定长度的前缀设置通过一个变量内容的数字和追加的字节。一个揭露包含七个组件：</p>
+
+<p>version：标示FastCGI协议的版本，这个规范文档是FCGI_VERSION_1。</p>
+
+<p>type：标示FastCGI记录类型，通用函数记录的表现。指明记录类型和他们的方法会被详细说明在下面的段落中。</p>
+
+<p>requestId：标示记录所属的FastCGI请求。</p>
+
+<p>contentLength：这字节数字在contentData组件的记录。</p>
+
+<p>paddingLength：这字节数字在paddingData组件的记录。</p>
+
+<p>contentData：在0到65535字节之间的数据。解释根据记录类型。</p>
+
+<p>paddingData：在0到255字节之间的数据。它会被忽略。</p>
+
+<p>我们用松散的C结构初始化格式去指定常量FastCGI记录，我们忽略版本组件，
+忽略padding和对待requestId作为一个数字，因此{FCGI_END_REQUEST,1,{FCGI_REQUEST_COMPLETE,0}}是一个记录，类型为FCGI_END_REQUEST，requestId == 1,
+和contentData == {FCGI_REQUEST_COMPLETE,0}。</p>
+
+<p>填充</p>
+
+<p>协议允许发送者填充他们发生的记录，需要接受者去解释这个paddingLength和跳过这个paddingData，填充允许发送者去保持数据整齐为了更高效的处理，X窗系统的经验显示了对其的表现优势。我们推荐记录以8位字节的倍数来填充边界。固定长度的部分的FCGI_Record是8个字节。</p>
+
+<p>管理请求ID</p>
+
+<p>web服务器重新使用FastCGI请求ID，应用保持每个请求ID当前状态追踪在给的传输连接上，一个请求ID R变成活跃当应用受到一个记录{FCGU_BEGIN_REQUEST,R,…}和变成不活跃当应用发送一个记录{FCGU_END_REQUEST,R,…}给web服务器。当一个请求ID R 是不活跃的，应用忽略记录ID==R，期望对于FCGU_BEGIN_REQUEST记录仅仅是描述的。web服务器企图去保持FastCGI请求IDs 小，这个方式使应用能保持追踪请求ID状态用小的数组而不是长的数组或者是哈希表。一个应用也有选项的接受仅仅在请求在一个时间，在这情况下应用简单的检查进入的requestId值对比与当前的请求Id。</p>
+
+<p>记录的类型</p>
+
+<p>这儿有两个有用方式的分类FastCGI记录类型。
+第一个目的是在管理和应用记录之间。一个管理记录保持信息是没有明确说明的对于任何web服务器请求，例如信息关于协议的能力的应用，一个应用记录包括信息关于一个详细的请求，表示通过requestId组件。
+管理记录由一个requestId为0的值，也被称为空请求ID，应用记录有非零的requestId。
+第二目的是在离散的和流的记录之间。一个离散的记录包含有用的信息单元数据。一个流记录是流的一部分，一个序列的零活更多的非空记录的流类型，支持一个空的记录的流类型contentData 组件的流记录，当连接从一个字节序列，这个自己叙事是流的值，因此流的值是独立的在许多记录它所包含的或它的字节是被分隔在在非空的记录之中。
+这里有两种分类是独立的，在记录类型的定义在FastCGI协议的版本中，所有的管理记录记录类型也是离散的记录类型。几乎所有的应用记录类型是流记录类型，但是三个应用记录是离散的，没有东西阻止定义管理记录类型，该类型是协议的某些新版本中的流。</p>
+
+<p>3.4.名字-值对
+在许多的角色，FastCGI应用需要读和写变动的数字对的可表长度值，所以它是有用的对于采用一个标准的格式去编码一个名字-值得对。FastCGI传送一个名字-值得对作为名字的长度，根据值的长度，根据名字，根据值。127字节的长度和少于被编码在一个字节的，当更长长度总是被编码在四个字节中。</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    typedef struct {
+        unsigned char nameLengthB0;  /* nameLengthB0  &gt;&gt; 7 == 0 */
+        unsigned char valueLengthB0; /* valueLengthB0 &gt;&gt; 7 == 0 */
+        unsigned char nameData[nameLength];
+        unsigned char valueData[valueLength];
+    } FCGI_NameValuePair11;
+
+    typedef struct {
+        unsigned char nameLengthB0;  /* nameLengthB0  &gt;&gt; 7 == 0 */
+        unsigned char valueLengthB3; /* valueLengthB3 &gt;&gt; 7 == 1 */
+        unsigned char valueLengthB2;
+        unsigned char valueLengthB1;
+        unsigned char valueLengthB0;
+        unsigned char nameData[nameLength];
+        unsigned char valueData[valueLength
+                ((B3 &amp; 0x7f) &lt;&lt; 24) + (B2 &lt;&lt; 16) + (B1 &lt;&lt; 8) + B0];
+    } FCGI_NameValuePair14;
+
+    typedef struct {
+        unsigned char nameLengthB3;  /* nameLengthB3  &gt;&gt; 7 == 1 */
+        unsigned char nameLengthB2;
+        unsigned char nameLengthB1;
+        unsigned char nameLengthB0;
+        unsigned char valueLengthB0; /* valueLengthB0 &gt;&gt; 7 == 0 */
+        unsigned char nameData[nameLength
+                ((B3 &amp; 0x7f) &lt;&lt; 24) + (B2 &lt;&lt; 16) + (B1 &lt;&lt; 8) + B0];
+        unsigned char valueData[valueLength];
+    } FCGI_NameValuePair41;
+
+    typedef struct {
+        unsigned char nameLengthB3;  /* nameLengthB3  &gt;&gt; 7 == 1 */
+        unsigned char nameLengthB2;
+        unsigned char nameLengthB1;
+        unsigned char nameLengthB0;
+        unsigned char valueLengthB3; /* valueLengthB3 &gt;&gt; 7 == 1 */
+        unsigned char valueLengthB2;
+        unsigned char valueLengthB1;
+        unsigned char valueLengthB0;
+        unsigned char nameData[nameLength
+                ((B3 &amp; 0x7f) &lt;&lt; 24) + (B2 &lt;&lt; 16) + (B1 &lt;&lt; 8) + B0];
+        unsigned char valueData[valueLength
+                ((B3 &amp; 0x7f) &lt;&lt; 24) + (B2 &lt;&lt; 16) + (B1 &lt;&lt; 8) + B0];
+    } FCGI_NameValuePair44; 高顺序字的顺序的第一个字节的长度表明长度的编码，一个高位零含有一个字节编码，一个四字节编码。这个名字-值对格式运行发送者传送二进制值在不用附加编码情况下。是可使接受者能立刻定位正确存储数量甚至为大的值。
+</code></pre></div></div>
+
+<p>3.5.关闭传输连接
+web服务器控制传输连接的生命周期。web服务器能关闭一个连接当没有请求是活跃的。
+或web服务器能代表关闭授权给应用（看FCGI_BEGIN_REQUEST）。在这种情况下应用关闭连接在最后说明请求。这个灵活的考虑一个多样的应用类型。简单的应用会操作一个请求在一个时间和接受一个新的传输连接对没有请求。更复杂的应用会处理并行的请求，通过一个或多个传输连接，会保持传输连接打开在长时间的周期。一个简单的应用得到一个重要的表现增长通过关闭传输连接当他已经完成写入它的响应时。
+web服务器需要控制连接生命周期在一个长连接中。当一个应用关闭一个连接或者找到一个呗关闭的连接时，应用初始化按一个新的连接。</p>
+
+<p>4.管理记录类型
+4.1.FCGI_GET_VALUES,FCGI_GET_VALUES_RESULT
+web服务器能查询在应用中特殊的变量，服务者会典型的执行一个茶轩在应用开始的时候为了自动的确定系统层面的配置。应用接受通过发送一个记录{FCGI_GET_VALUES, 0, …}，一个FCGU_GET_VALUES记录的contentData部分包括一系列空值的名字-值的对。应用响应通过提供一个值来发送一个记录{FCGI_GET_VALUES_RESULT, 0, …}，如果应用不能理解包含在查询中的一个变量名，它会从响应中忽略这个名字。FCGI_GET_VALUES是被设计去允许一个开放变量的结束设置，，这个初始化设置提供信息去帮
+助服务器执行应用和连接管理：</p>
+
+<p>FCGI_MAX_CONNS:这个应用的最大的并行传输连接数量会接受例如1或10。
+FCGI_MAX_REQS:应用的最大并行请求数量会接受例如1或50。
+FCGI_MPXS_CONNS:”0” 如果这个应用没有多路连接（例如处理并行请求通过每个连接）,“1”表示否。
+一个应用可能接受FCGI_GET_VALUES 记录在任何时间。这个应用的响应应该不涉及应用本身，而只涉及FastCGI库。</p>
+
+<p>4.2.FCGU_UNKOWN_TYPE
+管理记录的设置是这个协议的成长在特性版本中，去提供这个进化，协议包括FCGI_UNKOWN_TYPE管理记录。当一个应用受到一个管理记录，这记录类型为T，应用无法理解，应用响应{FCGI_UNKNOWN_TYPE, 0, {T}}。
+一个FCGU_UNKOWN_TYPE记录的contentData组件格式如下：</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    typedef struct {
+        unsigned char type;    
+        unsigned char reserved[7];
+    } FCGI_UnknownTypeBody; 类型组件是无法识别的管理组件类型。
+</code></pre></div></div>
+
+<p>5.应用记录类型
+5.1.FCGI_BEGIN_REQUEST
+web服务器发送一个FCGI_BEGIN_REQUEST记录开始一个请求。
+FCGI_BEGIN_REQUEST记录的contentData组件有如下格式</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    typedef struct {
+        unsigned char roleB1;
+        unsigned char roleB0;
+        unsigned char flags;
+        unsigned char reserved[5];
+    } FCGI_BeginRequestBody; 这个角色组件设置了web服务器期望应用扮演的角色，当前的角色定义是：
+</code></pre></div></div>
+
+<p>FCGI_RESPONDER
+FCGI_AUTHORIZER
+FCGI_FILTER
+角色是被描述更多细节在章节6中。
+这个标志位组件包含一个字来控制连接关闭：flags&amp;FCGI_KEEP_CONN：如果是零，应用关闭连接在响应这个请求之后，如果非零，应用不会关闭连接在响应之后，web服务器保持响应能力在这个链接上。</p>
+
+<p>5.2.名字-值的对 流：FCGI_PARAMS
+FCGU_PARAMS
+是个流记录被作用在发送名字-值得对从web服务器到应用。名字-值的对是被发送流一个一个发送切没有明确顺序。</p>
+
+<p>5.3字节流：FCGI_STDIN,FCGI_DATA,FCGI_STDOUT,FCGI_STDERR
+FCGI_STDIN
+是一个流记录类型用来在发送任意的数据从web服务器到应用。
+FCGI_DATA
+是第二种流记录类型，用来发送追加的数据给应用。
+FCGI_STDOUT/FCGI_STDERR
+是流记录类型发送期望的数据和错误数据从应用到web服务器。
+5.4.FCGI_ABORT_REQUEST
+web服务器发送一个FCGI_ABORT_REQUEST 记录投结束请求，在收到{FCGI_ABORT_REQUEST,R}之后，应用响应尽可能快的{FCGI_END_REQUEST, R, {FCGI_REQUEST_COMPLETE, appStatus}}。这是真实的一个响应从应用，非低级知识面从FastCGI库。
+一个web服务器结束一个FastCGI请求当一个http客户端关闭它的传输连接在FastCGI请求已经跑在代表那个客户端。这种情况可能看起来不常见，所有FastCGI是缓慢的，但是FastCGI应用能被延时和另一个系统通信或执行一个服务推送。当web服务器不是一个多路复用的请求通过一个传输连接，web服务器能终止这个请求通过关闭请求的传输连接。但是随着多路复用请求，关闭传输连接已经不好的影响在关闭在连接上的所有的请求。</p>
+
+<p>5.5.FCGI_END_REQUEST
+应用发送FCGI_END_REQUEST记录去终结一个请求，要么是因为应用已经处理了请求，或者因为应用已经拒绝了请求。
+FCGI_END_REQUEST记录的contentData组件有如下格式：</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    typedef struct {
+        unsigned char appStatusB3;
+        unsigned char appStatusB2;
+        unsigned char appStatusB1;
+        unsigned char appStatusB0;
+        unsigned char protocolStatus;
+        unsigned char reserved[3];
+    } FCGI_EndRequestBody; appStatus组件是一个应用级别的状态码，每个角色记录appSstatus的用法 protocolStatus组件是协议级别的状态码；操作protocolStatus的值是：
+</code></pre></div></div>
+
+<p>FCGI_REQUEST_COMPLETE：正常的请求结束。
+F- CGI_CANT_MPX_CONN：拒绝一个新的请求，这个发生在web服务器发送一个并行请求通过一个连接给应用时，该应用是被设计去处理一个请求在一个时间每切割连接
+FCGI_OVERLOADED：拒绝一个新请求，这个发生在应用用光一些资源，例如数据库连接等。
+FCGI_UNKOWN_ROLE：拒绝一个新请求，这个发生在web服务器已经指明一个角色，但是对于应用来说是未知的。
+6.角色是被描述更多细节在章节6中。
+6.1角色协议
+角色协议仅包含应用记录类型的记录，它们本质上用流来传输所有的数据。为了是协议可靠和简单的应用编程，交涉协议被定义去用贴近连续的编程，在协议中严格顺序的编程。应用接受它的第一次输出，然后它的第二次，以此类推。直到塔接受完毕。相似的，应用发送它的第一次输出，然后第二次，以此类推。直到发送完毕。输入不是对于彼此不是交错的，输出也不是。连续的编组角色对一些FastCGI角色是过于限制的。因为FastCGI编程能写stdout和stderr没有时间性的限制。所以角色协议用FCGI_STDOUT和FCGI_STDERR允许这两个流被交错。
+所有的角色协议用FCGI_STDERR流仅是stderr被用作传统的应用编程的一种方式。去报告一个应用级别的错误用可理解的方式。FCGI_STDERR流的使用是可选的。，如果一个应用没有错误去报告，它要么不发送FCGI_STDERR记录或者零长度的FCGI_STDERR记录。</p>
+
+<p>当一个角色协议调用去传送一个其他流而不是FCGI_STDERR，至少是一个流类型的记录总是被传送的，甚至如果流是空的。再者在可靠协议的和简单的应用编程这些有兴趣的方面，角色协议是被设计去贴近请求和响应。在真实的请求和响应协议，应用接受所有的输入记录在发送第一个输出记录之前。请求和响应协议不总是运行流水线。请求和响应视同FCGI_PARAMS去传输文本型的值，例如CGI程序从环境变量获得的值，值得长度不包括结束的空字节。值它本身也不包括空的字节。一个应用需要去提供environ(7)格式的名字-值的对必须插入一个等于的签名在名字和值还有追加的空字节在值得后面。角色协议不支持无法解析的头特性的CGI，FastCGI应用设置响应状态用Status和location CGI头组。</p>
+
+<p>6.2.响应者
+一个响应者的FastCGI应用有相同的目的作为CGI/1.1程序：她接受所有关联一个HTTP请求的信息和生产一个HTTP响应。它的足够去解释每个CGI/1.1的元素怎样去模仿作为一个响应者：</p>
+
+<p>响应者应用接受CGI/1.1 环境变量从web服务通过FCGI_PARAMS。
+下一步响应者应用接受CGI/1.1 stdin数据从web服务器通过FCGI_STDIN。应用接受几乎为CONTENT_LENGTH字节从这个流上在接受终止流的最后标示之前。
+响应者应用发送CGI/1.1 stdout数据给web服务器通过FCGI_STDOUT，CGI/1.1 stderr数据通过FCGI_STDERR。应用发送这些并行的，而不是一个接着一个。应用必须等待完成读取FCGI_PARAMS在它开始写FCGI_STDOUT和FCGI_STDERR之前，但是它不必完成从FCGI_STDIN读取在它开始写这两个流之前。
+在发送它所有的stdout和stderr数据之后，响应者应用发送一个FCGI_END_REQUEST记录。应用设置protocolStatus组件给FCGI_REQUEST_COMPLETE和appStatus组件的CGI程序会返回通过exit的系统调用的状态码。
+一个响应者执行更新，例如执行一个POST方式，应该比较从FCGI_STDIN通过CONTENT_LENGTH的字节的数量和终止更新如果两个数字不相等。
+6.3.授权者
+一个授权者FastCGI应用接受所有关于HTTP请求的信息和生产一个授权/非授权的决定。在这种情况下一个授权决定授权者也能和HTTP请求关联名字-值的对。当给一个非授权的决定时授权者发送一个完全的响应给HTTP客户端。只从CGI/1.1定义了一种近乎完美的好方法去表示联系HTTP请求的信息，授权者用相同的表示：</p>
+
+<p>授权者应用接受HTTP请求信息从web服务器在fcgi_params流上，用相同的格式作为响应者。web服务器不会发送CONTENT_LENGTH,PATH_INFO,PATH_TRANSLATED和SCRIPT_NAME头。
+授权者应用发送stdout和stderr数据用相同的方式作为一个响应者。CGI/1.1响应状态说明请求的处理。如果应用大宋状态码200（OK），web服务器运行访问，依赖于它的配置，web服务器可能进行其他的访问检查，包括请求其他的授权者。
+一个授权者应用的200响应可能包括明智是前缀为Variable-的头。这些头通过名字-值的对在应用与web服务器沟通。
+举个例子，响应的头
+Variable-AUTH_METHOD: database lookup
+传输“database lookup”用名字AUTH_METHOD，这个服务例如名字-值得对是与HTTP请求有联系，包括在随后的CGI或者FastCGI请求执行在处理HTTP请求时。当应用给一个200响应，服务忽略这些以Variable-为前缀的响应头，也会忽略任何响应内容。对与授权者响应状态值是非200（OK），web服务器拒绝访问并发送响应状态，头和内容返回给HTTP客户端。</p>
+
+<p>6.4.过虑者
+一个过虑者FastCGI应用接受所有与HTTP请求相关的信息，加上一个额外的数据流从在web服务器上的文件存储，生产一个过滤后的版本的数据流作为HTTP响应。一个过虑者是和响应者具有类似的功能，都是处理数据文件作为参数。不同的是作为一个过虑者，数据文件和过虑者自己都能被控制访问使用web服务器的访问控制机制，当一个响应者获得一个数据文件的名字作为一个参数时必须处理它自己的访问控制检查在这个数据文件上。
+过虑者的步骤处理是与响应者是相似的。第一服务表示过虑者用环境变量，然后标准的输入（正常的从POST数据），最后数据文件输入：</p>
+
+<p>像响应者一样，过虑者应用接受名字-值对从web服务器通过FCGI_PARAMS。过虑者应用接受两个过滤说明参数：FCGI_DATA_LAST_MOD和FCGI_DATA_LENGTH。
+下一步过虑者应用接受CGI/1.1 stdin数据从web服务器通过FCGI_STDIN。应用接受CONTENT_LENGTH长度的字节从这个流上在接受结束表示之前。（如果HTTP客户端不能提供，例如客户端挂了，应用接受少于content_length字节的数据）。
+-下一步过虑者应用接受文件数据从web服务器通过FCGI_DATA，这个文件的最后修改时间（表示为一个整形的从1970-01-01开始的数字）是FCGI_DATA_LAST_MOD；应用读取FCGI_DATA_LENGTH字节的数据从这个流上在接受到结束流标示之前。
+过虑者应用发送CGI/1.1 stdout数据导问服务器通过FCGI_STDOUT和CGI/1.1 stderr数据通过FCG_STDERR。这个应用发送这些并行的数据，而不是一个一个发送。应用必须等待结束读取FCGI_STDIN在它开始写FCGI_STDOUT和FCGI_STDERR之前，但是它不必结束读取FCGI_DATA在它开始写这两个流之前。
+在发送所有的stdout和stderr数据之后，应用发送一个FCGI_END_REQUEST记录。应用设置一个protocolStatus组件给FCGI_REQUEST_COMPLETE和appstatus组件的状态码，这是类似的CGI程序会通过exit系统调用返回的。
+一个过滤器应该比较在FCGI_STDIN收到的字节的数量和CONTENT_LENGTH的值，与FCGI_DATA和FCGI_DATA_LENGTH。如果这个数字是不匹配的和过滤器是一个查询，过虑者响应会提供一个标示数据丢失。如果数字不匹配且过滤器是一个更新，过滤器应该终止更新。
+7.错误码
+一个FastCGI应用以零状态退出标示它已经完成目的，比如为了执行一种粗略的垃圾回收。
+一个FastCGI应用以非零状态退出似乎除了崩溃。一个web服务器或其他应用怎么管理响应给一个以零或非零退出码是不在这次规范的范围内。
+一个web服务器能请求一个FastCGI应用退出通过发送给它一个STGERM信号。如果应用忽略STGTERM信号web服务器能再发送SIGKILL信号。
+FastCGI应用报告应用级别错误通过FCGI_STDERR流和FCGI_END_REQUEST的appStatus组件，在许多情况下一个错误会被直接报告通过FCGI_STDOUT流。
+在UNIX，应用报告基础级别错误，包括FastCGI协议错误和格式错误在FastCGI环境版本，通过syslog。依赖错误的级别，应用能要么继续要么以非零码退出。</p>
+
+<p>8.类型和常量
+/*</p>
+<ul>
+  <li>Listening socket file number
+ */
+#define FCGI_LISTENSOCK_FILENO 0</li>
+</ul>
+
+<p>typedef struct {
+    unsigned char version;
+    unsigned char type;
+    unsigned char requestIdB1;
+    unsigned char requestIdB0;
+    unsigned char contentLengthB1;
+    unsigned char contentLengthB0;
+    unsigned char paddingLength;
+    unsigned char reserved;
+} FCGI_Header;</p>
+
+<p>/*</p>
+<ul>
+  <li>Number of bytes in a FCGI_Header.  Future versions of the protocol</li>
+  <li>will not reduce this number.
+ */
+#define FCGI_HEADER_LEN  8</li>
+</ul>
+
+<p>/*</p>
+<ul>
+  <li>Value for version component of FCGI_Header
+ */
+#define FCGI_VERSION_1           1</li>
+</ul>
+
+<p>/*</p>
+<ul>
+  <li>Values for type component of FCGI_Header
+ */
+#define FCGI_BEGIN_REQUEST       1
+#define FCGI_ABORT_REQUEST       2
+#define FCGI_END_REQUEST         3
+#define FCGI_PARAMS              4
+#define FCGI_STDIN               5
+#define FCGI_STDOUT              6
+#define FCGI_STDERR              7
+#define FCGI_DATA                8
+#define FCGI_GET_VALUES          9
+#define FCGI_GET_VALUES_RESULT  10
+#define FCGI_UNKNOWN_TYPE       11
+#define FCGI_MAXTYPE (FCGI_UNKNOWN_TYPE)</li>
+</ul>
+
+<p>/*</p>
+<ul>
+  <li>Value for requestId component of FCGI_Header
+ */
+#define FCGI_NULL_REQUEST_ID     0</li>
+</ul>
+
+<p>typedef struct {
+    unsigned char roleB1;
+    unsigned char roleB0;
+    unsigned char flags;
+    unsigned char reserved[5];
+} FCGI_BeginRequestBody;</p>
+
+<p>typedef struct {
+    FCGI_Header header;
+    FCGI_BeginRequestBody body;
+} FCGI_BeginRequestRecord;</p>
+
+<p>/*</p>
+<ul>
+  <li>Mask for flags component of FCGI_BeginRequestBody
+ */
+#define FCGI_KEEP_CONN  1</li>
+</ul>
+
+<p>/*</p>
+<ul>
+  <li>Values for role component of FCGI_BeginRequestBody
+ */
+#define FCGI_RESPONDER  1
+#define FCGI_AUTHORIZER 2
+#define FCGI_FILTER     3</li>
+</ul>
+
+<p>typedef struct {
+    unsigned char appStatusB3;
+    unsigned char appStatusB2;
+    unsigned char appStatusB1;
+    unsigned char appStatusB0;
+    unsigned char protocolStatus;
+    unsigned char reserved[3];
+} FCGI_EndRequestBody;</p>
+
+<p>typedef struct {
+    FCGI_Header header;
+    FCGI_EndRequestBody body;
+} FCGI_EndRequestRecord;</p>
+
+<p>/*</p>
+<ul>
+  <li>Values for protocolStatus component of FCGI_EndRequestBody
+ */
+#define FCGI_REQUEST_COMPLETE 0
+#define FCGI_CANT_MPX_CONN    1
+#define FCGI_OVERLOADED       2
+#define FCGI_UNKNOWN_ROLE     3</li>
+</ul>
+
+<p>/*</p>
+<ul>
+  <li>Variable names for FCGI_GET_VALUES / FCGI_GET_VALUES_RESULT records
+ */
+#define FCGI_MAX_CONNS  “FCGI_MAX_CONNS”
+#define FCGI_MAX_REQS   “FCGI_MAX_REQS”
+#define FCGI_MPXS_CONNS “FCGI_MPXS_CONNS”</li>
+</ul>
+
+<p>typedef struct {
+    unsigned char type;  <br />
+    unsigned char reserved[7];
+} FCGI_UnknownTypeBody;</p>
+
+<p>typedef struct {
+    FCGI_Header header;
+    FCGI_UnknownTypeBody body;
+} FCGI_UnknownTypeRecord;
+9.引用
+The WWW Common Gateway Interface at W3C</p>
+
+<p>A.表：记录类型的属性
+如下的图表列出了所有的记录类型和标示这每一个属性：</p>
+
+<p>WS-&gt;App：这个记录的类型仅能被发送通过web服务器给应用。其他类型的记录仅能被发送通过应用给web服务器。
+management：这个类型的记录保存信息是不被web服务器特别指明的是用在空请求ID上。其他记录的类型保持请求说明信息不能用在空请求ID上
+stream：这个记录的类型来自流，结束通过空长度的记录。其他记录的类型是不一样的；每一个运载一个有用的单元数据。
+                               WS-&gt;App   management  stream</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    FCGI_GET_VALUES           x          x
+    FCGI_GET_VALUES_RESULT               x
+    FCGI_UNKNOWN_TYPE                    x
+
+    FCGI_BEGIN_REQUEST        x
+    FCGI_ABORT_REQUEST        x
+    FCGI_END_REQUEST
+    FCGI_PARAMS               x                    x
+    FCGI_STDIN                x                    x
+    FCGI_DATA                 x                    x
+    FCGI_STDOUT                                    x 
+    FCGI_STDERR                                    x      B.典型的协议信息流
+</code></pre></div></div>
+
+<p>示例的其他符合的惯例</p>
+
+<p>contentData的流记录（FCGI_PARAMS, FCGI_STDIN, FCGI_STDOUT, and FCGI_STDERR）是以字符串来标示的，一个字符在“…”过长去显示，所以只有前缀被显示。
+消息发送给web服务器是缩进的，代表消息被接受从web服务器。
+消息被展示通过应用在时间系列的经验上。
+1.一个简单的请求，没有数据再stdin，且是一个成功的响应</p>
+
+<p>{FCGI_BEGIN_REQUEST,   1, {FCGI_RESPONDER, 0}}
+{FCGI_PARAMS,          1, “\013\002SERVER_PORT80\013\016SERVER_ADDR199.170.183.42 … “}
+{FCGI_PARAMS,          1, “”}
+{FCGI_STDIN,           1, “”}</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>{FCGI_STDOUT,      1, "Content-type: text/html\r\n\r\n&lt;html&gt;\n&lt;head&gt; ... "}
+{FCGI_STDOUT,      1, ""}
+{FCGI_END_REQUEST, 1, {0, FCGI_REQUEST_COMPLETE}} 2.相似与例子1，但是这个时间数据再stdin。web服务器选择发送参数用更多的FCGI_PARAMS记录在之前：
+</code></pre></div></div>
+
+<p>{FCGI_BEGIN_REQUEST,   1, {FCGI_RESPONDER, 0}}
+{FCGI_PARAMS,          1, “\013\002SERVER_PORT80\013\016SER”}
+{FCGI_PARAMS,          1, “VER_ADDR199.170.183.42 … “}
+{FCGI_PARAMS,          1, “”}
+{FCGI_STDIN,           1, “quantity=100&amp;item=3047936”}
+{FCGI_STDIN,           1, “”}</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>{FCGI_STDOUT,      1, "Content-type: text/html\r\n\r\n&lt;html&gt;\n&lt;head&gt; ... "}
+{FCGI_STDOUT,      1, ""}
+{FCGI_END_REQUEST, 1, {0, FCGI_REQUEST_COMPLETE}} 3.相似与例子1，但是这个时间应用检测到错误，应用记录这个消息在stderr上，返回一个页面给客户端，返回一个非零的退出状态给web服务器。 应用悬着去发送页面使用更多的FCGI_STDOUT记录：
+</code></pre></div></div>
+
+<p>{FCGI_BEGIN_REQUEST,   1, {FCGI_RESPONDER, 0}}
+{FCGI_PARAMS,          1, “\013\002SERVER_PORT80\013\016SERVER_ADDR199.170.183.42 … “}
+{FCGI_PARAMS,          1, “”}
+{FCGI_STDIN,           1, “”}</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>{FCGI_STDOUT,      1, "Content-type: text/html\r\n\r\n&lt;ht"}
+{FCGI_STDERR,      1, "config error: missing SI_UID\n"}
+{FCGI_STDOUT,      1, "ml&gt;\n&lt;head&gt; ... "}
+{FCGI_STDOUT,      1, ""}
+{FCGI_STDERR,      1, ""}
+{FCGI_END_REQUEST, 1, {938, FCGI_REQUEST_COMPLETE}} 4.两个实例的例子1，多路复用在一个连接上。第一个请求是比第二个更困难，所以应用结束请求的完成顺序：
+</code></pre></div></div>
+
+<p>{FCGI_BEGIN_REQUEST,   1, {FCGI_RESPONDER, FCGI_KEEP_CONN}}
+{FCGI_PARAMS,          1, “\013\002SERVER_PORT80\013\016SERVER_ADDR199.170.183.42 … “}
+{FCGI_PARAMS,          1, “”}
+{FCGI_BEGIN_REQUEST,   2, {FCGI_RESPONDER, FCGI_KEEP_CONN}}
+{FCGI_PARAMS,          2, “\013\002SERVER_PORT80\013\016SERVER_ADDR199.170.183.42 … “}
+{FCGI_STDIN,           1, “”}</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>{FCGI_STDOUT,      1, "Content-type: text/html\r\n\r\n"}
+</code></pre></div></div>
+
+<p>{FCGI_PARAMS,          2, “”}
+{FCGI_STDIN,           2, “”}</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>{FCGI_STDOUT,      2, "Content-type: text/html\r\n\r\n&lt;html&gt;\n&lt;head&gt; ... "}
+{FCGI_STDOUT,      2, ""}
+{FCGI_END_REQUEST, 2, {0, FCGI_REQUEST_COMPLETE}}
+{FCGI_STDOUT,      1, "&lt;html&gt;\n&lt;head&gt; ... "}
+{FCGI_STDOUT,      1, ""}
+{FCGI_END_REQUEST, 1, {0, FCGI_REQUEST_COMPLETE}}
+</code></pre></div></div>
+
+<p>https://www.jianshu.com/p/5ada2fbc0da3</p>
+
+<p>https://fastcgi-archives.github.io/FastCGI_Specification.html</p>
+
+<p>https://github.com/FastCGI-Archives/fastcgi-archives.github.io</p>
+
+<p>https://www.imooc.com/article/45163</p>
+
+<p>https://zhuanlan.zhihu.com/p/41302954</p>
+:ET

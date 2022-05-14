@@ -1,0 +1,124 @@
+---
+title: HTTPS
+layout: post
+category: web
+author: 夏泽民
+---
+HTTPS可以防止中间人篡改内容吗？
+我搜到Wireshark可以通过导入CA，进而解密HTTPS内容。那么如果是客户端程序来访问HTTPS的话，用户就有办法查看请求返回内容了。
+
+另一方面，我们知道，私钥是存在服务端的，那就是说中间人无法伪造一个服务端用私钥加密，客户端用公钥解密的内容了。
+
+以上有个假设前提是，客户端无法被破解，服务端私钥不会被泄露。
+<!-- more -->
+通信安全，肯定需要用 https，那么 https 咋工作的，简单整理一下：
+
+服务器将自己的证书发送给客户端；
+客户端通过层层 CA 验证证书是真的，从证书里面拿出来服务器的公钥；
+客户端通过服务器公钥将一个随机数发送给服务器；
+服务器通过自己的私钥解密得到随机数，这样客户端和服务器都能通过这个随机出算出一个对称秘钥；
+之后双方通过对称秘钥加密数据进行通信。
+简单的过程是这样，通过非对称加密的方式来传输一个对称加密的秘钥，最终通过对称秘钥进行数据加密，这样能保证传输的效率。
+
+这里关键的一步就是服务器发送过来的证书，是通过一个信任的 CA 签名的，所以值得信任。
+
+我们使用抓包工具的第一步就是在你自己设备中信任 Charles 的 CA 证书，在自己的设备中添加了一个 CA，请求的时候，Charles 通过自己的 CA 签名了一个自己的公钥，发送给客户端，客户端就误以为是服务器了，这样之后的流程都会先走到 Charles 然后才会走到目标服务器。
+
+Charles 扮演了一个中间人的角色，而且这个中间人是我们自己设置的。用户本身主动添加中间人，跟中间人攻击完全是两码事，一个正常用户，设备中 CA 无异常，中间人根本参与不进来，即便从网络传输过程中获取了 https 的数据包，也无法解密，获取不了数据，更不要谈篡改了。
+
+用户自己用抓包工具抓包，跟中间人在网络传输中抓包是两件事！
+
+客户端签名
+很多人会想到，应该在客户端请求之前，对请求的数据进行一次签名，防止一些非法的人随意访问到服务器接口。
+
+首先客户端可以有很多，Web ，小程序，APP，这些个客户端都是可以获取到本地的，利用各种反编译的工具分析客户端的代码，你用什么方式做的签名，我照着做一遍就行了，只要你有接口，我就有一定有办法调用，只是一些时间成本的问题。
+
+所以你会在 Github 上看到各种网易云音乐客户端，微信客户端，知乎日报客户端......
+
+所以如果你是出于防止接口被随意调用，那么只能防备一些小白用户，我个人还是感觉意义不大。
+
+在进行App测试或定位线上问题时，经常会遇到抓取HTTPS数据包的需求。一般在windows上会使用fiddler，Mac上使用Charles。对于https请求，抓到的数据因为经过了加密，只能看到乱码。
+
+操作原理
+关键的操作思想：
+1. 构造一个中间人代理，它有能力完成TLS/SSL握手
+2. 弄到一个根证书，并用它生成签名认证的代理服务器证书
+
+<p>　　Charles就是一个理想的中间人，它支持SSL握手，可以自动根据根证书生成一个签名的服务器证书，并且它的官网为我们提供了一个根证书。（不安装也可抓到包只不过只能抓到http的包，不能抓https的包）
+　　我们要做的就是在客户端安装好这个根证书，然后让我们的操作系统信任它。对App来说，需要设法在IOS或Android上装上这个官网提供的根证书。
+　　完成上述步骤后，App再指定Charles为它的代理服务器，这时，App请求的服务器证书就是Charles自动生成的代理服务器证书。如果Charles的根证书已被信任，这个自动生成的代理服务器证书是有效的，使用它App和Charles的TLS握手可以顺利完成。</p>
+
+以下是详细的操作步骤：
+
+分步指南
+第一步：配置HTTP代理，这步与抓取HTTP请求是一样的：
+选择在8888端口上监听，然后确定。够选了SOCKS proxy，还能截获到浏览器的http访问请求。
+第二步：配置SSL代理：
+
+首先在charles的 Proxy选项选择SSL Proxy Settings
+点add添加需要监视的域名，支持 *号通配符，端口一般都是443:
+第三步 为手机设置代理
+
+在手机无线中配置手动代理，输入安装Charles的电脑的网络地址，端口填8888。
+
+第四步 安装根证书
+
+在手机上安装Charles的根证书：
+
+以IOS为例，在Safri上打开Charles的根证书下载网址： chls.pro/ssl 。
+顺利的话会出现这样的画面，继续点安装，然后去设置里的描述文件管理中信任它就行了。
+
+安卓安装，要分操作系统 chls.pro/ssl 。
+
+会下载下来一个charles-proxy-ssl-proxying-certificate.pem证书
+
+有的手机需要将后缀改为'.crt',有的可直接使用，以小米为例（可直接使用）
+
+设置 > 更多设置(系统和设备) > 系统安全 > 从存储设备安装>找到相应的文件夹下的文件>点击安装
+第一次安装需要命名
+
+在代理开启的情况下登录
+
+如果不能下载，检查手机是否正确设置了代理，Charles是否已经打开并配置正确。
+
+电脑端的根证书安装
+
+以MAC为例，直接在Charles的Help菜单中安装；安装完成后去系统的钥匙串访问中信任它。
+
+3.设置访问域名和端口 
+大部分人会设置Host:* port：443 ；但是如果直接点击OK也是没有问题的
+
+针对ios和一部分android机子可行，android7.0的机子再去用charles抓包时候会出现一下情况： 
+unknown
+
+sskhandshake:received alert certificate unknown
+
+此时此刻，把目光转移到代码上来，不管你在charles怎么配置都是无济于事的
+
+步骤如下:
+
+1.在项目res目录下新增一个文件夹，命名xml,并且新建一个xml文件，可以命名为network_security_config.xml(其实。名字可以顺便命名，对应就行)
+2.network_security_config.xml 里面添加内容:
+
+<span style="color:#000000"><code class="language-xml"><span style="color:#006666"><?xml version="1.0" encoding="utf-8"?></span>
+<span style="color:#006666"><<span style="color:#4f4f4f">network-security-config</span>></span>
+    <span style="color:#006666"><<span style="color:#4f4f4f">domain-config</span>></span>
+        <span style="color:#006666"><<span style="color:#4f4f4f">domain</span> <span style="color:#4f4f4f">includeSubdomains</span>=<span style="color:#009900">"true"</span>></span>请求域名<span style="color:#006666"></<span style="color:#4f4f4f">domain</span>></span>
+        <span style="color:#006666"><<span style="color:#4f4f4f">trust-anchors</span>></span>
+            <span style="color:#006666"><<span style="color:#4f4f4f">certificates</span> <span style="color:#4f4f4f">src</span>=<span style="color:#009900">"@raw/证书名称"</span>/></span>
+        <span style="color:#006666"></<span style="color:#4f4f4f">trust-anchors</span>></span>
+    <span style="color:#006666"></<span style="color:#4f4f4f">domain-config</span>></span>
+<span style="color:#006666"></<span style="color:#4f4f4f">network-security-config</span>></span></code></span>
+PS：请求域名 - 为你项目请求接口所用到的域名 
+证书名称 - 为上面提到的第二点在charles里面点击”Save Charles Root Certificate..”（路径: Help - SSL Proxying -Save Charles Root Certificate.. ）
+
+3.把证书放进res/raw 目录下 ，如果没有此目录，需要新建
+ps:此时文件名称应当和上面提到的network_security_config.xml 文件里面证书名称对应
+
+4.在AndroidManifest.xml文件需要加入以下配置: 
+<span style="color:#000000"><code class="language-xml">android:networkSecurityConfig="@xml/network_security_config"</code></span>
+大功告成，配置完成即可抓包。
+
+https://github.com/iSECPartners/Android-SSL-TrustKiller
+https://github.com/Fuzion24/JustTrustMe
+https://github.com/nabla-c0d3/ssl-kill-switch2

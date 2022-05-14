@@ -1,0 +1,403 @@
+I"w0<p>通过利用反射，可以在程序运行时处理任意类型。通过TypeOf方法取得取得类型信息，包装在Type中。通过ValueOf取得运行时的数据，包装在Value中。</p>
+
+<!-- more -->
+
+<p>func SimpleCopyProperties(dst, src interface{}) (err error) {
+	// 防止意外panic
+	defer func() {
+		if e := recover(); e != nil {
+			err = errors.New(fmt.Sprintf(“%v”, e))
+		}
+	}()</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>dstType, dstValue := reflect.TypeOf(dst), reflect.ValueOf(dst)
+srcType, srcValue := reflect.TypeOf(src), reflect.ValueOf(src)
+
+// dst必须结构体指针类型
+if dstType.Kind() != reflect.Ptr || dstType.Elem().Kind() != reflect.Struct {
+	return errors.New("dst type should be a struct pointer")
+}
+
+// src必须为结构体或者结构体指针
+if srcType.Kind() == reflect.Ptr {
+	srcType, srcValue = srcType.Elem(), srcValue.Elem()
+}
+if srcType.Kind() != reflect.Struct {
+	return errors.New("src type should be a struct or a struct pointer")
+}
+
+// 取具体内容
+dstType, dstValue = dstType.Elem(), dstValue.Elem()
+
+// 属性个数
+propertyNums := dstType.NumField()
+
+for i := 0; i &lt; propertyNums; i++ {
+	// 属性
+	property := dstType.Field(i)
+	// 待填充属性值
+	propertyValue := srcValue.FieldByName(property.Name)
+
+	// 无效，说明src没有这个属性 || 属性同名但类型不同
+	if !propertyValue.IsValid() || property.Type != propertyValue.Type() {
+		continue
+	}
+
+	if dstValue.Field(i).CanSet() {
+		dstValue.Field(i).Set(propertyValue)
+	}
+}
+
+return nil }
+</code></pre></div></div>
+
+<p>https://juejin.cn/post/6844904009505964039</p>
+
+<p>反射实现类型与指针拷贝
+reflect.New(reflect.TypeOf(param))可以生成一个指向param类型的指针变量，举例来说，如果param是Cartoon,那么该表达式生成的结果就是<em>Cartoon类型，如果type是</em>Cartoon,那么该表达式生成的结果就是 <em>*Cartoon 类型。
+reflect.TypeOf(param).Elem()可以得到该param指针指向的结构体类型（param一定是指针类型，不然Elem()会报错）。也就说如果param是</em>Cartoon的话，那么此表达式返回的对象就是Cartoon。
+reflect.ValueOf(param).Elem() 可以得到此param指针指向的结构体的值。（param一定是指针类型，不然Elem()会报错）
+reflect.Value对象的Set方法可以实现赋值操作。上一步得到的结构体在赋值时即可形成拷贝。</p>
+
+<p>https://juejin.cn/post/6844903922205720590</p>
+
+<p>反射是指在程序运行期对程序本身进行访问和修改的能力。程序在编译时，变量被转换为内存地址，变量名不会被编译器写入到可执行部分。在运行程序时，程序无法获取自身的信息。</p>
+
+<p>支持反射的语言可以在程序编译期将变量的反射信息，如字段名称、类型信息、结构体信息等整合到可执行文件中，并给程序提供接口访问反射信息，这样就可以在程序运行期获取类型的反射信息，并且有能力修改它们。</p>
+
+<p>Go程序在运行期使用reflect包访问程序的反射信息。</p>
+
+<p>reflect包实现了运行时反射，允许程序操作任意类型的对象。典型用法是用静态类型interface{}保存一个值，通过调用TypeOf获取其动态类型信息，该函数返回一个Type类型值。调用ValueOf函数返回一个Value类型值，该值代表运行时的数据。Zero接受一个Type类型参数并返回一个代表该类型零值的Value类型值。</p>
+
+<p>Go 程序的反射系统无法获取到一个可执行文件空间中或者是一个包中的所有类型信息，需要配合使用标准库中对应的词法、语法解析器和抽象语法树（AST）对源码进行扫描后获得这些信息。</p>
+
+<p>从类型对象中获取类型名称和种类的例子
+Go 语言中的类型名称对应的反射获取方法是 reflect.Type 中的 Name() 方法，返回表示类型名称的字符串。</p>
+
+<p>类型归属的种类（Kind）使用的是 reflect.Type 中的 Kind() 方法，返回 reflect.Kind 类型的常量。
+https://www.cnblogs.com/itbsl/p/10551880.html</p>
+
+<p>这个是调用方法的，类似于Java的Method.Invoke() ，其实这种玩法很不推荐，我们知道golang，对于方法是很随意的，各种类型都可以定义方法，所以主流的rpc语言都是使用的接口约束Method信息，进而获取类型。后期我会解读go-rpc，它自带的rpc框架内部实现.
+​	区别就是reflect.ValueOf().Call() 和 reflect.TypeOf().Method().Func.Call() 这俩call方法不同的是，前面那个不需要传递 receiver，后者的第一个参数必须是receiver</p>
+
+<p>https://juejin.cn/post/6844904199994474504</p>
+
+<p>https://www.cnblogs.com/golove/p/5909541.html</p>
+
+<p>func (upckr *unpacker) unpackBlob(count int, isMapKey bool) (interface{}, error) {
+	theType := upckr.buffer[upckr.offset] &amp; 0xff
+	upckr.offset++
+	count–
+	var val interface{}</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>switch theType {
+case ParticleType.STRING:
+	val = string(upckr.buffer[upckr.offset : upckr.offset+count])
+
+case ParticleType.BLOB:
+	if isMapKey {
+		b := reflect.Indirect(reflect.New(reflect.ArrayOf(count, reflect.TypeOf(byte(0)))))
+		reflect.Copy(b, reflect.ValueOf(upckr.buffer[upckr.offset:upckr.offset+count]))
+
+		val = b.Interface()
+	} else {
+		b := make([]byte, count)
+		copy(b, upckr.buffer[upckr.offset:upckr.offset+count])
+		val = b
+	}
+
+case ParticleType.GEOJSON:
+	val = NewGeoJSONValue(string(upckr.buffer[upckr.offset : upckr.offset+count]))
+
+default:
+	panic(NewAerospikeError(SERIALIZE_ERROR, fmt.Sprintf("Error while unpacking BLOB. Type-header with code `%d` not recognized.", theType)))
+}
+upckr.offset += count
+
+return val, nil
+
+
+https://golang.hotexamples.com/zh/examples/reflect/-/ArrayOf/golang-arrayof-function-examples.html
+</code></pre></div></div>
+
+<p>不是所有的反射值都可以修改。对于一个反射值是否可以修改，可以通过CanSet()进行检查。</p>
+
+<p>要修改值，必须满足:</p>
+
+<p>可以寻址</p>
+
+<p>可寻址的类型：</p>
+
+<p>指针指向的具体元素
+slice的元素
+可寻址的结构体的字段(指向结构体的指针)
+可寻址的数组的元素(指向数组的指针)
+不是结构体没有导出的字段</p>
+
+<p>https://blog.csdn.net/lanyang123456/article/details/95238197
+MakeMap实现中不需要反射。这是删除反射的重写:
+func MakeMap(fn *func(func(s rune) rune, string) string) {
+    *fn = func(mapping func(rune) rune, s string) string {
+        var builder strings.Builder
+        builder.Grow(len(s))
+        extractedString := []rune(s)
+        for i := 0; i &lt; len(extractedString); i++ {
+            builder.WriteRune(mapping(extractedString[i]))
+        }
+        return builder.String()
+    }
+}
+https://www.coder.work/article/7193174</p>
+
+<p>已知的 deepcopy 开源库Permalink
+大体上在 Github 上可以搜索到的是这些库，排名无分先后，大体上源于 Github 自身列举出来的顺序：</p>
+
+<p>jinzhu/copier</p>
+
+<p>Copier for golang, copy value from struct to struct and more</p>
+
+<p>mohae/deepcopy</p>
+
+<p>Deep copy things</p>
+
+<p>ulule/deepcopier</p>
+
+<p>simple struct copying for golang</p>
+
+<p>mitchellh/copystructure</p>
+
+<p>Go (golang) library for deep copying values in Go.</p>
+
+<p>globusdigital/deep-copy</p>
+
+<p>Deep copy generator</p>
+
+<p>getlantern/deepcopy</p>
+
+<p>Deep copying for Go</p>
+
+<p>antlabs/deepcopy</p>
+
+<p>deepcopy库支持dst, src间的深度拷贝，类型从struct,map,slice基本都支持，支持过滤条件[从零实现]</p>
+
+<p>go-toolsmith/astcopy</p>
+
+<p>Package astcopy implements Go AST deep copy operations.</p>
+
+<p>qdm12/reprint</p>
+
+<p>Golang deep copying, THE RIGHT WAY ™️</p>
+
+<p>ybriffa/deepcopy</p>
+
+<p>library to make deep copies in go</p>
+
+<p>volio/go-copy</p>
+
+<p>Go deep copy library, support circular reference</p>
+
+<p>huandu/go-clone</p>
+
+<p>Deep clone any Go data.</p>
+
+<p>wzshiming/deepclone</p>
+
+<p>deepclone</p>
+
+<p>davidwalter0/go-clone</p>
+
+<p>recursive deep copy of go object</p>
+
+<p>https://hedzr.com/golang/reflect/golang-reflect-1/</p>
+
+<p>https://github.com/jinzhu/copier
+https://github.com/mohae/deepcopy
+https://github.com/ulule/deepcopier
+https://github.com/mitchellh/copystructure
+https://github.com/globusdigital/deep-copy
+https://github.com/getlantern/deepcopy
+https://github.com/antlabs/deepcopy
+https://github.com/go-toolsmith/astcopy
+https://github.com/qdm12/reprint
+https://github.com/huandu/go-clone
+https://github.com/wzshiming/deepclone
+https://github.com/davidwalter0/go-clone</p>
+
+<p>package main</p>
+
+<p>import (
+“fmt”
+“reflect”
+“time”
+)</p>
+
+<p>type (
+	Player struct {
+		Id     int
+		Level  int
+		Heroes map[int]<em>Hero
+		Equips []</em>Equip
+	}</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>Hero struct {
+	Id     int
+	Level  int
+	Skills []*Skill
+}
+
+Equip struct {
+	Id    int
+	Level int
+}
+
+Skill struct {
+	Id    int
+	Level int
+} )
+</code></pre></div></div>
+
+<p>func NewHero() <em>Hero {
+	return &amp;Hero{
+		Id:     1,
+		Level:  1,
+		Skills: append([]</em>Skill{NewSkill()}, NewSkill(), NewSkill()),
+	}
+}</p>
+
+<p>func NewSkill() *Skill {
+	return &amp;Skill{1, 1}
+}</p>
+
+<p>func NewEquip() *Equip {
+	return &amp;Equip{1, 1}
+}</p>
+
+<p>func NewPlayer() <em>Player {
+	return &amp;Player{
+		Id:     1,
+		Level:  1,
+		Heroes:   map[int]</em>Hero{1: NewHero(), 2: NewHero(), 3: NewHero()},
+		Equips: append([]*Equip{NewEquip()}, NewEquip(), NewEquip()),
+	}
+}</p>
+
+<p>func (self *Hero) Print() {
+	fmt.Printf(“Id=%d, Level=%d\n”, self.Id, self.Level)
+	for _, v := range self.Skills {
+		fmt.Printf(“%v\n”, *v)
+	}
+}</p>
+
+<p>func (self *Player) Print() {
+	fmt.Printf(“Id=%d, Level=%d\n”, self.Id, self.Level)
+	for _, v := range self.Heroes {
+		v.Print()
+	}</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>for _, v := range self.Equips {
+	fmt.Printf("%+v\n", *v)
+} }
+</code></pre></div></div>
+
+<p>type Interface interface {
+	DeepCopy() interface{}
+}</p>
+
+<p>func Copy(src interface{}) interface{} {
+	if src == nil {
+		return nil
+	}
+	original := reflect.ValueOf(src)
+	cpy := reflect.New(original.Type()).Elem()
+	copyRecursive(original, cpy)</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>return cpy.Interface() }
+</code></pre></div></div>
+
+<p>func copyRecursive(src, dst reflect.Value) {
+	if src.CanInterface() {
+		if copier, ok := src.Interface().(Interface); ok {
+			dst.Set(reflect.ValueOf(copier.DeepCopy()))
+			return
+		}
+	}</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>switch src.Kind() {
+case reflect.Ptr:
+	originalValue := src.Elem()
+
+	if !originalValue.IsValid() {
+		return
+	}
+	dst.Set(reflect.New(originalValue.Type()))
+	copyRecursive(originalValue, dst.Elem())
+
+case reflect.Interface:
+	if src.IsNil() {
+		return
+	}
+	originalValue := src.Elem()
+	copyValue := reflect.New(originalValue.Type()).Elem()
+	copyRecursive(originalValue, copyValue)
+	dst.Set(copyValue)
+
+case reflect.Struct:
+	t, ok := src.Interface().(time.Time)
+	if ok {
+		dst.Set(reflect.ValueOf(t))
+		return
+	}
+	for i := 0; i &lt; src.NumField(); i++ {
+		if src.Type().Field(i).PkgPath != "" {
+			continue
+		}
+		copyRecursive(src.Field(i), dst.Field(i))
+	}
+
+case reflect.Slice:
+	if src.IsNil() {
+		return
+	}
+	dst.Set(reflect.MakeSlice(src.Type(), src.Len(), src.Cap()))
+	for i := 0; i &lt; src.Len(); i++ {
+		copyRecursive(src.Index(i), dst.Index(i))
+	}
+
+case reflect.Map:
+	if src.IsNil() {
+		return
+	}
+	dst.Set(reflect.MakeMap(src.Type()))
+	for _, key := range src.MapKeys() {
+		originalValue := src.MapIndex(key)
+		copyValue := reflect.New(originalValue.Type()).Elem()
+		copyRecursive(originalValue, copyValue)
+		copyKey := Copy(key.Interface())
+		dst.SetMapIndex(reflect.ValueOf(copyKey), copyValue)
+	}
+
+default:
+	dst.Set(src)
+} }
+</code></pre></div></div>
+
+<p>func main() {
+	p1 := NewPlayer()
+	p2 := Copy(p1).(*Player)
+	fmt.Println(reflect.DeepEqual(p1, p2))
+}</p>
+
+<p>// 输出
+true</p>
+
+<p>// benchamark测试
+func BenchmarkReflect(b *testing.B) {
+	p1 := NewPlayer()
+	for i:=0 ; i&lt;b.N ; i++ {
+		Copy(p1)
+	}
+}</p>
+
+<p>https://studygolang.com/articles/13709</p>
+
+:ET

@@ -1,0 +1,43 @@
+I"O<p>名称	描述	指标类型	可用性
+Threads_connected	当前开放的连接	资源: 利用率	服务器状态变量
+Threads_running	当前运行的连接	资源: 利用率	服务器状态变量
+Connection_errors_internal	由服务器错误导致的失败连接数	资源: 错误	服务器状态变量
+Aborted_connects	尝试与服务器进行连接结果失败的次数	资源: 错误	服务器状态变量
+Connection_errors_max_connections	由 max_connections 限制导致的失败连接数	资源: 错误	服务器状态变量
+MySQL 提供了 Threads_connected 指标以记录连接的线程数——每个连接对应一个线程。通过监控该指标与先前设置的连接限制，你可以确保服务器拥有足够的容量处理新的连接。MySQL 还提供了 Threads_running 指标，帮助你分隔在任意时间正在积极处理查询的线程与那些虽然可用但是闲置的连接。</p>
+
+<p>如果服务器真的达到 max_connections 限制，它就会开始拒绝新的连接。在这种情况下，Connection_errors_max_connections 指标就会开始增加，同时，追踪所有失败连接尝试的 Aborted_connects 指标也会开始增加。</p>
+
+<p>MySQL 提供了许多有关连接错误的指标，帮助你调查连接问题。Connection_errors_internal 是个很值得关注的指标，因为该指标只会在错误源自服务器本身时增加。内部错误可能反映了内存不足状况，或者服务器无法开启新的线程。</p>
+
+<p>应该设置告警的指标</p>
+
+<p>Threads_connected：当所有可用连接都被占用时，如果一个客户端试图连接至 MySQL，后者会返回 “Too many connections(连接数过多)”错误，同时将 Connection_errors_max_connections 的值增加。为了防止出现此类情况，你应该监控可用连接的数量，并确保其值保持在 max_connections 限制以内。</p>
+
+<p>Aborted_connects：如果该计数器在不断增长，意味着用户尝试连接到数据库的努力全都失败了。此时，应该借助 Connection_errors_max_connections 与  Connection_errors_internal 之类细粒度高的指标调查该问题的根源。
+<!-- more -->
+关键的 InnoDB 缓冲池指标</p>
+
+<p>MySQL 提供了许多关于缓冲池及其利用率的指标。其中一些有用的指标能够追踪缓冲池的总大小，缓冲池的使用量，以及其处理读取操作的效率。</p>
+
+<p>指标 Innodb_buffer_pool_read_requests 及 Innodb_buffer_pool_reads 对于理解缓冲池利用率都非常关键。Innodb_buffer_pool_read_requests 追踪合理读取请求的数量，而 Innodb_buffer_pool_reads 追踪缓冲池无法满足，因而只能从磁盘读取的请求数量。我们知道，从内存读取的速度比从磁盘读取通常要快好几个数量级，因此，如果 Innodb_buffer_pool_reads 的值开始增加，意味着数据库性能大有问题。</p>
+
+<p>缓冲池利用率是在考虑扩大缓冲池之前应该检查的重要指标。利用率指标无法直接读取，但是可以通过下面的方式简单地计算得到：</p>
+
+<p>(Innodb_buffer_pool_pages_total - Innodb_buffer_pool_pages_free) / 
+ Innodb_buffer_pool_pages_total
+如果你的数据库从磁盘进行大量读取，而缓冲池还有许多闲置空间，这可能是因为缓存最近才清理过，还处于热身阶段。如果你的缓冲池并未填满，但能有效处理读取请求，则说明你的数据工作集相当适应目前的内存配置。</p>
+
+<p>然而，较高的缓冲池利用率并不一定意味着坏消息，因为旧数据或不常使用的数据会根据 LRU 算法 自动从缓存中清理出去。但是，如果缓冲池无法有效满足你的读取工作量，这可能说明扩大缓存的时机已至。</p>
+
+<p>将缓冲池指标转化为字节</p>
+
+<p>大多数缓冲池指标都以内存页面为单位进行记录，但是这些指标也可以转化为字节，从而使其更容易与缓冲池的实际大小相关联。例如，你可以使用追踪缓冲池中内存页面总数的服务器状态变量找出缓冲池的总大小（以字节为单位）：</p>
+
+<p>Innodb_buffer_pool_pages_total * innodb_page_size
+InnoDB 页面大小是可调整的，但是默认设置为 16 KiB，或 16,384 字节。你可以使用 SHOW VARIABLES 查询了解其当前值：</p>
+
+<p>SHOW VARIABLES LIKE “innodb_page_size”;</p>
+
+<p>http://blog.oneapm.com/apm-tech/755.html</p>
+:ET

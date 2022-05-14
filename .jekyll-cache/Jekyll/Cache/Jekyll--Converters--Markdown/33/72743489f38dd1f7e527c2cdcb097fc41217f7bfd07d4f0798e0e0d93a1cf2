@@ -1,0 +1,161 @@
+I"<p>借助反射来判断。
+func IsNil(i interface{}) bool {
+    defer func() {
+        recover()
+    }()
+    vi := reflect.ValueOf(i)
+    return vi.IsNil()
+}
+<!-- more -->
+要判断interface 空的问题，首先看下其底层实现。</p>
+
+<p>interface 底层结构
+根据 interface 是否包含有 method，底层实现上用两种 struct 来表示：iface 和 eface。eface表示不含 method 的 interface 结构，或者叫 empty interface。对于 Golang 中的大部分数据类型都可以抽象出来 _type 结构，同时针对不同的类型还会有一些其他信息。</p>
+
+<p>1.eface
+type eface struct {
+    _type *_type
+    data  unsafe.Pointer
+}</p>
+
+<p>type _type struct {
+    size       uintptr // type size
+    ptrdata    uintptr // size of memory prefix holding all pointers
+    hash       uint32  // hash of type; avoids computation in hash tables
+    tflag      tflag   // extra type information flags
+    align      uint8   // alignment of variable with this type
+    fieldalign uint8   // alignment of struct field with this type
+    kind       uint8   // enumeration for C
+    alg        *typeAlg  // algorithm table
+    gcdata    *byte    // garbage collection data
+    str       nameOff  // string form
+    ptrToThis typeOff  // type for pointer to this type, may be zero
+}
+2.iface
+iface 表示 non-empty interface 的底层实现。相比于 empty interface，non-empty 要包含一些 method。method 的具体实现存放在 itab.fun 变量里。如果 interface 包含多个 method，这里只有一个 fun 变量怎么存呢？这个下面再细说。</p>
+
+<p>type iface struct {
+    tab  *itab
+    data unsafe.Pointer
+}</p>
+
+<p>// layout of Itab known to compilers
+// allocated in non-garbage-collected memory
+// Needs to be in sync with
+// ../cmd/compile/internal/gc/reflect.go:/^func.dumptypestructs.
+type itab struct {
+    inter  *interfacetype
+    _type  *_type
+    link   *itab
+    bad    int32
+    inhash int32      // has this itab been added to hash?
+    fun    [1]uintptr // variable sized
+}
+概括起来，接口对象由接口表 (interface table) 指针和数据指针组成，或者说由动态类型和动态值组成。</p>
+
+<p>struct Iface
+{
+    Itab* tab;
+    void* data;
+};</p>
+
+<p>struct Itab
+{
+    InterfaceType* inter;
+    Type* type;
+    void (*fun[])(void);
+};</p>
+
+<p>接口表存储元数据信息，包括接口类型、动态类型，以及实现接口的方法指针。无论是反射还是通过接口调用方法，都会用到这些信息。</p>
+
+<p>再来看下nil的定义。</p>
+
+<p>nil的定义
+// nil is a predeclared identifier representing the zero value for a pointer, channel, func, interface, map, or slice type.</p>
+
+<p>var nil Type // Type must be a pointer, channel, func, interface, map, or slice type</p>
+
+<p>也就是说，只有pointer, channel, func, interface, map, or slice 这些类型的值才可以是nil.</p>
+
+<p>如何判定interface里面的动态值是否空
+对于一个接口的零值就是它的类型和值的部分都是nil。</p>
+
+<p>一个接口值基于它的动态类型被描述为空或非空。</p>
+
+<p>例如，</p>
+
+<p>var w io.Writer
+1
+一般情况下，通过使用w==nil或者w!=nil来判读接口值是否为空，只是判断了动态类型，而没有判断动态值。</p>
+
+<p>例如，下面的例子。</p>
+
+<p>package main</p>
+
+<p>import (“fmt”)</p>
+
+<p>func main(){</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>   var a interface{} = nil // tab = nil, data = nil
+   var b interface{} = (*int)(nil) // tab 包含 *int 类型信息, data = nil
+
+   fmt.Println(a==nil)
+   fmt.Println(b==nil) }
+</code></pre></div></div>
+
+<p>output:</p>
+
+<p>true
+false</p>
+
+<p>上面代码中，接口b的动态类型为*int， 而动态值为nil，直接使用等于号无法判断。</p>
+
+<p>所以不能直接通过与nil比较的方式判断动态值是否为空。</p>
+
+<p>那如何判断动态值是否为空？</p>
+
+<p>可以借助反射来判断。</p>
+
+<p>func IsNil(i interface{}) bool {
+    defer func() {
+        recover()
+    }()
+    vi := reflect.ValueOf(i)
+    return vi.IsNil()
+}</p>
+
+<p>其中，IsNil定义如下：</p>
+
+<p>func (v Value) IsNil() bool 
+1
+参数v必须是chan, func, interface, map, pointer, or slice，否则会panic。</p>
+
+<p>如果调用IsNil的不是一个指针，会出现异常，需要捕获异常。
+或者修改成这样：</p>
+
+<p>func IsNil(i interface{}) bool {
+    vi := reflect.ValueOf(i)
+    if vi.Kind() == reflect.Ptr {
+        return vi.IsNil()
+    }
+    return false
+}</p>
+
+<p>总结
+一个接口包括动态类型和动态值。
+如果一个接口的动态类型和动态值都为空，则这个接口为空的。</p>
+
+<p>参考
+https://blog.csdn.net/lanyang123456/article/details/83715090</p>
+
+<p>https://golang.org/src/builtin/builtin.go?h=var+nil+Type#L101</p>
+
+<p>《Go学习笔记–雨痕》</p>
+
+<p>http://legendtkl.com/2017/07/01/golang-interface-implement/</p>
+
+<p>https://www.jianshu.com/p/97bfe8104e03</p>
+
+<p>http://legendtkl.com/2017/07/01/golang-interface-implement/
+https://www.jianshu.com/p/97bfe8104e03</p>
+:ET

@@ -1,0 +1,1658 @@
+I"�<p>https://mp.weixin.qq.com/s/qWfci0XCfuNCeAVBoCDW7A
+因为TCP的三次握手等等原因，建立一个连接是一件成本比较高的行为。所以在一个需要多次与特定实体交互的程序中，就需要维持一个连接池，里面有可以复用的连接可供重复使用。
+而维持一个连接池，最基本的要求就是要做到：thread safe（线程安全），尤其是在Golang这种特性是goroutine的语言中。
+<!-- more -->
+实现简单的连接池
+type 
+Pool</p>
+
+<p>struct</p>
+
+<p>{</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>m sync . Mutex
+</code></pre></div></div>
+
+<p>//保证多个goroutine访问时候,closed的线程安全</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>res chan io . Closer
+</code></pre></div></div>
+
+<p>//连接存储的chan</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>factory func ()
+</code></pre></div></div>
+
+<p>(
+io
+.
+Closer
+,
+error
+)</p>
+
+<p>//新建连接的工厂方法</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>closed  bool
+</code></pre></div></div>
+
+<p>//连接池关闭标志</p>
+
+<p>}</p>
+
+<p>这个简单的连接池，我们利用chan来存储池里的连接。而新建结构体的方法也比较简单：</p>
+
+<p>func 
+New
+(
+fn func
+()</p>
+
+<p>(
+io
+.
+Closer
+,
+ error
+),
+ size 
+uint
+)</p>
+
+<p>(*
+Pool
+,
+ error
+)</p>
+
+<p>{</p>
+
+<p>if
+ size 
+&lt;=</p>
+
+<p>0</p>
+
+<p>{</p>
+
+<p>return</p>
+
+<p>nil
+,
+ errors
+.
+New
+(
+“size的值太小了。”
+)</p>
+
+<p>}</p>
+
+<p>return</p>
+
+<p>&amp;
+Pool
+{</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    factory :  fn ,
+
+    res :
+ make ( chan io . Closer ,  size ),
+</code></pre></div></div>
+
+<p>},</p>
+
+<p>nil</p>
+
+<p>}</p>
+
+<p>只需要提供对应的工厂函数和连接池的大小就可以了。</p>
+
+<p>获取连接
+那么我们要怎么从中获取资源呢？因为我们内部存储连接的结构是chan，所以只需要简单的select就可以保证线程安全：</p>
+
+<p>//从资源池里获取一个资源</p>
+
+<p>func 
+(
+p 
+*
+Pool
+)</p>
+
+<p>Acquire
+()</p>
+
+<p>(
+io
+.
+Closer
+,
+error
+)</p>
+
+<p>{</p>
+
+<p>select</p>
+
+<p>{</p>
+
+<p>case
+ r
+,
+ok 
+:=</p>
+
+<p>&lt;-
+p
+.
+res
+:</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    log . Println ( "Acquire:共享资源" )
+</code></pre></div></div>
+
+<p>if</p>
+
+<p>!
+ok 
+{</p>
+
+<p>return</p>
+
+<p>nil
+,
+ErrPoolClosed</p>
+
+<p>}</p>
+
+<p>return
+ r
+,
+nil</p>
+
+<p>default
+:</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    log . Println ( "Acquire:新生成资源" )
+</code></pre></div></div>
+
+<p>return
+ p
+.
+factory
+()</p>
+
+<p>}</p>
+
+<p>}</p>
+
+<p>我们先从连接池的res这个chan里面获取，如果没有的话我们就利用我们早已经准备好的工厂函数进行构造连接。同时我们在从res获取连接的时候利用ok先确定了这个连接池是否已经关闭。如果已经关闭的话我们就返回早已经准备好的连接已关闭错误。</p>
+
+<p>关闭连接池
+那么既然提到关闭连接池，我们是怎么样关闭连接池的呢？</p>
+
+<p>//关闭资源池，释放资源</p>
+
+<p>func 
+(
+p 
+*
+Pool
+)</p>
+
+<p>Close
+()</p>
+
+<p>{</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>p . m . Lock ()
+
+defer p . m . Unlock ()
+</code></pre></div></div>
+
+<p>if
+ p
+.
+closed 
+{</p>
+
+<p>return</p>
+
+<p>}</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>p . closed  =
+</code></pre></div></div>
+
+<p>true</p>
+
+<p>//关闭通道，不让写入了</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>close ( p . res )
+</code></pre></div></div>
+
+<p>//关闭通道里的资源</p>
+
+<p>for
+ r
+:=
+range p
+.
+res 
+{</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    r . Close ()
+</code></pre></div></div>
+
+<p>}</p>
+
+<p>}</p>
+
+<p>这边我们需要先进行p.m.Lock()<em>上锁操作，这么做是因为我们需要对结构体里面的</em>closed进行读写。需要先把这个标志位设定后，关闭res这个chan，使得Acquire方法无法再获取新的连接。我们再对res这个chan里面的连接进行Close操作。</p>
+
+<p>释放连接
+释放连接首先得有个前提，就是连接池还没有关闭。如果连接池已经关闭再往res里面送连接的话就好触发panic。</p>
+
+<p>func 
+(
+p 
+*
+Pool
+)</p>
+
+<p>Release
+(
+r io
+.
+Closer
+){</p>
+
+<p>//保证该操作和Close方法的操作是安全的</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>p . m . Lock ()
+
+defer p . m . Unlock ()
+</code></pre></div></div>
+
+<p>//资源池都关闭了，就省这一个没有释放的资源了，释放即可</p>
+
+<p>if
+ p
+.
+closed 
+{</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    r . Close ()
+</code></pre></div></div>
+
+<p>return</p>
+
+<p>}</p>
+
+<p>select</p>
+
+<p>{</p>
+
+<p>case
+ p
+.
+res 
+&lt;-
+ r
+:</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    log . Println ( "资源释放到池子里了" )
+</code></pre></div></div>
+
+<p>default
+:</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    log . Println ( "资源池满了，释放这个资源吧" )
+
+    r . Close ()
+</code></pre></div></div>
+
+<p>}</p>
+
+<p>}</p>
+
+<p>以上就是一个简单且线程安全的连接池实现方式了。我们可以看到的是，现在连接池虽然已经实现了，但是还有几个小缺点:</p>
+
+<p>我们对连接最大的数量没有限制，如果线程池空的话都我们默认就直接新建一个连接返回了。一旦并发量高的话将会不断新建连接，很容易（尤其是MySQL）造成 too many connections的报错发生。</p>
+
+<p>既然我们需要保证最大可获取连接数量，那么我们就不希望数量定的太死。希望空闲的时候可以维护一定的空闲连接数量idleNum，但是又希望我们能限制最大可获取连接数量maxNum。</p>
+
+<p>第一种情况是并发过多的情况，那么如果并发量过少呢？现在我们在新建一个连接并且归还后，我们很长一段时间不再使用这个连接。那么这个连接很有可能在几个小时甚至更长时间之前就已经建立的了。长时间闲置的连接我们并没有办法保证它的可用性。便有可能我们下次获取的连接是已经失效的连接。</p>
+
+<p>那么我们可以从已经成熟使用的MySQL连接池库和Redis连接池库中看看，它们是怎么解决这些问题的。</p>
+
+<p>Golang标准库的Sql连接池
+Golang的连接池实现在标准库 database/sql/sql.go下。当我们运行：</p>
+
+<p>db
+,
+ err 
+:=
+ sql
+.
+Open
+(
+“mysql”
+,</p>
+
+<p>“xxxx”
+)</p>
+
+<p>的时候，就会打开一个连接池。我们可以看看返回的db的结构体：</p>
+
+<p>type DB 
+struct</p>
+
+<p>{</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>waitDuration int64  // Total time waited for new connections.
+
+mu           sync . Mutex
+</code></pre></div></div>
+
+<p>// protects following fields</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>freeConn      []* driverConn
+
+connRequests map [ uint64 ] chan connRequest
+
+nextRequest  uint64  // Next key to use in connRequests.
+
+numOpen       int
+</code></pre></div></div>
+
+<p>// number of opened and pending open connections</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>// Used to signal the need for new connections
+</code></pre></div></div>
+
+<p>// a goroutine running connectionOpener() reads on this chan and</p>
+
+<p>// maybeOpenNewConnections sends on the chan (one send per needed connection)</p>
+
+<p>// It is closed during db.Close(). The close tells the connectionOpener</p>
+
+<p>// goroutine to exit.</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>openerCh          chan  struct {}
+
+closed             bool
+
+maxIdle            int
+</code></pre></div></div>
+
+<p>// zero means defaultMaxIdleConns; negative means 0</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>maxOpen            int
+</code></pre></div></div>
+
+<p>// &lt;= 0 means unlimited</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>maxLifetime       time . Duration
+</code></pre></div></div>
+
+<p>// maximum amount of time a connection may be reused</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>cleanerCh         chan  struct {}
+
+waitCount         int64  // Total number of connections waited for.
+
+maxIdleClosed     int64  // Total number of connections closed due to idle.
+
+maxLifetimeClosed int64  // Total number of connections closed due to max free limit.
+</code></pre></div></div>
+
+<p>}</p>
+
+<p>上面省去了一些暂时不需要关注的field。我们可以看的，DB这个连接池内部存储连接的结构freeConn，并不是我们之前使用的chan，而是[]<em>driverConn，一个连接切片。同时我们还可以看到，里面有maxIdle等相关变量来控制空闲连接数量。值得注意的是，DB的初始化函数Open函数并没有新建数据库连接。而新建连接在哪个函数呢？我们可以在Query方法一路往回找，我们可以看到这个函数： func(db</em>DB)conn(ctx context.Context,strategy connReuseStrategy)(*driverConn,error)。而我们从连接池获取连接的方法，就从这里开始：</p>
+
+<p>获取连接
+// conn returns a newly-opened or cached *driverConn.</p>
+
+<p>func 
+(
+db 
+*
+DB
+)
+ conn
+(
+ctx context
+.
+Context
+,
+ strategy connReuseStrategy
+)</p>
+
+<p>(*
+driverConn
+,
+ error
+)</p>
+
+<p>{</p>
+
+<p>// 先判断db是否已经关闭。</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>db . mu . Lock ()
+</code></pre></div></div>
+
+<p>if
+ db
+.
+closed 
+{</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    db . mu . Unlock ()
+</code></pre></div></div>
+
+<p>return</p>
+
+<p>nil
+,
+ errDBClosed</p>
+
+<p>}</p>
+
+<p>// 注意检测context是否已经被超时等原因被取消。</p>
+
+<p>select</p>
+
+<p>{</p>
+
+<p>default
+:</p>
+
+<p>case</p>
+
+<p>&lt;-
+ctx
+.
+Done
+():</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    db . mu . Unlock ()
+</code></pre></div></div>
+
+<p>return</p>
+
+<p>nil
+,
+ ctx
+.
+Err
+()</p>
+
+<p>}</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>lifetime  :=  db . maxLifetime
+</code></pre></div></div>
+
+<p>// 这边如果在freeConn这个切片有空闲连接的话，就left pop一个出列。注意的是，这边因为是切片操作，所以需要前面需要加锁且获取后进行解锁操作。同时判断返回的连接是否已经过期。</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>numFree  :=  len ( db . freeConn )
+</code></pre></div></div>
+
+<p>if
+ strategy 
+==
+ cachedOrNewConn 
+&amp;&amp;
+ numFree</p>
+<blockquote>
+
+</blockquote>
+
+<p>0</p>
+
+<p>{</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    conn  :=  db . freeConn [ 0 ]
+
+    copy ( db . freeConn ,  db . freeConn [ 1 :])
+
+    db . freeConn  =  db . freeConn [: numFree - 1 ]
+
+    conn . inUse  =
+</code></pre></div></div>
+
+<p>true</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    db . mu . Unlock ()
+</code></pre></div></div>
+
+<p>if
+ conn
+.
+expired
+(
+lifetime
+)</p>
+
+<p>{</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>        conn . Close ()
+</code></pre></div></div>
+
+<p>return</p>
+
+<p>nil
+,
+ driver
+.
+ErrBadConn</p>
+
+<p>}</p>
+
+<p>// Lock around reading lastErr to ensure the session resetter finished.</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    conn . Lock ()
+
+    err  :=  conn . lastErr
+
+    conn . Unlock ()
+</code></pre></div></div>
+
+<p>if
+ err 
+==
+ driver
+.
+ErrBadConn</p>
+
+<p>{</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>        conn . Close ()
+</code></pre></div></div>
+
+<p>return</p>
+
+<p>nil
+,
+ driver
+.
+ErrBadConn</p>
+
+<p>}</p>
+
+<p>return
+ conn
+,</p>
+
+<p>nil</p>
+
+<p>}</p>
+
+<p>// 这边就是等候获取连接的重点了。当空闲的连接为空的时候，这边将会新建一个request（的等待连接 的请求）并且开始等待</p>
+
+<p>if
+ db
+.
+maxOpen</p>
+<blockquote>
+
+</blockquote>
+
+<p>0</p>
+
+<p>&amp;&amp;
+ db
+.
+numOpen</p>
+<blockquote>
+  <p>=
+ db
+.
+maxOpen 
+{</p>
+</blockquote>
+
+<p>// 下面的动作相当于往connRequests这个map插入自己的号码牌。</p>
+
+<p>// 插入号码牌之后这边就不需要阻塞等待继续往下走逻辑。</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    req  :=  make ( chan connRequest ,
+</code></pre></div></div>
+
+<p>1
+)</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    reqKey  :=  db . nextRequestKeyLocked ()
+
+    db . connRequests [ reqKey ]
+</code></pre></div></div>
+
+<p>=
+ req</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    db . waitCount ++
+
+    db . mu . Unlock ()
+
+
+
+    waitStart  :=  time . Now ()
+</code></pre></div></div>
+
+<p>// Timeout the connection request with the context.</p>
+
+<p>select</p>
+
+<p>{</p>
+
+<p>case</p>
+
+<p>&lt;-
+ctx
+.
+Done
+():</p>
+
+<p>// context取消操作的时候，记得从connRequests这个map取走自己的号码牌。</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>        db . mu . Lock ()
+</code></pre></div></div>
+
+<p>delete
+(
+db
+.
+connRequests
+,
+ reqKey
+)</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>        db . mu . Unlock ()
+
+
+
+        atomic . AddInt64 (&amp; db . waitDuration ,  int64 ( time . Since ( waitStart )))
+</code></pre></div></div>
+
+<p>select</p>
+
+<p>{</p>
+
+<p>default
+:</p>
+
+<p>case
+ ret
+,
+ ok 
+:=</p>
+
+<p>&lt;-
+req
+:</p>
+
+<p>// 这边值得注意了，因为现在已经被context取消了。但是刚刚放了自己的号码牌进去排队里面。意思是说不定已经发了连接了，所以得注意归还！</p>
+
+<p>if
+ ok 
+&amp;&amp;
+ ret
+.
+conn 
+!=</p>
+
+<p>nil</p>
+
+<p>{</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>                db . putConn ( ret . conn ,  ret . err ,
+</code></pre></div></div>
+
+<p>false
+)</p>
+
+<p>}</p>
+
+<p>}</p>
+
+<p>return</p>
+
+<p>nil
+,
+ ctx
+.
+Err
+()</p>
+
+<p>case
+ ret
+,
+ ok 
+:=</p>
+
+<p>&lt;-
+req
+:</p>
+
+<p>// 下面是已经获得连接后的操作了。检测一下获得连接的状况。因为有可能已经过期了等等。</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>        atomic . AddInt64 (&amp; db . waitDuration ,  int64 ( time . Since ( waitStart )))
+</code></pre></div></div>
+
+<p>if</p>
+
+<p>!
+ok 
+{</p>
+
+<p>return</p>
+
+<p>nil
+,
+ errDBClosed</p>
+
+<p>}</p>
+
+<p>if
+ ret
+.
+err 
+==</p>
+
+<p>nil</p>
+
+<p>&amp;&amp;
+ ret
+.
+conn
+.
+expired
+(
+lifetime
+)</p>
+
+<p>{</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>            ret . conn . Close ()
+</code></pre></div></div>
+
+<p>return</p>
+
+<p>nil
+,
+ driver
+.
+ErrBadConn</p>
+
+<p>}</p>
+
+<p>if
+ ret
+.
+conn 
+==</p>
+
+<p>nil</p>
+
+<p>{</p>
+
+<p>return</p>
+
+<p>nil
+,
+ ret
+.
+err</p>
+
+<p>}</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>        ret . conn . Lock ()
+
+        err  :=  ret . conn . lastErr
+
+        ret . conn . Unlock ()
+</code></pre></div></div>
+
+<p>if
+ err 
+==
+ driver
+.
+ErrBadConn</p>
+
+<p>{</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>            ret . conn . Close ()
+</code></pre></div></div>
+
+<p>return</p>
+
+<p>nil
+,
+ driver
+.
+ErrBadConn</p>
+
+<p>}</p>
+
+<p>return
+ ret
+.
+conn
+,
+ ret
+.
+err</p>
+
+<p>}</p>
+
+<p>}</p>
+
+<p>// 下面就是如果上面说的限制情况不存在，可以创建先连接时候，要做的创建连接操作了。</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>db . numOpen ++
+</code></pre></div></div>
+
+<p>// optimistically</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>db . mu . Unlock ()
+
+ci ,  err  :=  db . connector . Connect ( ctx )
+</code></pre></div></div>
+
+<p>if
+ err 
+!=</p>
+
+<p>nil</p>
+
+<p>{</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    db . mu . Lock ()
+
+    db . numOpen --
+</code></pre></div></div>
+
+<p>// correct for earlier optimism</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    db . maybeOpenNewConnections ()
+
+    db . mu . Unlock ()
+</code></pre></div></div>
+
+<p>return</p>
+
+<p>nil
+,
+ err</p>
+
+<p>}</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>db . mu . Lock ()
+
+dc  :=
+</code></pre></div></div>
+
+<p>&amp;
+driverConn
+{</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    db :
+    db ,
+
+    createdAt :  nowFunc (),
+
+    ci :
+    ci ,
+
+    inUse :
+</code></pre></div></div>
+
+<p>true
+,</p>
+
+<p>}</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>db . addDepLocked ( dc ,  dc )
+
+db . mu . Unlock ()
+</code></pre></div></div>
+
+<p>return
+ dc
+,</p>
+
+<p>nil</p>
+
+<p>}</p>
+
+<p>复制代码</p>
+
+<p>简单来说，DB结构体除了用的是slice来存储连接，还加了一个类似排队机制的connRequests来解决获取等待连接的过程。同时在判断连接健康性都有很好的兼顾。那么既然有了排队机制，归还连接的时候是怎么做的呢？</p>
+
+<p>释放连接
+我们可以直接找到 func(db<em>DB)putConnDBLocked(dc</em>driverConn,err error)bool这个方法。就像注释说的，这个方法主要的目的是：</p>
+
+<p>Satisfy a connRequest or put the driverConn in the idle pool and return true or return false.</p>
+
+<p>我们主要来看看里面重点那几行：</p>
+
+<p>…</p>
+
+<p>// 如果已经超过最大打开数量了，就不需要在回归pool了</p>
+
+<p>if
+ db
+.
+maxOpen</p>
+<blockquote>
+
+</blockquote>
+
+<p>0</p>
+
+<p>&amp;&amp;
+ db
+.
+numOpen</p>
+<blockquote>
+
+  <p>db
+.
+maxOpen 
+{</p>
+</blockquote>
+
+<p>return</p>
+
+<p>false</p>
+
+<p>}</p>
+
+<p>// 这边是重点了，基本来说就是从connRequest这个map里面随机抽一个在排队等着的请求。取出来后发给他。就不用归还池子了。</p>
+
+<p>if
+ c 
+:=
+ len
+(
+db
+.
+connRequests
+);
+ c</p>
+<blockquote>
+
+</blockquote>
+
+<p>0</p>
+
+<p>{</p>
+
+<p>var
+ req chan connRequest</p>
+
+<p>var
+ reqKey uint64</p>
+
+<p>for
+ reqKey
+,
+ req 
+=
+ range db
+.
+connRequests 
+{</p>
+
+<p>break</p>
+
+<p>}</p>
+
+<p>delete
+(
+db
+.
+connRequests
+,
+ reqKey
+)</p>
+
+<p>// 删除这个在排队的请求。</p>
+
+<p>if
+ err 
+==</p>
+
+<p>nil</p>
+
+<p>{</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>        dc . inUse  =
+</code></pre></div></div>
+
+<p>true</p>
+
+<p>}</p>
+
+<p>// 把连接给这个正在排队的连接。</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    req  &lt;-  connRequest {
+
+        conn :  dc ,
+
+        err :   err ,
+</code></pre></div></div>
+
+<p>}</p>
+
+<p>return</p>
+
+<p>true</p>
+
+<p>}</p>
+
+<p>else</p>
+
+<p>if
+ err 
+==</p>
+
+<p>nil</p>
+
+<p>&amp;&amp;</p>
+
+<p>!
+db
+.
+closed 
+{</p>
+
+<p>// 既然没人排队，就看看到了最大连接数目没有。没到就归还给freeConn。</p>
+
+<p>if
+ db
+.
+maxIdleConnsLocked
+()</p>
+
+<blockquote>
+
+  <p>len
+(
+db
+.
+freeConn
+)</p>
+</blockquote>
+
+<p>{</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>        db . freeConn  =  append ( db . freeConn ,  dc )
+
+        db . startCleanerLocked ()
+</code></pre></div></div>
+
+<p>return</p>
+
+<p>true</p>
+
+<p>}</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    db . maxIdleClosed ++
+</code></pre></div></div>
+
+<p>}</p>
+
+<p>…</p>
+
+<p>我们可以看到，当归还连接时候，如果有在排队轮候的请求就不归还给池子直接发给在轮候的人了。</p>
+
+<p>现在基本就解决前面说的小问题了。不会出现连接太多导致无法控制too many connections的情况。也很好了维持了连接池的最小数量。同时也做了相关对于连接健康性的检查操作。</p>
+
+<p>值得注意的是，作为标准库的代码，相关注释和代码都非常完美，真的可以看的神清气爽。</p>
+
+<p>redis Golang实现的Redis客户端
+这个Golang实现的Redis客户端，是怎么实现连接池的。这边的思路非常奇妙，还是能学习到不少好思路。当然了，由于代码注释比较少，啃起来第一下还是有点迷糊的。相关代码地址在https://github.com/go-redis/redis/blob/master/internal/pool/pool.go 可以看到。</p>
+
+<p>而它的连接池结构如下</p>
+
+<p>type 
+ConnPool</p>
+
+<p>struct</p>
+
+<p>{</p>
+
+<p>…</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>queue chan  struct {}
+
+
+
+connsMu      sync . Mutex
+
+conns         []* Conn
+
+idleConns     []* Conn
+
+poolSize      int
+
+idleConnsLen  int
+
+
+
+stats  Stats
+
+
+
+_closed  uint32  // atomic
+
+closedCh chan  struct {}
+</code></pre></div></div>
+
+<p>}</p>
+
+<p>我们可以看到里面存储连接的结构还是slice。但是我们可以重点看看 queue， conns， idleConns这几个变量，后面会提及到。但是值得注意的是！我们可以看到，这里有两个[]*Conn结构：conns、 idleConns，那么问题来了：</p>
+
+<p>到底连接存在哪里？</p>
+
+<p>新建连接池连接
+我们先从新建连接池连接开始看：</p>
+
+<p>func 
+NewConnPool
+(
+opt 
+*
+Options
+)</p>
+
+<p>*
+ConnPool</p>
+
+<p>{</p>
+
+<p>….</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>p . checkMinIdleConns ()
+</code></pre></div></div>
+
+<p>if
+ opt
+.
+IdleTimeout</p>
+
+<blockquote>
+
+</blockquote>
+
+<p>0</p>
+
+<p>&amp;&amp;
+ opt
+.
+IdleCheckFrequency</p>
+
+<blockquote>
+
+</blockquote>
+
+<p>0</p>
+
+<p>{</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    go p . reaper ( opt . IdleCheckFrequency )
+</code></pre></div></div>
+
+<p>}</p>
+
+<p>….</p>
+
+<p>}</p>
+
+<p>初始化连接池的函数有个和前面两个不同的地方。</p>
+
+<p>checkMinIdleConns方法，在连接池初始化的时候就会往连接池填满空闲的连接。</p>
+
+<p>go p.reaper(opt.IdleCheckFrequency)则会在初始化连接池的时候就会起一个go程，周期性的淘汰连接池里面要被淘汰的连接。</p>
+
+<p>获取连接
+func 
+(
+p 
+*
+ConnPool
+)</p>
+
+<p>Get
+(
+ctx context
+.
+Context
+)</p>
+
+<p>(*
+Conn
+,
+ error
+)</p>
+
+<p>{</p>
+
+<p>if
+ p
+.
+closed
+()</p>
+
+<p>{</p>
+
+<p>return</p>
+
+<p>nil
+,</p>
+
+<p>ErrClosed</p>
+
+<p>}</p>
+
+<p>//这边和前面sql获取连接函数的流程不同。sql是先看看连接池有没有空闲连接，有的话先获取不到再排队。这边是直接先排队获取令牌，排队函数后面会分析。</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>err  :=  p . waitTurn ( ctx )
+</code></pre></div></div>
+
+<p>if
+ err 
+!=</p>
+
+<p>nil</p>
+
+<p>{</p>
+
+<p>return</p>
+
+<p>nil
+,
+ err</p>
+
+<p>}</p>
+
+<p>//前面没出error的话，就已经排队轮候到了。接下来就是获取的流程。</p>
+
+<p>for</p>
+
+<p>{</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    p . connsMu . Lock ()
+</code></pre></div></div>
+
+<p>//从空闲连接里面先获取一个空闲连接。</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    cn  :=  p . popIdle ()
+
+    p . connsMu . Unlock ()
+</code></pre></div></div>
+
+<p>if
+ cn 
+==</p>
+
+<p>nil</p>
+
+<p>{</p>
+
+<p>// 没有空闲连接时候直接跳出循环。</p>
+
+<p>break</p>
+
+<p>}</p>
+
+<p>// 判断是否已经过时，是的话close掉了然后继续取出。</p>
+
+<p>if
+ p
+.
+isStaleConn
+(
+cn
+)</p>
+
+<p>{</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>        _  =  p . CloseConn ( cn )
+</code></pre></div></div>
+
+<p>continue</p>
+
+<p>}</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    atomic . AddUint32 (&amp; p . stats . Hits ,
+</code></pre></div></div>
+
+<p>1
+)</p>
+
+<p>return
+ cn
+,</p>
+
+<p>nil</p>
+
+<p>}</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>atomic . AddUint32 (&amp; p . stats . Misses ,
+</code></pre></div></div>
+
+<p>1
+)</p>
+
+<p>// 如果没有空闲连接的话，这边就直接新建连接了。</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>newcn ,  err  :=  p . newConn ( ctx ,
+</code></pre></div></div>
+
+<p>true
+)</p>
+
+<p>if
+ err 
+!=</p>
+
+<p>nil</p>
+
+<p>{</p>
+
+<p>// 归还令牌。</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    p . freeTurn ()
+</code></pre></div></div>
+
+<p>return</p>
+
+<p>nil
+,
+ err</p>
+
+<p>}</p>
+
+<p>return
+ newcn
+,</p>
+
+<p>nil</p>
+
+<p>}</p>
+
+<p>我们可以试着回答开头那个问题：连接到底存在哪里？答案是从 cn:=p.popIdle()这句话可以看出，获取连接这个动作，是从 idleConns里面获取的，而里面的函数也证明了这一点。同时我的理解是：</p>
+
+<p>sql的排队意味着我对连接池申请连接后，把自己的编号告诉连接池。连接那边一看到有空闲了，就叫我的号。我答应了一声，然后连接池就直接给个连接给我。我如果不归还，连接池就一直不叫下一个号。</p>
+
+<p>redis这边的意思是，我去和连接池申请的不是连接而是令牌。我就一直排队等着，连接池给我令牌了，我才去仓库里面找空闲连接或者自己新建一个连接。用完了连接除了归还连接外，还得归还令牌。当然了，如果我自己新建连接出错了，我哪怕拿不到连接回家，我也得把令牌给回连接池，不然连接池的令牌数少了，最大连接数也会变小。</p>
+
+<p>而：</p>
+
+<p>func 
+(
+p 
+*
+ConnPool
+)
+ freeTurn
+()</p>
+
+<p>{</p>
+
+<p>&lt;-
+p
+.
+queue</p>
+
+<p>}</p>
+
+<p>func 
+(
+p 
+*
+ConnPool
+)
+ waitTurn
+(
+ctx context
+.
+Context
+)
+ error 
+{</p>
+
+<p>…</p>
+
+<p>case
+ p
+.
+queue 
+&lt;-</p>
+
+<p>struct
+{}{}:</p>
+
+<p>return</p>
+
+<p>nil</p>
+
+<p>…</p>
+
+<p>}</p>
+
+<p>就是在靠queue这个chan来维持令牌数量。</p>
+
+<p>那么 conns的作用是什么呢？我们可以来看看新建连接这个函数：</p>
+
+<p>新建连接
+func 
+(
+p 
+*
+ConnPool
+)
+ newConn
+(
+ctx context
+.
+Context
+,
+ pooled 
+bool
+)</p>
+
+<p>(*
+Conn
+,
+ error
+)</p>
+
+<p>{</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>cn ,  err  :=  p . dialConn ( ctx ,  pooled )
+</code></pre></div></div>
+
+<p>if
+ err 
+!=</p>
+
+<p>nil</p>
+
+<p>{</p>
+
+<p>return</p>
+
+<p>nil
+,
+ err</p>
+
+<p>}</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>p . connsMu . Lock ()
+
+p . conns  =  append ( p . conns ,  cn )
+</code></pre></div></div>
+
+<p>if
+ pooled 
+{</p>
+
+<p>// 如果连接池满了，会在后面移除。</p>
+
+<p>if
+ p
+.
+poolSize</p>
+<blockquote>
+  <p>=
+ p
+.
+opt
+.
+PoolSize</p>
+</blockquote>
+
+<p>{</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>        cn . pooled  =
+</code></pre></div></div>
+
+<p>false</p>
+
+<p>}</p>
+
+<p>else</p>
+
+<p>{</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>        p . poolSize ++
+</code></pre></div></div>
+
+<p>}</p>
+
+<p>}</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>p . connsMu . Unlock ()
+</code></pre></div></div>
+
+<p>return
+ cn
+,</p>
+
+<p>nil</p>
+
+<p>}</p>
+
+<p>基本逻辑出来了。就是如果新建连接的话，我并不会直接放在 idleConns里面，而是先放 conns里面。同时先看池子满了没有。满的话后面归还的时候会标记，后面会删除。那么这个后面会删除，指的是什么时候呢？那就是下面说的归还连接的时候了。</p>
+
+<p>归还连接
+func 
+(
+p 
+*
+ConnPool
+)</p>
+
+<p>Put
+(
+cn 
+*
+Conn
+)</p>
+
+<p>{</p>
+
+<p>if
+ cn
+.
+rd
+.
+Buffered
+()</p>
+
+<blockquote>
+
+</blockquote>
+
+<p>0</p>
+
+<p>{</p>
+
+<p>internal
+.
+Logger
+.
+Printf
+(
+“Conn has unread data”
+)</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    p . Remove ( cn ,
+</code></pre></div></div>
+
+<p>BadConnError
+{})</p>
+
+<p>return</p>
+
+<p>}</p>
+
+<p>//这就是我们刚刚说的后面了，前面标记过不要入池的，这边就删除了。当然了，里面也会进行freeTurn操作。</p>
+
+<p>if</p>
+
+<p>!
+cn
+.
+pooled 
+{</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    p . Remove ( cn ,
+</code></pre></div></div>
+
+<p>nil
+)</p>
+
+<p>return</p>
+
+<p>}</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>p . connsMu . Lock ()
+
+p . idleConns  =  append ( p . idleConns ,  cn )
+
+p . idleConnsLen ++
+
+p . connsMu . Unlock ()
+</code></pre></div></div>
+
+<p>//我们可以看到很明显的这个归还号码牌的动作。</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>p . freeTurn ()
+</code></pre></div></div>
+
+<p>}</p>
+
+<p>其实归还的过程，就是从 conns转移到 idleConns的过程。当然了，如果新建这个连接时候发现已经 超卖了，后面归还时候就不转移，直接删除了。</p>
+
+<p>等等，上面的逻辑似乎有点不对？我们来理一下获取连接流程：</p>
+
+<p>先 waitTurn，拿到令牌。而令牌数量是根据pool里面的 queue决定的。</p>
+
+<p>拿到令牌了，去库房 idleConns里面拿空闲的连接。没有的话就自己 newConn一个，并且把他记录到 conns里面。</p>
+
+<p>用完了，就调用 put归还：也就是从 conns转移到 idleConns。归还的时候就检查在 newConn时候是不是已经做了超卖标记了。是的话就不转移到 idleConns。</p>
+
+<p>我当时疑惑了好久，既然始终都需要获得令牌才能得到连接，令牌数量是定的。为什么还会超卖呢？翻了一下源码，我的答案是：</p>
+
+<p>虽然 Get方法获取连接是 newConn这个私用方法，受到令牌管制导致不会出现超卖。但是这个方法接受传参：pooledbool。所以我猜是担心其他人调用这个方法时候，不管三七二十一就传了true，导致poolSize越来越大。</p>
+
+<p>总的来说，redis这个连接池的连接数控制，还是在 queue这个我称为令牌的chan进行操作。</p>
+
+<p>总结
+上面可以看到，连接池的最基本的保证，就是获取连接时候的线程安全。但是在实现诸多额外特性时候却又从不同角度来实现。还是非常有意思的。但是不管存储结构是用chan还是还是slice，都可以很好的实现这一点。如果像sql或者redis那样用slice来存储连接，就得维护一个结构来表示排队等候的效果。</p>
+:ET

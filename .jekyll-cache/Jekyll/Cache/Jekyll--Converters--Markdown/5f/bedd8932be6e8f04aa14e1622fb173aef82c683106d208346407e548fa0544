@@ -1,0 +1,682 @@
+I"�F<p>1、zend_hash_num_elements 获取数组元素个数。宏定义如下：
+1 #define zend_hash_num_elements(ht) <br />
+2     (ht)-&gt;nNumOfElements
+2、ZEND_HASH_FOREACH_KEY_VAL 遍历数组键值。使用方法：
+1 ZEND_HASH_FOREACH_KEY_VAL(Z_ARRVAL_P(array), num_key, string_key, entry) {
+2             // code
+3 } ZEND_HASH_FOREACH_END();
+　ZEND_HASH_FOREACH_KEY_VAL是个宏函数：
+1 #define ZEND_HASH_FOREACH_KEY_VAL(ht, _h, _key, _val) <br />
+2     ZEND_HASH_FOREACH(ht, 0); <br />
+3     _h = _p-&gt;h; <br />
+4     _key = _p-&gt;key; <br />
+5     _val = _z;
+　  继续展开 ZEND_HASH_FOREACH：</p>
+
+<p>复制代码
+1 #define ZEND_HASH_FOREACH(_ht, indirect) do { <br />
+2         Bucket *_p = (_ht)-&gt;arData; <br />
+3         Bucket *_end = _p + (_ht)-&gt;nNumUsed; <br />
+4         for (; _p != _end; _p++) { <br />
+5             zval *_z = &amp;_p-&gt;val; <br />
+6             if (indirect &amp;&amp; Z_TYPE_P(_z) == IS_INDIRECT) { <br />
+7                 _z = Z_INDIRECT_P(_z); <br />
+8             } <br />
+9             if (UNEXPECTED(Z_TYPE_P(_z) == IS_UNDEF)) continue;
+复制代码
+ZEND_HASH_FOREACH_END展开：
+1 #define ZEND_HASH_FOREACH_END() <br />
+2         } <br />
+3     } while (0)</p>
+
+<p>ZEND_HASH_FOREACH_KEY_VAL(Z_ARRVAL_P(array), num_key, string_key, entry) {
+             // code
+} ZEND_HASH_FOREACH_END();
+完全展开：
+复制代码
+ 1 do { 
+ 2     Bucket *_p = (_ht)-&gt;arData;  // Z_ARRVAL_P(array) —&gt; ht —&gt; _ht
+ 3     Bucket *_end = _p + (_ht)-&gt;nNumUsed;  // 起始地址+偏移地址
+ 4     for (; _p != _end; _p++) { 
+ 5         zval *_z = &amp;_p-&gt;val; 
+ 6         if (indirect &amp;&amp; Z_TYPE_P(_z) == IS_INDIRECT) { 
+ 7             _z = Z_INDIRECT_P(_z); 
+ 8         } 
+ 9         if (UNEXPECTED(Z_TYPE_P(_z) == IS_UNDEF)) continue;
+10         _h = _p-&gt;h;  // zend_ulong num_key —&gt; _h
+11         _key = _p-&gt;key; // zend_string *string_key —&gt; _key
+12         _val = _z; // zval *entry —&gt; _val
+13         {
+14            //code
+15         } 
+16     } 
+17 } while (0)
+复制代码</p>
+
+<!-- more -->
+<p>https://www.cnblogs.com/natian-ws/p/9105338.html
+      数组
+本节我们讲一下php的数组，在php中，数组使用HashTable实现的。本节中我们先详细的介绍一下HashTable，然后再讲讲如何使用HastTable</p>
+
+<p>1.1     变长结构体
+所谓的变长结构体，其实是我们C语言结构体的一种特殊用法，并没有什么新奇之处。我们先来看一下变长结构体的一种通用定义方法。</p>
+
+<p>typedef struct bucket {</p>
+
+<p>    int n;</p>
+
+<p>    char key[30];</p>
+
+<p>    char value[1];</p>
+
+<p>} Bucket;</p>
+
+<p>我们定义了一个结构体Bucket，我们希望用这个结构体存放学生的个人简介。其中key用来存在学生的姓名，value用来存放学生的简介。大家可能很好奇，我们的value声明了长度为1. 1个char能存多少信息呀？</p>
+
+<p>         其实，对于变长结构体，我们在使用的使用不能直接定义变量，例如：Bucket bucket; 您要是这样使用，value肯定存储不了多少信息。对于变长结构体，我们在使用的时候需要先声明一个变长结构体的指针，然后通过malloc函数分配函数空间，我们需要用到的空间长度是多少，我们就可以malloc多少。通用的使用方法如下：</p>
+
+<p>Bucket* pBucket;</p>
+
+<p>pBucket = malloc(sizeof(Bucket)+ n *sizeof(char));</p>
+
+<p>其中n就是你要使用value的长度。如果这样使用的话，value指向的字符串不久变长了吗！</p>
+
+<p> </p>
+
+<p>1.2     Hashtable简介
+我们先看一下HashTable的定义</p>
+
+<p>struct _hashtable;</p>
+
+<p> </p>
+
+<p>typedef struct bucket {</p>
+
+<p>    ulong h;//当元素是数字索引时使用</p>
+
+<p>    uint nKeyLength;//当使用字符串索引时，这个变量表示索引的长度，索引（字符串）保存在最后一个元素aKey</p>
+
+<p>    void *pData;//用来指向保存的数据，如果保存的数据是指针的话，pDataPtr就指向这个数据，pData指向pDataPtr</p>
+
+<p>    void *pDataPtr;</p>
+
+<p>    struct bucket *pListNext;//上一个元素</p>
+
+<p>    struct bucket *pListLast;//下一个元素</p>
+
+<p>    struct bucket *pNext;//指向下一个bucket的指针</p>
+
+<p>    struct bucket *pLast;//指向上一个bucket的指针</p>
+
+<p>    char arKey[1];//必须放在最后，主要是为了实现变长结构体</p>
+
+<p>} Bucket;</p>
+
+<p> </p>
+
+<p>typedef struct _hashtable {</p>
+
+<p>    uint nTableSize;             //哈希表的大小</p>
+
+<p>    uint nTableMask;             //数值上等于nTableSize- 1</p>
+
+<p>    uint nNumOfElements;         //记录了当前HashTable中保存的记录数</p>
+
+<p>    ulong nNextFreeElement;      //指向下一个空闲的Bucket</p>
+
+<p>    Bucket *pInternalPointer;   //这个变量用于数组反转</p>
+
+<p>    Bucket *pListHead;           //指向Bucket的头</p>
+
+<p>    Bucket *pListTail;           //指向Bucket的尾</p>
+
+<p>    Bucket **arBuckets;</p>
+
+<p>    dtor_func_t pDestructor;     //函数指针，数组增删改查时自动调用，用于某些清理操作</p>
+
+<p>    zend_bool persistent;         //是否持久</p>
+
+<p>    unsigned char nApplyCount;</p>
+
+<p>    zend_bool bApplyProtection;  //和nApplyCount一起起作用，防止数组遍历时无限递归</p>
+
+<p>#if ZEND_DEBUG</p>
+
+<p>    int inconsistent;</p>
+
+<p>#endif</p>
+
+<p>} HashTable;</p>
+
+<p>希望大家能好好看看上面的定义，有些东西我将出来反而会说不明白，不如大家看看代码浅显明了。PHP的数组，其实是一个带有头结点的双向链表，其中HashTable是头，Bucket存储具体的结点信息。</p>
+
+<p>1.3     HashTable内部函数分析
+1.3.1    宏HASH_PROTECT_RECURSION
+#defineHASH_PROTECT_RECURSION(ht)                                                     \</p>
+
+<p>    if ((ht)-&gt;bApplyProtection) {                                                       \</p>
+
+<p>        if ((ht)-&gt;nApplyCount++ &gt;= 3){                                                \</p>
+
+<p>            zend_error(E_ERROR, “Nestinglevel too deep - recursive dependency?”); \</p>
+
+<p>        }                                                                               \</p>
+
+<p>    }</p>
+
+<p>这个宏主要用来防止循环引用。</p>
+
+<p>1.3.2    宏ZEND_HASH_IF_FULL_DO_RESIZE
+#defineZEND_HASH_IF_FULL_DO_RESIZE(ht)            \</p>
+
+<p>    if ((ht)-&gt;nNumOfElements &gt;(ht)-&gt;nTableSize) {  \</p>
+
+<p>        zend_hash_do_resize(ht);                    \</p>
+
+<p>    }</p>
+
+<p>         这个宏的作用是检查目前HashTable中的元素个数是否大于了总的HashTable的大小，如果个数大于了HashTable的大小，那么我们就重新分配空间。我们看一下zend_hash_do_resize</p>
+
+<p>static int zend_hash_do_resize(HashTable*ht)</p>
+
+<p>{</p>
+
+<p>    Bucket **t;</p>
+
+<p>    IS_CONSISTENT(ht);</p>
+
+<p>    if ((ht-&gt;nTableSize«1)&gt;0){   /* Let’s double the table size */</p>
+
+<p>        t = (Bucket**) perealloc_recoverable(ht-&gt;arBuckets,</p>
+
+<p>(ht-&gt;nTableSize«1)* sizeof(Bucket*), ht-&gt;persistent);</p>
+
+<p>        if (t){</p>
+
+<p>            HANDLE_BLOCK_INTERRUPTIONS();</p>
+
+<p>            ht-&gt;arBuckets = t;</p>
+
+<p>            ht-&gt;nTableSize = (ht-&gt;nTableSize«1);</p>
+
+<p>            ht-&gt;nTableMask = ht-&gt;nTableSize-1;</p>
+
+<p>            zend_hash_rehash(ht);</p>
+
+<p>            HANDLE_UNBLOCK_INTERRUPTIONS();</p>
+
+<p>            return SUCCESS;</p>
+
+<p>        }</p>
+
+<p>        return FAILURE;</p>
+
+<p>    }</p>
+
+<p>    return SUCCESS;</p>
+
+<p>}  </p>
+
+<p>         从上面的代码中我们可以看出，HashTable在分配空间的时候，新分配的空间等于原有空间的2倍。</p>
+
+<p>1.3.3    函数 _zend_hash_init
+这个函数是用来初始化HashTable的，我们先看一下代码：</p>
+
+<p>ZEND_API int _zend_hash_init(HashTable*ht, uint nSize, hash_func_t pHashFunction, dtor_func_t pDestructor, zend_bool persistent ZEND_FILE_LINE_DC)</p>
+
+<p>{</p>
+
+<p>    uint i = 3; //HashTable的大小默认无2的3次方</p>
+
+<p>    Bucket **tmp;</p>
+
+<p> </p>
+
+<p>    SET_INCONSISTENT(HT_OK);</p>
+
+<p> </p>
+
+<p>    if (nSize&gt;=0x80000000){</p>
+
+<p>        ht-&gt;nTableSize = 0x80000000;</p>
+
+<p>    } else{</p>
+
+<p>        while ((1U « i)&lt; nSize){</p>
+
+<p>            i++;</p>
+
+<p>        }</p>
+
+<p>        ht-&gt;nTableSize = 1 « i;</p>
+
+<p>    }</p>
+
+<p> </p>
+
+<p>    ht-&gt;nTableMask = ht-&gt;nTableSize-1;</p>
+
+<p>    ht-&gt;pDestructor = pDestructor;</p>
+
+<p>    ht-&gt;arBuckets =NULL;</p>
+
+<p>    ht-&gt;pListHead =NULL;</p>
+
+<p>    ht-&gt;pListTail =NULL;</p>
+
+<p>    ht-&gt;nNumOfElements = 0;</p>
+
+<p>    ht-&gt;nNextFreeElement = 0;</p>
+
+<p>    ht-&gt;pInternalPointer = NULL;</p>
+
+<p>    ht-&gt;persistent = persistent;</p>
+
+<p>    ht-&gt;nApplyCount =0;</p>
+
+<p>    ht-&gt;bApplyProtection = 1;</p>
+
+<p>   </p>
+
+<p>    /* Uses ecalloc() so that Bucket* == NULL */</p>
+
+<p>    if (persistent){</p>
+
+<p>        tmp = (Bucket <em>*) calloc(ht-&gt;nTableSize,sizeof(Bucket</em>));</p>
+
+<p>        if (!tmp){</p>
+
+<p>            return FAILURE;</p>
+
+<p>        }</p>
+
+<p>        ht-&gt;arBuckets = tmp;</p>
+
+<p>    } else{</p>
+
+<p>        tmp = (Bucket <em>*) ecalloc_rel(ht-&gt;nTableSize,sizeof(Bucket</em>));</p>
+
+<p>        if (tmp){</p>
+
+<p>            ht-&gt;arBuckets = tmp;</p>
+
+<p>        }</p>
+
+<p>    }</p>
+
+<p>   </p>
+
+<p>    return SUCCESS;</p>
+
+<p>}</p>
+
+<p>可以看出，HashTable的大小被初始化为2的n次方，另外我们看到有两种内存方式，一种是calloc，一种是ecalloc_rel，这两中内存分配方式我们细讲了，有兴趣的话大家可以自己查一查。</p>
+
+<p>1.3.4    函数_zend_hash_add_or_update
+这个函数向HashTable中添加或者修改元素信息</p>
+
+<p>ZEND_API int _zend_hash_add_or_update(HashTable<em>ht,constchar *arKey, uint nKeyLength,void</em>pData, uint nDataSize,void**pDest,int flag ZEND_FILE_LINE_DC)</p>
+
+<p>{</p>
+
+<p>    ulong h;</p>
+
+<p>    uint nIndex;</p>
+
+<p>    Bucket *p;</p>
+
+<p> </p>
+
+<p>    IS_CONSISTENT(ht);</p>
+
+<p> </p>
+
+<p>    if (nKeyLength&lt;=0){</p>
+
+<p>#if ZEND_DEBUG</p>
+
+<p>        ZEND_PUTS(“zend_hash_update: Can’t put inempty key\n”);</p>
+
+<p>#endif</p>
+
+<p>        return FAILURE;</p>
+
+<p>    }</p>
+
+<p> </p>
+
+<p>    h = zend_inline_hash_func(arKey, nKeyLength);</p>
+
+<p>    nIndex = h &amp; ht-&gt;nTableMask;</p>
+
+<p> </p>
+
+<p>    p = ht-&gt;arBuckets[nIndex];</p>
+
+<p>    while (p!=NULL){</p>
+
+<p>        if ((p-&gt;h== h)&amp;&amp;(p-&gt;nKeyLength== nKeyLength)){</p>
+
+<p>            if (!memcmp(p-&gt;arKey, arKey, nKeyLength)){</p>
+
+<p>                if (flag &amp; HASH_ADD){</p>
+
+<p>                    return FAILURE;</p>
+
+<p>                }</p>
+
+<p>                HANDLE_BLOCK_INTERRUPTIONS();</p>
+
+<p>#if ZEND_DEBUG</p>
+
+<p>                if (p-&gt;pData == pData){</p>
+
+<p>                    ZEND_PUTS(“Fatal error in zend_hash_update:p-&gt;pData == pData\n”);</p>
+
+<p>                    HANDLE_UNBLOCK_INTERRUPTIONS();</p>
+
+<p>                    return FAILURE;</p>
+
+<p>                }</p>
+
+<p>#endif</p>
+
+<p>                if (ht-&gt;pDestructor){</p>
+
+<p>                    ht-&gt;pDestructor(p-&gt;pData);</p>
+
+<p>                }</p>
+
+<p>                UPDATE_DATA(ht, p, pData, nDataSize);</p>
+
+<p>                if (pDest) {</p>
+
+<p>                    *pDest = p-&gt;pData;</p>
+
+<p>                }</p>
+
+<p>                HANDLE_UNBLOCK_INTERRUPTIONS();</p>
+
+<p>                return SUCCESS;</p>
+
+<p>            }</p>
+
+<p>        }</p>
+
+<p>        p = p-&gt;pNext;</p>
+
+<p>    }</p>
+
+<p>   </p>
+
+<p>    p = (Bucket*) pemalloc(sizeof(Bucket)-1 + nKeyLength, ht-&gt;persistent);</p>
+
+<p>    if (!p){</p>
+
+<p>        return FAILURE;</p>
+
+<p>    }</p>
+
+<p>    memcpy(p-&gt;arKey, arKey, nKeyLength);</p>
+
+<p>    p-&gt;nKeyLength = nKeyLength;</p>
+
+<p>    INIT_DATA(ht, p, pData, nDataSize);</p>
+
+<p>    p-&gt;h = h;</p>
+
+<p>    CONNECT_TO_BUCKET_DLLIST(p, ht-&gt;arBuckets[nIndex]);</p>
+
+<p>    if (pDest){</p>
+
+<p>        *pDest = p-&gt;pData;</p>
+
+<p>    }</p>
+
+<p> </p>
+
+<p>    HANDLE_BLOCK_INTERRUPTIONS();</p>
+
+<p>    CONNECT_TO_GLOBAL_DLLIST(p, ht);</p>
+
+<p>    ht-&gt;arBuckets[nIndex]= p;</p>
+
+<p>    HANDLE_UNBLOCK_INTERRUPTIONS();</p>
+
+<p> </p>
+
+<p>    ht-&gt;nNumOfElements++;</p>
+
+<p>    ZEND_HASH_IF_FULL_DO_RESIZE(ht);       /* If the Hash table is full, resize it */</p>
+
+<p>    return SUCCESS;</p>
+
+<p>}</p>
+
+<p>1.3.5    宏CONNECT_TO_BUCKET_DLLIST
+#define CONNECT_TO_BUCKET_DLLIST(element, list_head)        \</p>
+
+<p>    (element)-&gt;pNext= (list_head);                         \</p>
+
+<p>    (element)-&gt;pLast= NULL;                                \</p>
+
+<p>    if((element)-&gt;pNext) {                                 \</p>
+
+<p>        (element)-&gt;pNext-&gt;pLast =(element);                \</p>
+
+<p>    }</p>
+
+<p>这个宏是将bucket加入到bucket链表中</p>
+
+<p>1.3.6    其他函数或者宏定义
+我们只是简单的介绍一下HashTable，如果你想细致的了解HashTable的话，建议您看看php的源代码，关于HashTable的代码在Zend/zend_hash.h 和Zend/zend_hash.c中。</p>
+
+<p>zend_hash_add_empty_element 给函数增加一个空元素</p>
+
+<p>zend_hash_del_key_or_index 根据索引删除元素</p>
+
+<p>zend_hash_reverse_apply  反向遍历HashTable</p>
+
+<p>zend_hash_copy  拷贝</p>
+
+<p>_zend_hash_merge  合并</p>
+
+<p>zend_hash_find  字符串索引方式查找</p>
+
+<p>zend_hash_index_find  数值索引方法查找</p>
+
+<p>zend_hash_quick_find  上面两个函数的封装</p>
+
+<p>zend_hash_exists  是否存在索引</p>
+
+<p>zend_hash_index_exists  是否存在索引</p>
+
+<p>zend_hash_quick_exists  上面两个方法的封装</p>
+
+<p>1.4     C扩展常用HashTable函数
+虽然HashTable看起来有点复杂，但是使用却是很方便的，我们可以用下面的函数对HashTable进行初始化和赋值。</p>
+
+<p>2005 年地方院校招生人数</p>
+
+<p>PHP语法</p>
+
+<p>C语法</p>
+
+<p>意义</p>
+
+<p>$arr = array()</p>
+
+<p>array_init(arr);</p>
+
+<p>初始化数组</p>
+
+<p>$arr[] = NULL;</p>
+
+<p>add_next_index_null(arr);</p>
+
+<p> </p>
+
+<p>$arr[] = 42;</p>
+
+<p>add_next_index_long(arr, 42);</p>
+
+<p> </p>
+
+<p>$arr[] = true;</p>
+
+<p>add_next_index_bool(arr, 1);</p>
+
+<p> </p>
+
+<p>$arr[] = 3.14;</p>
+
+<p>add_next_index_double(3.14);</p>
+
+<p> </p>
+
+<p>$arr[] = ‘foo’;</p>
+
+<p>add_next_index_string(arr, “foo”, 1);</p>
+
+<p>1的意思进行字符串拷贝</p>
+
+<p>$arr[] = $myvar;</p>
+
+<p>add_next_index_zval(arr, myvar);</p>
+
+<p> </p>
+
+<p>$arr[0] = NULL;</p>
+
+<p>add_index_null(arr, 0);</p>
+
+<p> </p>
+
+<p>$arr[1] = 42;</p>
+
+<p>add_index_long(arr, 1, 42);</p>
+
+<p> </p>
+
+<p>$arr[2] = true;</p>
+
+<p>add_index_bool(arr, 2, 1);</p>
+
+<p> </p>
+
+<p>$arr[3] = 3.14;</p>
+
+<p>add_index_double(arr, 3, 3,14);</p>
+
+<p> </p>
+
+<p>$arr[4] = ‘foo’;</p>
+
+<p>add_index_string(arr, 4, “foo”, 1);</p>
+
+<p> </p>
+
+<p>$arr[5] = $myvar;</p>
+
+<p>add_index_zval(arr, 5, myvar);</p>
+
+<p> </p>
+
+<p>$arr[“abc”] = NULL;</p>
+
+<p>add_assoc_null(arr, “abc”);</p>
+
+<p> </p>
+
+<p>$arr[“def”] = 711;</p>
+
+<p>add_assoc_long(arr, “def”, 711);</p>
+
+<p> </p>
+
+<p>$arr[“ghi”] = true;</p>
+
+<p>add_assoc_bool(arr, ghi”, 1);</p>
+
+<p> </p>
+
+<p>$arr[“jkl”] = 1.44;</p>
+
+<p>add_assoc_double(arr, “jkl”, 1.44);</p>
+
+<p> </p>
+
+<p>$arr[“mno”] = ‘baz’;</p>
+
+<p>add_assoc_string(arr, “mno”, “baz”, 1);</p>
+
+<p> </p>
+
+<p>$arr[‘pqr’] = $myvar;</p>
+
+<p>add_assoc_zval(arr, “pqr”, myvar);</p>
+
+<p> </p>
+
+<p>1.5     任务和实验
+说了这么多，我们实验一下。</p>
+
+<p>任务：返回一个数组，数组中的数据如下：</p>
+
+<p>Array</p>
+
+<p>(</p>
+
+<p>   [0] =&gt; for test</p>
+
+<p>   [42] =&gt; 123</p>
+
+<p>   [for test. for test.] =&gt; 1</p>
+
+<p>   [array] =&gt; Array</p>
+
+<p>       (</p>
+
+<p>           [0] =&gt; 3.34</p>
+
+<p>       )</p>
+
+<p>)</p>
+
+<p>代码实现：</p>
+
+<p>PHP_FUNCTION(test)</p>
+
+<p>{</p>
+
+<p>    zval* t;</p>
+
+<p> </p>
+
+<p>    array_init(return_value);</p>
+
+<p>    add_next_index_string(return_value,”for test”,1);</p>
+
+<p>    add_index_long(return_value,42,123);</p>
+
+<p>    add_assoc_double(return_value,”for test. for test.”,1.0);</p>
+
+<p>   </p>
+
+<p>    ALLOC_INIT_ZVAL(t);</p>
+
+<p>    array_init(t);</p>
+
+<p>    add_next_index_double(t,3.34);</p>
+
+<p> </p>
+
+<p>    add_assoc_zval(return_value,”array”, t);</p>
+
+<p>}</p>
+
+<p>很简单吧，还记得return_value吗？</p>
+
+<p>https://blog.csdn.net/niujiaming0819/article/details/8568587</p>
+
+:ET

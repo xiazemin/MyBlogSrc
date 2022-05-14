@@ -1,0 +1,107 @@
+---
+title: race
+layout: post
+category: golang
+author: 夏泽民
+---
+比如一个全局变量，如果没有加上锁，我们写一个比较庞大的项目下来，就根本不知道这个变量是不是会引起多个goroutine竞争。
+<!-- more -->
+package main
+
+import(
+    "time"
+    "fmt"
+    "math/rand"
+)
+
+func main() {
+    start := time.Now()
+    var t *time.Timer
+    t = time.AfterFunc(randomDuration(), func() {
+        fmt.Println(time.Now().Sub(start))
+        t.Reset(randomDuration())
+    })
+    time.Sleep(5 * time.Second)
+}
+
+func randomDuration() time.Duration {
+    return time.Duration(rand.Int63n(1e9))
+}
+
+time.AfterFunc是会另外启动一个goroutine来进行计时和执行func()。
+由于func中有对t(Timer)进行操作(t.Reset)，而主goroutine也有对t进行操作(t=time.After)。
+这个时候，其实有可能会造成两个goroutine对同一个变量进行竞争的情况。
+
+package main
+
+import(
+    "time"
+    "fmt"
+)
+
+func main() {
+    a := 1
+    go func(){
+        a = 2
+    }()
+    a = 3
+    fmt.Println("a is ", a)
+
+    time.Sleep(2 * time.Second)
+}
+
+这里的go func触发的goroutine会修改a。
+主goroutine 也会对a进行修改。但是我们如果只go run运行，我们可能往往不会发现什么太大的问题。
+
+golang在1.1之后引入了竞争检测的概念。我们可以使用go run -race 或者 go build -race 来进行竞争检测。
+golang语言内部大概的实现就是同时开启多个goroutine执行同一个命令，并且纪录每个变量的状态。
+
+用race来检测上面的程序，我们就会看到输出：
+
+runtime  go run -race race1.go
+a is  3
+==================
+WARNING: DATA RACE
+Write by goroutine 5:
+  main.func·001()
+      /Users/yejianfeng/Documents/workspace/go/src/runtime/race1.go:11 +0x3a
+
+Previous write by main goroutine:
+  main.main()
+      /Users/yejianfeng/Documents/workspace/go/src/runtime/race1.go:13 +0xe7
+
+Goroutine 5 (running) created at:
+  main.main()
+      /Users/yejianfeng/Documents/workspace/go/src/runtime/race1.go:12 +0xd7
+==================
+Found 1 data race(s)
+exit status 66
+
+这个命令输出了Warning，告诉我们，goroutine5运行到第11行和main goroutine运行到13行的时候触发竞争了。
+而且goroutine5是在第12行的时候产生的。
+
+这样我们根据分析这个提示就可以看到这个程序在哪个地方写的有问题了。
+
+当然这个参数会引发CPU和内存的使用增加，所以基本是在测试环境使用，不是在正式环境开启。
+
+
+$  go run -race main.go 
+a is  3
+==================
+WARNING: DATA RACE
+Write at 0x00c420018070 by goroutine 6:
+  main.main.func1()
+      /Users/didi/goLang/src/github.com/xiazemin/race/main.go:10 +0x3b
+
+Previous write at 0x00c420018070 by main goroutine:
+  main.main()
+      /Users/didi/goLang/src/github.com/xiazemin/race/main.go:12 +0x8e
+
+Goroutine 6 (running) created at:
+  main.main()
+      /Users/didi/goLang/src/github.com/xiazemin/race/main.go:9 +0x7d
+==================
+Found 1 data race(s)
+exit status 66
+
+

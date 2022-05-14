@@ -1,0 +1,15 @@
+---
+title: allocation
+layout: post
+category: elasticsearch
+author: 夏泽民
+---
+ElasticSearch如何查找磁盘空间使用情况？
+如果您不需要由/_cat/shards你可以用
+
+curl -XGET localhost:9200/_cat/allocation?v
+获取每个节点的可用磁盘空间
+<!-- more -->
+https://cloud.tencent.com/developer/ask/38054
+
+

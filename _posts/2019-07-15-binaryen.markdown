@@ -1,0 +1,135 @@
+---
+title: binaryen
+layout: post
+category: golang
+author: 夏泽民
+---
+https://github.com/WebAssembly/binaryen
+WebAssembly 的生态大致分为两部分, 编译器等工具链, 和执行环境
+两者依据 spec 来完成对接, 并且实现解耦
+工具链部分重要的新项目是 Binaryen, 一个编译器
+https://github.com/WebAssembly/binaryen
+实现语言是 C++, 可以用于 parse 和 emit WebAssembly
+也可以基于 AST 规范进行转换
+基于几个部分的工具:
+
+Binaryen shell 可以加载运行代码, 类似解释器
+使用的后缀 .wast, 这是 WebAssembly 的某个文本格式
+
+asm2wasm ASM.js 编译到 WebAssembly
+
+wasm2asm WebAssembly 编译到 ASM.js(还没完成)
+
+s2wasm 汇编文件, 后缀 .s, 编译到 WebAssembly, 基于 LLVM
+http://llvm.org/devmtg/2015-10/slides/BastienGohman-WebAssembly-HereBeDragons.pdf
+
+wasm.js Binaryen 的 JavaScript 实现, 以便在已有 JavaScript 环境执行
+
+关于 Binaryen 的介绍, 有个幻灯片, 其中一页特别要看下
+https://kripken.github.io/talks/wasm.html#/9
+Binaryen 就是 Binary 和 Emscripten 的结尾连载一起写
+<!-- more -->
+Emscripten 可以编译 C 或者 C++ 到 ASM.js
+而 Binaryen 可以把 ASM.js 编译到 WebAssembly, 整个就通了
+可以用 asm2wasm 命令, 也可以用 emcc 直接包含这一步:
+
+emcc file.cpp -o file.js -s ‘BINARYEN=”path-to-binaryen”’
+https://github.com/kripken/emscripten/wiki/WebAssembly
+
+目前还没有直接编译到浏览器环境运行的方案
+现在测目标是最快能实现和检验效果, 浏览器的事以后再说
+而为了测出的目的的话, 有个性能很低的 wasm.js 可以跑
+大概就是用来初始化运行环境, 然后解释执行 WebAssembly
+估计这个方案和 CoffeeScript 的解释执行会有相似之处
+提到一些可以参考的内容
+https://kripken.github.io/talks/wasm.html#/10
+https://github.com/WebAssembly/build-suite
+
+目前的测试工具, 将来也能用来保证后续代码的可靠性
+当然以后运行性能必定是要非常高的
+https://github.com/WebAssembly/binaryen/blob/master/src/wasm2asm.h
+https://github.com/WebAssembly/polyfill-prototype-2
+https://github.com/WebAssembly/design/blob/master/FAQ.md#can-the-polyfill-really-be-efficient
+很多 C/C++ 项目将来可以被编译到 WebAssembly, 以后难度不会高
+
+关于 LLVM 后端
+WebAssembly 也在开发一个 LLVM 后端, 现在还不成熟
+不过将来应该会非常重要的, Binaryen 也支持
+LLVM 通常会输出 .s 的汇编后缀文件, 这个也是类似的
+这个结果会有点像 C 生成的汇编, 而不是像 AST 的样子
+至少能从这个文件比较直接得转换到 WebAssembly
+其中会用到 s2wasm 来进行编译, 细节看原文
+这个项目有命令行, 也已经集成在 Emscripten 里边
+
+emcc file.cpp -o file.js -s ‘BINARYEN=”path-to-binaryen”’ -s WASM_BACKEND=1
+https://github.com/kripken/emscripten/wiki/WebAssembly
+
+现在大致有两条思路, 一条旧一条新, 新的还没成熟, 但将来会取代旧的
+
+Emscripten + asm.js backend + asm2wasm
+
+Emscripten + new WebAssembly backend + s2wasm
+
+另外在 FAQ 里扒了一些感兴趣的内容
+https://github.com/WebAssembly/design/blob/master/FAQ.md
+
+使用场景用哪些?
+页面上拉了很长的列表, 感觉常用的桌面软件都列上去了
+https://github.com/WebAssembly/design/blob/master/UseCases.md
+
+只是针对 C/C++ 程序员设计的吗?
+最初可能是为了 C/C++, 后面会跟 ES6 模块接口整合
+那么就是很容易复用 C++ 写的类库, 而不用写 C++ 了
+构建 LLVM 后端, 支持 LLVM 的 Clang, GCC 等, 因为熟悉所以先对付 LLVM
+
+从长远的目标, WebAssembly 算是提供二进制格式, 实现 Web 平台功能
+https://github.com/WebAssembly/design/blob/master/HighLevelGoals.md
+比如对 Web 向后兼容, 继承 JavaScript 的同源策略, 异步调用和被调用 JavaScript
+访问已有的 API, 提供人类能阅读的文本格式, 对应 View Source 效果
+还有 Source Maps, 协程, 多进程, 大于 4GB 内存, 尾递归, 具体看文档
+https://github.com/WebAssembly/design/blob/master/FutureFeatures.md#gcdom-integration
+对于 Node 环境也支持, 还有移动平台, 网联网设备等等
+https://github.com/WebAssembly/design/blob/master/NonWeb.md
+
+关于 Web API 有单独的文档, 在 MVP 这个初步的阶段之后会开始做
+https://github.com/WebAssembly/design/blob/master/GC.md
+
+在 WebAssembly 当中直接引用 DOM 和各种对象
+
+直接访问 Web API, 而不是通过 JavaScript 去调用
+
+在 WebAssembly 代码中直接操作 GC 对象
+
+想要替代 JavaScript 吗?
+不是的. WebAssembly 只是允许了更多的语言能编译运行
+而 JavaScript 作为快速发展的语言, 是享有特权, 一直支持下去的
+两种语言很可能会长期共用下去, 比如性能要求高的部分用 WebAssembly
+
+Binaryen 工具链
+       Binaryen提供了一系列工具，用来形成他们独有的工作流。
+
+binaryen-shell: A shell that can load and interpret WebAssembly code in S-Expression format, as well as run transformation passes on it. It can also run the spec test suite.
+wasm-as: Assembles WebAssembly in text format (currently S-Expression format) into binary format (currently v8 format).
+wasm-dis: Un-assembles WebAssembly in binary format (currently v8 format) into text format (currently S-Expression format).
+asm2wasm: An asm.js-to-WebAssembly compiler, built on Emscripten’s asm optimizer infrastructure. This is used by Emscripten in Binaryen mode when it uses Emscripten’s fastcomp asm.js backend.
+wasm2asm: A WebAssembly-to-asm.js compiler, the reverse of asm2wasm. This is a work in progress.
+s2wasm: A compiler from the .s format emitted by the new WebAssembly backend being developed in LLVM. This is used by Emscripten in Binaryen mode when it integrates with the new LLVM backend.
+wasm.js: wasm.js contains Binaryen components compiled to JavaScript, including the interpreter, asm2wasm, the S-Expression parser, etc., which allow you to use Binaryen with Emscripten and execute code compiled to WASM even if the browser doesn’t have native support yet. This can be useful as a (slow) polyfill.
+binaryen.js: A stand alone library that exposes Binaryen methods for parsing s-expressions and instantiating WASM modules in JavaScript.
+现阶段比较有用的命令
+binaryen-shell
+bin/binaryen-shell [.wast file] [options] [passes, see --help] [--help]
+       可以高亮显示wast文件
+
+asm2wasm
+bin/asm2wasm [input.asm.js file]
+       可以转换asm.js文件到wasm格式，并高亮显示
+
+WebAssembly生成工作流
+       binaryen提供了两个流程
+
+C/C++ Source ⇒ asm2wasm ⇒ WebAssembly
+
+C/C++ Source ⇒ WebAssembly LLVM backend ⇒ s2wasm ⇒ WebAssembly
+
+       还有一个方法，就是使用ilwasm把.NET CIL变成WebAssembly S-expressions，不过这个项目已经很久没动过了。

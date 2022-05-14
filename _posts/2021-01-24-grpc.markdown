@@ -1,0 +1,33 @@
+---
+title: grpc http2 context cancel
+layout: post
+category: golang
+author: 夏泽民
+---
+GRPC请求失败, 看日志提示 context is cancelled. 而且报错时间与请求发出的时间很接近, 根本还没达到超时时间.
+
+ServiceA -异步-> ServiceB -异步-> ServiceC
+
+服务A调用服务B, B收到请求之后又会去请求服务C.
+
+B返回给A的结果并不依赖B请求C的结果, 因此B会尽快返回给A.
+
+一旦B返回, B与A之间的context就被cancel, 而B与C的context是继承于前者, 也被级联cancel了.
+除了context级联cancel, 还有超时传递.
+
+解决办法: context的传递是基于ThreadLocal的, 只要能使得B调用C时当前线程的context是符合预期(比如空白)的就行, 这样就会阻止cancel级联了.
+
+方法1: 扔到一个线程池里去做, 线程池里默认肯定没context, 因此会用Context.ROOT (相当于是空白的), 但这感觉有点傻
+
+方法2: 在B调用C的地方使用Context.ROOT.attach() 临时替换掉当前线程的上下文为ROOT
+
+方法3: 在方法2的基础上使用拦截器. 注意, 如果不在拦截器里加入一些名称判断, 那默认所有调出去的方法的context都会被换掉.
+
+https://http2.github.io/
+<!-- more -->
+
+grpc 超时传递原理 
+https://www.cnblogs.com/sunsky303/p/11119300.html
+
+https://www.jianshu.com/p/9e57da13b737
+

@@ -1,0 +1,380 @@
+I"�3<p>我们都知道map是无序的，每次取出key/value的顺序都可能不一致，但map转json的顺序是不是也是无序的吗？尽管json中的参数顺序大部分情况下对使用没有影响，我们不妨看看源码中怎么处理的。</p>
+
+<p>先说结论：</p>
+
+<p>map转json是有序的，按照ASCII码升序排列key。
+<!-- more -->
+溯源
+源码位于encoding/json/encode.go中</p>
+
+<p>type mapEncoder struct {
+   elemEnc encoderFunc
+}</p>
+
+<p>func (me mapEncoder) encode(e *encodeState, v reflect.Value, opts encOpts) {
+   if v.IsNil() {//为nil时，返回null
+      e.WriteString(“null”)
+      return
+   }
+   e.WriteByte(‘{‘)</p>
+
+<p>// Extract and sort the keys.
+   keys := v.MapKeys()//获取map中的所有keys
+   sv := make([]reflectWithString, len(keys))
+   for i, v := range keys {
+      sv[i].v = v
+      if err := sv[i].resolve(); err != nil {//处理key，尤其是非string（int/uint）类型的key转string
+         e.error(&amp;MarshalerError{v.Type(), err})
+      }
+   }
+   //排序，升序，直接比较字符串
+   sort.Slice(sv, func(i, j int) bool { return sv[i].s &lt; sv[j].s })</p>
+
+<p>for i, kv := range sv {
+      if i &gt; 0 {
+         e.WriteByte(‘,’)
+      }
+      e.string(kv.s, opts.escapeHTML)
+      e.WriteByte(‘:’)
+      me.elemEnc(e, v.MapIndex(kv.v), opts)
+   }
+   e.WriteByte(‘}’)
+}</p>
+
+<p>func newMapEncoder(t reflect.Type) encoderFunc {
+   switch t.Key().Kind() {
+   case reflect.String,
+      reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+      reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
+   default:
+      if !t.Key().Implements(textMarshalerType) {
+         return unsupportedTypeEncoder
+      }
+   }
+   me := mapEncoder{typeEncoder(t.Elem())}
+   return me.encode
+}</p>
+
+<p>{
+    “foo”: “Hello, World!”,
+    “bar”: {
+        “b”: {
+            “go”: “1”
+        },
+        “a”: {
+            “go”: “2”
+        },
+        “c”: {
+            “go”: “3”
+        }
+    }
+}
+有如上一段 JSON，在程序中需要将其转为一个结构体以方便读取里边的数据，struct 的定义大概如下：</p>
+
+<p>type Foobar struct {
+    Foo  string <code class="language-plaintext highlighter-rouge">json:"foo"</code>
+    Bar map[string]struct {
+        Go string <code class="language-plaintext highlighter-rouge">json:"go"</code>
+    } <code class="language-plaintext highlighter-rouge">json:"bar"</code>
+}
+现在有这么两个需求：</p>
+
+<p>按顺序输出 bar.a、bar.b、bar.c
+按顺序输出 bar.b、bar.a、bar.c
+如果是用 Java 的小伙伴，肯定已经想到 SortedMap（用的比较多是 TreeMap）和 LinkedHashMap 了，前者是可以按 key 进行排序的，后者则可以保持键值对的插入顺序，而这两者都是 JDK 自带的，任何一个 Javaer 应该都使用过。</p>
+
+<p>但是在 Go 语言的 “简约设计” 面前，这些都是不存在的 ——Go 只提供了最基础的 hash map。</p>
+
+<p>并且，在借助 range 关键字对 Go 的 map 进行遍历访问的时候，会对 map 的 key 的顺序做随机化处理，也就是说即使是同一个 map 在同一个程序里进行两次相同的遍历，前后两轮访问 key 的顺序也是随机化的。(可以在这里验证：https://play.golang.org/p/s3Mj4gNfi4g )</p>
+
+<p>在 Go 的官方 blog 的文章 Go maps in action 也确定了该现象确实存在，并且是有意而为之，</p>
+
+<p>When iterating over a map with a range loop, the iteration order is not specified and is not guaranteed to be the same from one iteration to the next. Since the release of Go 1.0, the runtime has randomized map iteration order.</p>
+
+<p>那么在 Go 里边实现以上需求就得绕些路了。</p>
+
+<p>实现类似 SortedMap 的遍历
+SortedMap 主要是对 key 排序，那么我们便可将 map 的 key 全部拿出来，放到一个数组中，然后对这个数组排序后对有序数组遍历，再间接取 map 里的值就行了。</p>
+
+<p>package main</p>
+
+<p>import (
+    “fmt”
+    “sort”
+)</p>
+
+<p>func main() {
+    m := make(map[string]string)
+    m[“b”] = “2”
+    m[“a”] = “1”
+    m[“c”] = “3”</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>keys := make([]string, 0, len(m))
+for k, _ := range m {
+    keys = append(keys, k)
+}
+
+sort.Strings(keys)
+
+for _, k := range keys {
+    fmt.Printf("Key:%+v, Value:%+v\n", k, m[k])
+} } https://play.golang.org/p/vzpwizlRYUO
+</code></pre></div></div>
+
+<p>输出：</p>
+
+<p>Key:a, Value:1
+Key:b, Value:2
+Key:c, Value:3
+不过每次都要这么写有些麻烦，我们可以将其封装成一个方法</p>
+
+<p>func sortedMap(m map[string]interface{}, f func(k string, v interface{})) {
+    var keys []string
+    for k := range m {
+        keys = append(keys, k)
+    }
+    sort.Strings(keys)
+    for _, k := range keys {
+        f(k, m[k])
+    }
+}
+然后这样调用</p>
+
+<p>func main() {
+    m := make(map[string]interface{})
+    m[“b”] = “2”
+    m[“a”] = “1”
+    m[“c”] = “3”</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>sortedMap(m, func(k string, v interface{}) {
+    val := v.(string)
+    fmt.Printf("Key:%+v, Value:%+v\n", k, val)
+}) } 不过遗憾的是，因为 Go 不支持泛型，所以该方法并不是很通用（当 key 不为 string 的时候），但终究算是一个解决办法。
+</code></pre></div></div>
+
+<p>实现类似 LinkedHashMap
+相比于上边按 key 排序来讲，在 Go 中实现 LinkedHashMap 要困难得多，要自己写一套数据结构。</p>
+
+<p>之前有人试图给 Go 标准库提交过相关的代码，但是被拒绝了（(沮丧脸) 详情可见 7930: encoding/json: Optionally preserve the key order of JSON objects ），不过在 GitHub 上还是能找到相关的代码的：go-ordered-json，我们就可以用使用这个库来完成。</p>
+
+<p>正如该项目的 ReadMe 中所说，你应该尽可能避免使用该库</p>
+
+<p>If you can, you should avoid using this package.</p>
+
+<p>但是对我来说，我没有更好的方案（第三方 API 返回的 JSON 中就是用 map 来保持顺序的），那么我也只好好好的 enjoy it 了。</p>
+
+<p>package main</p>
+
+<p>import (
+    “fmt”
+    “github.com/virtuald/go-ordered-json”
+)</p>
+
+<p>func main() {
+    jsonString := <code class="language-plaintext highlighter-rouge">{
+    "b": "2",
+    "a": "1",
+    "c": "3"
+}</code></p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>oo := json.OrderedObject{}
+err := json.Unmarshal([]byte(jsonString), &amp;oo)
+if err != nil {
+    panic(err)
+}
+fmt.Printf("%+v", oo) } 输出结果：
+</code></pre></div></div>
+
+<p>[{Key:b Value:2} {Key:a Value:1} {Key:c Value:3}]
+可以看出 json.OrderedObject 内部其实是把 map 处理成了 slice。</p>
+
+<p>但是注意了：json.OrderedObject 只处理顶层的这个 map，如果嵌套有 map 的话，下层的 map 还是无序的。</p>
+
+<p>（你可能会怀疑是不是因为用了 fmt.Printf 导致打印出来的顺序变了，你可以自己遍历试一下哦～）</p>
+
+<p>现在来看看本文开头的那个 JSON 的例子</p>
+
+<p>{
+    “foo”: “Hello, World!”,
+    “bar”: {
+        “b”: {
+            “go”: “1”
+        },
+        “a”: {
+            “go”: “2”
+        },
+        “c”: {
+            “go”: “3”
+        }
+    }
+}
+如果我把上边代码中的 jsonString 换成上边的这个 JSON，那么输出的就会是</p>
+
+<p>[{Key:foo Value:Hello, World!} {Key:bar Value:map[a:map[go:2] b:map[go:1] c:map[go:3]]}]
+可以看出它只保证了最外层 foo 和 bar 的顺序， 而对于 bar 对应的这个 map，是按 a,b,c 的顺序来，并不是我们期望中的 b,a,c。</p>
+
+<p>不过这个问题也是有解的，我们先创建一个 struct（和文章开头提到那个 struct 有点像），重点就是 Bar 的类型这里是 json.OrderedObject</p>
+
+<p>type Foobar struct {
+    Foo string             <code class="language-plaintext highlighter-rouge">json:"foo"</code>
+    Bar json.OrderedObject <code class="language-plaintext highlighter-rouge">json:"bar"</code>
+}
+然后咱们来开始吧</p>
+
+<p>package main</p>
+
+<p>import (
+    “fmt”
+    “github.com/virtuald/go-ordered-json”
+)</p>
+
+<p>func main() {</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>jsonString := `{
+"foo": "Hello, World!",
+"bar": {
+    "b": {
+        "go": "1"
+    },
+    "a": {
+        "go": "2"
+    },
+    "c": {
+        "go": "3"
+    }
+} }`
+
+foobar := Foobar{}
+err := json.Unmarshal([]byte(jsonString), &amp;foobar)
+if err != nil {
+    panic(err)
+}
+
+for _, value := range foobar.Bar {
+    m := value.Value.(map[string]interface{})
+    for k, v := range m {
+        fmt.Printf("%+v.%+v=%+v\n", value.Key, k, v)
+    }
+}
+</code></pre></div></div>
+
+<p>}
+输出结果：</p>
+
+<p>b.go=1
+a.go=2
+c.go=3
+成功了是不是？！此处应该有掌声～</p>
+
+<p>当然，是献给 virtuald/go-ordered-json 的～</p>
+
+<p>encoding/json
+有时间了可以研究一下 encoding/json 库，它的意义相对其他语言来说在 Go 中尤其重要 —— 它还扮演着 struct 转换器的角色。</p>
+
+<p>另外在用它对 map 进行 encode 的时候（就是 json.Marshal 咯），还是挺有意思的，大家猜猜下边这段代码，range 和 json 部分分别是什么样的结果？多运行几次呢？</p>
+
+<p>package main</p>
+
+<p>import (
+	“encoding/json”
+	“fmt”
+)</p>
+
+<p>func main() {
+	jsonString := <code class="language-plaintext highlighter-rouge">{
+	"foo": {
+		"b": "1",
+		"a": "2",
+		"c": "3"
+	}
+}</code>
+	o := make(map[string]map[string]string)
+	err := json.Unmarshal([]byte(jsonString), &amp;o)
+	if err != nil {
+		panic(err)
+	}</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>fmt.Println("range:")
+for _, m := range o {
+	for k, v := range m {
+		fmt.Printf("%s, %s\n", k, v)
+	}
+}
+
+bytes, err := json.Marshal(o)
+if err != nil {
+	panic(err)
+}
+
+fmt.Println("")
+fmt.Println("json:")
+fmt.Printf("%s\n", bytes) } 有兴趣的朋友点击下边的 Go Playground 自己试试
+</code></pre></div></div>
+
+<p>https://play.golang.org/p/JcTWRlYjQ5j</p>
+
+<p>https://github.com/virtuald/go-ordered-json</p>
+
+<p>https://github.com/google/gson
+LinkedHashMap本身是有序的，使用JDK自带的序列化代码或者fastJson代码序列化后，字符串并非按照插入顺序输出</p>
+
+<p>Map&lt;String,String&gt; linkedMap=new LinkedHashMap&lt;String,String&gt;();
+linked2.put(“b”,”2”);
+linked2.put(“a”,”1”);
+linked2.put(“c”,”3”);
+String jsonStr=JSON.toJSONString(linkedMap);
+输出jsonStr为{“a”:”1”,”b”:”2”,”c”:”3”}
+解决办法：
+使用Gson(com.google.gson)序列化
+Map&lt;String,String&gt; linkedMap=new LinkedHashMap&lt;String,String&gt;();
+linked2.put(“b”,”2”);
+linked2.put(“a”,”1”);
+linked2.put(“c”,”3”);
+Gson gson = new GsonBuilder().enableComplexMapKeySerialization().create();
+String jsonStr=gson.toJson(linked2);
+System.out.println(jsonStr);
+输出jsonStr为{“b”:”2”,”a”:”1”,”c”:”3”}</p>
+
+<p>fastjson（1.2.15）需要将前端多层嵌套json转换为map，由于map的无序性，想了很多办法，最终找到使用 Map m= JSONArray.parseObject(json, LinkedHashMap&lt;String,String&gt;.class); 来转换，问题来了，第一层顺序是对的，但是第二层排序居然出问题了，目前仅仅只是需要转换成String 他居然把String都给自动排序了，后来网上查了很多资料发现还可以采用一种方式：</p>
+
+<p>Java代码</p>
+
+<p>收藏代码</p>
+
+<p>JSONObject jsonObj = new JSONObject(true);<br />
+Map m= jsonObj.parseObject(json, LinkedHashMap.class);<br />
+ 但是输出问题还是存在第二层以后排序混乱，如下：</p>
+
+<p>传入Json：
+{“t1”:””,”t3”:””,”t2”:{“a1”:””,”a3”:””,”a2”:””}}</p>
+
+<p>输出：</p>
+
+<p>{t1=, t3=, t2={“a1”:””,”a2”:””,”a3”:””}}</p>
+
+<p>无奈，跟踪fastjson源码，花了2小时在com.alibaba.fastjson.parser.DefaultJSONParser 类中475行发现</p>
+
+<p>Java代码</p>
+
+<p>收藏代码</p>
+
+<p>else if (ch == ‘{‘) { // 减少嵌套，兼容android<br />
+                   lexer.nextToken();</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>               final boolean parentIsArray = fieldName != null &amp;&amp; fieldName.getClass() == Integer.class;  
+  
+               &lt;span style="color: #ff0000;"&gt;&lt;strong&gt;JSONObject input = new JSONObject(lexer.isEnabled(Feature.OrderedField)&lt;/strong&gt;&lt;/span&gt;);  
+</code></pre></div></div>
+
+<p>居然这里面判断了Feature.OrderedField</p>
+
+<p>果断知道了解决办法：</p>
+
+<p>HashMap m=  JSON.parseObject(json,LinkedHashMap.class,Feature.OrderedField);</p>
+
+<p>搞定，输出结果：</p>
+
+<p>{t1=, t3=, t2={“a1”:””,”a3”:””,”a2”:””}}</p>
+
+<p>https://github.com/iancoleman/orderedmap</p>
+:ET

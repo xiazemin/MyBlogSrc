@@ -1,0 +1,114 @@
+I"g<p>主要是三个系统调用</p>
+
+<p>clone() – 实现线程的系统调用，用来创建一个新的进程，并可以通过设计上述参数达到隔离。
+unshare() – 使某进程脱离某个namespace
+setns() – 把某进程加入到某个namespace</p>
+
+<p>LXC所实现的隔离性主要是来自kernel的namespace, 其中pid, net, ipc, mnt, uts 等namespace将container的进程, 网络, 消息, 文件系统和hostname 隔离开。</p>
+
+<p>一、      pid namespace
+之前提到用户的进程是lxc-start进程的子进程, 不同用户的进程就是通过pidnamespace隔离开的，且不同 namespace 中可以有相同PID。具有以下特征:
+1、每个namespace中的pid是有自己的pid=1的进程(类似/sbin/init进程)</p>
+
+<p>2、每个namespace中的进程只能影响自己的同一个namespace或子namespace中的进程</p>
+
+<p>3、因为/proc包含正在运行的进程，因此在container中的pseudo-filesystem的/proc目录只能看到自己namespace中的进程</p>
+
+<p>4、因为namespace允许嵌套，父namespace可以影响子namespace的进程，所以子namespace的进程可以在父namespace中看到，但是具有不同的pid</p>
+
+<p>正是因为以上的特征，所有的LXC进程在docker中的父进程为docker进程，每个lxc进程具有不同的namespace。同时由于允许嵌套，因此可以很方便的实现 LXC in LXC
+二、  net namespace
+有了 pid namespace, 每个namespace中的pid能够相互隔离，但是网络端口还是共享host的端口。网络隔离是通过netnamespace实现的，
+每个net namespace有独立的 network devices, IP addresses, IP routing tables, /proc/net 目录。这样每个container的网络就能隔离开来。
+LXC在此基础上有5种网络类型，docker默认采用veth的方式将container中的虚拟网卡同host上的一个docker bridge连接在一起。</p>
+
+<p>三、 ipc namespace
+container中进程交互还是采用linux常见的进程间交互方法(interprocess communication - IPC), 包括常见的信号量、消息队列和共享内存。然而同VM不同，container 的进程间交互实际上还是host上具有相同pid namespace中的进程间交互，因此需要在IPC资源申请时加入namespace信息 - 每个IPC资源有一个唯一的 32bit ID。</p>
+
+<p>四、  mnt namespace
+类似chroot，将一个进程放到一个特定的目录执行。mnt namespace允许不同namespace的进程看到的文件结构不同，这样每个 namespace 中的进程所看到的文件目录就被隔离开了。同chroot不同，每个namespace中的container在/proc/mounts的信息只包含所在namespace的mount point。</p>
+
+<p>五、  uts namespace
+UTS(“UNIX Time-sharing System”) namespace允许每个container拥有独立的hostname和domain name, 　　使其在网络上可以被视作一个独立的节点而非Host上的一个进程。</p>
+
+<p>六 、  user namespace
+每个container可以有不同的 user 和 group id, 也就是说可以以container内部的用户在container内部执行程序而非Host上的用户。
+有了以上6种namespace从进程、网络、IPC、文件系统、UTS和用户角度的隔离，一个container就可以对外展现出一个独立计算机的能力，并且不同container从OS层面实现了隔离。 　　然而不同namespace之间资源还是相互竞争的，仍然需要类似ulimit来管理每个container所能使用的资源 - LXC 采用的是cgroup。
+<!-- more -->
+创建一个network namespace
+创建一个network namespace
+ip netns add nstest
+ip netns list 
+删除一个network namespace
+ip netns delete nstest 
+ip netns list 
+3.在network namespace 中执行一条命令,如显示nstest中的网卡信息</p>
+
+<p>ip netns exec nstest ip addr 
+或直接打开一个Bash,在里面执行命令,用exit退出</p>
+
+<p>ip netns exec nstest bash
+配置network namespace
+配置网卡
+启动默认添加的网络回环设备,回环设备默认是关闭的
+ip netns exec nstest ip link set dev lo up
+在主机上添加两块虚拟网卡veth-a和veth-b</p>
+
+<p>ip link add veth-a type  veth peer name veth-b
+ip addr 
+将veth-b加入到nstest这个network namespace中,veth-a留在主机中</p>
+
+<p>ip link set veth-b netns nstest
+ip netns exec nstest ip link
+为网卡分配IP地址</p>
+
+<p>#为主机的veth-a分配ip
+ip addr add 10.0.0.1/24 dev veth-a
+ip link set dev veth-a up</p>
+<h1 id="为nstest中的veth-b配置ip并启动">为nstest中的veth-b配置ip并启动</h1>
+<p>ip netns exec nstest ip addr add 10.0.0.2/24 dev veth-b
+ip netns exec nstest ip link set dev veth-b up
+#验证连通性
+[root@cyt-aliyun-test ~]# ping 10.0.0.2 
+PING 10.0.0.2 (10.0.0.2) 56(84) bytes of data.
+64 bytes from 10.0.0.2: icmp_seq=1 ttl=64 time=0.065 ms
+[root@cyt-aliyun-test ~]# ip netns exec nstest ping 10.0.0.1 
+PING 10.0.0.1 (10.0.0.1) 56(84) bytes of data.
+64 bytes from 10.0.0.1: icmp_seq=1 ttl=64 time=0.048 ms
+64 bytes from 10.0.0.1: icmp_seq=2 ttl=64 time=0.054 ms
+64 bytes from 10.0.0.1: icmp_seq=3 ttl=64 time=0.060 ms
+使用ip命令配置docker容器网络</p>
+<h1 id="查看容器的pid">查看容器的pid</h1>
+<p>[root@cyt-aliyun-test ~]# docker ps
+CONTAINER ID        IMAGE               COMMAND                  CREATED             STATUS              PORTS                  NAMES
+354e7442c0b1        php-apache:5.6.31   “docker-php-entrypoin”   6 weeks ago         Up 6 weeks          0.0.0.0:8080-&gt;80/tcp   kod
+[root@cyt-aliyun-test ~]# docker inspect –format ‘{{.State.Pid}}’ kod
+16289
+#若不存在/var/run/netns目录,则创建目录
+mkdir -p /var/run/netns
+#在/var/run/netns/目录下创建软链接,指向kod容器的network namespace
+[root@cyt-aliyun-test netns]# ln -s /proc/16289/ns/net /var/run/netns/kod
+#测试
+[root@cyt-aliyun-test netns]# ip netns exec kod ip addr
+1: lo: &lt;LOOPBACK,UP,LOWER_UP&gt; mtu 65536 qdisc noqueue state UNKNOWN qlen 1
+    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
+    inet 127.0.0.1/8 scope host lo
+       valid_lft forever preferred_lft forever
+    inet6 ::1/128 scope host 
+       valid_lft forever preferred_lft forever
+34: eth0@if35: &lt;BROADCAST,MULTICAST,UP,LOWER_UP&gt; mtu 1500 qdisc noqueue state UP 
+    link/ether 02:42:ac:11:00:02 brd ff:ff:ff:ff:ff:ff link-netnsid 0
+    inet 172.17.0.2/16 scope global eth0
+       valid_lft forever preferred_lft forever
+    inet6 fe80::42:acff:fe11:2/64 scope link 
+       valid_lft forever preferred_lft forever
+[root@cyt-aliyun-test netns]# ip netns list
+kod (id: 1)
+nstest (id: 0)</p>
+
+<p>主要是三个系统调用</p>
+
+<p>clone() – 实现线程的系统调用，用来创建一个新的进程，并可以通过设计上述参数达到隔离。
+unshare() – 使某进程脱离某个namespace
+setns() – 把某进程加入到某个namespace</p>
+:ET

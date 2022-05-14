@@ -1,0 +1,418 @@
+---
+title: 进程的页表
+layout: post
+category: linux
+author: 夏泽民
+---
+页表是一种特殊的数据结构，放在系统空间的页表区，存放逻辑页与物理页帧的对应关系。 每一个进程都拥有一个自己的页表，PCB表中有指针指向页表。
+逻辑地址：CPU所生成的地址。CPU产生的逻辑地址被分为 :p （页号） 它包含每个页在物理内存中的基址，
+地址转化
+地址转化
+用来作为页表的索引；d （页偏移），同基址相结合，用来确定送入内存设备的物理内存地址。
+物理地址：内存单元所看到的地址。逻辑地址空间为2^m，且页大小为2^n，那么逻辑地址的高m－n位表示页号，低n位表示页偏移。
+逻辑地址空间:由程序所生成的所有逻辑地址的集合。
+物理地址空间:与逻辑地址相对应的内存中所有物理地址的集合,用户程序看不见真正的物理地址。
+注：用户只生成逻辑地址，且认为进程的地址空间为0到max。物理地址范围从R+0到R+max，R为基地址,地址映射－将程序地址空间中使用的逻辑地址变换成内存中的物理地址的过程。由内存管理单元（MMU）来完成。
+分页逻辑地址 =P(页号).d(页内位移)
+分页物理地址=f(页帧号).d(同上)
+P = 线性逻辑地址/页面大小
+d= 线性逻辑地址-P*页面大小 [1]
+
+作用
+实现从页号到物理块号的地址映射。
+逻辑地址转换成物理地址的过程是：用页号p去检索页表，从页表中得到该页的物理块号，把它装入物理地址寄存器中。同时，将页内地址d直接送入物理地址寄存器的块内地址字段中。这样，物理地址寄存器中的内容就是由二者拼接成的实际访问内存的地址，从而完成了从逻辑地址到物理地址的转换。
+基本分页存储管理方式
+用固定大小的页(Page)来描述逻辑地址空间，用相同大小的页框(Frame)来描述物理内存空间，由操作系统实现从逻辑页到物理页框的页面映射，同时负责对所有页的管理和进程运行的控制。
+分级页表
+一个32位逻辑地址空间的计算机系统，页大小为4KB，那么页表有一百万条目。假设每个条目占4B，则需要
+二级页表的页表项
+二级页表的页表项
+4MB物理地址空间来存储页表本身。利用多级页表，可以减少页表所占用的空间。
+一个逻辑地址(32位系统，页大小 4K) 可以被分为 :一个20位的页号 +一个12位的偏移。如果对页表进行再分页，那么页号分解为:一个10位的页号 +一个10位的偏移。因此，一个逻辑地址表示如下 :p1 是用来访问外部页表的索引, p2 是外部页表的页偏移。
+<!-- more -->
+[那么每个进程的页表是怎么创建的呢？]
+
+进程的内核页全局目录的装载过程
+
+do_fork()->copy_process()->copy_mm()(如果是fork一个内核线程kernel thread的话，内核线程将会直接使用当前普通进程的页表集，内核线程并不拥有自己的页表集)->dup_mm()->mm_init()->mm_alloc_pgd()->pgd_alloc
+
+pgd_alloc()
+
+{
+
+    pgd = (pgd_t *)__get_free_page(PGALLOC_GFP)   //为pgd分为一个物理页
+
+    preallocate_pmds(pmds)     //为pmd 页中间目录预先分配页请参考下面的 分析
+
+     preallocate_pmds(pmd_t *pmds[])
+
+     {
+
+        int i;
+
+        bool failed = false;
+
+        for(i = 0; i < PREALLOCATED_PMDS; i++) {  //PREALLOCATED 该宏只有在定义了 CONFIG_X86_PAE即PAE模式时才有用,否则该宏为0，即32位系统在没有开启PAE模式时只使用三级页表机制
+
+                pmd_t *pmd = (pmd_t *)__get_free_page(PGALLOC_GFP);
+
+                if (pmd == NULL)
+
+                        failed = true;
+
+                pmds[i] = pmd;
+
+        }   
+
+        return 0;
+
+}
+
+     pgd_ctor(mm, pgd)   //将swapper_pg_dir全局页目录（部分后256项--即内核最后1G的虚拟地址,这里指的是内核的页表）拷到pgd里，则可以看出，linux下所有进程的内核页全局目录是一样的，都是swapper_pg_dir里最后的1/4的内容，而每个进程的用户态的页表确是不同的，所以在dup_mmap会去将父进程的页表一项一项的爬出来设置为当前进程的页表。
+           pgd_ctor{
+
+                     clone_pgd_range(pgd + KERNEL_PGD_BOUNDARY,swapper_pg_dir + KERNEL_PGD_BOUNDARY,KERNEL_PGD_PTRS);
+
+                                 //KERNEL_PGD_BOUNDARY=768,  KERNEL_PGD_PTRS=256    //具体的值见下面的macro
+
+                                //将swapper_pg_dir 中的768到1024项拷到pgd里，即所有的进程的内核页是相同的。
+
+                          pgd_set_mm(pgd, mm);  pgd->index = mm    建立反向映射吧
+
+                          pgd_list_add(pgd);   将pgd加入到pgd_list中去
+
+                         }
+
+进程的用户态地址页拷贝
+
+dup_mmap()函数实现页表映射的拷贝
+
+dup_mmap()
+
+{
+
+    struct vm_area_struct *mpnt,
+
+    for (mpnt = oldmm->mmap; mpnt; mpnt = mpnt->vm_next) { //遍历父进程的所有的虚拟地址空间
+
+                 tmp = kmem_cache_alloc(vm_area_cachep, GFP_KERNEL); //分配一个新的虚拟地址空间
+
+                *tmp = *mpnt;   //将父进程的虚拟地址空间拷贝到新分配的虚拟地址空间中去，并将新分配的虚拟地址空间插入到新进程内存空间中去，这里有两种数据结构，一种是链表用于方便的遍历所有的虚拟地址空间，另一种是红黑树，用来快速的找出适合的虚拟地址空间块
+
+               *pprev = tmp;
+
+                pprev = &tmp->vm_next;
+
+                tmp->vm_prev = prev;
+
+                prev = tmp;
+
+                __vma_link_rb(mm, tmp, rb_link, rb_parent); //插入红黑树中去
+
+                rb_link = &tmp->vm_rb.rb_right;
+
+                rb_parent = &tmp->vm_rb;
+
+                retval = copy_page_range(mm, oldmm, mpnt); //最后进行重新映射,要是没有这项(页表复制)的话，即使有合法访问的虚拟存储区域，但是没有正确的页表，不能访问到具体的物理内存，所以为了能建立正确的页映射，使进程能够访问到具体的物理页。
+     }
+
+ }
+
+页表的复制
+
+copy_page_range()
+
+{
+
+        dst_pgd = pgd_offset(dst_mm, addr);  //取得pgd
+
+        src_pgd = pgd_offset(src_mm, addr); //取得pgd
+
+      do {
+
+          copy_pud_range();  //拷贝页上级目录
+
+      } while (...)
+
+}
+
+copy_pud_range()
+
+{
+
+        dst_pud = pud_alloc(dst_mm, dst_pgd, addr); //分配一页内存做为页上级表，如果是32位没有开启PAE的话，pud就等于pgd
+
+        src_pud = pud_offset(src_pgd, addr);
+
+      do {
+
+          copy_pmd_range();  //拷贝页中间目录
+
+      } while (...)
+
+}
+
+copy_pud_range()
+
+{
+
+        dst_pmd = pmd_alloc(dst_mm, dst_pud, addr); //分配一页内存做为页中间目录,如果是32位没有开启PAE的话，pud就等于pgd
+
+        src_pmd = pmd_offset(src_pud, addr);
+
+      do {
+
+          copy_pte_range();  //拷贝页表项
+
+      } while (...)
+
+}
+
+copy_pte_range
+
+{
+
+   dst_pte = pte_alloc_map_lock(); //分配大小为一页的页表
+
+     do {
+
+         copy_one_pte() //具体的实现是set_pte_at(dst_mm, addr, dst_pte, pte) 即native_set_pte中的 *dst_pte = pte
+
+     }
+
+}
+
+//分配pmd
+
+ static inline pmd_t *pmd_alloc(struct mm_struct *mm, pud_t *pud, unsigned long address)
+
+{
+
+        return (unlikely(pud_none(*pud)) && __pmd_alloc(mm, pud, address))? NULL: pmd_offset(pud, address);
+
+}
+
+在32位的non-pae里__pmd_alloc直接返回0，否则__pmd_alloc()分配一页做为pmd
+
+int __pmd_alloc(struct mm_struct *mm, pud_t *pud, unsigned long address)
+
+{                                               
+
+        pmd_t *new = pmd_alloc_one(mm, address);  //直接分配一页
+
+        if (!new)
+
+                return -ENOMEM;
+
+        smp_wmb(); /* See comment in __pte_alloc */
+
+        spin_lock(&mm->page_table_lock);
+
+#ifndef __ARCH_HAS_4LEVEL_HACK
+
+        if (pud_present(*pud))          /* Another has populated it */
+
+                pmd_free(mm, new); 
+
+        else
+
+                pud_populate(mm, pud, new);
+
+#else
+
+        if (pgd_present(*pud))          /* Another has populated it */
+
+                pmd_free(mm, new);
+
+        else
+
+                pgd_populate(mm, pud, new);
+
+#endif /* __ARCH_HAS_4LEVEL_HACK */
+
+        spin_unlock(&mm->page_table_lock);
+
+        printk (KERN_INFO "wangbo in __pmd_alloc\n");
+
+        return 0;
+
+}
+
+[some macro definition]
+
+#define PAGE_OFFSET 0xc0000000
+
+#define PGDIR_SHIFT     22
+
+#define PTRS_PER_PGD    1024
+
+#define pgd_index(address) (((address) >> PGDIR_SHIFT) & (PTRS_PER_PGD - 1)) 
+
+#define KERNEL_PGD_BOUNDARY     pgd_index(PAGE_OFFSET) // 768
+
+#define KERNEL_PGD_PTRS         (PTRS_PER_PGD - KERNEL_PGD_BOUNDARY) //256
+
+
+ 
+
+mm_alloc_pgd() 函数会调用pgd_alloc()会为该进程分配一页(4K)的页全局目录的线性地址并保存在 task_struct->mm_struct->pgd中
+
+具体的实现是通过__get_free_pages((gfp_mask), 0)实现的，该函数通过alloc_pages()在低端内存里( 小于896M的空间里)分配一个页描述符(struct page *page)，并将该页的页描述符通过page_address()转换成虚拟地址。实际上就是通过__va(PFN_PHYS(page_to_pfn(page)))先将页描述符转换成实际物理地址((page - mem_map) << 12 )(所有的物理页描述符存放在mem_map数组里，左移12是一页4K的大小)，然后再将物理地址通过__va转换成虚拟地址，也即将得到的低端物理内存地址直接加上PAGE_OFFSET即可 (unsigned long )(x)+PAGE_OFFSET
+
+到现在可以得知进程描述符里的mm_struct->pgd是线性地址，而且属于内核空间的地址(大于0xc0000000)。
+
+
+
+pte的映射（写时复制机制）
+
+dup_mm()->dup_mmap 中完成中间页表pmd到页表pte的映射从而建立起页表，并将每一个pte页表，置为只读，以便激发起写时复制技术dup_mmap执行，继续复制pte页表项，使子进程的每个中间页表pmd的每个页表项pte=父进程对应的该pte，并且将该pte最后几个标志位中的只读位置1，从而完成写时复制的准备工作
+
+
+
+
+
+
+
+cr3寄存器的加载
+
+cr3寄存器的加载是在进程调度的时候更新的，具体如下
+
+schedule()->context_switch()->switch_mm()->load_cr3(next->pgd)
+
+load_cr3加载的是mm_struct->pgd，即线性地址，而实际上加裁到cr3寄存器的是实际的物理地址write_cr3(__pa(pgdir));在装载cr3寄存器时将线性地址通过__pa转换成了物理地址了，所以cr3寄存器是装的是实实在在的物理地址。
+
+进程，主要包含三个元素：
+o. 一个可以执行的程序；
+o. 和该进程相关联的全部数据（包括变量，内存空间，缓冲区等等）；
+o. 程序的执行上下文（execution context）。
+
+一个进程表示的，就是一个可执行程序的一次执行过程中的一个状态。操作系统对进程的管理，典型的情况，是通过进程表完成的。进程表中的每一个表项，记录的是当前操作系统中一个进程的情况。对于单CPU的情况而言，每一特定时刻只有一个进程占用CPU，但是系统中可能同时存在多个活动的（等待执行或继续执行的）进程。
+一个称为"程序计数器（program counter,pc）"的寄存器，指出当前占用CPU的进程要执行的下一条指令的位置。
+当分给某个进程的CPU时间已经用完，操作系统将该进程相关的寄存器的值，保存到该进程在进程表中对应的表项里面；把将要接替这个进程占用CPU的那个进程的上下文，从进程表中读出，并更新相应的寄存器（这个过程称为"上下文交换(process context switch)"，程序寄存器pc指出程序当前已经执行到哪里，是进程上下文的重要内容，换出CPU的进程要保存这个寄存器的值，换入CPU的进程，也要根据进程表中保存的本进程执行上下文信息，更新这个寄存器）。
+
+
+下面说一说进程页表的知识：
+
+页表是一种特殊的数据结构，放在系统空间的页表区，存放逻辑页与物理页帧的对应关系。 每一个进程都拥有一个自己的页表，PCB表中有指针指向页表。
+
+基本分页存储管理方式：
+
+用固定大小的页(Page)来描述逻辑地址空间，用相同大小的页框(Frame)来描述物理内存空间，由操作系统实现从逻辑页到物理页框的页面映射，同时负责对所有页的管理和进程运行的控制。
+
+
+页表实现从页号到物理块号的地址映射：
+
+逻辑地址转换成物理地址的过程是：用页号p去检索页表，从页表中得到该页的物理块号，把它装入物理地址寄存器中。同时，将页内地址d直接送入物理地址寄存器的块内地址字段中。这样，物理地址寄存器中的内容就是由二者拼接成的实际访问内存的地址，从而完成了从逻辑地址到物理地址的转换。
+
+
+注：
+逻辑地址空间:由程序所生成的所有逻辑地址的集合。
+物理地址空间:与逻辑地址相对应的内存中所有物理地址的集合,用户程序看不见真正的物理地址。
+
+也就是说我们之前学习的时候都被欺骗啦？我们在学习c时取地址&一直获取的是其逻辑地址，并非真正的物理地址。
+在古老的操作系统里面，所有进程都是共用同一物理内存空间的，这种方法会有一些问题，比如两个进程之前相互踩内存，一个进程污染（踩内存）后，无法隔离，必须整个系统复位，才能恢复干净的环境。在这种操作系统下，进程之间无法隔离。
+
+为了解决进程之间内存隔离，提供了虚拟内存这个概念。
+进程看到的是虚拟内存，这根本看不到物理内存，物理内存是OS给它分配的，它不需要感知物理内存。对于同一程序运行起来的两个进程，它们的虚拟空间布局可能完全一样，但他们真实使用的物理内存空间则不相同，通过这种方式来实现进程之间的隔离。
+
+初学内核时，经常被“内核页表”和“进程页表”搞晕，不知道这到底是个啥东东，跟我们平时理解的页表有和关系。。
+内核页表：即书上说的主内核页表，在内核中其实就是一段内存，存放在主内核页全局目录init_mm.pgd(swapper_pg_dir)中，硬件并不直接使用。
+进程页表：每个进程自己的页表，放在进程自身的页目录task_struct.pgd中。
+在保护模式下，从硬件角度看，其运行的基本对象为“进程”(或线程)，而寻址则依赖于“进程页表”，在进程调度而进行上下文切换时，会进行页表的切换：即将新进程的pgd(页目录)加载到CR3寄存器中。从这个角度看，其实是完全没有用到“内核页表”的，那么“内核页表”有什么用呢？跟“进程页表”有什么关系呢？
+
+1、内核页表中的内容为所有进程共享，每个进程都有自己的“进程页表”，“进程页表”中映射的线性地址包括两部分：
+用户态
+内核态
+其中，内核态地址对应的相关页表项，对于所有进程来说都是相同的(因为内核空间对所有进程来说都是共享的)，而这部分页表内容其实就来源于“内核页表”，即每个进程的“进程页表”中内核态地址相关的页表项都是“内核页表”的一个拷贝。
+2、“内核页表”由内核自己维护并更新，在vmalloc区发生page fault时，将“内核页表”同步到“进程页表”中。以32位系统为例，内核页表主要包含两部分：
+线性映射区
+vmalloc区
+其中，线性映射区即通过TASK_SIZE偏移进行映射的区域，对32系统来说就是0-896M这部分区域，映射对应的虚拟地址区域为TASK_SIZE-TASK_SIZE+896M。这部分区域在内核初始化时就已经完成映射，并创建好相应的页表，即这部分虚拟内存区域不会发生page fault。
+vmalloc区，为896M-896M+128M，这部分区域用于映射高端内存，有三种映射方式：vmalloc、固定、临时，这里就不像述了。。
+以vmalloc为例(最常使用)，这部分区域对应的线性地址在内核使用vmalloc分配内存时，其实就已经分配了相应的物理内存，并做了相应的映射，建立了相应的页表项，但相关页表项仅写入了“内核页表”，并没有实时更新到“进程页表中”，内核在这里使用了“延迟更新”的策略，将“进程页表”真正更新推迟到第一次访问相关线性地址，发生page fault时，此时在page fault的处理流程中进行“进程页表”的更新：
+点击(此处)折叠或打开
+
+/*
+     * 缺页地址位于内核空间。并不代表异常发生于内核空间，有可能是用户
+     * 态访问了内核空间的地址。
+     */
+    if (unlikely(fault_in_kernel_space(address))) {
+        if (!(error_code & (PF_RSVD | PF_USER | PF_PROT))) {
+            //检查发生缺页的地址是否在vmalloc区，是则进行相应的处理
+            if (vmalloc_fault(address) >= 0)
+                return;
+点击(此处)折叠或打开
+
+/*
+  * 对于发生缺页异常的指针位于vmalloc区情况的处理，主要是将
+  * 主内核页表向当前进程的内核页表同步。
+  */
+static noinline __kprobes int vmalloc_fault(unsigned long address)
+{
+    unsigned long pgd_paddr;
+    pmd_t *pmd_k;
+    pte_t *pte_k;
+
+    /* Make sure we are in vmalloc area: */
+    /* 区域检查 */
+    if (!(address >= VMALLOC_START && address < VMALLOC_END))
+        return -1;
+
+    WARN_ON_ONCE(in_nmi());
+
+    /*
+     * Synchronize this task's top level page-table
+     * with the 'reference' page table.
+     *
+     * Do _not_ use "current" here. We might be inside
+     * an interrupt in the middle of a task switch..
+     */
+     /*获取pgd(最顶级页目录)地址，直接从CR3寄存器中读取。
+     *不要通过current获取，因为缺页异常可能在上下文切换的过程中发生，
+     *此时如果通过current获取，则可能会出问题*/
+    pgd_paddr = read_cr3();
+    //从主内核页表中，同步vmalloc区发生缺页异常地址对应的页表
+    pmd_k = vmalloc_sync_one(__va(pgd_paddr), address);
+    if (!pmd_k)
+        return -1;
+    //如果同步后，相应的PTE还不存在，则说明该地址有问题了
+    pte_k = pte_offset_kernel(pmd_k, address);
+    if (!pte_present(*pte_k))
+        return -1;
+
+    return 0;
+}
+
+进程切换切换的是进程页表：即将新进程的pgd(页目录)加载到CR3寄存器中。而内核页表是所有进程共享的，每个进程的“进程页表”中内核态地址相关的页表项都是“内核页表”的一个拷贝。
+在vmalloc区发生page fault时，将“内核页表”同步到“进程页表”中。这部分区域对应的线性地址在内核使用vmalloc分配内存时，其实就已经分配了相应的物理内存，并做了相应的映射，建立了相应的页表项，但相关页表项仅写入了“内核页表”，并没有实时更新到“进程页表中”，内核在这里使用了“延迟更新”的策略，将“进程页表”真正更新推迟到第一次访问相关线性地址，发生page fault时，此时在page fault的处理流程中进行“进程页表”的更新。
+
+所以linux中，只有进程的页表是时刻在更换的，而内核页表全局只有一份，所有进程共享内核页表！
+
+多进程的实现瓶颈就在这里，也就是说，如果我们无法解决进程的地址的问题，是无法使用多进程的。那么怎么解决这个问题呢？很简单，只要让进程使用的地址分为两种就可以了，一种是进程本身访问的地址，另一种是把进程访问的地址进行转化后的地址。
+
+怎么理解这两个地址呢？很简单，假设一个 A 应用程序，我们同时运行他两次，由于编译时的限定，他们必须同时被存放在内存里的 0x80000000 地址开头的内存里，但经过转换后，第一个 A 进程加载应用程序数据时，访问的 0x80000000 被转化成了 0x1000，第二个 A 进程被转化成了 0x2000，于是他们被分别存放在了 0x1000 和 0x2000 这两个内存地址里（要注意的是，是进程每次寻址时才转换，不是一次性转换）。这下，他总不会冲突了吧？
+
+那么怎么实现上面说的地址转换呢？这就要依靠处理器支持的 MMU 了，经过 MMU 的处理，可以把系统中的地址分为两种，第一种是进程寻址的地址，第二种是第一种地址经过转化后的地址，比如我要访问 0x1000 这个地址，经过转换后就变成了访问 0x2000 了，这里的源地址又称虚拟地址，目标地址则是为物理上的内存地址，他们之间的转换称为映射。
+
+说到这里，就又要引出一个问题，那就是转换的规则又是怎么样的？实际上，MMU 的转换规则也是由我们自己写到内存里的，每四个字节为一条转换规则，又称为一项，所有的项的合称就是 “ 页表 ”。我们把页表的开始地址（第一条页表项的地址）写到专门存放页表项的寄存器内，然后开启 MMU，系统就会自动从页表里得到转换规则并开始转换地址。
+
+只有支持 MMU 的处理器才能使用页表，而只有拥有页表的系统才能支持多进程，这也就是说，没有 MMU 的处理器是无法支持多进程操作系统的，除非他使用其他的机制来实现两种地址的转换。
+
+所谓的多进程切换，就是每个进程都有自己的一套页表，里面存放了自己的映射规则，切换进程时切换页表而已。
+
+页面与页表
+
+　　1. 页面
+
+　　1) 页面和物理块
+
+　　分页存储管理，是将一个进程的逻辑地址空间分成若干个大小相等的片，称为页面或页，并为各页加以编号，从0开始，如第0页、第1页等。相应地，也把内存空间分成与页面相同大小的若干个存储块，称为(物理)块或页框(frame)，也同样为它们加以编号，如0＃块、1＃块等等。在为进程分配内存时，以块为单位将进程中的若干个页分别装入到多个可以不相邻接的物理块中。由于进程的最后一页经常装不满一块而形成了不可利用的碎片，称之为“页内碎片”。
+
+　　2) 页面大小
+
+　　在分页系统中的页面其大小应适中。页面若太小，一方面虽然可使内存碎片减小，从而减少了内存碎片的总空间，有利于提高内存利用率，但另一方面也会使每个进程占用较多的页面，从而导致进程的页表过长，占用大量内存；此外，还会降低页面换进换出的效率。然而，如果选择的页面较大，虽然可以减少页表的长度，提高页面换进换出的速度，但却又会使页内碎片增大。因此，页面的大小应选择得适中，且页面大小应是2的幂，通常为512 B~8 KB。
+
+　　2. 地址结构
+
+　　分页地址中的地址结构如下：
+　　对某特定机器，其地址结构是一定的。若给定一个逻辑地址空间中的地址为A，页面的大小为L，则页号P和页内地址d可求得：

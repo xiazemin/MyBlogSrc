@@ -1,0 +1,1799 @@
+I"��<p>https://github.com/lxc/lxc
+lxc_start.c
+int main(int argc, char *argv[])
+{
+    int err = 1;
+    struct lxc_conf *conf;    //初始化config结构
+    char *const *args;		 //传递的参数
+    char *rcfile = NULL;		 //指定配置文件
+    char *const default_args[] = {    //默认的args参数
+        “/sbin/init”,
+        NULL,
+    };<br />
+struct lxc_container *c;    //lxc-container 的结构体
+….
+}
+<!-- more -->
+lxc_conf这个数据结构
+struct lxc_conf {
+    int is_execute;		//容器是否在执行
+    char *fstab;			//fstab？
+    int tty;				//tty的个数
+    int pts;				//pts的个数？
+    int reboot;			//重启？
+    int need_utmp_watch;		//字面翻译 需要utmp 查看
+    signed long personality;		//字面翻译 特点	
+    struct utsname *utsname;	//ustname
+    struct lxc_list cgroup;		//cgroup list lxc_list只是简单的链表结构
+    struct lxc_list id_map;		//id_map list
+    struct lxc_list network;		//network list
+    struct saved_nic *saved_nics;//saved_nics 结构
+    int num_savednics;			//savednics数量？
+    int auto_mounts;			//auto_mounts?
+    struct lxc_list mount_list;		//mount_list list?
+    struct lxc_list caps;			//caps list？
+    struct lxc_list keepcaps;		//keepcaps list?
+    struct lxc_tty_info tty_info;	//tty的相关信息
+    struct lxc_console console;	//console的结构体
+    struct lxc_rootfs rootfs;		//rootfs的结构体
+    char *ttydir;					//tty目录
+int close_all_fds;			//关闭所有fd
+struct lxc_list hooks[NUM_LXC_HOOKS];	//hooks 函数</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>char *lsm_aa_profile;   //?
+char *lsm_se_context;	//?
+int tmp_umount_proc;	//?
+char *seccomp;  // filename with the seccomp rules #if HAVE_SCMP_FILTER_CTX
+scmp_filter_ctx seccomp_ctx; #endif
+int maincmd_fd;		//?
+int autodev;  // if 1, mount and fill a /dev at start
+int haltsignal; // signal used to halt container
+int stopsignal; // signal used to hard stop container
+int kmsg;  // if 1, create /dev/kmsg symlink
+char *rcfile;   // Copy of the top level rcfile we read
+ 
+// Logfile and loglevel can be set in a container config file.
+// Those function as defaults.  The defaults can be overriden
+// by command line.  However we don't want the command line
+// specified values to be saved on c-&gt;save_config().  So we
+// store the config file specified values here.
+char *logfile;  // the logfile as specifed in config
+int loglevel;   // loglevel as specifed in config (if any)
+ 
+int inherit_ns_fd[LXC_NS_MAX];
+ 
+int start_auto;
+int start_delay;
+int start_order;
+struct lxc_list groups;
+int nbd_idx;
+ 
+/* set to true when rootfs has been setup */
+bool rootfs_setup; };
+</code></pre></div></div>
+
+<p>lxc_container的结构体</p>
+
+<p>/*!</p>
+<ul>
+  <li>
+    <p>An LXC container.
+ */
+struct lxc_container {
+ // private fields
+char *name; 		 //container 的名字
+char *configfile; 		 // configuration file 的路径
+char *pidfile;   		 // 存储pid 的文件名
+struct lxc_lock *slock;  //Container semaphore lock. 容器的信号锁
+ struct lxc_lock *privlock;//容器的私有信号锁
+ int numthreads;			//容器的引用数量，由privlock保护
+ struct lxc_conf *lxc_conf;</p>
+
+    <p>// public fields
+ char *error_string;		//全局变量 可读的最后显示的error
+ int error_num;			//最后error的数字
+ bool daemonize;		//容器是否希望开启守护进程
+char *config_path;		// configuration file 的路径 和上面的区别？ 全局？
+…….					//一堆成员函数   暂不看
+}</p>
+  </li>
+</ul>
+
+<p>lxc_list_init(&amp;defines);             //初始化list</p>
+
+<p>defines定义在文件开始，为全局变量</p>
+
+<p>static structlxc_list defines;</p>
+
+<p>if(lxc_caps_init())                    //caps初始化</p>
+
+<p>        return err;</p>
+
+<p>到这个函数里看一下。</p>
+
+<p>int lxc_caps_init(void)
+{
+    uid_t uid = getuid();
+    gid_t gid = getgid();
+    uid_t euid = geteuid();	//有效uid</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>if (!uid) {				//root权限运行的话就省了后面的步骤了
+    INFO("command is run as 'root'");
+    return 0;
+}   
+ 
+if (uid &amp;&amp; !euid) {
+    INFO("command is run as setuid root (uid : %d)", uid);
+ 
+    if (prctl(PR_SET_KEEPCAPS, 1)) {		//prctl 设置进程的选项，为下面set？
+        ERROR("failed to 'PR_SET_KEEPCAPS': %m");
+        return -1; 
+    }   
+ 
+    if (setresgid(gid, gid, gid)) {
+        ERROR("failed to change gid to '%d': %m", gid);
+        return -1; 
+    }   
+ 
+    if (setresuid(uid, uid, uid)) {
+        ERROR("failed to change uid to '%d': %m", uid);
+        return -1; 
+    }   
+ 
+    if (lxc_caps_up()) {
+        ERROR("failed to restore capabilities: %m");
+        return -1; 
+    }   
+}   
+</code></pre></div></div>
+
+<p>if (uid == euid)
+INFO(“command is run as user ‘%d’”, uid);</p>
+
+<p>return 0;
+}</p>
+
+<p>接着就是读传过来的参数</p>
+
+<p>if(lxc_arguments_parse(&amp;my_args, argc, argv))</p>
+
+<p>        return err;</p>
+
+<p>这个函数就没细看，只需知道将参数传给my_args</p>
+
+<p>判断有没有指定 初始执行的参数，没有的话指定默认参数</p>
+
+<p>if (!my_args.argc)</p>
+
+<p>        args = default_args;</p>
+
+<p>    else       </p>
+
+<p>        args = my_args.argv;</p>
+
+<p> </p>
+
+<p>初始化一堆log的，暂时也没细看</p>
+
+<p>if (lxc_log_init(my_args.name, my_args.log_file, my_args.log_priority,
+             my_args.progname, my_args.quiet, my_args.lxcpath[0]))
+        return err;
+lxc_log_options_no_override();</p>
+
+<p>const char <em>lxcpath = my_args.lxcpath[0];		//lxcpath 很有意思
+// lxc_global_config_value(“lxc.lxcpath”)这个写的还是比较复杂的，总之lxcpath会是默认的路径
+//指定config的位置，如果没指定，则使用默认的路径的config，通过配置创建新的
+/</em>
+     * rcfile possibilities:
+     * 1. rcfile from random path specified in cli option
+     * 2. rcfile not specified, use $lxcpath/$lxcname/config
+     * 3. rcfile not specified and does not exist.
+     <em>/
+    /</em> rcfile is specified in the cli option */
+    if (my_args.rcfile) {
+        rcfile = (char *)my_args.rcfile;
+        c = lxc_container_new(my_args.name, lxcpath);
+        if (!c) {
+            ERROR(“Failed to create lxc_container”);
+            return err;
+        }
+        c-&gt;clear_config(c);
+        if (!c-&gt;load_config(c, rcfile)) {
+            ERROR(“Failed to load rcfile”);
+            lxc_container_put(c);
+            return err;
+        }
+}
+ } else {
+        int rc;</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    rc = asprintf(&amp;rcfile, "%s/%s/config", lxcpath, my_args.name);
+    if (rc == -1) {
+        SYSERROR("failed to allocate memory");
+        return err;
+    }
+    INFO("using rcfile %s", rcfile);
+ 
+    /* container configuration does not exist */
+    if (access(rcfile, F_OK)) {
+        free(rcfile);
+        rcfile = NULL;
+    }
+    c = lxc_container_new(my_args.name, lxcpath);
+    if (!c) {
+        ERROR("Failed to create lxc_container");
+        return err;
+    } }
+</code></pre></div></div>
+
+<p>里面最主要的函数c = lxc_container_new(my_args.name, lxcpath);</p>
+
+<p>struct lxc_container *lxc_container_new(const char *name, const char *configpath)
+{
+    struct lxc_container *c;			//结构体lxc_container 前面分析过了</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>c = malloc(sizeof(*c));			//创建
+if (!c) {
+    fprintf(stderr, "failed to malloc lxc_container\n");
+    return NULL;
+}    
+memset(c, 0, sizeof(*c));		   //初始0
+ 
+if (configpath)
+    c-&gt;config_path = strdup(configpath);			//config_path
+else 
+    c-&gt;config_path = strdup(lxc_global_config_value("lxc.lxcpath"));
+ 
+if (!c-&gt;config_path) {
+    fprintf(stderr, "Out of memory\n");
+    goto err; 
+}    
+ 
+remove_trailing_slashes(c-&gt;config_path);
+c-&gt;name = malloc(strlen(name)+1);
+if (!c-&gt;name) {
+    fprintf(stderr, "Error allocating lxc_container name\n");
+    goto err; 
+}    
+strcpy(c-&gt;name, name);
+ 
+c-&gt;numthreads = 1; 
+ // lock这部分没细看
+if (!(c-&gt;slock = lxc_newlock(c-&gt;config_path, name))) {
+    fprintf(stderr, "failed to create lock\n");
+    goto err; 
+}
+ if (!(c-&gt;privlock = lxc_newlock(NULL, NULL))) {
+    fprintf(stderr, "failed to alloc privlock\n");
+    goto err;
+}
+ // set config path
+ if (!set_config_filename(c)) {
+    fprintf(stderr, "Error allocating config file pathname\n");
+    goto err;
+}
+ //load config path
+if (file_exists(c-&gt;configfile) &amp;&amp; !lxcapi_load_config(c, NULL))
+    goto err;
+ //判断容器是否创建失败
+ if (ongoing_create(c) == 2) {
+    ERROR("Error: %s creation was not completed", c-&gt;name);
+    lxcapi_destroy(c);
+    lxcapi_clear_config(c);
+}
+c-&gt;daemonize = true;
+c-&gt;pidfile = NULL;
+ …… 				//后面都是成员函数赋值 } 现在回到lxc_start 的main函数中 //判断容器是否在运行 if (c-&gt;is_running(c)) {
+    ERROR("Container is already running.");
+    err = 0;
+    goto out;  } /*         * We should use set_config_item() over &amp;defines, which would handle   * unset c-&gt;lxc_conf for us and let us not use lxc_config_define_load()   */ //加载config文件  if (!c-&gt;lxc_conf)
+ c-&gt;lxc_conf = lxc_conf_init();  conf = c-&gt;lxc_conf; if (lxc_config_define_load(&amp;defines, conf))
+    goto out; //提示信息 if (!rcfile &amp;&amp; !strcmp("/sbin/init", args[0])) {
+    ERROR("Executing '/sbin/init' with no configuration file may crash the host");
+    goto out;
+}
+ 
+if (ensure_path(&amp;conf-&gt;console.path, my_args.console) &lt; 0) {
+    ERROR("failed to ensure console path '%s'", my_args.console);
+    goto out;
+}
+ 
+if (ensure_path(&amp;conf-&gt;console.log_path, my_args.console_log) &lt; 0) {
+    ERROR("failed to ensure console log '%s'", my_args.console_log);
+    goto out;
+}
+// pid 文件
+if (my_args.pidfile != NULL) {
+    if (ensure_path(&amp;c-&gt;pidfile, my_args.pidfile) &lt; 0) {
+        ERROR("failed to ensure pidfile '%s'", my_args.pidfile);
+        goto out;
+    }
+}
+//一些share_ns 的配置，未细看
+ int i;
+for (i = 0; i &lt; LXC_NS_MAX; i++) {
+    if (my_args.share_ns[i] == NULL)
+        continue;
+ 
+    int pid = pid_from_lxcname(my_args.share_ns[i], lxcpath);
+    if (pid &lt; 1)
+        goto out;
+ 
+    int fd = open_ns(pid, ns_info[i].proc_name);
+    if (fd &lt; 0)
+        goto out;
+    conf-&gt;inherit_ns_fd[i] = fd;
+}
+//初始化为1
+if (!my_args.daemonize) {
+    c-&gt;want_daemonize(c, false);
+}
+ 
+if (my_args.close_all_fds)
+    c-&gt;want_close_all_fds(c, true);
+ 
+err = c-&gt;start(c, 0, args) ? 0 : 1;
+ 
+if (err) {
+    ERROR("The container failed to start.");
+    if (my_args.daemonize)
+        ERROR("To get more details, run the container in foreground mode.");
+    ERROR("Additional information can be obtained by setting the "
+          "--logfile and --logpriority options.");
+    err = c-&gt;error_num;
+    lxc_container_put(c);
+    return err;
+}
+</code></pre></div></div>
+
+<p>out:
+    lxc_container_put(c);
+    return err;
+}
+直接到c-&gt;start 过程start是调用 lxcapi_start 这个函数指针，现在去看下这个函数到底是怎么讲lxc container 启动起来的。</p>
+
+<p>    传过来的参数是container c，useinit 0，argv=args 即指定的初始化程序</p>
+
+<p>static bool lxcapi_start(struct lxc_container *c, int useinit, char * const argv[])
+{
+    int ret;
+    struct lxc_conf *conf;
+    bool daemonize = false;				//守护进程为false
+    FILE *pid_fp = NULL;				//pid_file文件的指针
+    char *default_args[] = {				//又是default_args
+        “/sbin/init”,
+        NULL,
+    };</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>/* container exists */
+if (!c)								//判断容器是否存在
+    return false;
+/* container has been setup */
+if (!c-&gt;lxc_conf)						//config加载完美
+    return false;
+ 
+if ((ret = ongoing_create(c)) &lt; 0) {		//容器是否创建完整
+    ERROR("Error checking for incomplete creation");
+    return false;
+}
+if (ret == 2) {
+    ERROR("Error: %s creation was not completed", c-&gt;name);
+    c-&gt;destroy(c);
+    return false;
+} else if (ret == 1) {
+    ERROR("Error: creation of %s is ongoing", c-&gt;name);
+    return false;
+}
+ 
+ /* is this app meant to be run through lxcinit, as in lxc-execute? */
+if (useinit &amp;&amp; !argv)					//还是判断
+    return false;
+ 
+if (container_mem_lock(c))			//lock
+    return false;
+conf = c-&gt;lxc_conf;					//conf赋值
+daemonize = c-&gt;daemonize;			//true
+container_mem_unlock(c);		//unlock
+ 
+if (useinit) {						//0
+    ret = lxc_execute(c-&gt;name, argv, 1, conf, c-&gt;config_path);
+    return ret == 0 ? true : false;
+}
+ 
+if (!argv)
+    argv = default_args;			//又重新判断 args 是否为空，空即赋值
+ /*
+* say, I'm not sure - what locks do we want here?  Any?
+* Is liblxc's locking enough here to protect the on disk
+* container?  We don't want to exclude things like lxc_info
+* while container is running...
+ * 这段注释给跪了，还是老老实实看他想干嘛吧
+*/
+if (daemonize) {					//true
+    lxc_monitord_spawn(c-&gt;config_path);	//start好像跟前面的版本差别
+ 
+    pid_t pid = fork();
+    if (pid &lt; 0)
+        return false;
+ 
+    if (pid != 0) {
+        /* Set to NULL because we don't want father unlink
+         * the PID file, child will do the free and unlink.
+         */
+        c-&gt;pidfile = NULL;
+        return wait_on_daemonized_start(c, pid);		//等下进去，里面有waitpid，所以先看后面
+    }
+ 
+    /* second fork to be reparented by init */
+    pid = fork();										//两次fork
+    if (pid &lt; 0) {
+        SYSERROR("Error doing dual-fork");
+        return false;
+    }
+    if (pid != 0)
+        exit(0);
+    /* like daemon(), chdir to / and redirect 0,1,2 to /dev/null */
+    if (chdir("/")) {									//root目录
+        SYSERROR("Error chdir()ing to /.");
+        return false;
+    }
+    lxc_check_inherited(conf, -1);
+    close(0);					//pipe file? close(1);
+    close(2);
+    open("/dev/zero", O_RDONLY);
+    open("/dev/null", O_RDWR);
+    open("/dev/null", O_RDWR);
+    setsid();
+} else {
+    if (!am_single_threaded()) {
+        ERROR("Cannot start non-daemonized container when threaded");
+        return false;
+    }
+} /* We need to write PID file after daeminize, so we always
+ * write the right PID.
+ */
+if (c-&gt;pidfile) {								//写入pid 到pidfile
+    pid_fp = fopen(c-&gt;pidfile, "w");
+    if (pid_fp == NULL) {
+        SYSERROR("Failed to create pidfile '%s' for '%s'",
+             c-&gt;pidfile, c-&gt;name);
+        return false;
+    }
+ 
+    if (fprintf(pid_fp, "%d\n", getpid()) &lt; 0) {
+        SYSERROR("Failed to write '%s'", c-&gt;pidfile);
+        fclose(pid_fp);
+        pid_fp = NULL;
+        return false;
+    }
+ 
+    fclose(pid_fp);
+    pid_fp = NULL;
+}
+</code></pre></div></div>
+
+<p>reboot:
+		…..     			
+}</p>
+
+<p>现在到 wait_on_daemonized_start(c, pid) 里面看看函数调用的情况</p>
+
+<p>这个就是主线程的pid 在等待其他子线程工作完，然后执行，只能硬着头皮继续看了。</p>
+
+<p>static bool wait_on_daemonized_start(struct lxc_container <em>c, int pid)
+{
+    /</em> we’ll probably want to make this timeout configurable? */
+    int timeout = 5, ret, status;</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>/*
+ * our child is going to fork again, then exit.  reap the
+ * child
+ */
+ret = waitpid(pid, &amp;status, 0);
+if (ret == -1 || !WIFEXITED(status) || WEXITSTATUS(status) != 0)
+    DEBUG("failed waiting for first dual-fork child");
+return lxcapi_wait(c, "RUNNING", timeout); } 函数很简单 直接调用了lxcapi_wait。
+</code></pre></div></div>
+
+<p>static bool lxcapi_wait(struct lxc_container *c, const char *state, int timeout)
+{
+    int ret;</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>if (!c)
+    return false;
+ 
+ret = lxc_wait(c-&gt;name, state, timeout, c-&gt;config_path);
+return ret == 0; }
+</code></pre></div></div>
+
+<p>这个依旧很简单又跳走了。。。lxc_wait了</p>
+
+<p>这个函数现在先不细说了，只是检查容器创建是否超时的问题。</p>
+
+<p>reboot:
+    conf-&gt;reboot = 0;
+    ret = lxc_start(c-&gt;name, argv, conf, c-&gt;config_path);
+    …..
+}
+reboot 又调用lxc-start 泪奔。
+int lxc_start(const char *name, char *const argv[], struct lxc_conf *conf,
+          const char *lxcpath)
+{
+    struct start_args start_arg = { //又搞了一个start_args实在不懂
+        .argv = argv,
+    };   </p>
+
+<p>    if (lxc_check_inherited(conf, -1)) 
+        return -1;</p>
+
+<p>    conf-&gt;need_utmp_watch = 1; 
+    return __lxc_start(name, conf, &amp;start_ops, &amp;start_arg, lxcpath); //ok，干上了
+}
+My god 感觉好戏才刚刚开始。。。。
+这里面就是lxc-start的全部，所以分开来讲，前面的废话太多，这次看重点
+int __lxc_start(const char <em>name, struct lxc_conf *conf,
+        struct lxc_operations</em> ops, void *data, const char *lxcpath)
+{
+    struct lxc_handler *handler; //结构体，保存container的一些属性
+    int err = -1;
+    int status;
+    int netnsfd = -1;</p>
+
+<p>handler = lxc_init(name, conf, lxcpath); //init
+这时候要跳到init中去看看
+struct lxc_handler *lxc_init(const char *name, struct lxc_conf *conf, const char *lxcpath)
+{
+    struct lxc_handler *handler;</p>
+
+<p>    handler = malloc(sizeof(*handler)); //初始化一堆 handler
+    if (!handler)
+        return NULL;</p>
+
+<p>    memset(handler, 0, sizeof(*handler));</p>
+
+<p>    handler-&gt;conf = conf;
+    handler-&gt;lxcpath = lxcpath;
+    handler-&gt;pinfd = -1;</p>
+
+<p>    lsm_init();</p>
+
+<p>handler-&gt;name = strdup(name);
+if (!handler-&gt;name) {
+        ERROR(“failed to allocate memory”);
+        goto out_free;
+   }
+ if (lxc_cmd_init(name, handler, lxcpath)) //cmd_init
+        goto out_free_name;
+if (lxc_read_seccomp_config(conf) != 0) { //这货直接返回0，什么都没有
+       ERROR(“failed loading seccomp policy”);
+     goto out_close_maincmd_fd;
+}
+/* Begin by setting the state to STARTING <em>/
+    if (lxc_set_state(name, handler, STARTING)) { //STARTING enum 类型
+        ERROR(“failed to set state ‘%s’”, lxc_state2str(STARTING));
+        goto out_close_maincmd_fd;
+    }
+/</em> Start of environment variable setup for hooks <em>/
+    if (setenv(“LXC_NAME”, name, 1)) {
+        SYSERROR(“failed to set environment variable for container name”);
+    }
+    if (setenv(“LXC_CONFIG_FILE”, conf-&gt;rcfile, 1)) {
+        SYSERROR(“failed to set environment variable for config path”);
+    }
+    if (setenv(“LXC_ROOTFS_MOUNT”, conf-&gt;rootfs.mount, 1)) {
+        SYSERROR(“failed to set environment variable for rootfs mount”);
+    }
+    if (setenv(“LXC_ROOTFS_PATH”, conf-&gt;rootfs.path, 1)) {
+        SYSERROR(“failed to set environment variable for rootfs mount”);
+    }
+    if (conf-&gt;console.path &amp;&amp; setenv(“LXC_CONSOLE”, conf-&gt;console.path, 1)) {
+        SYSERROR(“failed to set environment variable for console path”);
+    }
+    if (conf-&gt;console.log_path &amp;&amp; setenv(“LXC_CONSOLE_LOGPATH”, conf-&gt;console.log_path, 1)) {
+        SYSERROR(“failed to set environment variable for console log”);
+}
+Prestart 在这个位置，这个是可以配置到config文件中的
+/</em> End of environment variable setup for hooks <em>/
+if (run_lxc_hooks(name, “pre-start”, conf, handler-&gt;lxcpath, NULL)) {
+     ERROR(“failed to run pre-start hooks for container ‘%s’.”, name);
+     goto out_aborting;
+}
+//创建tty 
+if (lxc_create_tty(name, conf)) {
+        ERROR(“failed to create the ttys”);
+        goto out_aborting;
+}
+这个函数打开的是/dev/ptmx这个东西还不是很了解，回头细看
+和pts 是主从设备，然后分配pty？
+/</em> the signal fd has to be created before forking otherwise
+     * if the child process exits before we setup the signal fd,
+     * the event will be lost and the command will be stuck */
+    handler-&gt;sigfd = setup_signal_fd(&amp;handler-&gt;oldmask);
+    if (handler-&gt;sigfd &lt; 0) {
+        ERROR(“failed to set sigchild fd handler”);
+        goto out_delete_tty;
+    }</p>
+
+<p>    /* do this after setting up signals since it might unblock SIGWINCH */
+    if (lxc_console_create(conf)) {
+        ERROR(“failed to create console”);
+        goto out_restore_sigmask;
+    }</p>
+
+<p>    if (ttys_shift_ids(conf) &lt; 0) {
+        ERROR(“Failed to shift tty into container”);
+        goto out_restore_sigmask;
+    }</p>
+
+<p>    INFO(“‘%s’ is initialized”, name);
+    return handler;
+}
+Init完成，回到__lxc_start中
+if (!handler) {
+        ERROR(“failed to initialize the container”);
+        return -1;
+    }
+    handler-&gt;ops = ops;
+    handler-&gt;data = data;
+// lxc是否支持reboot，配置中handler-&gt;conf-&gt;need_utmp_watch=1表示支持
+    if (must_drop_cap_sys_boot(handler-&gt;conf)) {
+        #if HAVE_SYS_CAPABILITY_H
+        DEBUG(“Dropping cap_sys_boot”);
+        #else
+        DEBUG(“Can’t drop cap_sys_boot as capabilities aren’t supported”);
+        #endif
+    } else {
+        DEBUG(“Not dropping cap_sys_boot or watching utmp”);
+        handler-&gt;conf-&gt;need_utmp_watch = 0;
+}
+if (geteuid() == 0 &amp;&amp; !lxc_list_empty(&amp;conf-&gt;id_map)) { //effective uid
+        /* if the backing store is a device, mount it here and now */
+        if (rootfs_is_blockdev(conf)) {
+            if (unshare(CLONE_NEWNS) &lt; 0) {
+                ERROR(“Error unsharing mounts”);
+                goto out_fini_nonet;
+            }
+            remount_all_slave();
+            if (do_rootfs_setup(conf, name, lxcpath) &lt; 0) {
+                ERROR(“Error setting up rootfs mount as root before spawn”);
+                goto out_fini_nonet;
+            }
+            INFO(“Set up container rootfs as host root”);
+        }
+    }
+err = lxc_spawn(handler);
+    if (err) {
+        ERROR(“failed to spawn ‘%s’”, name);
+        goto out_fini_nonet;
+}
+Ok 又一个spawn，进去看看
+static int lxc_spawn(struct lxc_handler *handler)
+{
+    int failed_before_rename = 0;
+    const char *name = handler-&gt;name;
+    bool cgroups_connected = false;
+    int saved_ns_fd[LXC_NS_MAX]; //LXC_NS_MAX
+    int preserve_mask = 0, i;
+    int netpipepair[2], nveths; //网络相关</p>
+
+<p>    netpipe = -1;
+for (i = 0; i &lt; LXC_NS_MAX; i++)
+        if (handler-&gt;conf-&gt;inherit_ns_fd[i] != -1) //暂时忽略
+            preserve_mask |= ns_info[i].clone_flag;</p>
+
+<p>    if (lxc_sync_init(handler)) //同步socketpair
+        return -1;</p>
+
+<p>    handler-&gt;clone_flags = CLONE_NEWPID|CLONE_NEWNS;
+    if (!lxc_list_empty(&amp;handler-&gt;conf-&gt;id_map)) {//id_map空，初始NEWUSER
+ INFO(“Cloning a new user namespace”);
+        handler-&gt;clone_flags |= CLONE_NEWUSER;
+    }
+//这里开始创建NEWNET了
+if (handler-&gt;conf-&gt;inherit_ns_fd[LXC_NS_NET] == -1) {
+        if (!lxc_requests_empty_network(handler))
+            handler-&gt;clone_flags |= CLONE_NEWNET;
+    
+        if (!lxc_list_empty(&amp;handler-&gt;conf-&gt;network)) {
+    
+            /* Find gateway addresses from the link device, which is
+             * no longer accessible inside the container. Do this
+             * before creating network interfaces, since goto
+             * out_delete_net does not work before lxc_clone. */
+            if (lxc_find_gateway_addresses(handler)) {
+                ERROR(“failed to find gateway addresses”);
+                lxc_sync_fini(handler);
+                return -1;
+            }</p>
+
+<p>            /* that should be done before the clone because we will
+             * fill the netdev index and use them in the child
+             */
+            if (lxc_create_network(handler)) {
+                ERROR(“failed to create the network”);
+                lxc_sync_fini(handler);
+                return -1;
+            }
+        }
+if (save_phys_nics(handler-&gt;conf)) { //save phys nics
+            ERROR(“failed to save physical nic info”);
+            goto out_abort;
+        }
+    } else {
+        INFO(“Inheriting a net namespace”);
+    }
+if (handler-&gt;conf-&gt;inherit_ns_fd[LXC_NS_IPC] == -1) { //NS_IPC
+        handler-&gt;clone_flags |= CLONE_NEWIPC;
+    } else {
+        INFO(“Inheriting an IPC namespace”);
+    }</p>
+
+<p>    if (handler-&gt;conf-&gt;inherit_ns_fd[LXC_NS_UTS] == -1) { //NS_UTS
+        handler-&gt;clone_flags |= CLONE_NEWUTS;
+    } else {
+        INFO(“Inheriting a UTS namespace”);
+    }
+if (!cgroup_init(handler)) { //init cgroup
+        ERROR(“failed initializing cgroup support”);
+        goto out_delete_net;
+    }
+//这里ops一直为空，搞了半天不知道是怎么初始化ops的
+//<strong>attribute</strong>((constructor))很大可能是这个
+    cgroups_connected = true;</p>
+
+<p>    if (!cgroup_create(handler)) { 
+        ERROR(“failed creating cgroups”);
+        goto out_delete_net;
+    }
+/*
+     * if the rootfs is not a blockdev, prevent the container from
+     * marking it readonly.
+     *
+     * if the container is unprivileged then skip rootfs pinning
+     <em>/
+    if (lxc_list_empty(&amp;handler-&gt;conf-&gt;id_map)) { //刚才是空？
+        handler-&gt;pinfd = pin_rootfs(handler-&gt;conf-&gt;rootfs.path);
+        if (handler-&gt;pinfd == -1)
+            INFO(“failed to pin the container’s rootfs”);
+    }
+if (preserve_ns(saved_ns_fd, preserve_mask) &lt; 0) //打开/prco/self/ns下面的东西
+        goto out_delete_net;
+    if (attach_ns(handler-&gt;conf-&gt;inherit_ns_fd) &lt; 0) //
+        goto out_delete_net;
+//下面是创建网络的pipe?
+    if (am_unpriv() &amp;&amp; (nveths = count_veths(&amp;handler-&gt;conf-&gt;network))) {
+        if (pipe(netpipepair) &lt; 0) {
+            SYSERROR(“Error creating pipe”);
+            goto out_delete_net;
+        }
+        /</em> store netpipe in the global var for do_start’s use <em>/
+        netpipe = netpipepair[0];
+    }
+/</em> Create a process in a new set of namespaces */
+    handler-&gt;pid = lxc_clone(do_start, handler, handler-&gt;clone_flags);
+    if (handler-&gt;pid &lt; 0) {
+        SYSERROR(“failed to fork into a new namespace”);
+        goto out_delete_net;
+my god lxc_clone 又要跳了。。。
+首先看下传递的参数吧
+do_start函数指针 ，handler， handler-&gt;clone_flags，一堆NS的设置
+简述下lxc_clone函数里面的流程
+指定一页内存大小做为子进程的栈空间，然后调用系统的clone 进行clone，回头开一章说里面的一些函数调用。
+ret = clone(do_clone, stack  + stack_size, flags | SIGCHLD, &amp;clone_arg);
+static int do_clone(void *arg)
+{
+    struct clone_arg *clone_arg = arg;
+    return clone_arg-&gt;fn(clone_arg-&gt;arg);
+}
+Do_clone里调用刚才的clone的指针do_start
+Ok，到do_start中去看，
+static int do_start(void *data)
+{
+    struct lxc_handler *handler = data;
+    const char *lsm_label = NULL;</p>
+
+<p>    if (sigprocmask(SIG_SETMASK, &amp;handler-&gt;oldmask, NULL)) {
+        SYSERROR(“failed to set sigprocmask”);
+        return -1;
+    }</p>
+
+<p>        /* This prctl must be before the synchro, so if the parent
+     * dies before we set the parent death signal, we will detect
+     * its death with the synchro right after, otherwise we have
+     * a window where the parent can exit before we set the pdeath
+     * signal leading to a unsupervized container.
+     */
+    if (prctl(PR_SET_PDEATHSIG, SIGKILL, 0, 0, 0)) { //和前面的prctl一样
+        SYSERROR(“failed to set pdeath signal”);
+        return -1;
+    }</p>
+
+<p>lxc_sync_fini_parent(handler);
+/* don’t leak the pinfd to the container */
+    if (handler-&gt;pinfd &gt;= 0) {
+        close(handler-&gt;pinfd);
+    }</p>
+
+<p>    /* Tell the parent task it can begin to configure the
+     * container and wait for it to finish
+     <em>/
+    if (lxc_sync_barrier_parent(handler, LXC_SYNC_CONFIGURE))
+        return -1;
+        
+    if (read_unpriv_netifindex(&amp;handler-&gt;conf-&gt;network) &lt; 0)
+        goto out_warn_father;
+/</em>
+     * if we are in a new user namespace, become root there to have
+     * privilege over our namespace
+     <em>/
+    if (!lxc_list_empty(&amp;handler-&gt;conf-&gt;id_map)) { //设置gid uid。。
+        NOTICE(“switching to gid/uid 0 in new user namespace”);
+        if (setgid(0)) {
+            SYSERROR(“setgid”);
+            goto out_warn_father;
+        }
+        if (setuid(0)) {
+            SYSERROR(“setuid”);
+            goto out_warn_father;
+        }
+        if (setgroups(0, NULL)) {
+            SYSERROR(“setgroups”);
+            goto out_warn_father;
+        }
+    }
+#if HAVE_SYS_CAPABILITY_H //这个跟编译时候有关，config中也有一条
+    if (handler-&gt;conf-&gt;need_utmp_watch) {
+        if (prctl(PR_CAPBSET_DROP, CAP_SYS_BOOT, 0, 0, 0)) {
+            SYSERROR(“failed to remove CAP_SYS_BOOT capability”);
+            goto out_warn_father;
+        }
+        DEBUG(“Dropped cap_sys_boot”);
+    }
+#endif
+/</em> Setup the container, ip, names, utsname, … <em>/
+    if (lxc_setup(handler)) { //终于要配置container了
+        ERROR(“failed to setup the container”);
+        goto out_warn_father;
+    }
+Setup的代码就不放出来了，主要的函数贴上来。
+setup_utsname(lxc_conf-&gt;utsname)
+setup_network(&amp;lxc_conf-&gt;network)
+run_lxc_hooks(name, “pre-mount”, lxc_conf)
+setup_rootfs(lxc_conf)
+if (lxc_conf-&gt;autodev) mount_autodev(lxc_conf-&gt;rootfs.mount)
+setup_mount(&amp;lxc_conf-&gt;rootfs, lxc_conf-&gt;fstab, name)
+run_lxc_hooks(name, “mount”, lxc_conf)
+if (lxc_conf-&gt;autodev) {
+run_lxc_hooks(name, “autodev”, lxc_conf)
+setup_autodev(lxc_conf-&gt;rootfs.mount) }
+setup_console(&amp;lxc_conf-&gt;rootfs, &amp;lxc_conf-&gt;console, lxc_conf-&gt;ttydir)
+setup_tty(&amp;lxc_conf-&gt;rootfs, &amp;lxc_conf-&gt;tty_info, lxc_conf-&gt;ttydir)
+setup_pivot_root(&amp;lxc_conf-&gt;rootfs)
+setup_pts(lxc_conf-&gt;pts)
+setup_personality(lxc_conf-&gt;personality)
+setup_caps(&amp;lxc_conf-&gt;caps)
+后面再好好的研究，先把步骤理清。下面几个先看注释了。
+/</em> ask father to setup cgroups and wait for him to finish */
+    if (lxc_sync_barrier_parent(handler, LXC_SYNC_CGROUP))
+        return -1;</p>
+
+<p>    /* Set the label to change to when we exec(2) the container’s init <em>/
+    if (!strcmp(lsm_name(), “AppArmor”))
+        lsm_label = handler-&gt;conf-&gt;lsm_aa_profile;
+    else if (!strcmp(lsm_name(), “SELinux”))
+        lsm_label = handler-&gt;conf-&gt;lsm_se_context;
+    if (lsm_process_label_set(lsm_label, 1, 1) &lt; 0)
+        goto out_warn_father;
+/</em> Some init’s such as busybox will set sane tty settings on stdin,
+     * stdout, stderr which it thinks is the console. We already set them
+     * the way we wanted on the real terminal, and we want init to do its
+     * setup on its console ie. the pty allocated in lxc_console_create()
+     * so make sure that that pty is stdin,stdout,stderr.
+     */
+    if (lxc_console_set_stdfds(handler) &lt; 0)
+        goto out_warn_father;</p>
+
+<p>    /* If we mounted a temporary proc, then unmount it now */
+tmp_proc_unmount(handler-&gt;conf);
+if (lxc_seccomp_load(handler-&gt;conf) != 0)
+        goto out_warn_father;</p>
+
+<p>    if (run_lxc_hooks(handler-&gt;name, “start”, handler-&gt;conf, handler-&gt;lxcpath, NULL)) {
+        ERROR(“failed to run start hooks for container ‘%s’.”, handler-&gt;name);
+        goto out_warn_father;
+    }
+/* The clearenv() and putenv() calls have been moved here
+     * to allow us to use environment variables passed to the various
+     * hooks, such as the start hook above.  Not all of the
+     * variables like CONFIG_PATH or ROOTFS are valid in this
+     * context but others are. <em>/
+    if (clearenv()) {
+        SYSERROR(“failed to clear environment”);
+        /</em> don’t error out though */
+    }    </p>
+
+<p>    if (putenv(“container=lxc”)) {
+        SYSERROR(“failed to set environment variable”);
+        goto out_warn_father;
+    }    </p>
+
+<p>    close(handler-&gt;sigfd);</p>
+
+<p>    /* after this call, we are in error because this
+     * ops should not return as it execs <em>/
+    handler-&gt;ops-&gt;start(handler, handler-&gt;data); //看怎么跳回去
+handler在lxc_start 跳到__lxc_start 的时候就给ops的start 赋值函数指针start了，因此直接跳到start函数中。
+static int start(struct lxc_handler *handler, void</em> data)
+{
+    struct start_args *arg = data;</p>
+
+<p>    NOTICE(“exec’ing ‘%s’”, arg-&gt;argv[0]);</p>
+
+<p>    execvp(arg-&gt;argv[0], arg-&gt;argv);
+    SYSERROR(“failed to exec %s”, arg-&gt;argv[0]);
+    return 0;
+}
+这里面开始执行容器的rootfs下面的第一个启动选项，default_args是/sbin/init，可以在start的时候指定。
+Ok 从clone中回到 lxc_spawn这个中看后面怎么执行的。
+if (attach_ns(saved_ns_fd))
+        WARN(“failed to restore saved namespaces”);</p>
+
+<p>    lxc_sync_fini_child(handler);
+//一些cgroup的配置，将对用的namespace写入cgroup中
+    if (lxc_sync_wait_child(handler, LXC_SYNC_CONFIGURE))
+        failed_before_rename = 1;
+if (!cgroup_create_legacy(handler)) {
+        ERROR(“failed to setup the legacy cgroups for %s”, name);
+        goto out_delete_net;
+    }
+    if (!cgroup_setup_limits(handler, false)) {
+        ERROR(“failed to setup the cgroup limits for ‘%s’”, name);
+        goto out_delete_net;
+    }
+        
+    if (!cgroup_enter(handler))
+        goto out_delete_net;
+    
+    if (!cgroup_chown(handler)) 
+        goto out_delete_net;
+    
+    if (failed_before_rename)
+        goto out_delete_net;
+//网络配置
+/* Create the network configuration */
+    if (handler-&gt;clone_flags &amp; CLONE_NEWNET) {
+        if (lxc_assign_network(&amp;handler-&gt;conf-&gt;network, handler-&gt;pid)) {
+            ERROR(“failed to create the configured network”);
+            goto out_delete_net;
+        }
+    }</p>
+
+<p>    if (netpipe != -1) {
+        struct lxc_list <em>iterator;
+        struct lxc_netdev *netdev;
+    
+        close(netpipe);
+        lxc_list_for_each(iterator, &amp;handler-&gt;conf-&gt;network) {
+            netdev = iterator-&gt;elem;
+            if (netdev-&gt;type != LXC_NET_VETH)
+                continue;
+            if (write(netpipepair[1], netdev-&gt;name, IFNAMSIZ) != IFNAMSIZ) {
+                ERROR(“Error writing veth name to container”);
+                goto out_delete_net;
+            }
+        }
+        close(netpipepair[1]);
+}
+/</em> map the container uids - the container became an invalid
+     * userid the moment it was cloned with CLONE_NEWUSER - this
+     * call doesn’t change anything immediately, but allows the
+     * container to setuid(0) (0 being mapped to something else on
+     * the host) later to become a valid uid again */
+    if (lxc_map_ids(&amp;handler-&gt;conf-&gt;id_map, handler-&gt;pid)) {
+        ERROR(“failed to set up id mapping”);
+        goto out_delete_net;
+    }</p>
+
+<p>    /* Tell the child to continue its initialization.  we’ll get
+     * LXC_SYNC_CGROUP when it is ready for us to setup cgroups
+     */
+    if (lxc_sync_barrier_child(handler, LXC_SYNC_POST_CONFIGURE))
+        goto out_delete_net;</p>
+
+<p>    if (!cgroup_setup_limits(handler, true)) {
+        ERROR(“failed to setup the devices cgroup for ‘%s’”, name);
+        goto out_delete_net;
+    }</p>
+
+<p>    cgroup_disconnect();
+    cgroups_connected = false;
+/* Tell the child to complete its initialization and wait for
+     * it to exec or return an error.  (the child will never
+     * return LXC_SYNC_POST_CGROUP+1.  It will either close the
+     * sync pipe, causing lxc_sync_barrier_child to return
+     * success, or return a different value, causing us to error
+     * out).
+     */
+    if (lxc_sync_barrier_child(handler, LXC_SYNC_POST_CGROUP))
+        return -1;</p>
+
+<p>    if (detect_shared_rootfs())
+        umount2(handler-&gt;conf-&gt;rootfs.mount, MNT_DETACH);</p>
+
+<p>    if (handler-&gt;ops-&gt;post_start(handler, handler-&gt;data)) //post_start什么也没干，就赋值，直接return了
+        goto out_abort;</p>
+
+<p>    if (lxc_set_state(name, handler, RUNNING)) {
+        ERROR(“failed to set state to %s”,
+                  lxc_state2str(RUNNING));
+        goto out_abort;
+    }</p>
+
+<p>    lxc_sync_fini(handler);</p>
+
+<p>    return 0;
+现在spaw函数结束，很多细节都没看，里面每个地方估计都要看很久，先把握下流程吧。
+netnsfd = get_netns_fd(handler-&gt;pid);</p>
+
+<p>    err = lxc_poll(name, handler);
+    if (err) {
+        ERROR(“mainloop exited with an error”);
+        if (netnsfd &gt;= 0)
+            close(netnsfd);
+        goto out_abort;
+    }
+又来了一个poll函数
+看看poll做了什么
+调用epoll_create用于通信
+lxc_mainloop_open(&amp;descr)
+注册各种epoll事件
+lxc_mainloop_add_handler(&amp;descr, sigfd, signal_handler, &amp;pid)
+lxc_console_mainloop_add(&amp;descr, handler)
+lxc_command_mainloop_add(name, &amp;descr, handler)
+if (handler-&gt;conf-&gt;need_utmp_watch) lxc_utmp_mainloop_add(&amp;descr, handler)
+最后返回的时候又调用了lxc_mainloop(&amp;descr)
+while (waitpid(handler-&gt;pid, &amp;status, 0) &lt; 0 &amp;&amp; errno == EINTR)
+        continue;</p>
+
+<p>    /*
+     * If the child process exited but was not signaled,
+     * it didn’t call reboot.  This should mean it was an
+     * lxc-execute which simply exited.  In any case, treat
+     * it as a ‘halt’
+     <em>/
+        if (WIFSIGNALED(status)) {
+        switch(WTERMSIG(status)) {
+        case SIGINT: /</em> halt <em>/
+            DEBUG(“Container halting”);
+            break;
+        case SIGHUP: /</em> reboot <em>/
+            DEBUG(“Container rebooting”);
+            handler-&gt;conf-&gt;reboot = 1;
+            break;
+        case SIGSYS: /</em> seccomp */
+            DEBUG(“Container violated its seccomp policy”);
+            break;
+        default:
+            DEBUG(“unknown exit status for init: %d”, WTERMSIG(status));
+            break;
+        }
+        }</p>
+
+<p>    lxc_rename_phys_nics_on_shutdown(netnsfd, handler-&gt;conf);
+    if (netnsfd &gt;= 0)
+        close(netnsfd);</p>
+
+<p>    if (handler-&gt;pinfd &gt;= 0) {
+        close(handler-&gt;pinfd);
+        handler-&gt;pinfd = -1;
+}</p>
+
+<p>    lxc_monitor_send_exit_code(name, status, handler-&gt;lxcpath);
+    err =  lxc_error_set_and_log(handler-&gt;pid, status);
+}</p>
+
+<p>1、首先就是第一个lxc_check_inherited函数</p>
+
+<p>dir = opendir(“/proc/self/fd”);</p>
+
+<p>    if (!dir) {</p>
+
+<p>        WARN(“failed to opendirectory: %m”);</p>
+
+<p>        return -1;</p>
+
+<p>}</p>
+
+<p>此函数是根据配置将/proc/self/fd下，关闭fd。</p>
+
+<p>然后就跳到__lxc_start中</p>
+
+<p>2、看下lxc-init</p>
+
+<p>在init中 设置一些关于LXC_XXX的环境变量，猜测用于后面的使用。</p>
+
+<p>可以再lxc启动的时候加一些脚本。</p>
+
+<p>会在hook中先执行pre-start的前缀的脚本</p>
+
+<p>if (run_lxc_hooks(name, “pre-start”, conf,handler-&gt;lxcpath, NULL)) {</p>
+
+<p>        ERROR(“failed to runpre-start hooks for container ‘%s’.”, name);</p>
+
+<p>        goto out_aborting;</p>
+
+<p>}</p>
+
+<p>继续，后面有调用lxc_create_tty，细致研究发现，这个函数是根据conf中设置tty的个数，通过opentty函数来创建pts给容器使用。</p>
+
+<p>ret = openpty(&amp;pty_info-&gt;master, &amp;pty_info-&gt;slave,pty_info-&gt;name,NULL, NULL);</p>
+
+<p>这个可以再config文件中设置tty的个数</p>
+
+<p>tty的作用是，如果容器配置了根文件系统和inittab文件设置启动gettty，同时在inittab中gettty的个数不能超过设置的tty的个数，否则会出问题</p>
+
+<p>同理 lxc_console_create 也是一样</p>
+
+<p>如果容器配置了根文件系统和inittab文件设置使用控制台,您可能希望指定该控制台的输出。可以在config中设置lxc.console.logfile来指定输出的位置，lxc.console指定console的个数</p>
+
+<p>然后通过ttys_shift_ids来设置tty的owner。</p>
+
+<p>这样init的初始化过程就结束了。</p>
+
+<p>3、然后到must_drop_cap_sys_boot(handler-&gt;conf)这个步骤中。</p>
+
+<p>这个函数会读系统中/proc/sys/kernel/ctrl-alt-del这个文件，判断确定cmd的命令，cmd = v ?LINUX_REBOOT_CMD_CAD_ON : LINUX_REBOOT_CMD_CAD_OFF;</p>
+
+<p>然后会系统调用clone，其中函数指针为container_reboot_supported，最终会调用reboot这个函数，</p>
+
+<p>通过man reboot可以看到细节</p>
+
+<p>LINUX_REBOOT_CMD_CAD_OFF</p>
+
+<p>             (RB_DISABLE_CAD,  0).   CAD is  disabled.   This means  that  the CAD keystroke will cause a SIGINT signalto be sent to init</p>
+
+<p>              (process 1),whereupon this process may decide upon a proper action (maybe: kill allprocesses, sync, reboot).</p>
+
+<p> </p>
+
+<p>       LINUX_REBOOT_CMD_CAD_ON</p>
+
+<p>              (RB_ENABLE_CAD,0x89abcdef).  CAD is enabled.  This means that the CAD keystroke willimmediately cause the  action  associated</p>
+
+<p>              withLINUX_REBOOT_CMD_RESTART.</p>
+
+<p>那么，问题来了，到底reboot什么东西，系统？还是container？一个已经启动，一个正在start过程。</p>
+
+<table>
+  <tbody>
+    <tr>
+      <td>暂时还没搞懂，是不是NEWPID</td>
+      <td>NEWUSER 启动的新的namespace的空间中的东西，可能发SIGINT信号给主机的init的进程。将以前启动的container剩余的部分重新启动？先mark一下。</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>4、然后判断if (geteuid() == 0&amp;&amp; !lxc_list_empty(&amp;conf-&gt;id_map))，id_map是空的，因为目前所有的的流程，都是以privilegecontainer说的，所有非root的用户就不分析了。</p>
+
+<p>检查rootfs_is_blockdev(conf) 感觉函数是在判断rootfs的路径是否为blockdev，然后remount_all_slave打开/proc/self/mountinfo然后将shared enties 改变到slave中，就看当前的系统有没有share entries了。</p>
+
+<p>然后调用do_rootfs_setup(conf, name,lxcpath) 将container rootfs 挂载上去。同时也通过pre-mount的脚本将自定义的一些mount 加进去，因此，这个地方也可以自己自定义，复用一些东西</p>
+
+<table>
+  <tbody>
+    <tr>
+      <td>然后调用setup_rootfs，先是调用mount(“”,”/”, NULL, MS_SLAVE</td>
+      <td>MS_REC, 0)，mount /，调用bdev_init，初始化rootfs。</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>5、然后进去lxc-spawn这个函数中，在别的地方很多次见到spawn这个函数，只知道spawn的英文意思是产卵的意思。这个函数上次分析，里面有很多事在做。</p>
+
+<p>首先将以前的cloneflag 保存，记得start的刚开始初始化的时候如果没设置，ns_info中都设置默认的-1，然后就是同步handler，没什么好说的。</p>
+
+<p>然后就是讲handler的clone_flags设置CLONE_NEWXXX,获取物理网络，等等设置一堆东西， 然后就要想办法将cgroup与namespace联系到一块了，到cgroup_init里面看看是什么流程。</p>
+
+<p>首先，前面一直迷惑的ops怎么被初始化的问题，</p>
+
+<p><strong>attribute</strong>((constructor))</p>
+
+<p>void cgroup_ops_init(void)</p>
+
+<p>这个结构，在函数未调用之前就被执行了，这个回头会在杂篇中讲到，首先程序会根据系统中是否有cgmanager 来使用不同的初始化函数，本文就默认没有cgmanager，调用通用的cgfs_ops_init；返回一个引用值，返回静态变量cgfs_ops；将一些指针赋值，ok，看cgroup_init初始化过程，init指向cgfs_init，因此到cgfs_init这个函数中看一下</p>
+
+<p>首先初始化cgfs_data的数据结构，然后设置cgroup_pattern为全局变量中lxc.cgroup.pattern即在编译中的DEFAULT_CGROUP_PATTERN，默认的是/lxc/%n，这个暂时不知道含义。继续看</p>
+
+<p>然后调用lxc_cgroup_load_meta加载metadata，函数中会判断cgroup的使用情况，然后会调用lxc_cgroup_load_meta2的函数，会查找子系统的白名单，或者指定的hierarchies。</p>
+
+<p>最终返回给handler-&gt;cgroup_data。</p>
+
+<p>然后调用cgroup_create(handler)来创建cgroup，调用ops的create，create的指针指向cgfs_create，是个内联函数，最终调用lxc_cgroupfs_create，lxc_cgroupfs_create(d-&gt;name,d-&gt;cgroup_pattern, md, NULL)用来创建new cgroup</p>
+
+<p>/* we will modify the result of this operation directly,</p>
+
+<p>     * so we don’t have to copythe data structure</p>
+
+<p>     */</p>
+
+<p>   base_info = (path_pattern[0]== ‘/’) ?</p>
+
+<p>    lxc_cgroup_process_info_get_init(meta_data) :    //pattern为/lxc/%n</p>
+
+<p>     lxc_cgroup_process_info_get_self(meta_data);</p>
+
+<p>    if (!base_info)</p>
+
+<p>        return NULL;</p>
+
+<p>其中get_init为returnlxc_cgroup_process_info_get(1, meta);pid 为1号进程get数据，根据/proc/1/cgroup中的信息添加到cgroup_process_info的链表中。</p>
+
+<p>new_cgroup_paths = calloc(meta_data-&gt;maximum_hierarchy + 1,sizeof(char *));</p>
+
+<p>    if (!new_cgroup_paths)</p>
+
+<p>        goto out_initial_error;</p>
+
+<p> </p>
+
+<p>    new_cgroup_paths_sub =calloc(meta_data-&gt;maximum_hierarchy + 1, sizeof(char *));</p>
+
+<p>    if (!new_cgroup_paths_sub)</p>
+
+<p>        goto out_initial_error;</p>
+
+<p>分配空间</p>
+
+<p>/* find mount points we can use */</p>
+
+<p>    for (info_ptr = base_info;info_ptr; info_ptr = info_ptr-&gt;next) {</p>
+
+<p>        h =info_ptr-&gt;hierarchy;</p>
+
+<p>        mp =lxc_cgroup_find_mount_point(h, info_ptr-&gt;cgroup_path, true);</p>
+
+<p>        if (!mp) {</p>
+
+<p>            ERROR(“Could notfind writable mount point for cgroup hierarchy %d while trying to createcgroup.”, h-&gt;index);</p>
+
+<p>            gotoout_initial_error;</p>
+
+<p>        }</p>
+
+<p>        info_ptr-&gt;designated_mount_point= mp;</p>
+
+<p> </p>
+
+<p>        if(lxc_string_in_array(“ns”, (const char **)h-&gt;subsystems))</p>
+
+<p>            continue;</p>
+
+<p>        if(handle_cgroup_settings(mp, info_ptr-&gt;cgroup_path) &lt; 0) {</p>
+
+<p>            ERROR(“Could notset clone_children to 1 for cpuset hierarchy in parent cgroup.”);</p>
+
+<p>            gotoout_initial_error;</p>
+
+<p>        }</p>
+
+<p>}</p>
+
+<p>/* normalize the path */</p>
+
+<p>    cgroup_path_components =lxc_normalize_path(path_pattern);</p>
+
+<p>    if (!cgroup_path_components)</p>
+
+<p>        goto out_initial_error;</p>
+
+<p>来看主要的find_name_on_this_level程序块</p>
+
+<p>/* determine name of the path component we should create */</p>
+
+<p>        if (contains_name&amp;&amp; suffix &gt; 0) {</p>
+
+<p>            char *buf =calloc(strlen(name) + 32, 1);</p>
+
+<p>            if (!buf)</p>
+
+<p>                gotoout_initial_error;</p>
+
+<p>            snprintf(buf, strlen(name)+ 32, “%s-%u”, name, suffix);</p>
+
+<p>            current_component =lxc_string_replace(“%n”, buf, p_eff);</p>
+
+<p>            free(buf);</p>
+
+<p>        } else {</p>
+
+<p>            current_component =contains_name ? lxc_string_replace(“%n”, name, p_eff) : p_eff;</p>
+
+<p>        }</p>
+
+<p>        parts[0] = path_so_far;</p>
+
+<p>        parts[1] =current_component;</p>
+
+<p>        parts[2] = NULL;</p>
+
+<p>        current_subpath =path_so_far ? lxc_string_join(“/”, (const char **)parts, false) :current_component;</p>
+
+<p>/* Now go through each hierarchy and try to create the</p>
+
+<p>         * corresponding cgroup</p>
+
+<p>         */</p>
+
+<p>其中最主要的是</p>
+
+<p>r = create_cgroup(info_ptr-&gt;designated_mount_point,current_entire_path);来创建cgroup的目录层级。</p>
+
+<p>理一下头绪，cgroup通过cgroup.patternd 的模式，然后读取/proc/1/cgroup下去创建相应的cgroup层级，最后创建cgroup的目录。</p>
+
+<p>6、回到lxc-spawn中，然后到通过一些网络的netpipepair设置，这些都不是我们关心的。</p>
+
+<p>最后调用lxc_clone函数调用do_start来对container进行一系列的初始化操作，首先是lxc_setup 前面也介绍了，通过初始化，mount rootfs，网络，autodev，自动挂载/proc,/sys等文件，然后设置tty，console等设置标准输入输出的位置，等等。</p>
+
+<p>然后可以设置if(run_lxc_hooks(handler-&gt;name, “start”, handler-&gt;conf,handler-&gt;lxcpath, NULL)) start脚本来辅助工作，这个也是可以自定义的内容</p>
+
+<p>最后在do_start函数中调用handler-&gt;ops-&gt;start(handler,handler-&gt;data);</p>
+
+<p>ops为lxc的operation中的内容，来看看想干嘛。execvp(arg-&gt;argv[0],arg-&gt;argv);执行start container了，这里面，我们用到的是/init不是默认的/sbin/init，因为我们的容器不是标准的容器，所以这点是不同的。</p>
+
+<p>里面注释也谈到了，当我们执行这个/init的时候，函数就不会返回来了，那么后面的程序怎么办？</p>
+
+<p>所以在do_start中子进程一直等到父进程完成工作和配置。</p>
+
+<p>/* Tell the parent task it can begin to configure the</p>
+
+<p>     * container and wait for itto finish</p>
+
+<p>     */</p>
+
+<p>    if(lxc_sync_barrier_parent(handler, LXC_SYNC_CONFIGURE))</p>
+
+<p>        return -1;</p>
+
+<p>然后父进程进行一系列的配置，其中最主要的就是cgroup的配置，如果容器没有cgroup的话，资源划分就成问题了，</p>
+
+<p>cgroup_setup_limits 资源限制，cgroup_enter将pid进程加入task任务中，等等设置cgroup</p>
+
+<p>然后还是配置网络，将container加入到veth当中，这当年还是要看自己config网络相关的配置，so，网络配置有很多，就忽略网络的问题了。</p>
+
+<p>然后又告诉子进程继续初始化过程</p>
+
+<p>/* Tell the child to continue its initialization.  we’ll get</p>
+
+<p>     * LXC_SYNC_CGROUP when it isready for us to setup cgroups</p>
+
+<p>     */</p>
+
+<p>    if(lxc_sync_barrier_child(handler, LXC_SYNC_POST_CONFIGURE))</p>
+
+<p>        goto out_delete_net;</p>
+
+<p>然后当子进程setup过程完成之后，让父进程设置cgroup，同时父进程设置完cgroup时，也通知子进程完成，此时子进程就真正进入到container的init的进程了。</p>
+
+<p>一直没发现这个LXC_SYNC_POST_CGROUPwait 子进程的信号谁发给他，这个比较疑惑？</p>
+
+<p>最后发现是do_stat这个函数if判断失败后goto的，则表示中间会error，最后还有个post_cgroup，注释是这样说道。</p>
+
+<p>/* Tell the child to complete its initialization and wait for</p>
+
+<p>     * it to exec or return anerror.  (the child will never</p>
+
+<p>     * returnLXC_SYNC_POST_CGROUP+1.  It will eitherclose the</p>
+
+<p>     * sync pipe, causinglxc_sync_barrier_child to return</p>
+
+<p>     * success, or return adifferent value, causing us to error</p>
+
+<p>     * out).</p>
+
+<p>     */</p>
+
+<p>    if(lxc_sync_barrier_child(handler, LXC_SYNC_POST_CGROUP))</p>
+
+<p>        return -1;</p>
+
+<p>然后就是调用post-start，NOTICE 运行的pid，最后设置container的状态为RUNNING,至此spawn就结束了。</p>
+
+<p>回到__lxc_start中，get_netns_fd获得network的状态，然后进入lxc_poll中.后面没什么好说的，现在主要考虑lxc 在exec container的init的进程过后，lxc是如何继续接管程序的。</p>
+
+<p>lxc start部分的源码的大致工作流程已经熟悉，那么就要关注他的核心内容了，就是关于namespace 和 cgroup的内容了。</p>
+
+<p>根据前面的分析已经知道，lxc根据一些配置会自动将flag设置成CLONE_NEWXXX,然后会通过cgroup init 来初始化一堆 cgroup。我们先来看一下。</p>
+
+<p>首先通过cgroup_create 来创建 cgroup，前面介绍都是有个ops 指向函数指针，这里先假设我们用的cgfs，理论上应该和cgroupmanager是一样的方式，可能细节有区别而已。</p>
+
+<p>那么顺理成章create指向cgfs_create，后面就直接说函数指针的位置了。</p>
+
+<p>函数内部通过调用lxc_cgroupfs_create。那么就要从create a newcgroup</p>
+
+<p>static struct cgroup_process_info <em>lxc_cgroupfs_create(const char</em>name, const char <em>path_pattern, struct cgroup_meta_data *meta_data, const char</em>sub_pattern)</p>
+
+<p> </p>
+
+<p>char**cgroup_path_components = NULL;</p>
+
+<p>    char **p = NULL;</p>
+
+<p>    char *path_so_far = NULL;</p>
+
+<p>    char **new_cgroup_paths =NULL;</p>
+
+<p>    char **new_cgroup_paths_sub =NULL;</p>
+
+<p>    struct cgroup_mount_point*mp;</p>
+
+<p>    struct cgroup_hierarchy *h;</p>
+
+<p>    struct cgroup_process_info*base_info = NULL;</p>
+
+<p>    struct cgroup_process_info*info_ptr;</p>
+
+<p>    int saved_errno;</p>
+
+<p>    int r;</p>
+
+<p>    unsigned suffix = 0;</p>
+
+<p>    bool had_sub_pattern = false;</p>
+
+<p>size_t i;</p>
+
+<p> </p>
+
+<p>if (!is_valid_cgroup(name)){                                      //判断name 是否有效</p>
+
+<p>        ERROR(“Invalidcgroup name: ‘%s’”, name);</p>
+
+<p>        errno = EINVAL;</p>
+
+<p>        return NULL;</p>
+
+<p>}</p>
+
+<p> </p>
+
+<p>if (!strstr(path_pattern,”%n”)) {</p>
+
+<p>        ERROR(“Invalidcgroup path pattern: ‘%s’; contains no %%n for specifying container name”,path_pattern);</p>
+
+<p>        errno = EINVAL;</p>
+
+<p>        return NULL;</p>
+
+<p>}</p>
+
+<p>根据privilege 和unprivilege  container的不同读取到proc 下面的pid的不同来确定不同的cgroup 信息。</p>
+
+<p>base_info = (path_pattern[0]== ‘/’) ?</p>
+
+<p>       lxc_cgroup_process_info_get_init(meta_data) :</p>
+
+<p>       lxc_cgroup_process_info_get_self(meta_data);</p>
+
+<p>    if (!base_info)</p>
+
+<p>        return NULL;</p>
+
+<p>new_cgroup_paths =calloc(meta_data-&gt;maximum_hierarchy + 1, sizeof(char *));</p>
+
+<p>    if (!new_cgroup_paths)</p>
+
+<p>        goto out_initial_error;</p>
+
+<p> </p>
+
+<p>在自己机子上面，看到的cgroup：</p>
+
+<p>gudh@lxc-D3F2-CM:~$ cat/proc/self/cgroup</p>
+
+<p>11:name=systemd:/user/1004.user/5.session</p>
+
+<p>10:hugetlb:/user/1004.user/5.session</p>
+
+<p>9:perf_event:/user/1004.user/5.session</p>
+
+<p>8:blkio:/user/1004.user/5.session</p>
+
+<p>7:freezer:/user/1004.user/5.session</p>
+
+<p>6:devices:/user/1004.user/5.session</p>
+
+<p>5:memory:/user/1004.user/5.session</p>
+
+<p>4:cpuacct:/user/1004.user/5.session</p>
+
+<p>3:cpu:/user/1004.user/5.session</p>
+
+<p>2:cpuset:/user/1004.user/5.session</p>
+
+<p>gudh@lxc-D3F2-CM:~$ id</p>
+
+<p>uid=1004(gudh)gid=1004(gudh) groups=1004(gudh),0(root),4(adm)</p>
+
+<p>gudh@lxc-D3F2-CM:~$ cat/proc/1/cgroup</p>
+
+<p>11:name=systemd:/</p>
+
+<p>10:hugetlb:/</p>
+
+<p>9:perf_event:/</p>
+
+<p>8:blkio:/</p>
+
+<p>7:freezer:/</p>
+
+<p>6:devices:/</p>
+
+<p>5:memory:/</p>
+
+<p>4:cpuacct:/</p>
+
+<p>3:cpu:/</p>
+
+<p>2:cpuset:/</p>
+
+<p>然后就是分配path的大小</p>
+
+<p>    new_cgroup_paths_sub =calloc(meta_data-&gt;maximum_hierarchy + 1, sizeof(char *));</p>
+
+<p>    if (!new_cgroup_paths_sub)</p>
+
+<p>        goto out_initial_error;</p>
+
+<p> </p>
+
+<p>查找可以挂载的点，然后创建。</p>
+
+<p>/* find mount points we canuse */</p>
+
+<p>    for (info_ptr = base_info; info_ptr;info_ptr = info_ptr-&gt;next) {</p>
+
+<p>        h = info_ptr-&gt;hierarchy;</p>
+
+<p>        mp = lxc_cgroup_find_mount_point(h,info_ptr-&gt;cgroup_path, true);</p>
+
+<p>        if (!mp) {</p>
+
+<p>            ERROR(“Could not find writablemount point for cgroup hierarchy %d while trying to create cgroup.”,h-&gt;index);</p>
+
+<p>            goto out_initial_error;</p>
+
+<p>        }</p>
+
+<p>        info_ptr-&gt;designated_mount_point =mp;</p>
+
+<p> </p>
+
+<p>        if (lxc_string_in_array(“ns”,(const char **)h-&gt;subsystems))</p>
+
+<p>            continue;</p>
+
+<p>        if (handle_cgroup_settings(mp,info_ptr-&gt;cgroup_path) &lt; 0) {</p>
+
+<p>            ERROR(“Could not setclone_children to 1 for cpuset hierarchy in parent cgroup.”);</p>
+
+<p>            goto out_initial_error;</p>
+
+<p>        }</p>
+
+<p>    }</p>
+
+<p> </p>
+
+<p>cgroup_path_components = lxc_normalize_path(path_pattern);</p>
+
+<p>    if (!cgroup_path_components)</p>
+
+<p>        goto out_initial_error;</p>
+
+<p> </p>
+
+<p>然后根据normalize的path去创建他们。</p>
+
+<p>/* go through the pathcomponents to see if we can create them */</p>
+
+<table>
+  <tbody>
+    <tr>
+      <td>    for (p = cgroup_path_components; *p</td>
+      <td> </td>
+      <td>(sub_pattern &amp;&amp; !had_sub_pattern); p++) {</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>        /* we only want to create the samecomponent with -1, -2, etc.</p>
+
+<p>         * if the component contains thecontainer name itself, otherwise</p>
+
+<p>         * it’s not an error if it alreadyexists</p>
+
+<p>         */</p>
+
+<p>        char <em>p_eff = *p ? *p : (char</em>)sub_pattern;</p>
+
+<p>        bool contains_name = strstr(p_eff,”%n”);</p>
+
+<p>        char *current_component = NULL;</p>
+
+<p>        char *current_subpath = NULL;</p>
+
+<p>        char *current_entire_path = NULL;</p>
+
+<p>        char *parts[3];</p>
+
+<p>        size_t j = 0;</p>
+
+<p>        i = 0;</p>
+
+<p> </p>
+
+<p>       /* if we are processing the subpattern, we want to make sure</p>
+
+<p>         * loop is ended the next time around</p>
+
+<p>         */</p>
+
+<p>        if (!*p) {</p>
+
+<p>            had_sub_pattern = true;</p>
+
+<p>            p–;</p>
+
+<p>        }</p>
+
+<p> </p>
+
+<p>然后就到find_name_on_this_level，这里面pattern 应该是/lxc/%n</p>
+
+<p> </p>
+
+<p>        goto find_name_on_this_level;</p>
+
+<p>find_name_on_this_level:</p>
+
+<p>        /* determine name of the path componentwe should create */</p>
+
+<p>        if (contains_name &amp;&amp; suffix&gt; 0) {</p>
+
+<p>            char *buf = calloc(strlen(name) +32, 1);</p>
+
+<p>            if (!buf)</p>
+
+<p>               goto out_initial_error;</p>
+
+<p>            snprintf(buf, strlen(name) + 32,”%s-%u”, name, suffix);</p>
+
+<p>            current_component =lxc_string_replace(“%n”, buf, p_eff);</p>
+
+<p>            free(buf);</p>
+
+<p>        } else {</p>
+
+<p>            current_component = contains_name ?lxc_string_replace(“%n”, name, p_eff) : p_eff;</p>
+
+<p>        }</p>
+
+<p>        parts[0] = path_so_far;</p>
+
+<p>        parts[1] = current_component;</p>
+
+<p>        parts[2] = NULL;</p>
+
+<p>        current_subpath = path_so_far ?lxc_string_join(“/”, (const char **)parts, false) :current_component;</p>
+
+<p>紧接着创建相应的cgroup</p>
+
+<p>for (i = 0, info_ptr =base_info; info_ptr; info_ptr = info_ptr-&gt;next, i++) {</p>
+
+<p>            char *parts2[3];</p>
+
+<p> </p>
+
+<p>            if(lxc_string_in_array(“ns”, (const char**)info_ptr-&gt;hierarchy-&gt;subsystems))</p>
+
+<p>                continue;</p>
+
+<p>            current_entire_path = NULL;</p>
+
+<p> </p>
+
+<p>            parts2[0] =!strcmp(info_ptr-&gt;cgroup_path, “/”) ? “” :info_ptr-&gt;cgroup_path;</p>
+
+<p>            parts2[1] = current_subpath;</p>
+
+<p>            parts2[2] = NULL;</p>
+
+<p>            current_entire_path = lxc_string_join(“/”,(const char **)parts2, false);</p>
+
+<p> </p>
+
+<p>            if (!*p) {</p>
+
+<p>                /* we are processing thesubpath, so only update that one */</p>
+
+<p>                free(new_cgroup_paths_sub[i]);</p>
+
+<p>                new_cgroup_paths_sub[i] =strdup(current_entire_path);</p>
+
+<p>                if (!new_cgroup_paths_sub[i])</p>
+
+<p>                    goto cleanup_from_error;</p>
+
+<p>            } else {</p>
+
+<p>                /* remember which path was usedon this controller */</p>
+
+<p>                free(new_cgroup_paths[i]);</p>
+
+<p>                new_cgroup_paths[i] =strdup(current_entire_path);</p>
+
+<p>                if (!new_cgroup_paths[i])</p>
+
+<p>                    goto cleanup_from_error;</p>
+
+<p>            }</p>
+
+<p> </p>
+
+<p>            r =create_cgroup(info_ptr-&gt;designated_mount_point, current_entire_path);</p>
+
+<p>这样就完成相应的代码设置。</p>
+
+<p>对于pattern 为/lxc/%n 就分两次不同创建在相应的目录，这样cgroup subpath 也同时受到顶层/lxc 的控制，cgroup就成功创建了。</p>
+
+<p> </p>
+
+<p>       然后就到cgroup_create_legacy最终调用lxc_cgroup_create_legacy</p>
+
+<p>直接看注释</p>
+
+<p>/*  </p>
+
+<p>     * if cgroup is mounted at/cgroup and task is in cgroup /ab/, pid 2375 and</p>
+
+<p>     * name is c1,</p>
+
+<p>     * dir: /ab</p>
+
+<p>     * fulloldpath =/cgroup/ab/2375</p>
+
+<p>     * fullnewpath =/cgroup/ab/c1</p>
+
+<p>     * newname = /ab/c1</p>
+
+<p>     */</p>
+
+<p>如果老名字为/sys/cgroup/cpu/lxc/android/2375</p>
+
+<p>那么就改成/sys/cgroup/cpu/lxc/android/android?</p>
+
+<p>加入cgroup一些创建file的 capability</p>
+
+<p> </p>
+
+<p>cgroup_setup_limits 名字很明显设置限额 with_device是false</p>
+
+<p>将在config中加入的device.allow 和device.deny 配置</p>
+
+<p>手动设置的地方</p>
+
+<p> </p>
+
+<p>然后就是cgfs_enter 最后到lxc_cgroupfs_enter</p>
+
+<p>lxc_cgroup_find_mount_point 查找path下面的mount point</p>
+
+<p>cgroup_to_absolute_path absolute path</p>
+
+<p>lxc_write_to_file然后将pid写入到cgroup的absolutepath下面</p>
+
+<p>这样就将pid 与cgroup成功绑定。
+cgroup_chown chown的指针目前是NULL 暂时不分析
+后面又来了一次 cgroup_setup_limits 这是with_device 是true
+此时应该就完成了cgroup的相关设置</p>
+:ET

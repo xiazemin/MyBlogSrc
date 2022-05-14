@@ -1,0 +1,737 @@
+I"�`<p>由于我们使用的阿里云服务器不能telnet 25端口，发送ssl时候感觉很蹩脚，就自己写了一个go mail 发送
+<!-- more -->
+2、main.go</p>
+
+<p>// main.go
+package main</p>
+
+<p>import (
+	“flag”
+	“fmt”
+	“io/ioutil”
+	“log”
+	“net/smtp”
+	“os”
+	“sslmail/mymail”
+	“strings”
+)</p>
+
+<p>func SendMail(fromuser, password, subject, host, port, bodyfile, bodyhtmlfile string, tousers, attachs []string) error {
+	// NewEmail返回一个email结构体的指针
+	e := mymail.NewEmail()
+	// 发件人
+	e.From = fromuser
+	// 收件人(可以有多个)
+	e.To = tousers
+	// 邮件主题
+	e.Subject = subject
+	// 解析html模板
+	//body := new(bytes.Buffer)
+	if strings.TrimSpace(bodyfile) != “” {
+		f, err := os.OpenFile(bodyfile, os.O_RDONLY, 0600)
+		if err != nil {
+			fmt.Println(err)
+		} else {
+			contentBytes, err := ioutil.ReadAll(f)
+			if err != nil {
+				fmt.Println(“读取文件失败”)
+			} else {
+				e.Text = contentBytes
+			}
+		}
+	}</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>if strings.TrimSpace(bodyhtmlfile) != "" {
+	ft, err := os.OpenFile(bodyhtmlfile, os.O_RDONLY, 0600)
+	if err != nil {
+		fmt.Println(err)
+	} else {
+		htmlBytes, err := ioutil.ReadAll(ft)
+		if err != nil {
+			fmt.Println("读取文件失败")
+		} else {
+			e.HTML = htmlBytes
+		}
+	}
+}
+
+if len(attachs) &gt; 0 {
+	for _, v := range attachs {
+		e.AttachFile(v)
+	}
+}
+addr := host + ":" + port
+//fmt.Println(addr)
+// 发送邮件(如果使用QQ邮箱发送邮件的话，passwd不是邮箱密码而是授权码)
+return e.Send(addr, smtp.PlainAuth("", fromuser, password, host)) }
+</code></pre></div></div>
+
+<p>type sliceValue []string</p>
+
+<p>func newSliceValue(vals []string, p <em>[]string) *sliceValue {
+	*p = vals
+	return (</em>sliceValue)(p)
+}</p>
+
+<p>func (s *sliceValue) Set(val string) error {
+	*s = sliceValue(strings.Split(val, “,”))
+	return nil
+}</p>
+
+<p>func (s <em>sliceValue) Get() interface{} { return []string(</em>s) }</p>
+
+<p>func (s <em>sliceValue) String() string { return strings.Join([]string(</em>s), “,”) }</p>
+
+<p>func main() {</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>//fromuser := "name@yourmail.com"
+fromuser := flag.String("fromuser", "name@yourmail.com", "sender email info")
+password := flag.String("password", "your password default", "sender email password")
+var tousers []string
+flag.Var(newSliceValue([]string{}, &amp;tousers), "tousers", "your `tousers` email separated by ','")
+subject := flag.String("subject", "hello,world", "subject")
+host := flag.String("host", "smtp.qiye.163.com", "ssl url info")
+port := flag.String("port", "465", "ssl port")
+bodyfile := flag.String("bodyfile", "", "the body file your password default")
+bodyhtmlfile := flag.String("bodyhtmlfile", "", "the body html file your password default")
+var attachs []string
+flag.Var(newSliceValue([]string{}, &amp;attachs), "attachs", "your `attachs` email separated by ','")
+//htmlbody := flag.String("htmlbody", "a html file ", "you can describe you mail")
+flag.Parse()
+//fmt.Println(attachs)
+err := SendMail(*fromuser, *password, *subject, *host, *port, *bodyfile, *bodyhtmlfile, tousers, attachs)
+if err != nil {
+	log.Println("发送邮件失败")
+	//log.Println(err)
+	return
+}
+log.Println("发送邮件成功") } 3、mymail/email.go
+</code></pre></div></div>
+
+<p>// Package email is designed to provide an “email interface for humans.”
+// Designed to be robust and flexible, the email package aims to make sending email easy without getting in the way.
+package mymail</p>
+
+<p>import (
+    “bufio”
+    “bytes”
+    “crypto/rand”
+    “crypto/tls”
+    “encoding/base64”
+    “errors”
+    “fmt”
+    “io”
+    “log”
+    “math”
+    “math/big”
+    “mime”
+    “mime/multipart”
+    “mime/quotedprintable”
+    “net”
+    “net/mail”
+    “net/smtp”
+    “net/textproto”
+    “os”
+    “path/filepath”
+    “strings”
+    “time”
+    “unicode”
+)</p>
+
+<p>const (
+    MaxLineLength      = 76                             // MaxLineLength is the maximum line length per RFC 2045
+    defaultContentType = “text/plain; charset=us-ascii” // defaultContentType is the default Content-Type according to RFC 2045, section 5.2
+)</p>
+
+<p>// ErrMissingBoundary is returned when there is no boundary given for a multipart entity
+var ErrMissingBoundary = errors.New(“No boundary found for multipart entity”)</p>
+
+<p>// ErrMissingContentType is returned when there is no “Content-Type” header for a MIME entity
+var ErrMissingContentType = errors.New(“No Content-Type found for MIME entity”)</p>
+
+<p>// Email is the type used for email messages
+type Email struct {
+    ReplyTo     []string
+    From        string
+    To          []string
+    Bcc         []string
+    Cc          []string
+    Subject     string
+    Text        []byte // Plaintext message (optional)
+    HTML        []byte // Html message (optional)
+    Sender      string // override From as SMTP envelope sender (optional)
+    Headers     textproto.MIMEHeader
+    Attachments []*Attachment
+    ReadReceipt []string
+}</p>
+
+<p>// part is a copyable representation of a multipart.Part
+type part struct {
+    header textproto.MIMEHeader
+    body   []byte
+}</p>
+
+<p>// NewEmail creates an Email, and returns the pointer to it.
+func NewEmail() *Email {
+    return &amp;Email{Headers: textproto.MIMEHeader{}}
+}</p>
+
+<p>// trimReader is a custom io.Reader that will trim any leading
+// whitespace, as this can cause email imports to fail.
+type trimReader struct {
+    rd io.Reader
+}</p>
+
+<p>// Read trims off any unicode whitespace from the originating reader
+func (tr trimReader) Read(buf []byte) (int, error) {
+    n, err := tr.rd.Read(buf)
+    t := bytes.TrimLeftFunc(buf[:n], unicode.IsSpace)
+    n = copy(buf, t)
+    return n, err
+}</p>
+
+<p>// NewEmailFromReader reads a stream of bytes from an io.Reader, r,
+// and returns an email struct containing the parsed data.
+// This function expects the data in RFC 5322 format.
+func NewEmailFromReader(r io.Reader) (*Email, error) {
+    e := NewEmail()
+    s := trimReader{rd: r}
+    tp := textproto.NewReader(bufio.NewReader(s))
+    // Parse the main headers
+    hdrs, err := tp.ReadMIMEHeader()
+    if err != nil {
+        return e, err
+    }
+    // Set the subject, to, cc, bcc, and from
+    for h, v := range hdrs {
+        switch {
+        case h == “Subject”:
+            e.Subject = v[0]
+            subj, err := (&amp;mime.WordDecoder{}).DecodeHeader(e.Subject)
+            if err == nil &amp;&amp; len(subj) &gt; 0 {
+                e.Subject = subj
+            }
+            delete(hdrs, h)
+        case h == “To”:
+            for _, to := range v {
+                tt, err := (&amp;mime.WordDecoder{}).DecodeHeader(to)
+                if err == nil {
+                    e.To = append(e.To, tt)
+                } else {
+                    e.To = append(e.To, to)
+                }
+            }
+            delete(hdrs, h)
+        case h == “Cc”:
+            for _, cc := range v {
+                tcc, err := (&amp;mime.WordDecoder{}).DecodeHeader(cc)
+                if err == nil {
+                    e.Cc = append(e.Cc, tcc)
+                } else {
+                    e.Cc = append(e.Cc, cc)
+                }
+            }
+            delete(hdrs, h)
+        case h == “Bcc”:
+            for _, bcc := range v {
+                tbcc, err := (&amp;mime.WordDecoder{}).DecodeHeader(bcc)
+                if err == nil {
+                    e.Bcc = append(e.Bcc, tbcc)
+                } else {
+                    e.Bcc = append(e.Bcc, bcc)
+                }
+            }
+            delete(hdrs, h)
+        case h == “From”:
+            e.From = v[0]
+            fr, err := (&amp;mime.WordDecoder{}).DecodeHeader(e.From)
+            if err == nil &amp;&amp; len(fr) &gt; 0 {
+                e.From = fr
+            }
+            delete(hdrs, h)
+        }
+    }
+    e.Headers = hdrs
+    body := tp.R
+    // Recursively parse the MIME parts
+    ps, err := parseMIMEParts(e.Headers, body)
+    if err != nil {
+        return e, err
+    }
+    for _, p := range ps {
+        if ct := p.header.Get(“Content-Type”); ct == “” {
+            return e, ErrMissingContentType
+        }
+        ct, _, err := mime.ParseMediaType(p.header.Get(“Content-Type”))
+        if err != nil {
+            return e, err
+        }
+        switch {
+        case ct == “text/plain”:
+            e.Text = p.body
+        case ct == “text/html”:
+            e.HTML = p.body
+        }
+    }
+    return e, nil
+}</p>
+
+<p>// parseMIMEParts will recursively walk a MIME entity and return a []mime.Part containing
+// each (flattened) mime.Part found.
+// It is important to note that there are no limits to the number of recursions, so be
+// careful when parsing unknown MIME structures!
+func parseMIMEParts(hs textproto.MIMEHeader, b io.Reader) ([]<em>part, error) {
+    var ps []</em>part
+    // If no content type is given, set it to the default
+    if _, ok := hs[“Content-Type”]; !ok {
+        hs.Set(“Content-Type”, defaultContentType)
+    }
+    ct, params, err := mime.ParseMediaType(hs.Get(“Content-Type”))
+    if err != nil {
+        return ps, err
+    }
+    // If it’s a multipart email, recursively parse the parts
+    if strings.HasPrefix(ct, “multipart/”) {
+        if _, ok := params[“boundary”]; !ok {
+            return ps, ErrMissingBoundary
+        }
+        mr := multipart.NewReader(b, params[“boundary”])
+        for {
+            var buf bytes.Buffer
+            p, err := mr.NextPart()
+            if err == io.EOF {
+                break
+            }
+            if err != nil {
+                return ps, err
+            }
+            if _, ok := p.Header[“Content-Type”]; !ok {
+                p.Header.Set(“Content-Type”, defaultContentType)
+            }
+            subct, _, err := mime.ParseMediaType(p.Header.Get(“Content-Type”))
+            if err != nil {
+                return ps, err
+            }
+            if strings.HasPrefix(subct, “multipart/”) {
+                sps, err := parseMIMEParts(p.Header, p)
+                if err != nil {
+                    return ps, err
+                }
+                ps = append(ps, sps…)
+            } else {
+                var reader io.Reader
+                reader = p
+                const cte = “Content-Transfer-Encoding”
+                if p.Header.Get(cte) == “base64” {
+                    reader = base64.NewDecoder(base64.StdEncoding, reader)
+                }
+                // Otherwise, just append the part to the list
+                // Copy the part data into the buffer
+                if _, err := io.Copy(&amp;buf, reader); err != nil {
+                    return ps, err
+                }
+                ps = append(ps, &amp;part{body: buf.Bytes(), header: p.Header})
+            }
+        }
+    } else {
+        // If it is not a multipart email, parse the body content as a single “part”
+        var buf bytes.Buffer
+        if _, err := io.Copy(&amp;buf, b); err != nil {
+            return ps, err
+        }
+        ps = append(ps, &amp;part{body: buf.Bytes(), header: hs})
+    }
+    return ps, nil
+}</p>
+
+<p>// Attach is used to attach content from an io.Reader to the email.
+// Required parameters include an io.Reader, the desired filename for the attachment, and the Content-Type
+// The function will return the created Attachment for reference, as well as nil for the error, if successful.
+func (e *Email) Attach(r io.Reader, filename string, c string) (a *Attachment, err error) {
+    var buffer bytes.Buffer
+    if _, err = io.Copy(&amp;buffer, r); err != nil {
+        return
+    }
+    at := &amp;Attachment{
+        Filename: filename,
+        Header:   textproto.MIMEHeader{},
+        Content:  buffer.Bytes(),
+    }
+    // Get the Content-Type to be used in the MIMEHeader
+    if c != “” {
+        at.Header.Set(“Content-Type”, c)
+    } else {
+        // If the Content-Type is blank, set the Content-Type to “application/octet-stream”
+        at.Header.Set(“Content-Type”, “application/octet-stream”)
+    }
+    at.Header.Set(“Content-Disposition”, fmt.Sprintf(“attachment;\r\n filename="%s"”, filename))
+    at.Header.Set(“Content-ID”, fmt.Sprintf(“&lt;%s&gt;”, filename))
+    at.Header.Set(“Content-Transfer-Encoding”, “base64”)
+    e.Attachments = append(e.Attachments, at)
+    return at, nil
+}</p>
+
+<p>// AttachFile is used to attach content to the email.
+// It attempts to open the file referenced by filename and, if successful, creates an Attachment.
+// This Attachment is then appended to the slice of Email.Attachments.
+// The function will then return the Attachment for reference, as well as nil for the error, if successful.
+func (e *Email) AttachFile(filename string) (a *Attachment, err error) {
+    f, err := os.Open(filename)
+    if err != nil {
+        return
+    }
+    defer f.Close()</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>ct := mime.TypeByExtension(filepath.Ext(filename))
+basename := filepath.Base(filename)
+return e.Attach(f, basename, ct) }
+</code></pre></div></div>
+
+<p>// msgHeaders merges the Email’s various fields and custom headers together in a
+// standards compliant way to create a MIMEHeader to be used in the resulting
+// message. It does not alter e.Headers.
+//
+// “e”’s fields To, Cc, From, Subject will be used unless they are present in
+// e.Headers. Unless set in e.Headers, “Date” will filled with the current time.
+func (e *Email) msgHeaders() (textproto.MIMEHeader, error) {
+    res := make(textproto.MIMEHeader, len(e.Headers)+4)
+    if e.Headers != nil {
+        for _, h := range []string{“Reply-To”, “To”, “Cc”, “From”, “Subject”, “Date”, “Message-Id”, “MIME-Version”} {
+            if v, ok := e.Headers[h]; ok {
+                res[h] = v
+            }
+        }
+    }
+    // Set headers if there are values.
+    if _, ok := res[“Reply-To”]; !ok &amp;&amp; len(e.ReplyTo) &gt; 0 {
+        res.Set(“Reply-To”, strings.Join(e.ReplyTo, “, “))
+    }
+    if _, ok := res[“To”]; !ok &amp;&amp; len(e.To) &gt; 0 {
+        res.Set(“To”, strings.Join(e.To, “, “))
+    }
+    if _, ok := res[“Cc”]; !ok &amp;&amp; len(e.Cc) &gt; 0 {
+        res.Set(“Cc”, strings.Join(e.Cc, “, “))
+    }
+    if _, ok := res[“Subject”]; !ok &amp;&amp; e.Subject != “” {
+        res.Set(“Subject”, e.Subject)
+    }
+    if _, ok := res[“Message-Id”]; !ok {
+        id, err := generateMessageID()
+        if err != nil {
+            return nil, err
+        }
+        res.Set(“Message-Id”, id)
+    }
+    // Date and From are required headers.
+    if _, ok := res[“From”]; !ok {
+        res.Set(“From”, e.From)
+    }
+    if _, ok := res[“Date”]; !ok {
+        res.Set(“Date”, time.Now().Format(time.RFC1123Z))
+    }
+    if _, ok := res[“MIME-Version”]; !ok {
+        res.Set(“MIME-Version”, “1.0”)
+    }
+    for field, vals := range e.Headers {
+        if _, ok := res[field]; !ok {
+            res[field] = vals
+        }
+    }
+    return res, nil
+}</p>
+
+<p>func writeMessage(buff io.Writer, msg []byte, multipart bool, mediaType string, w *multipart.Writer) error {
+    if multipart {
+        header := textproto.MIMEHeader{
+            “Content-Type”:              {mediaType + “; charset=UTF-8”},
+            “Content-Transfer-Encoding”: {“quoted-printable”},
+        }
+        if _, err := w.CreatePart(header); err != nil {
+            return err
+        }
+    }</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>qp := quotedprintable.NewWriter(buff)
+// Write the text
+if _, err := qp.Write(msg); err != nil {
+    return err
+}
+return qp.Close() }
+</code></pre></div></div>
+
+<p>// Bytes converts the Email object to a []byte representation, including all needed MIMEHeaders, boundaries, etc.
+func (e *Email) Bytes() ([]byte, error) {
+    // TODO: better guess buffer size
+    buff := bytes.NewBuffer(make([]byte, 0, 4096))</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>headers, err := e.msgHeaders()
+if err != nil {
+    return nil, err
+}
+
+var (
+    isMixed       = len(e.Attachments) &gt; 0
+    isAlternative = len(e.Text) &gt; 0 &amp;&amp; len(e.HTML) &gt; 0
+)
+
+var w *multipart.Writer
+if isMixed || isAlternative {
+    w = multipart.NewWriter(buff)
+}
+switch {
+case isMixed:
+    headers.Set("Content-Type", "multipart/mixed;\r\n boundary="+w.Boundary())
+case isAlternative:
+    headers.Set("Content-Type", "multipart/alternative;\r\n boundary="+w.Boundary())
+case len(e.HTML) &gt; 0:
+    headers.Set("Content-Type", "text/html; charset=UTF-8")
+    headers.Set("Content-Transfer-Encoding", "quoted-printable")
+default:
+    headers.Set("Content-Type", "text/plain; charset=UTF-8")
+    headers.Set("Content-Transfer-Encoding", "quoted-printable")
+}
+headerToBytes(buff, headers)
+_, err = io.WriteString(buff, "\r\n")
+if err != nil {
+    return nil, err
+}
+
+// Check to see if there is a Text or HTML field
+if len(e.Text) &gt; 0 || len(e.HTML) &gt; 0 {
+    var subWriter *multipart.Writer
+
+    if isMixed &amp;&amp; isAlternative {
+        // Create the multipart alternative part
+        subWriter = multipart.NewWriter(buff)
+        header := textproto.MIMEHeader{
+            "Content-Type": {"multipart/alternative;\r\n boundary=" + subWriter.Boundary()},
+        }
+        if _, err := w.CreatePart(header); err != nil {
+            return nil, err
+        }
+    } else {
+        subWriter = w
+    }
+    // Create the body sections
+    if len(e.Text) &gt; 0 {
+        // Write the text
+        if err := writeMessage(buff, e.Text, isMixed || isAlternative, "text/plain", subWriter); err != nil {
+            return nil, err
+        }
+    }
+    if len(e.HTML) &gt; 0 {
+        // Write the HTML
+        if err := writeMessage(buff, e.HTML, isMixed || isAlternative, "text/html", subWriter); err != nil {
+            return nil, err
+        }
+    }
+    if isMixed &amp;&amp; isAlternative {
+        if err := subWriter.Close(); err != nil {
+            return nil, err
+        }
+    }
+}
+// Create attachment part, if necessary
+for _, a := range e.Attachments {
+    ap, err := w.CreatePart(a.Header)
+    if err != nil {
+        return nil, err
+    }
+    // Write the base64Wrapped content to the part
+    base64Wrap(ap, a.Content)
+}
+if isMixed || isAlternative {
+    if err := w.Close(); err != nil {
+        return nil, err
+    }
+}
+return buff.Bytes(), nil }
+</code></pre></div></div>
+
+<p>// Send an email using the given host and SMTP auth (optional), returns any error thrown by smtp.SendMail
+// This function merges the To, Cc, and Bcc fields and calls the smtp.SendMail function using the Email.Bytes() output as the message
+func (e *Email) Send(addr string, a smtp.Auth) error {
+    // Merge the To, Cc, and Bcc fields
+    to := make([]string, 0, len(e.To)+len(e.Cc)+len(e.Bcc))
+    to = append(append(append(to, e.To…), e.Cc…), e.Bcc…)
+    for i := 0; i &lt; len(to); i++ {
+        addr, err := mail.ParseAddress(to[i])
+        if err != nil {
+            return err
+        }
+        to[i] = addr.Address
+    }
+    // Check to make sure there is at least one recipient and one “From” address
+    if e.From == “” || len(to) == 0 {
+        return errors.New(“Must specify at least one From address and one To address”)
+    }
+    sender, err := e.parseSender()
+    if err != nil {
+        return err
+    }
+    raw, err := e.Bytes()
+    if err != nil {
+        return err
+    }
+    return SendMailUsingTLS(addr, a, sender, to, raw)
+}</p>
+
+<p>// Select and parse an SMTP envelope sender address.  Choose Email.Sender if set, or fallback to Email.From.
+func (e *Email) parseSender() (string, error) {
+    if e.Sender != “” {
+        sender, err := mail.ParseAddress(e.Sender)
+        if err != nil {
+            return “”, err
+        }
+        return sender.Address, nil
+    } else {
+        from, err := mail.ParseAddress(e.From)
+        if err != nil {
+            return “”, err
+        }
+        return from.Address, nil
+    }
+}</p>
+
+<p>// Attachment is a struct representing an email attachment.
+// Based on the mime/multipart.FileHeader struct, Attachment contains the name, MIMEHeader, and content of the attachment in question
+type Attachment struct {
+    Filename string
+    Header   textproto.MIMEHeader
+    Content  []byte
+}</p>
+
+<p>// base64Wrap encodes the attachment content, and wraps it according to RFC 2045 standards (every 76 chars)
+// The output is then written to the specified io.Writer
+func base64Wrap(w io.Writer, b []byte) {
+    // 57 raw bytes per 76-byte base64 line.
+    const maxRaw = 57
+    // Buffer for each line, including trailing CRLF.
+    buffer := make([]byte, MaxLineLength+len(“\r\n”))
+    copy(buffer[MaxLineLength:], “\r\n”)
+    // Process raw chunks until there’s no longer enough to fill a line.
+    for len(b) &gt;= maxRaw {
+        base64.StdEncoding.Encode(buffer, b[:maxRaw])
+        w.Write(buffer)
+        b = b[maxRaw:]
+    }
+    // Handle the last chunk of bytes.
+    if len(b) &gt; 0 {
+        out := buffer[:base64.StdEncoding.EncodedLen(len(b))]
+        base64.StdEncoding.Encode(out, b)
+        out = append(out, “\r\n”…)
+        w.Write(out)
+    }
+}</p>
+
+<p>// headerToBytes renders “header” to “buff”. If there are multiple values for a
+// field, multiple “Field: value\r\n” lines will be emitted.
+func headerToBytes(buff io.Writer, header textproto.MIMEHeader) {
+    for field, vals := range header {
+        for _, subval := range vals {
+            // bytes.Buffer.Write() never returns an error.
+            io.WriteString(buff, field)
+            io.WriteString(buff, “: “)
+            // Write the encoded header if needed
+            switch {
+            case field == “Content-Type” || field == “Content-Disposition”:
+                buff.Write([]byte(subval))
+            default:
+                buff.Write([]byte(mime.QEncoding.Encode(“UTF-8”, subval)))
+            }
+            io.WriteString(buff, “\r\n”)
+        }
+    }
+}</p>
+
+<p>var maxBigInt = big.NewInt(math.MaxInt64)</p>
+
+<p>// generateMessageID generates and returns a string suitable for an RFC 2822
+// compliant Message-ID, e.g.:
+// <a href="mailto:1444789264909237300.3464.1819418242800517193@DESKTOP01">1444789264909237300.3464.1819418242800517193@DESKTOP01</a>
+//
+// The following parameters are used to generate a Message-ID:
+// - The nanoseconds since Epoch
+// - The calling PID
+// - A cryptographically random int64
+// - The sending hostname
+func generateMessageID() (string, error) {
+    t := time.Now().UnixNano()
+    pid := os.Getpid()
+    rint, err := rand.Int(rand.Reader, maxBigInt)
+    if err != nil {
+        return “”, err
+    }
+    h, err := os.Hostname()
+    // If we can’t get the hostname, we’ll use localhost
+    if err != nil {
+        h = “localhost.localdomain”
+    }
+    msgid := fmt.Sprintf(“&lt;%d.%d.%d@%s&gt;”, t, pid, rint, h)
+    return msgid, nil
+}</p>
+
+<p>func Dial(addr string) (*smtp.Client, error) {
+    conn, err := tls.Dial(“tcp”, addr, nil)
+    if err != nil {
+        log.Println(“Dialing Error:”, err)
+        return nil, err
+    }
+    //分解主机端口字符串
+    host, _, _ := net.SplitHostPort(addr)
+    return smtp.NewClient(conn, host)
+}</p>
+
+<p>//参考net/smtp的func SendMail()
+//使用net.Dial连接tls(ssl)端口时,smtp.NewClient()会卡住且不提示err
+//len(to)&gt;1时,to[1]开始提示是密送
+func SendMailUsingTLS(addr string, auth smtp.Auth, from string,
+    to []string, msg []byte) (err error) {</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>//create smtp client
+c, err := Dial(addr)
+if err != nil {
+    log.Println("Create smpt client error:", err)
+    return err
+}
+defer c.Close()
+
+if auth != nil {
+    if ok, _ := c.Extension("AUTH"); ok {
+        if err = c.Auth(auth); err != nil {
+            log.Println("Error during AUTH", err)
+            return err
+        }
+    }
+}
+
+if err = c.Mail(from); err != nil {
+    return err
+}
+
+for _, addr := range to {
+    if err = c.Rcpt(addr); err != nil {
+        return err
+    }
+}
+
+w, err := c.Data()
+if err != nil {
+    return err
+}
+
+_, err = w.Write(msg)
+if err != nil {
+    return err
+}
+
+err = w.Close()
+if err != nil {
+    return err
+}
+
+return c.Quit() } 4、build
+</code></pre></div></div>
+
+<p>go build -o sslmail  main.go</p>
+:ET

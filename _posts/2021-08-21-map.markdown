@@ -1,0 +1,114 @@
+---
+title: map的实现原理
+layout: post
+category: golang
+author: 夏泽民
+---
+一个map就是一个哈希表的引用。它是一个无序的key/value对的集合，其中，所有的key都是不同的。然后通过给定的key可以在常数时间复杂度内检索、更新或删除对应的value
+在map中的元素不是一个变量，因此不能对map的元素进行取址操作。因为map可能随着元素数量的增加而重新分配内存更大的内存空间，从而导致之前的地址失效
+
+runtime/map.go
+
+```
+// map 数据结构
+type hmap struct {
+    count     int // 元素的个数, len() 的值
+    flags     uint8
+    B         uint8  // bucket个数为：2^B；可以保存的元素个数： 填充因子(默认6.5) * 2^B 
+    noverflow uint16 // 溢出桶数量
+    hash0     uint32 // 哈希因子
+
+    buckets    unsafe.Pointer // Buckets数组，大小为 2^B 
+    oldbuckets unsafe.Pointer // 前面的Buckets，在增长时非nil
+    nevacuate  uintptr        // 迁移状态，进度
+
+    extra *mapextra // optional fields
+}
+
+// bucket 数据结构
+type bmap struct {
+    tophash [bucketCnt]uint8 // bucketCnt 是常量=8，一个bucket最多存储8个key/value对
+    // 后面紧跟着8个key
+    // 再后面是8个value
+    // 最后是overflow的指针
+}
+```
+<!-- more -->
+在 hint <= 8(bucketSize) 时，会调用 makemap_small 来进行初始化，如果 hint > 8，则调用 makemap。
+不提供 hint 的时候，编译器始终会调用 makemap_small 来初始化。
+
+
+mapassign的处理步骤如下：
+
+若h为nil则panic
+若有其他协程在写入map，则panic相关错误
+对key进行hash
+设置flags为Writing
+若h.buckets为nil，则重新分配
+进入again处理
+根据hash获取对应的bucket
+若h在扩容，则进行扩容工作
+获取bucket对应的*bmap b及hash的高位top
+进入bucketloop
+遍历bucket
+若b的当前topHash不为top
+（1）若当前tophash的状态为empty且inserti为nil，则当前tophash的地址赋值给inserti，并获取key及element的地址
+（2）若topHash的状态为emptyReset则跳出bucketloop
+（3）继续遍历bucket
+若b的当前topHash不为top，说明已找到匹配的hash。获取key确认与存入的key是否一致（是否hash冲突），不一致则继续遍历bucket。一致，则确实是否更新，需要更新，则更新对应的key。
+根据key的地址获取element的地址，跳转done
+获取b的overflow buckets，若为nil，则跳出bucketloop;否则将overflow赋值给b，继续bucketloop
+如果map没在扩容，新增数据后已超过负载因子或拥有太多的overflow buckets，则进行扩容处理；扩容后进入again
+如果inseti为nil，说明所有的buckets已经满了，创建新的overflow，存入
+如果key类型t并非指针类型，则获取其指针
+如果存储的值类型非指针，获取其指针
+将key移动至insertK
+更新inserti指向的值为top
+进入done
+如果有其它goroutine在写入，则panic
+如果存储的类型为值类型，则获取其指向的值地址
+返回elem
+简单总结
+简单来说，存入数据需要经过以下几步：
+
+计算hash
+根据hash低位从buckets中确认存入bucket的位置
+根据hash高位确认bucket内的位置
+确认key是否存在，若存在则获取数据存入地址
+否则获取overflow buckets，继续步骤1
+若需要扩容，则进行扩容，扩容后，继续步骤1
+如果buckets及overflow buckets均已满，则新建overflow bucket，获取key、elem的地址
+存入数据
+正常存入值的顺序：
+
+buckets
+overflow buckets
+扩容后存入buckets/overflow buckets或者创建overflow buckets后存入
+
+https://blog.csdn.net/xzw12138/article/details/107288181
+https://blog.csdn.net/xz_studying/article/details/109171786
+
+```
+// hint 就是 make 初始化map 的第二个参数
+func makemap(t *maptype, hint int, h *hmap) *hmap
+func makemap64(t *maptype, hint int64, h *hmap) *hmap
+func makemap_small() *hmap
+```
+https://www.cnblogs.com/-lee/p/12777254.html
+
+
+https://www.jianshu.com/p/9fcf9f9a2028
+https://blog.csdn.net/u010927340/article/details/110194541
+
+
+https://www.cnblogs.com/-lee/p/12807063.html
+
+https://www.cnblogs.com/-lee/p/12807063.html
+
+tophash是一个长度为8的数组，它不仅仅用来存放key的哈希高8位，在不同场景下它还可以标记迁移状态，bucket是否为空等
+https://blog.csdn.net/fengshenyun/article/details/100582529
+
+https://blog.csdn.net/fengshenyun/article/details/97296412
+https://qcrao91.gitbook.io/go/map/map-de-di-ceng-shi-xian-yuan-li-shi-shi-mo
+
+https://studygolang.com/articles/29760

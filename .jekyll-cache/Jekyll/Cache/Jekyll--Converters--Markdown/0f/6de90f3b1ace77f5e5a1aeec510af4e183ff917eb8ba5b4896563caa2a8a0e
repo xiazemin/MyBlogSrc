@@ -1,0 +1,290 @@
+I"	0<p>https://github.com/go-lang-plugin-org/go-lang-idea-plugin#pre-release-builds
+这个插件可以在idea上看到调试按钮，但是不好用
+https://github.com/derekparker/delve
+Go 官方的debug tool文档写的啥。</p>
+
+<p>GDB does not understand Go programs well. The stack management, threading, and runtime contain aspects that differ enough from the execution model GDB expects that they can confuse the debugger, even when the program is compiled with gccgo.</p>
+
+<p>In short, the instructions below should be taken only as a guide to how to use GDB when it works, not as a guarantee of success.</p>
+
+<p>In time, a more Go-centric debugging architecture may be required.</p>
+
+<p>总结一下上面说的话。</p>
+
+<p>Go 的debug工具有GDB这个玩意，但是目前貌似工作的不咋滴
+目前官方只是给你介绍介绍这个玩意怎么用，但是不保证能成功
+实话说，我们需要一个更懂 Go 的调试器
+最后一句话透露了本质，目前还没有一个非常好的调试工具。难道我们只能在不断打日志然后 build 然后再打日志中调试程序吗？ 当然不是，下面我来介绍一个专门为 Go而生的 debug 工具 Delve。</p>
+
+<p>Delve目的就是为了解决开发者在使用 GDB 调试中遇到的各种各样的问题。我们开始详细的介绍一些使用Delve 调试代码的例子。
+　Devle是一个非常棒的golang 调试工具，支持多种调试方式，直接运行调试，或者attach到一个正在运行中的golang程序，进行调试。</p>
+
+<p>　　线上golang服务出现问题时，Devle是必不少的在线调试工具，如果使用docker，也可以把Devle打进docker镜像里，调试代码。
+<!-- more -->
+首先默认你已经安装了 Go 环境，安装命令很简单，一句话。</p>
+
+<p>go get github.com/derekparker/delve/cmd/dlv
+注意:如果你使用Go1.5，你必须在运行这个命令前设置GO15VENDOREXPERIMENT=1</p>
+
+<p>调试代码
+首先得说明一下，实诚点说，当你想用debug 工具的时候，你的代码估计已经不按照你想象的方式运行了。只是你不知道为什么会这样，因此你可能需要换一种方式启动你的程序，下面我们来演示一下如果使用dlv来启动你的程序。我们的示例代码如下:</p>
+
+<p>package main</p>
+
+<p>import (
+    “fmt”
+    “sync”
+    “time”
+)</p>
+
+<p>func dostuff(wg *sync.WaitGroup, i int) {
+    fmt.Printf(“goroutine id %d\n”, i)
+    time.Sleep(300 * time.Second)
+    fmt.Printf(“goroutine id %d\n”, i)
+    wg.Done()
+}</p>
+
+<p>func main() {
+    var wg sync.WaitGroup
+    workers := 10</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>wg.Add(workers)
+for i := 0; i &lt; workers; i++ {
+    go dostuff(&amp;wg, i)
+}
+wg.Wait() } 在这个示例代码中，我们创建了10个goroutine，这种代码对于 GDB 来说是几乎不可读的，因为它对于goroutine的支持很差。但是Delve作为一个专业的 Go 调试器，对于goroutine这种杀手级功能还是非常了解的。下面我们来启动程序。
+</code></pre></div></div>
+
+<p>dlv debug test-debug.go
+运行这个命令，dlv会去编译你的代码，然后传一些参数给编译器，好让编译器编译出来更加方便调试的可执行文件，然后启动了你的程序，并且attach上去，这样你的console就会停留在了debug session，下面就可以调试程序了。</p>
+
+<p>首先我们在main函数上设置一个断点。</p>
+
+<p>(dlv) break main.main
+Breakpoint 1 set at 0x22d3 for main.main() ./test-debug.go:16
+输出信息里面告诉了我们断点的 ID和断点的位置，函数名和文件名以及所在行数。我们使用continue命令让程序运行到我们打断点的地方。</p>
+
+<p>(dlv) continue</p>
+<blockquote>
+  <p>main.main() ./test-debug.go:16 (hits goroutine(1):1 total:1) (PC: 0x22d3)
+    11:        time.Sleep(300 * time.Second)
+    12:        fmt.Printf(“goroutine id %d\n”, i)
+    13:        wg.Done()
+    14:    }
+    15:
+=&gt;  16:    func main() {
+    17:        var wg sync.WaitGroup
+    18:        workers := 10
+    19:
+    20:        wg.Add(workers)
+    21:        for i := 0; i &lt; workers; i++ {
+(dlv)
+现在程序就停在了第一个断点，现在我们可以使用next命令让程序运行到下一句话，如果你想继续向下，可以直接按回车(Delve会重复上一条命令如果你按下回车键)。</p>
+</blockquote>
+
+<p>(dlv) next</p>
+<blockquote>
+  <p>main.main() ./test-debug.go:17 (PC: 0x22d7)
+    12:        fmt.Printf(“goroutine id %d\n”, i)
+    13:        wg.Done()
+    14:    }
+    15:
+    16:    func main() {
+=&gt;  17:        var wg sync.WaitGroup
+    18:        workers := 10
+    19:
+    20:        wg.Add(workers)
+    21:        for i := 0; i &lt; workers; i++ {
+    22:            go dostuff(&amp;wg, i)
+(dlv)
+main.main() ./test-debug.go:18 (PC: 0x22f1)
+    13:        wg.Done()
+    14:    }
+    15:
+    16:    func main() {
+    17:        var wg sync.WaitGroup
+=&gt;  18:        workers := 10
+    19:
+    20:        wg.Add(workers)
+    21:        for i := 0; i &lt; workers; i++ {
+    22:            go dostuff(&amp;wg, i)
+    23:        }
+(dlv)
+main.main() ./test-debug.go:20 (PC: 0x22fa)
+    15:
+    16:    func main() {
+    17:        var wg sync.WaitGroup
+    18:        workers := 10
+    19:
+=&gt;  20:        wg.Add(workers)
+    21:        for i := 0; i &lt; workers; i++ {
+    22:            go dostuff(&amp;wg, i)
+    23:        }
+    24:        wg.Wait()
+    25:    }
+(dlv)  <br />
+现在我们可以尝试使用print命令去看一下变量的值。</p>
+</blockquote>
+
+<p>(dlv) print wg
+sync.WaitGroup {
+    state1: [12]uint8 [0,0,0,0,0,0,0,0,0,0,0,0],
+    sema: 0,}
+(dlv) print workers
+10
+(dlv)
+同时你也可以输出一个表达式</p>
+
+<p>(dlv) print workers &lt; 100
+true
+下面我们在另外一个函数dostuff 上设置一个断点</p>
+
+<p>(dlv) break dostuff
+Breakpoint 2 set at 0x2058 for main.dostuff() ./test-debug.go:9
+我们使用continue到我们设置断点的地方，然后next</p>
+
+<p>(dlv) next
+goroutine id 3</p>
+<blockquote>
+  <p>main.dostuff() ./test-debug.go:10 (PC: 0x205f)
+     5:        “sync”
+     6:        “time”
+     7:    )
+     8:
+     9:    func dostuff(wg *sync.WaitGroup, i int) {
+=&gt;  10:        fmt.Printf(“goroutine id %d\n”, i)
+    11:        time.Sleep(300 * time.Second)
+    12:        fmt.Printf(“goroutine id %d\n”, i)
+    13:        wg.Done()
+    14:    }
+    15:
+(dlv)
+可以看到Delve会告诉你目前的goroutine id，我们试试输出一下i和wg.</p>
+</blockquote>
+
+<p>(dlv) print i
+4
+(dlv) print wg
+*sync.WaitGroup {
+    state1: [12]uint8 [1,0,0,0,10,0,0,0,0,0,0,0],
+    sema: 0,}</p>
+
+<p>我们创建了10个goroutine，如果你继续使用next，你会发现你还是在同一个goroutine下。这样就避免了被调试器跳转到了另外的goroutine下导致不必要的调试错误。可见还是为 Go 而生的调试器才是真爱啊。</p>
+
+<p>进阶调试
+其实很多时候，我们调试的代码可能是daemon程序或者需要实现编译好在不同机器运行的程序。这就需要我们attach到一个已经在运行中的程序上，下面我们就使用上面的代码来演示一下如何attach到一个程序上进行调试。首先将刚才的程序运行起来,我这里直接使用了</p>
+
+<p>go build test-debug.go
+./test-debug
+然后使用ps查看正在运行的程序pid</p>
+
+<p>501 40994   549   0 12:08AM ttys003    0:00.00 ./test-debug</p>
+
+<p>然后我们attach上去</p>
+
+<p>dlv attach 40994
+可以看到，熟悉的debug seesion又回来了。下面我们可以继续使用上面的命令去设置断点了</p>
+
+<p>(dlv) break dostuff
+Breakpoint 1 set at 0x2058 for main.dostuff() /Users/xianlu/WorkSpace/golang/src/test-debug.go:9
+(dlv) break dostuff:3
+Breakpoint 2 set at 0x2144 for main.dostuff() /Users/xianlu/WorkSpace/golang/src/test-debug.go:12
+我使用continue使程序运行到我设置断点的地方</p>
+
+<p>(dlv) continue</p>
+<blockquote>
+  <p>main.dostuff() /Users/xianlu/WorkSpace/golang/src/test-debug.go:12 (hits goroutine(18):1 total:8) (PC: 0x2144)
+main.dostuff() /Users/xianlu/WorkSpace/golang/src/test-debug.go:12 (hits goroutine(19):1 total:8) (PC: 0x2144)
+main.dostuff() /Users/xianlu/WorkSpace/golang/src/test-debug.go:12 (hits goroutine(26):1 total:8) (PC: 0x2144)
+main.dostuff() /Users/xianlu/WorkSpace/golang/src/test-debug.go:12 (hits goroutine(23):1 total:8) (PC: 0x2144)
+main.dostuff() /Users/xianlu/WorkSpace/golang/src/test-debug.go:12 (hits goroutine(24):1 total:8) (PC: 0x2144)
+main.dostuff() /Users/xianlu/WorkSpace/golang/src/test-debug.go:12 (hits goroutine(20):1 total:8) (PC: 0x2144)
+main.dostuff() /Users/xianlu/WorkSpace/golang/src/test-debug.go:12 (hits goroutine(21):1 total:8) (PC: 0x2144)
+main.dostuff() /Users/xianlu/WorkSpace/golang/src/test-debug.go:12 (hits goroutine(25):1 total:8) (PC: 0x2144)
+     7:    )
+     8:
+     9:    func dostuff(wg *sync.WaitGroup, i int) {
+    10:        fmt.Printf(“goroutine id %d\n”, i)
+    11:        time.Sleep(300 * time.Second)
+=&gt;  12:        fmt.Printf(“goroutine id %d\n”, i)
+    13:        wg.Done()
+    14:    }
+    15:
+    16:    func main() {
+    17:        var wg sync.WaitGroup
+(dlv)
+可以看到，Delve已经打印出来了当前正在运行的goroutine，下面我们print一下我们当前的i</p>
+</blockquote>
+
+<p>(dlv) print i
+7
+(dlv) print wg
+*sync.WaitGroup {
+    state1: [12]uint8 [1,0,0,0,10,0,0,0,0,0,0,0],
+    sema: 0,}
+和上面一样，而且attach到这个进程后，也可以把对应的源码显示出来</p>
+
+<p>一个运行在8000端口上的web服务，访问 hi会返回机器的名称。上面代码的行号是很有用的，等会我们打断点的时候会用到。</p>
+
+<p>　  使用Delve运行我们的main.go</p>
+
+<p>dlv debug ./main.go
+在func li  里打一个断点，我们可以使用</p>
+
+<p>b main.hi
+或者使用   “文件:行号”来打断点</p>
+
+<p>b /home/goworkspace/src/github.com/mytest/main.go:20
+现在执行continue 让服务跑起来。访问一下我们的服务，看hi方法会不会停下来。</p>
+
+<p>curl localhost:8000/hi
+　　输入 n 回车，单步执行，</p>
+
+<p>　　输入 print（别名p）输出变量信息　　</p>
+
+<p>　　输入 args 打印出所有的方法参数信息</p>
+
+<p>　　输入 locals 打印所有的本地变量</p>
+
+<p>　使用Delve附加到运行的golang服务进行调试
+ 　　先编译一下我们的main.go然后去行main</p>
+
+<p>go build main.go</p>
+
+<p>./main
+然后使用Delve附加到我们的项目上，先看一下我们的项目的pid</p>
+
+<p>ps aux|grep main
+dlv attach 29260
+　在hi方法里打断点，然后执行c来等待断点的执行。</p>
+
+<p>b /home/goworkspace/src/github.com/mytest/main.go:20
+　　</p>
+
+<p>　　访问我们的服务器，看一下断点会不会被执行</p>
+
+<p>curl localhost:8000/hi</p>
+
+<p>https://tqdev.com/2016-debugging-go-with-vscode-and-delve</p>
+
+<p>dlv debug xxx.go 指定需要debug的文件
+进入dlv交互式窗口后，b <filename>:<line> 指定断点
+r arg 指定运行参数
+n 执行一行
+c 运行至断点或程序结束</line></filename></p>
+
+<p>Pass flags to the program you are debugging using –, for example:</p>
+
+<p>dlv exec ./hello – server –config conf/config.toml</p>
+
+<p>https://github.com/derekparker/delve/blob/master/Documentation/usage/dlv.md</p>
+
+<p>Available Commands: 
+  attach      关联到一个已经运行的程序上进行调试.</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    dlv attach  [程序的PID]   connect     Connect to a headless debug server.   core        Examine a core dump.   debug       Compile and begin debugging main package in current directory, or the package specified.   exec        Execute a precompiled binary, and begin a debug session.   help        Help about any command   run         Deprecated command. Use 'debug' instead.   test        Compile test binary and begin debugging program.   trace       Compile and begin tracing program.   version     Prints version.
+</code></pre></div></div>
+
+<p>http://lday.me/2017/02/27/0005_gdb-vs-dlv/
+https://guidao.github.io/go_debug.html#orgheadline3</p>
+:ET

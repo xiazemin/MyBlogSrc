@@ -1,0 +1,216 @@
+I"9<p>node中Promise使用实例
+需求：现有三个文件需要依次读取文件内容</p>
+
+<p>// a.json
+{
+    “next”: “b.json”,
+    “massage”: “this is a file content”
+}</p>
+
+<p>b.json
+{
+    “next”: “c.json”,
+    “massage”: “this b file content”
+}</p>
+
+<p>c.json
+{
+    “next”: “null”,
+    “massage”: “this c file content”
+}
+目录结构：
+在这里插入图片描述</p>
+
+<p>实现方法如下：</p>
+
+<p>// 方法一： callback获去文件的内容
+const fs = require(“fs”)
+const path = require(“path”)</p>
+
+<p>// 定义一个函数去获取文件内容
+function getFileContent(fileName, callback) {
+    const fullFilename = path.resolve(__dirname, “files”, fileName)
+    fs.readFile(fullFilename, (err, data) =&gt; {
+        if(err){
+            console.error(err)
+            return
+        }
+        // 调用callback函数处理读取到的数据
+        callback(
+            // readFile中读取的文件内容为buffer因此需要转为字符串
+            JSON.parse(data.toString())
+        )
+    })
+}</p>
+
+<p>getFileContent(“a.json”, aData =&gt; {
+    console.log(“a data”, aData)
+    getFileContent(aData.next, bData =&gt; {
+        console.log(“b data”, bData)
+        getFileContent(bData.next, cData =&gt; {
+            console.log(“c data”, cData)
+        })
+    })
+})</p>
+
+<p>// 方法二： 使用Promise和then连用获取文件内容
+const fs = require(“fs”)
+const path = require(“path”)</p>
+
+<p>function getFileContent(fileName) {
+    const promise = new Promise((resolve, reject) =&gt; {
+        const fullFilename = path.resolve(__dirname, “files”, fileName)
+        fs.readFile(fullFilename, (err, data) =&gt; {
+            if(err) {
+                reject(err)
+                return
+            }
+            resolve(
+                JSON.parse(data.toString())
+            )
+        })
+    })
+    return promise
+}</p>
+
+<p>// promise后面接 .then 可以获取resolve 里面的内容
+getFileContent(“a.json”).then(aData =&gt; {
+    console.log(“a data”, aData)
+    return getFileContent(aData.next)
+}).then(bData =&gt; {
+    console.log(“b data”, bData)
+    return getFileContent(bData.next)
+}).then(cData =&gt; {
+    console.log(“c data”, cData)
+})</p>
+
+<p>// 方法三： 使用async await 和 Promise连用实现同步读取文件
+const fs = require(“fs”)
+const path = require(“path”)</p>
+
+<p>function getFileContent(fileName) {
+    const promise = new Promise((resolve, reject) =&gt; {
+        const fullFilename = path.resolve(__dirname, “files”, fileName)
+        fs.readFile(fullFilename, (err, data) =&gt; {
+            if(err) {
+                reject(err)
+                return
+            }
+            resolve(
+                JSON.parse(data.toString())
+            )
+        })
+    })
+    return promise
+}</p>
+
+<p>async function readFileData() {
+    // 同步
+    try {
+        const aData = await getFileContent(“a.json”)
+        console.log(“a data”, aData)
+        const bData = await getFileContent(aData.next)
+        console.log(“b data”, bData)
+        const cData = await getFileContent(bData.next)
+        console.log(“c data”, cData)
+    } catch(err) {
+        console.error(err)
+    }
+}</p>
+
+<p>readFileData()
+注意⚠️：
+async await使用要点：
+// 1. await 后面可以追加 promise 对象，获取 resolve 的值
+// 2. await 必须包裹在 async 函数里面
+// 3. async 函数执行返回的也是一个 promise 对象
+// 4. try-catch 截获 promise 中 reject 的值
+<!-- more -->
+https://blog.csdn.net/danieljackz/article/details/97520141</p>
+
+<p>Javascript的特点是异步，Javascript不能等待，如果你实现某件需要等待的事情，你不能停在那里一直等待结果回来，相反，底线是使用回调callback：你定义一个函数，这个函数只有等到结果可用时才能被调用。</p>
+
+<p>这种回调模型对于好的代码组织是没有问题的，但是也可以通过从原始回调切换到promise解决很多问题，将promise看成是一个标准的数据容器，这样会简化你的代码组织，可以成为基于promise的架构。</p>
+
+<p>什么是Promise?
+　一个promise是一个带有”.then()”方法的对象，其代表的是一个操作的结果可能还没有或不知道，无论谁访问这个对象，都能够使用”.then()”方法加入回调等待操作出现成功结果或失败时的提醒通知，。</p>
+
+<p>　那么为什么这样做好处优于回调呢？标准的回调模式在我们处理请求时需要同时提供回调函数：</p>
+
+<p>request(url, function(error, response) {</p>
+
+<p>// handle success or error.</p>
+
+<p>});</p>
+
+<p>doSomethingElse();</p>
+
+<p>　很不幸，这段代码意味着这个request函数并不知道它自己什么时候能够完成，当然也没有必要，我们最终通过回调传递结果。这会导致多个回调形成了嵌套回调，或者称为回调陷阱。</p>
+
+<p>queryTheDatabase(query, function(error, result) {</p>
+
+<p>request(url, function(error, response) {</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>doSomethingElse(response, function(error, result) {
+
+  doAnotherThing(result, function(error, result) {
+
+    request(anotherUrl, function(error, response) {
+
+      ...
+
+    });
+
+  });
+
+});
+</code></pre></div></div>
+
+<p>});</p>
+
+<p>});</p>
+
+<p>　Promise能够解决这种问题，允许低层代码创建一个request然后返回一个对象，其代表着未完成的操作，让调用者去决定应该加入什么回调。</p>
+
+<p>Promise是什么？
+　promise是一个异步编程的抽象，它是一个返回值或抛出exception的代理对象，一般promise对象都有一个then方法，这个then方法是我们如何获得返回值(成功实现承诺的结果值，称为fulfillment)或抛出exception(拒绝承诺的理由，称为rejection)，then是用两个可选的回调作为参数，我们可以称为onFulfilled和OnRejected：</p>
+
+<p>var promise = doSomethingAync()
+promise.then(onFulfilled, onRejected)</p>
+
+<p>　当这个promise被解决了，也就是异步过程完成后，onFulfilled和OnRejected中任何一个将被调用，</p>
+
+<p>　因此，一个promise有下面三个不同状态：</p>
+
+<p>pending待承诺 - promise初始状态
+fulfilled实现承诺 - 一个承诺成功实现状态
+rejected拒绝承诺 - 一个承诺失败的状态</p>
+
+<p>https://www.jdon.com/idea/nodejs/promise.html
+https://www.jianshu.com/p/e48f76d41532
+https://www.cnblogs.com/linwenbin/p/12656664.html
+https://blog.csdn.net/cdnight/article/details/50857876
+https://www.jianshu.com/p/60a2129af455</p>
+
+<p>收尾执行-finally
+就是不管怎么样，都会执行的方法，即使是抛异常了</p>
+
+<p>chenqionghe(3)
+    .then(function () {
+        return get(2)
+    })
+    .then(function () {
+        throw new Error(“abc”);
+        return muscle(1)
+    })
+    .catch(function (e) {
+        console.log(“异常:” + e.message)
+    })
+    .finally(function () {
+        console.log(“最后都会执行的方法”)
+    })
+;</p>
+
+<p>https://www.cnblogs.com/chenqionghe/p/11406666.html</p>
+
+:ET

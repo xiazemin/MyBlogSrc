@@ -1,0 +1,65 @@
+---
+title: jiffies
+layout: post
+category: linux
+author: 夏泽民
+---
+HZ
+Linux核心每隔固定周期会发出timer interrupt (IRQ 0)，HZ是用来定义每一秒有几次timer interrupts。举例来说，HZ为1000，代表每秒有1000次timer interrupts。 HZ可在编译核心时设定，如下所示(以核心版本2.6.20-15为例)： 
+:~$ cd /usr/src/linux 
+:/usr/src/linux$ make menuconfig 
+ Processor type and features ---> Timer frequency (250 HZ) ---> 
+ Tick
+Tick是HZ的倒数，意即timer interrupt每发生一次中断的时间。如HZ为250时，tick为4毫秒(millisecond)。 
+
+Jiffies
+Jiffies为Linux核心变数(32位元变数，unsigned long)，它被用来纪录系统自开几以来，已经过多少的tick。每发生一次timer interrupt，Jiffies变数会被加一。值得注意的是，Jiffies于系统开机时，并非初始化成零，而是被设为-300*HZ (arch/i386/kernel/time.c)，即代表系统于开机五分钟后，jiffies便会溢位。那溢位怎么办?事实上，Linux核心定义几 个macro(timer_after、time_after_eq、time_before与time_before_eq)，即便是溢位，也能藉由这 几个macro正确地取得jiffies的内容。 
+
+另外，80x86架构定义一个与jiffies相关的变数jiffies_64 ，此变数64位元，要等到此变数溢位可能要好几百万年。因此要等到溢位这刻发生应该很难吧。那如何经由jiffies_64取得jiffies资讯呢?事 实上，jiffies被对应至jiffies_64最低的32位元。因此，经由jiffies_64可以完全不理会溢位的问题便能取得jiffies。
+HZ的设定：
+ #make menuconfig
+processor type and features--->Timer frequency (250 HZ)--->
+HZ的不同值会影响timer （节拍）中断的频率
+2.2 jiffies及其溢出 
+全局变量jiffies取值为自操作系统启动以来的时钟滴答的数目，在头文 件<linux/sched.h>中定义，数据类型为unsigned long volatile (32位无符号长整型)。关于 jiffies为什么要采用volatile来限定，可参考《关于volatile和jiffies.txt》。 
+jiffies转换为秒可采用 公式：(jiffies/HZ)计算，将秒转换为jiffies可采用公式：(seconds*HZ)计算。 
+当时钟中断发生时，jiffies 值就加1。因此连续累加一年又四个多月后就会溢出(假定HZ=100，1个jiffies等于1/100秒，jiffies可记录的最大秒数为 (2^32 -1)/100=42949672.95秒，约合497天或1.38年)，即当取值到达最大值时继续加1，就变为了0。 
+在 Vxworks操作系统中，定义HZ的值为60，因此连续累加两年又三个多月后也将溢出（jiffies可记录的最大秒数为约合2.27年）。如果在 Vxworks操作系统上的应用程序对jiffies的溢出没有加以充分考虑，那么在连续运行两年又三个多月后，这些应用程序还能够稳定运行吗？ 
+下 面我们来考虑jiffies的溢出，我们将从以下几个方面来阐述： 
+. 无符号整型溢出的具体过程 
+. jiffies溢出造成程序逻辑 出错 
+. Linux内核如何来防止jiffies溢出 
+. time_after等比较时间先/后的宏背后的原理 
+. 代码中 使用time_after等比较时间先/后的宏 
+
+3. 无符号整型溢出的具体过程 
+我们首先来看看无符号长整型（unsigned long）溢出的具体过程。实际上，无符号整型的溢出过 程都很类似。为了更具体地描述无符号长整型溢出的过程，我们以8位无符号整型为例来加以说明。 
+8位无符号整型从0开始持续增长，当增长到最大值 255时，继续加1将变为0，然后该过程周而复始： 
+0, 1, 2, ..., 253, 254, 255, 
+0, 1, 2, ..., 253, 254, 255, 
+... 
+<!-- more -->
+xtime是从cmos电路中取得的时间，一般是从某一历史时刻开始到现在的时间，也就是为了取得我们操作系统上显示的日期。这个就是所谓的“实时时钟”，它的精确度是微秒。
+
+
+jiffies是记录着从电脑开机到现在总共的时钟中断次数。在linux内核中jiffies远比xtime重要，那么他取决于系统的频率，单位是Hz，这里不得不说一下频率的单位，1MHz＝1000，000Hz（6个零），1KHz=1000Hz（3个零）.
+频 率是周期的倒数，一般是一秒钟中断产生的次数，所以，假如我们需要知道系统的精确的时间单位时，需要换算了，假如我们系统的频率是200Mhz,那么一次 中断的间隔是1秒/200,000，000Hz=0.000 000 005秒看一下上面我们的时间单位，对照一下小数点后面是9个零，所以理论上我们系统的精确度是5纳秒。LINUX系统时钟频率是一个常数HZ来决定的， 通常HZ＝100，那么他的精度度就是10ms（毫秒）。也就是说每10ms一次中断。所以一般来说Linux的精确度是10毫秒。
+
+硬件给内核提供一个系统定时器用以计算和管理时间，内核通过编程预设系统定时器的频率，即节拍率（tick rate),每一个周期称作一个tick(节拍）。Linux内核从2.5版内核开始把频率从100调高到1000，时间单位 jiffies 有多长？
+
+
+"在 Linux 2.6 中，系统时钟每 1 毫秒中断一次（时钟频率，用 HZ 宏表示，定义为 1000，即每秒中断 1000 次，2.4 中定义为 100，很多应用程序也仍然沿用 100 的时钟频率），这个时间单位称为一个 jiffie。"
+"jiffies 与绝对时间之间的转换, 用两个宏来完成两种时间单位的互换：JIFFIES_TO_NS()、NS_TO_JIFFIES()"
+（当然带来了很多优点，也有一些缺点）.
+
+硬件给内核提供一个系统定时器用以计算和管理时间，内核通过编程预设系统定时器的频率，即节拍率（tick rate),每一个周期称作一个tick(节拍）。Linux内核从2.5版内核开始把频率从100调高到1000（当然带来了很多优点，也有一些缺点）.
+   jiffies是内核中的一个全局变量，用来记录自系统启动一来产生的节拍数。譬如，如果计算系统运行了多长时间，可以用 jiffies/tick rate 来计算。jiffies定义在文件<linux/jiffies.h>中：
+extern unsigned long volatile jiffies;
+内核提供了四个宏来比较节拍计数，这些宏定义在文件<linux/jiffies.h>中：
+
+    time_before(unknown, known)
+    time_after(unknown, known)
+    time_before_eq(unknown, known)
+    time_after_eq(unknown, known)
+
+比较的时候用这些宏可以避免jiffies由于过大造成的回绕问题。

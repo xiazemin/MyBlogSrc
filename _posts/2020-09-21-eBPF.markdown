@@ -1,0 +1,195 @@
+---
+title: Debugging Go in prod using eBPF
+layout: post
+category: golang
+author: 夏泽民
+---
+
+https://blog.pixielabs.ai/blog/ebpf-function-tracing/post/
+https://github.com/iovisor/gobpf
+https://ebpf.io/
+
+When debugging, we are typically interested in capturing the state of a program. This allows us to examine what the application is doing and determine where the bug is located in our code. A simple way to observe state is to use a debugger to capture function arguments. For Go applications, we often use Delve or gdb.
+
+Delve and gdb work well for debugging in a development environment, but they are not often used in production. The features that make these debuggers powerful can also make them undesirable to use in production systems. Debuggers can cause significant interruption to the program and even allow mutation of state which might lead to unexpected failures of production software.
+
+To more cleanly capture function arguments, we will explore using enhanced BPF (eBPF), which is available in Linux 4.x+, and the higher level Go library gobpf.
+<!-- more -->
+什么是 BPF?
+BPF，及伯克利包过滤器Berkeley Packet Filter，最初构想提出于 1992 年，其目的是为了提供一种过滤包的方法，并且要避免从内核空间到用户空间的无用的数据包复制行为。它最初是由从用户空间注入到内核的一个简单的字节码构成，它在那个位置利用一个校验器进行检查 —— 以避免内核崩溃或者安全问题 —— 并附着到一个套接字上，接着在每个接收到的包上运行。几年后它被移植到 Linux 上，并且应用于一小部分应用程序上（例如，tcpdump）。其简化的语言以及存在于内核中的即时编译器（JIT），使 BPF 成为一个性能卓越的工具。
+
+然后，在 2013 年，Alexei Starovoitov 对 BPF 进行彻底地改造，并增加了新的功能，改善了它的性能。这个新版本被命名为 eBPF （意思是 “extended BPF”），与此同时，将以前的 BPF 变成 cBPF（意思是 “classic” BPF）。新版本出现了如映射和尾调用tail call这样的新特性，并且 JIT 编译器也被重写了。新的语言比 cBPF 更接近于原生机器语言。并且，在内核中创建了新的附着点。
+
+感谢那些新的钩子，eBPF 程序才可以被设计用于各种各样的情形下，其分为两个应用领域。其中一个应用领域是内核跟踪和事件监控。BPF 程序可以被附着到探针（kprobe），而且它与其它跟踪模式相比，有很多的优点（有时也有一些缺点）。
+
+另外一个应用领域是网络编程。除了套接字过滤器外，eBPF 程序还可以附加到 tc（Linux 流量控制工具）的入站或者出站接口上，以一种很高效的方式去执行各种包处理任务。这种使用方式在这个领域开创了一个新的天地。
+
+并且 eBPF 通过使用为 IO Visor 项目开发的技术，使它的性能进一步得到提升：也为 XDP（“eXpress Data Path”）添加了新的钩子，XDP 是不久前添加到内核中的一种新式快速路径。XDP 与 Linux 栈组合，然后使用 BPF ，使包处理的速度更快。
+
+甚至一些项目，如 P4、Open vSwitch，考虑[2] 或者开始去接洽使用 BPF。其它的一些，如 CETH、Cilium，则是完全基于它的。BPF 是如此流行，因此，我们可以预计，不久之后，将围绕它有更多工具和项目出现 …
+
+https://blog.csdn.net/21cnbao/article/details/95585483
+https://github.com/zoidbergwill/awesome-ebpf
+
+
+1. eBPF, bcc, bpftrace, iovisor 是什么
+eBPF 之于 Linux 一定程度上如同 JavaScript 之于 HTML。JavaScript 使得网页不再是静态的，它可以让你编写程序来监听鼠标点击等事件，而且程序运行在浏览器的安全虚拟环境中；类似的，有了 eBPF，内核也可以不是固定的(fixed)，你可以编写程序来监听 disk I/O 事件并执行相关动作，而且程序运行在内核的安全虚拟环境中。实际上，eBPF 更像是运行 JavaScript 的 V8 引擎，而不是像 JavaScript 本身。eBPF 是 Linux Kernel 的一部分。
+
+直接 eBPF 编码难于上青天，就好比直接编写 V8 字节码。但是没有人直接写 V8 字节码，他们用 JavaScript，或者基于 JavaScript 的框架(jQuery, Angular, React 等)。eBPF 也是一样，人们通过框架来使用 eBPF。对于 tracing 来说，主要的框架就是 bcc 和 bpftrace，这两个框架并不在内核代码中，他们在名为 iovisor 的 Linux Foundation project 中维护。
+
+2. eBPF tracing 示例
+tcplife是一个基于 eBPF 的工具，可以显示完整的 TCP session, 以及对应的进程号(PID) ，命令(COMM)，收发字节数(TX_KB, RX_KB)，以及时长(MS)：
+
+# tcplife
+PID   COMM       LADDR           LPORT RADDR           RPORT TX_KB RX_KB MS
+22597 recordProg 127.0.0.1       46644 127.0.0.1       28527     0     0 0.23
+3277  redis-serv 127.0.0.1       28527 127.0.0.1       46644     0     0 0.28
+22598 curl       100.66.3.172    61620 52.205.89.26    80        0     1 91.79
+22604 curl       100.66.3.172    44400 52.204.43.121   80        0     1 121.38
+22624 recordProg 127.0.0.1       46648 127.0.0.1       28527     0     0 0.22
+3277  redis-serv 127.0.0.1       28527 127.0.0.1       46648     0     0 0.27
+22647 recordProg 127.0.0.1       46650 127.0.0.1       28527     0     0 0.21
+3277  redis-serv 127.0.0.1       28527 127.0.0.1       46650     0     0 0.26
+[...]
+并不是 eBPF 才使得这样的工具成为可能，完全可以利用其他内核技术特性重写tcplife。但是如果这么做了，我们将因为性能开销、安全等因素而无法在生产环境中运行这个工具。eBPF 做的恰恰是让这个工具变得实用，tcplife 是高效并且安全的。举例来说，tcplife 并不会像其他内核技术特性一样去追踪每个网络包(packet)，那样会带来太多的性能开销。相反地，tcplife 只追踪 TCP session 事件，这类事件相对来说频率较低。这使得tcplife的负载极低，以至于我们可以在生产环境中24小时持续运行这个工具。
+
+
+https://my.oschina.net/u/1464083/blog/3055020
+https://github.com/iovisor/bcc
+https://github.com/iovisor/bpftrace
+https://github.com/iovisor/bcc/blob/master/docs/tutorial.md
+
+什么是 BPF？
+在 BPF 出现之前，如果你想去做包过滤，你必须拷贝所有的包到用户空间，然后才能去过滤它们（使用 “tap”）。
+
+这样做存在两个问题：
+
+如果你在用户空间中过滤，意味着你将拷贝所有的包到用户空间，拷贝数据的代价是很昂贵的。
+使用的过滤算法很低效。
+问题 #1 的解决方法似乎很明显，就是将过滤逻辑移到内核中。（虽然具体实现的细节并没有明确，我们将在稍后讨论）
+
+但是，为什么过滤算法会很低效？
+
+如果你运行 tcpdump host foo，它实际上运行了一个相当复杂的查询
+
+为什么 BPF 要工作在内核中
+这里的关键点是，包仅仅是个字节的数组。BPF 程序是运行在这些字节的数组之上。它们不允许有循环（loop），但是，它们 可以 有聪明的办法知道 IP 包头（IPv6 和 IPv4 长度是不同的）以及基于它们的长度来找到 TCP 端口：
+
+x = ip_header_length
+port = *(packet_start + x + port_offset) 
+（看起来不一样，其实它们基本上都相同）。在这个论文/幻灯片上有一个非常详细的虚拟机的描述，因此，我不打算解释它。
+
+当你运行 tcpdump host foo 后，这时发生了什么？就我的理解，应该是如下的过程。
+
+转换 host foo 为一个高效的 DAG 规则
+转换那个 DAG 规则为 BPF 虚拟机的一个 BPF 程序（BPF 字节码）
+发送 BPF 字节码到 Linux 内核，由 Linux 内核验证它
+编译这个 BPF 字节码程序为一个 原生(native)代码。例如，这是个ARM 上的 JIT 代码 以及 x86的机器码
+当包进入时，Linux 运行原生代码去决定是否过滤这个包。对于每个需要去处理的包，它通常仅需运行 100 - 200 个 CPU 指令就可以完成，这个速度是非常快的！
+现状：eBPF
+毕竟 BPF 出现已经有很长的时间了！现在，我们可以拥有一个更加令人激动的东西，它就是 eBPF。我以前听说过 eBPF，但是，我觉得像这样把这些片断拼在一起更好（我在 4 月份的 netdev 上我写了这篇 XDP & eBPF 的文章回复）
+
+关于 eBPF 的一些事实是：
+
+eBPF 程序有它们自己的字节码语言，并且从那个字节码语言编译成内核原生代码，就像 BPF 程序一样
+eBPF 运行在内核中
+eBPF 程序不能随心所欲的访问内核内存。而是通过内核提供的函数去取得一些受严格限制的所需要的内容的子集
+它们 可以 与用户空间的程序通过 BPF 映射进行通讯
+这是 Linux 3.18 的 bpf 系统调用
+kprobes 和 eBPF
+你可以在 Linux 内核中挑选一个函数（任意函数），然后运行一个你写的每次该函数被调用时都运行的程序。这样看起来是不是很神奇。
+
+例如：这里有一个 名为 disksnoop 的 BPF 程序，它的功能是当你开始/完成写入一个块到磁盘时，触发它执行跟踪。下图是它的代码片断：
+
+BPF_HASH(start, struct request *);
+void trace_start(struct pt_regs *ctx, struct request *req) {
+    // stash start timestamp by request ptr
+    u64 ts = bpf_ktime_get_ns();
+    start.update(&req, &ts);
+}
+...
+b.attach_kprobe(event="blk_start_request", fn_name="trace_start")
+b.attach_kprobe(event="blk_mq_start_request", fn_name="trace_start")
+
+本质上它声明一个 BPF 哈希（它的作用是当请求开始/完成时，这个程序去触发跟踪），一个名为 trace_start 的函数将被编译进 BPF 字节码，然后附加 trace_start 到内核函数 blk_start_request 上。
+
+这里使用的是 bcc 框架，它可以让你写 Python 式的程序去生成 BPF 代码。你可以在 https://github.com/iovisor/bcc 找到它（那里有非常多的示例程序）。
+
+uprobes 和 eBPF
+因为我知道可以附加 eBPF 程序到内核函数上，但是，我不知道能否将 eBPF 程序附加到用户空间函数上！那会有更多令人激动的事情。这是 在 Python 中使用一个 eBPF 程序去计数 malloc 调用的示例。
+
+附加 eBPF 程序时应该考虑的事情
+带 XDP 的网卡（我之前写过关于这方面的文章）
+tc egress/ingress （在网络栈上）
+kprobes（任意内核函数）
+uprobes（很明显，任意用户空间函数？？像带调试符号的任意 C 程序）
+probes 是为 dtrace 构建的名为 “USDT probes” 的探针（像 这些 mysql 探针)。这是一个 使用 dtrace 探针的示例程序
+JVM
+跟踪点
+seccomp / landlock 安全相关的事情
+
+https://zhuanlan.zhihu.com/p/36762187
+
+https://nova.polymtl.ca/~suchakra/PWL-Jun28-MTL.pdf
+https://github.com/iovisor/bcc/blob/master/LINKS.md
+
+eBPF
+BPF（Berkeley Packet Filter）是 Linux 内核提供的基于 BPF 字节码的动态注入技术（常应用于 tcpdump、raw socket 过滤等）。eBPF(extended Berkeley Packet Filter)是针对于 BPF 的扩展增强，丰富了 BPF 指令集，提供了 Map 的 KV 存储结构。我们可以利用 bpf（）系统调用，初始化 eBPF 的 Program 和 Map，利用 netlink 消息或者 setsockopt（）系统调用，将 eBPF 字节码注入到特定的内核处理流程中（如 XDP、socket filter 等）
+
+
+https://juejin.im/post/6844904182919462925
+
+https://speakerdeck.com/tuxology/the-bsd-packet-filter
+
+
+Linux未来监控tracing框架——eBPF
+eBPF源于早年间的成型于 BSD 之上的传统技术 BPF(Berkeley Packet Filter)。BPF 的全称是 Berkeley Packet Filter，顾名思义，这是一个用于过滤(filter)网络报文(packet)的架构。
+
+BPF 是在 1997 年首次被引入 Linux 的，Linux 内核中的报文过滤机制其实是有自己的名字的：Linux Socket Filter，简称 LSF。
+
+从 3.15 开始，一个套源于 BPF 的全新设计开始，在3.17被添置到了 kernel/bpf 下。全新设计最终被命名为了 extended BPF(eBPF)；为了后向兼容，传统的 BPF 仍被保留了下来，并被重命名为 classical BPF(cBPF)。相对于 cBPF，eBPF 带来的改变可谓是革命性的：一方面，它已经为内核追踪(Kernel Tracing)、应用性能调优/监控、流控(Traffic Control)等领域带来了激动人心的变革；另一方面，在接口的设计以及易用性上，eBPF 也有了较大的改进。
+
+cBPF 所覆盖的功能范围很简单，就是网络监控和 seccomp 两块，数据接口设计的粗放；而 eBPF 的利用范围要广的多，性能调优、内核监控、流量控制什么的，数据接口的多样性设计。
+
+由一个文件(net/core/filter.c)进化到一个目录(kernel/bpf)
+
+目前，支持生成 BPF 伪代码的编译器只有 llvm 一家，即使是通篇使用 gcc 编译的 Linux 内核，samples 目录下的 bpf 范例也要借用 llvm 来编译完成。
+
+1. 运行监测
+　　eBPF 其实是内核模块，比内核模块更短小精干，实现的功能也更新颖， eBPF注入的代码是要在内核中运行的，会有安全隐患。
+
+为了最大限度控制安全隐患，cBPF 时代就开始加入了代码检查机制以防止不规范的注入代码；到了 eBPF则在载入程序(bpf_load_program())时加入了更复杂的verifier 机制，会进行一系列的安全检查。
+
+3. bcc
+现在可以用 C 来实现 BPF，但编译出来的却仍然是 ELF 文件，开发者需要手动析出真正可以注入内核的代码。这工作有些麻烦，于是就有人设计了 BPF Compiler Collection(BCC)，BCC 是一个 python 库，但是其中有很大一部分的实现是基于 C 和 C++的，python实现了对 BCC 应用层接口的封装。
+
+使用 BCC 进行 BPF 的开发仍然需要开发者自行利用 C 来设计 BPF 程序——但也仅此而已，余下的工作，包括编译、解析 ELF、加载 BPF 代码块以及创建 map 等等基本可以由 BCC 一力承担，无需多劳开发者费心。
+
+3.1 bcc安装
+github的地址链接如下：
+
+https://github.com/iovisor/bcc
+
+执行：git clone https://github.com/iovisor/bcc.git
+在Ubuntu中直接安装二进制文件，命令如下：
+
+sudo apt-key adv --keyserver keyserver.ubuntu.com --recv-keys D4284CDD
+
+echo "deb https://repo.iovisor.org/apt/xenial xenial main" | sudo tee /etc/apt/sources.list.d/iovisor.list
+
+sudo apt-get update
+
+sudo apt-get install bcc-tools libbcc-examples linux-headers-$(uname -r)
+这样就可以 使用bcc/example/tracing中的python用例。
+
+https://www.cnblogs.com/muahao/p/9448354.html
+
+https://www.cnblogs.com/charlieroro/p/13403672.html
+
+https://linux.cn/article-9507-1.html
+
+https://www.jianshu.com/p/a9a07855ab15
+
+https://opensource.actionsky.com/20200324-mysql/
+
+

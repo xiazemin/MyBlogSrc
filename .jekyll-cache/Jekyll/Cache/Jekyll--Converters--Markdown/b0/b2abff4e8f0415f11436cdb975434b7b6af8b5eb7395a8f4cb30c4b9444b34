@@ -1,0 +1,109 @@
+I"A%<p>与刺激的abort()和exit()相比,goto语句看起来是处理异常的更可行方案。不幸的是，goto是本地的：它只能跳到所在函数内部的标号上，而不能将控制权转移到所在程序的任意地点（当然，除非你的所有代码都在main体中）。
+为了解决这个限制，C函数库提供了setjmp()和longjmp()函数，它们分别承担非局部标号和goto作用。头文件<setjmp.h>申明了这些函数及同时所需的jmp_buf数据类型。
+原理非常简单：
+1.setjmp(j)设置“jump”点，用正确的程序上下文填充jmp_buf对象j。这个上下文包括程序存放位置、栈和框架指针，其它重要的寄存器和内存数据。当初始化完jump的上下文，setjmp()返回0值。</setjmp.h></p>
+<ol>
+  <li>以后调用longjmp(j,r)的效果就是一个非局部的goto或“长跳转”到由j描述的上下文处（也就是到那原来设置j的setjmp()处）。当作为长跳转的目标而被调用时，setjmp()返回r或1（如果r设为0的话）。（记住，setjmp()不能在这种情况时返回0。）</li>
+</ol>
+
+<p>通过有两类返回值，setjmp()让你知道它正在被怎么使用。当设置j时，setjmp()如你期望地执行；但当作为长跳转的目标时，setjmp()就从外面“唤醒”它的上下文。你可以用longjmp()来终止异常，用setjmp()标记相应的异常处理程序。
+<!-- more -->
+#include <stdio.h>
+#include <setjmp.h></setjmp.h></stdio.h></p>
+
+<p>jmp_buf jumper;</p>
+
+<p>int div(int a, int b) {
+  if (b == 0) { // can’t divide by 0
+    longjmp(jumper, -3);//跳到以jumper 所在的jmp point，进行处理，-3 相当于具体的exception code.
+  }
+  return a / b;
+}</p>
+
+<p>int main(int argc, char *argv[]) {
+  int jstatus = setjmp(jumper);//相当于java catch,如果发生 jumper 异常，那么会跳回到这个jmp point
+  if (jstatus == 0) {//第一次执行的时候是正确的setjmp return 0.
+    int a = atoi(argv[1]);
+    int b = atoi(argv[2]);
+    printf(“%d/%d”, a, b);
+    int result = div(a, b);
+    printf(“=%d\n”, result);
+  } 
+  else if (jstatus == -3)
+    printf(“ –&gt; Error:divide by zero\n”);
+  else
+    printf(“Unhandled Error Case”);
+}</p>
+
+<p>头文件：<setjump.h></setjump.h></p>
+
+<p>1.setjump(env)  其中env代表环境变量，表示将程序中的上下文存储在env中。</p>
+
+<p>2.longjump：void longjmp( std::jmp_buf env, int status );  env为指代 setjmp 所保存的函数执行状态的变量，</p>
+
+<p>status表示从setjmp返回的值，若它等于0，则以1代替。常用于做异常处理。它的返回是在setjmp中。</p>
+
+<p>对错误处理而言，goto 语句只能是在函数的局部作用域内跳转，而不能实现跨函数跳转。但在实际错误处理中，经常会遇到这样的场景：在一个深度嵌套的函数调用中发生了错误，需要放弃当前任务，从多层函数调用中返回，并且在较高层级的函数中继续执行（或许是在 main() 函数中）。要做到这一点，可以让每个函数都返回一个状态值，由函数的调用者检查并做相应处理。</p>
+
+<p>很显然，遇到这种场景，goto 语句就显得无能为力了，而 setjmp 宏和 longjmp 函数组合就提供了这一功能，它们能够提供一种在程序中实现“非本地局部跳转”（non-local goto）的机制。其原型定义如下：
+int setjmp(jmp_buf env);
+void longjmp(jmp_buf env, int value);
+从上面的原型定义中可以看出，setjmp 宏与 longjmp 函数都使用 jmp_buf 结构作为形参以保存程序当前的堆栈环境，它们的调用关系是这样的：</p>
+
+<p>程序首先需要调用 setjmp 宏函数来初始化 jmp_buf 结构体变量 env，并将当前的堆栈环境信息存入 env 中，为以后调用 longjmp 函数恢复原来环境信息时使用。如果是直接调用 setjmp，那么它的返回值为 0；如果由于调用 longjmp 函数而调用 setjmp，那么它的返回值为非 0。由此可见，setjmp 宏函数能返回两次：
+第一次是初始化时，返回值为 0。
+第二次则是在遇到 longjmp 函数调用后，longjmp 函数将使 setjmp 发生第二次返回，返回值由 longjmp 函数的第二个参数给出，返回值为非 0。</p>
+
+<p>相对于 setjmp 函数用于保存程序的运行时的当前堆栈环境，longjmp 函数则用于恢复在先前程序中调用 setjmp 函数时所保存的堆栈环境。当调用 longjmp 函数时，它会根据变量 env 所保存的堆栈环境来恢复先前的环境。与此同时，longjmp 函数的 value 参数值会被 setjmp 函数返回，程序继续得以执行。如下面的示例代码所示：
+#include <stdio.h>
+#include <setjmp.h>
+jmp_buf buf;
+void F2(void)
+{
+    printf("F2()\n");
+    longjmp(buf,1);
+}
+void F1(void)
+{
+    F2();
+    printf("F1()\n");
+}
+int main(void)
+{
+    int jmpret = setjmp(buf);
+    if(!jmpret)
+    {
+        F1();
+    }
+    else
+    {
+        printf("继续执行main\n");
+    }
+    return 0;
+}
+运行结果为：
+F2()
+继续执行main</setjmp.h></stdio.h></p>
+
+<p>从上面的代码中可以看出，对 goto 语句而言，setjmp 宏与 longjmp 函数不仅能够实现跨函数的全局跳转，而且其错误处理方式也比 goto 语句优雅得多。但是，在使用 setjmp 宏与 longjmp 函数进行错误处理时，必须注意如下两点。
+1）setjmp 宏与 longjmp 函数组合使用时，它们必须有严格的先后执行顺序。
+也就是说，必须先调用 setjmp 来初始化 jmp_buf 结构体变量 env 之后，才能够调用 longjmp 函数来恢复到先前被保存的堆栈环境（即程序执行点）。如果在 setjmp 调用之前执行 longjmp 函数，那么将导致程序的执行流变得不可预测，很容易导致程序崩溃而退出。
+2) longjmp函数必须在setjmp的作用域之内。
+在一个函数中使用 setjmp 来初始化一个全局变量（jmp_buf buf）buf 之后，只要这个函数没有被返回，那么在其他任何地方都可以通过 longjmp 调用来跳转到 setjmp 的下一条语句执行。也就是说，setjmp 将发生调用处的局部堆栈环境保存在一个 jmp_buf 结构体变量 env 中，只要主调函数中对应的内存未曾释放，在调用 longjmp 的时候就可以根据已保存的 jmp_buf 参数恢复到 setjmp 的地方执行。</p>
+
+<p>其实，从上面的程序示例代码中不难看出，如果说 goto 语句使程序变得难以阅读，那么 setjmp 宏与 longjmp 函数组合这种非局部跳转会让整个代码的糟糕程度增加一个数量级，因为它能在程序中的任意多个函数间传递控制。因此，应当谨慎使用它们，尽可能避免在实际编码中使用 setjmp 宏与 longjmp 函数组合。尽管如此，在编写信号处理器时，它们偶尔还是会派上用场的。</p>
+
+<p>最后，需要注意的是，无论使用什么样的错误处理方式，都不要忘记发现程序中错误的最好方法其实是执行程序，对代码进行逐条跟踪，这样可以观察数据在函数中的流动，同时检查出类似于上溢和下溢错误、数据转换错误、NULL 指针错误、错误的内存单元、用 = 代替 ==、运算优先级错误、逻辑运算等错误。</p>
+
+<p>int setjmp( jmp_buf env );
+void longjmp( jmp_buf env, int value );</p>
+
+<h1 id="setjmpj设置jump点用正确的程序上下文填充jmp_buf-对象j这个上下文包括程序存放位置栈和框架指针其它重要的寄存器和内存数据当初始化完jump-的上下文setjmp返回0-值对setjmp函数的调用时会保存程序当前的堆栈环境到env参数中">setjmp(j)设置“jump”点，用正确的程序上下文填充jmp_buf 对象j。这个上下文包括程序存放位置、栈和框架指针，其它重要的寄存器和内存数据。当初始化完jump 的上下文，setjmp()返回0 值。对setjmp函数的调用时，会保存程序当前的堆栈环境到env参数中；</h1>
+<h1 id="以后调用longjmpjr的效果就是一个长跳转到由j-描述的上下文处也就是到那原来设置j-的setjmp处当作为长跳转的目标而被调用时setjmp返回r-或1如果r-设为0-的话记住setjmp不能在这种情况时返回0">以后调用longjmp(j,r)的效果就是一个“长跳转”到由j 描述的上下文处（也就是到那原来设置j 的setjmp()处）。当作为长跳转的目标而被调用时，setjmp()返回r 或1（如果r 设为0 的话）。（记住，setjmp()不能在这种情况时返回0。</h1>
+<p>　　
+       通常, 用longjmp()来终止异常，用setjmp()标记相应的异常处理程序, 在调用setjmp的函数返回之前，调用longjmp，否则结果不可预料。
+　　在使用longjmp时，请遵守以下规则或限制：
+$     不要假象寄存器类型的变量将总会保持不变。在调用longjmp之后，通过setjmp所返回的控制流中，例程中寄存器类型的变量将不会被恢复。
+$     不要使用longjmp函数，来实现把控制流，从一个中断处理例程中传出，除非被捕获的异常是一个浮点数异常。在后一种情况下，如果程序通过调用_fpreset函数，来首先初始化浮点数包后，它是可以通过longjmp来实现从中断处理例程中返回。
+$     在C++程序中，小心对setjmp和longjmp的使用，应为setjmp和longjmp并不能很好地支持C++中面向对象的语义。因此在C++程序中，使用C++提供的异常处理机制将会更加安全。</p>
+:ET

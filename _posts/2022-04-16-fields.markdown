@@ -1,0 +1,317 @@
+---
+title: most fields策略以及与best fields策略
+layout: post
+category: elasticsearch
+author: 夏泽民
+---
+best-fields策略，主要是说将某一个field匹配尽可能多的关键词的doc优先返回回来
+most-fields策略，主要是说尽可能返回更多field匹配到某个关键词的doc，优先返回回来
+POST /forum/_mapping/article
+{
+  "properties": {
+      "sub_title": { 
+          "type":     "string",
+          "analyzer": "english",
+          "fields": {
+              "std":   { 
+                  "type":     "string",
+                  "analyzer": "standard"
+              }
+          }
+      }
+  }
+}
+ 
+POST /forum/article/_bulk
+{ "update": { "_id": "1"} }
+{ "doc" : {"sub_title" : "learning more courses"} }
+{ "update": { "_id": "2"} }
+{ "doc" : {"sub_title" : "learned a lot of course"} }
+{ "update": { "_id": "3"} }
+{ "doc" : {"sub_title" : "we have a lot of fun"} }
+{ "update": { "_id": "4"} }
+{ "doc" : {"sub_title" : "both of them are good"} }
+{ "update": { "_id": "5"} }
+{ "doc" : {"sub_title" : "haha, hello world"} }
+ 
+GET /forum/article/_search
+{
+  "query": {
+    "match": {
+      "sub_title": "learning courses"
+    }
+  }
+}
+ 
+{
+  "took": 3,
+  "timed_out": false,
+  "_shards": {
+    "total": 5,
+    "successful": 5,
+    "failed": 0
+  },
+  "hits": {
+    "total": 2,
+    "max_score": 1.219939,
+    "hits": [
+      {
+        "_index": "forum",
+        "_type": "article",
+        "_id": "2",
+        "_score": 1.219939,
+        "_source": {
+          "articleID": "KDKE-B-9947-#kL5",
+          "userID": 1,
+          "hidden": false,
+          "postDate": "2017-01-02",
+          "tag": [
+            "java"
+          ],
+          "tag_cnt": 1,
+          "view_cnt": 50,
+          "title": "this is java blog",
+          "content": "i think java is the best programming language",
+          "sub_title": "learned a lot of course"
+        }
+      },
+      {
+        "_index": "forum",
+        "_type": "article",
+        "_id": "1",
+        "_score": 0.5063205,
+        "_source": {
+          "articleID": "XHDK-A-1293-#fJ3",
+          "userID": 1,
+          "hidden": false,
+          "postDate": "2017-01-01",
+          "tag": [
+            "java",
+            "hadoop"
+          ],
+          "tag_cnt": 2,
+          "view_cnt": 30,
+          "title": "this is java and elasticsearch blog",
+          "content": "i like to write best elasticsearch article",
+          "sub_title": "learning more courses"
+        }
+      }
+    ]
+  }
+}
+sub_title用的是enligsh analyzer，还原了单词
+
+sub_titile: learning coureses --> learn course
+ 
+{ "doc" : {"sub_title" : "learned a lot of course"} }，就排在了{ "doc" : {"sub_title" : "learning more courses"} }的前面
+ 
+GET /forum/article/_search
+{
+   "query": {
+        "match": {
+            "sub_title": "learning courses"
+        }
+    }
+}
+使用most fields策略，
+GET /forum/article/_search
+{
+   "query": {
+        "multi_match": {
+            "query":  "learning courses",
+            "type":   "most_fields", 
+            "fields": [ "sub_title", "sub_title.std" ]
+        }
+    }
+}
+ 
+learning courses得分变高了
+ 
+{
+  "took": 2,
+  "timed_out": false,
+  "_shards": {
+    "total": 5,
+    "successful": 5,
+    "failed": 0
+  },
+  "hits": {
+    "total": 2,
+    "max_score": 1.219939,
+    "hits": [
+      {
+        "_index": "forum",
+        "_type": "article",
+        "_id": "2",
+        "_score": 1.219939,
+        "_source": {
+          "articleID": "KDKE-B-9947-#kL5",
+          "userID": 1,
+          "hidden": false,
+          "postDate": "2017-01-02",
+          "tag": [
+            "java"
+          ],
+          "tag_cnt": 1,
+          "view_cnt": 50,
+          "title": "this is java blog",
+          "content": "i think java is the best programming language",
+          "sub_title": "learned a lot of course"
+        }
+      },
+      {
+        "_index": "forum",
+        "_type": "article",
+        "_id": "1",
+        "_score": 1.012641,
+        "_source": {
+          "articleID": "XHDK-A-1293-#fJ3",
+          "userID": 1,
+          "hidden": false,
+          "postDate": "2017-01-01",
+          "tag": [
+            "java",
+            "hadoop"
+          ],
+          "tag_cnt": 2,
+          "view_cnt": 30,
+          "title": "this is java and elasticsearch blog",
+          "content": "i like to write best elasticsearch article",
+          "sub_title": "learning more courses"
+        }
+      }
+    ]
+  }
+}
+与best_fields的区别
+（1）best_fields，是对多个field进行搜索，挑选某个field匹配度最高的那个分数，同时在多个query最高分相同的情况下，在一定程度上考虑其他query的分数。简单来说，你对多个field进行搜索，就想搜索到某一个field尽可能包含更多关键字的数据
+
+优点：通过best_fields策略，以及综合考虑其他field，还有minimum_should_match支持，可以尽可能精准地将匹配的结果推送到最前面
+缺点：除了那些精准匹配的结果，其他差不多大的结果，排序结果不是太均匀，没有什么区分度
+
+实际的例子：百度之类的搜索引擎，最匹配的到最前面，但是其他的就没什么区分度了
+
+（2）most_fields，综合多个field一起进行搜索，尽可能多地让所有field的query参与到总分数的计算中来，此时就会是个大杂烩，出现类似best_fields案例最开始的那个结果，结果不一定精准，某一个document的一个field包含更多的关键字，但是因为其他document有更多field匹配到了，所以排在了前面；所以需要建立类似sub_title.std这样的field，尽可能让某一个field精准匹配query string，贡献更高的分数，将更精准匹配的数据排到前面
+
+优点：将尽可能匹配更多field的结果推送到最前面，整个排序结果是比较均匀的
+缺点：可能那些精准匹配的结果，无法推送到最前面
+
+实际的例子：wiki，明显的most_fields策略，搜索结果比较均匀，但是的确要翻好几页才能找到最匹配的结果
+
+ 
+
+使用most_fields策略进行cross-fields search的弊端
+什么是cross-fields：cross-fields搜索，一个唯一标识，跨了多个field。比如一个人，标识，是姓名；一个建筑，它的标识是地址。姓名可以散落在多个field中，比如first_name和last_name中，地址可以散落在country，province，city中。跨多个field搜索一个标识，比如搜索一个人名，或者一个地址，就是cross-fields搜索初步来说，如果要实现，可能用most_fields比较合适。因为best_fields是优先搜索单个field最匹配的结果，cross-fields本身就不是一个field的问题了。
+
+POST /forum/article/_bulk
+{ "update": { "_id": "1"} }
+{ "doc" : {"author_first_name" : "Peter", "author_last_name" : "Smith"} }
+{ "update": { "_id": "2"} }
+{ "doc" : {"author_first_name" : "Smith", "author_last_name" : "Williams"} }
+{ "update": { "_id": "3"} }
+{ "doc" : {"author_first_name" : "Jack", "author_last_name" : "Ma"} }
+{ "update": { "_id": "4"} }
+{ "doc" : {"author_first_name" : "Robbin", "author_last_name" : "Li"} }
+{ "update": { "_id": "5"} }
+{ "doc" : {"author_first_name" : "Tonny", "author_last_name" : "Peter Smith"} }
+ 
+GET /forum/article/_search
+{
+  "query": {
+    "multi_match": {
+      "query":       "Peter Smith",
+      "type":        "most_fields",
+      "fields":      [ "author_first_name", "author_last_name" ]
+    }
+  }
+}
+Peter Smith，匹配author_first_name，匹配到了Smith，这时候它的分数很高，为什么啊？？？
+因为IDF分数高，IDF分数要高，那么这个匹配到的term（Smith），在所有doc中的出现频率要低，author_first_name field中，Smith就出现过1次
+Peter Smith这个人，doc 1，Smith在author_last_name中，但是author_last_name出现了两次Smith，所以导致doc 1的IDF分数较低
+
+总结：most fields策略在进行cross-fields搜索情况下存在的问题：
+
+问题1：只是找到尽可能多的field匹配的doc，而不是某个field完全匹配的doc
+
+问题2：most_fields，没办法用minimum_should_match去掉长尾数据，就是匹配的特别少的结果
+
+问题3：TF/IDF算法，比如Peter Smith和Smith Williams，搜索Peter Smith的时候，由于first_name中很少有Smith的，所以query在所有document中的频率很低，得到的分数很高，可能Smith Williams反而会排在Peter Smith前面
+
+ 
+
+如何解决cross-fields问题：
+
+使用copy to语法：将多个字段的值拷贝到一个字段中，并建立倒排索引；
+定义新的字段，使用copy to语法：
+PUT /forum/_mapping/article
+{
+  "properties": {
+      "new_author_first_name": {
+          "type":     "string",
+          "copy_to":  "new_author_full_name" 
+      },
+      "new_author_last_name": {
+          "type":     "string",
+          "copy_to":  "new_author_full_name" 
+      },
+      "new_author_full_name": {
+          "type":     "string"
+      }
+  }
+}
+ 
+填充数据：
+ 
+POST /forum/article/_bulk
+{ "update": { "_id": "1"} }
+{ "doc" : {"new_author_first_name" : "Peter", "new_author_last_name" : "Smith"} }		--> Peter Smith
+{ "update": { "_id": "2"} }	
+{ "doc" : {"new_author_first_name" : "Smith", "new_author_last_name" : "Williams"} }		--> Smith Williams
+{ "update": { "_id": "3"} }
+{ "doc" : {"new_author_first_name" : "Jack", "new_author_last_name" : "Ma"} }			--> Jack Ma
+{ "update": { "_id": "4"} }
+{ "doc" : {"new_author_first_name" : "Robbin", "new_author_last_name" : "Li"} }			--> Robbin Li
+{ "update": { "_id": "5"} }
+{ "doc" : {"new_author_first_name" : "Tonny", "new_author_last_name" : "Peter Smith"} }		--> Tonny Peter Smith
+ 
+获取数据验证：
+GET /forum/article/_search
+{
+  "query": {
+    "match": {
+      "new_author_full_name":       "Peter Smith"
+    }
+  }
+}
+问题1：只是找到尽可能多的field匹配的doc，而不是某个field完全匹配的doc --> 解决，最匹配的document被最先返回
+
+问题2：most_fields，没办法用minimum_should_match去掉长尾数据，就是匹配的特别少的结果 --> 解决，可以使用minimum_should_match去掉长尾数据
+
+问题3：TF/IDF算法，比如Peter Smith和Smith Williams，搜索Peter Smith的时候，由于first_name中很少有Smith的，所以query在所有document中的频率很低，得到的分数很高，可能Smith Williams反而会排在Peter Smith前面 --> 解决，Smith和Peter在一个field了，所以在所有document中出现的次数是均匀的，不会有极端的偏差
+
+使用原生的cross-fields技术
+ "type": "cross_fields", 
+
+ "operator": "and",
+
+GET /forum/article/_search
+{
+  "query": {
+    "multi_match": {
+      "query": "Peter Smith",
+      "type": "cross_fields", 
+      "operator": "and",
+      "fields": ["author_first_name", "author_last_name"]
+    }
+  }
+}
+问题1：只是找到尽可能多的field匹配的doc，而不是某个field完全匹配的doc --> 解决，要求每个term都必须在任何一个field中出现
+
+要求Peter必须在author_first_name或author_last_name中出现
+要求Smith必须在author_first_name或author_last_name中出现
+
+问题2：most_fields，没办法用minimum_should_match去掉长尾数据，就是匹配的特别少的结果 --> 解决，既然每个term都要求出现，长尾肯定被去除掉了；
+
+问题3：TF/IDF算法，比如Peter Smith和Smith Williams，搜索Peter Smith的时候，由于first_name中很少有Smith的，所以query在所有document中的频率很低，得到的分数很高，可能Smith Williams反而会排在Peter Smith前面 --> 计算IDF的时候，将每个query在每个field中的IDF都取出来，取最小值，就不会出现极端情况下的极大值了
+<!-- more -->
+https://blog.csdn.net/hsj1213522415/article/details/96647974

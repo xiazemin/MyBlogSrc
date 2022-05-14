@@ -1,0 +1,280 @@
+I"O1<p>https://blog.betacat.io/post/2020/03/a-pattern-for-writing-testable-go-code/
+UT（单元测试）是个好东西，我们每个人都爱它。当写完一段功能复杂的逻辑时，各种变态的测试样例能增强我们对这段逻辑的信心；当更改别人的代码时，好的 UT coverage 能帮我们确保这次的更改不会影响到其他的代码；当阅读别人代码时，相应的 UT 也是一份文档，能告诉我们这段代码所实现的功能。因此我们总是希望别人的代码能有 UT，但自己却很少写 UT，这是为什么呢？🤔</p>
+
+<p>以我有限的经验来看，原因大概可以分成这两类：</p>
+
+<p>外因：大多数老板不会去鼓励这种行为，他们看重的是更丰富和炫酷的功能，以及更快的迭代速度，具体代码质量怎么样，没人会关心。
+内因：大部分代码或多或少都会对第三方有些依赖，比如依赖 http 请求或者数据库连接。在测试时，我们需要替换掉那些依赖，但这个替换的过程往往让人痛不欲生，最后写出来的测试可能95%的代码都是在做依赖替换，而真正对业务逻辑的测试却少得可怜。在这种情况下我们很难自发的去写测试。
+可以看到，除了不可控的外因外，单元测试的难点就是替换依赖（mock），如果依赖能够简单的替换掉，那代码就变得很容易测试了。下面我们就来看看两种常见的替换方法：
+<!-- more -->
+Monkey Patch
+在动态语言（js/python）的世界里，函数和方法是可以被随意修改的，因而在它们的单元测试中，用monkey patch来 mock 依赖是再常见不过的事了。但 Go 是个强类型的语言，monkey patch既违反了语言的特性，也远没有像动态语言里面那么灵活，即使费尽力气使用上了，那段代码也是充满了黑科技，很容易让其他人掉进坑里。所以，如果不是万不得已，一般情况下还是不建议使用这种伤敌一千自损八百的大杀器的。</p>
+
+<p>理想状况下，一段测试代码应当是简单、可维护的，它的复杂度不应当超过被测试的业务代码，下面介绍的一种方法就很容易达到这个目的。</p>
+
+<p>Interface + Dependency Injection
+在 Go 语言中，接口（interface）是对一个对象的抽象性描述，表明该对象能提供什么样的服务。它最主要的作用就是解耦调用者和实现者，这成为了可测试代码的关键。甚至有人说：</p>
+
+<p>如果一个略有规模的项目中没有出现任何 interface 的定义，那么我们可以推测出这在很大的概率上是一个代码质量堪忧并且没有多少单元测试覆盖的项目。</p>
+
+<p>如果我们的代码都是面向接口编程，那依赖注入（dependency injection）就很容易实现。如果依赖注入被大量使用，那替换掉依赖将会变成一件轻而易举的事情。把这两者结合，就得到了一种编写可测试代码的模式：</p>
+
+<p>将代码的依赖抽象出来，抽象成一个接口，并且这个接口的实例不是自己创建出来，而是由上层调用方注入进来。
+将第三方依赖封装成上面接口的一种实现，调用方负责创建具体的实例，并注入进业务代码。
+有了这一层松耦合的依赖关系，在测试代码里，我们就可以 mock 出另一种接口的实现，从而很容易的替换掉第三方的依赖。</p>
+
+<p>Dependency Injection Architecture</p>
+
+<p>理论就这么简单，下面通过一个具体的例子实战一下，看看怎样用这个模式来重构一段代码，提升它的可测试性。</p>
+
+<p>Code in Action
+比方说我们有一个电商系统中的交易类transaction，用来记录每笔订单的交易情况。其中的Execute()函数负责执行转账操作，将钱从买家的账户转移到卖家的账户中，而真正的转账操作则是通过调用银行（支付宝、微信）的 SDK 完成的：</p>
+
+<p>1
+ 2
+ 3
+ 4
+ 5
+ 6
+ 7
+ 8
+ 9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+type transaction struct {
+    ID       string
+    BuyerID  int
+    SellerID int
+    Amount   float64
+    createdAt time.Time
+    Status TransactionStatus
+}</p>
+
+<p>func (t *transaction) Execute() bool {
+    if t.Status == Executed {
+        return true
+    }
+    if time.Now() - t.createdAt &gt; 24.hours { // 交易有有效期
+        t.Status = Expired
+        return false
+    }
+    client := BankClient.New(config.token) // 调用银行的 SDK 执行转账
+    if err := client.TransferMoney(id, t.BuyerID, t.SellerID, t.Amount); err != nil {
+        t.Status = Failed
+        return false
+    }
+    t.Status = Executed
+    return true
+}
+这个类最重要的功能集中在Execute()函数中，但它却不好测试，因为它有两个外部依赖：</p>
+
+<p>行为不确定的time.Now函数，它的每一次调用都会产生不同的结果。
+银行提供的转账 SDK，我们不可能每次测试都去真的调用一下，那测试成本也忒高了。
+解决方法就是把这两个依赖 mock 掉，即用一个“假的”服务来替换真的服务，这里我们先拿测试成本较高的银行 SDK 试水。</p>
+
+<p>Mock SDK Dependency
+按照上面的理论，先将代码里使用到的方法抽象成一个接口（目前这个接口只包含一个方法，当然实际的场景下抽象出来的接口肯定比这个复杂）：</p>
+
+<p>1
+2
+3
+type Transferer interface {
+    TransferMoney(id int, buyerID int, sellerID int, amount float64) error
+}
+然后将创建BankClient的行为上移到调用者那边去，相当于调用者创建了一个满足Transferer接口的实例，再注入进我们的代码。所以transaction这边就需要有个地方来接受这个实例，一个方法是通过Execute()函数的参数，但如果依赖过多的话，会造成函数参数爆炸，另一个则是放到transaction的成员属性中。这里我们采用更常见的第二个方法，因此重构后的transaction类及其构造函数就变成了这样：</p>
+
+<p>1
+ 2
+ 3
+ 4
+ 5
+ 6
+ 7
+ 8
+ 9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29
+type transaction struct {
+    ID       string
+    BuyerID  int
+    SellerID int
+    Amount   float64
+    createdAt time.Time
+    Status TransactionStatus
+    // 增加了一个存放接口的属性
+    transferer Transferer
+}</p>
+
+<p>func New(buyerID, sellerID int, amount float64, transferer Transferer) *transaction {
+    return &amp;transaction{
+        ID:         IdGenerator.generate(),
+        BuyerID:    buyerID,
+        SellerID:   sellerID,
+        Amount:     amount,
+        createdAt:  time.Now(),
+        Status:     TO_BE_EXECUTD,
+        transferer: transferer, // 注入进 transaction 类中
+    }
+}</p>
+
+<p>func (t *transaction) Execute() bool {
+    //…
+    //不直接创建，而是使用别人注入的接口实例
+    t.transferer.TransferMoney(id, t.BuyerID, t.SellerID, t.Amount)
+    //…
+}
+现在，我们在单元测试中就能够很方便的替换掉那个成本高昂的支付接口的调用了。</p>
+
+<p>1
+ 2
+ 3
+ 4
+ 5
+ 6
+ 7
+ 8
+ 9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+// 定义一个满足 Transferer 接口的 mock 类
+type MockedClient struct {
+    responseError error // 实例化的时候可以将期望的返回值保存进来
+}</p>
+
+<p>func (m *MockedClient) TransferMoney(id int, buyerID int, sellerID int, amount float64) error {
+    return m.responseError
+}</p>
+
+<p>func Test_transaction_Execute(t *testing.T) {
+    // 实例化一个可以自由控制结果的 client
+    transferer := &amp;MockedClient{
+        responseError: errors.New(“insufficient balance”),
+    }
+    tnx := New(buyerID, sellerID, amount, transferer)
+    if succeeded := tnx.Execute(); succeeded != false {
+        t.Errorf(“Execute() = %v, want %v”, succeeded, false)
+    }
+}
+第三方 SDK 的替换问题解决了，我们再来看看对交易过期这种情况的测试。</p>
+
+<p>最直观的方法就是将createdAt属性设为24小时之前，这样就可以模拟出过期这个场景了。但这不是一个好的解决方案，因为在我们的实现中，createdAt是个私有属性，它是在交易生成时（即构造函数中）自动获取的系统时间，外界不应该去干预它，否则就破坏了类的封装性。所以我们应该想办法去替换掉time.Now的行为。</p>
+
+<p>Mock time.Now
+事实上，怎样 mock 当前时间是一个很常见的问题，类似的函数还有rand.Intn，他们的共同点就是输出是不确定的，这就让我们的测试无法覆盖所有的情况。面对这些函数，我们当然可以像上面一样用一个接口封装一下，但对于这么一个无毒无副作用的 util 函数，用 OOP 的那一套封装一下不免有点小题大做。这方面更常见的一种做法是利用函数在 Go 里面是一等公民，引入一个中间变量解耦一下。</p>
+
+<p>即业务代码不直接通过调用time.Now获得当前时间，而是通过一个中间人获得，而这个中间人被外界赋值为了time.Now。跟上面一样，这个中间人可以通过成员属性和函数参数的方式注入进来，或者偷懒直接定义为一个全局变量。下面来看看这种偷懒的做法（如果单元测试是并行执行的t.Parallel()，最好不要这么做）：</p>
+
+<p>1
+ 2
+ 3
+ 4
+ 5
+ 6
+ 7
+ 8
+ 9
+10
+11
+12
+var nowFn = time.Now //一个全局变量，用来解耦time.Now的生产者和消费者</p>
+
+<p>func (t *transaction) Execute() bool {
+    if t.Status == Executed {
+        return true
+    }
+    if nowFn() - t.createdAt &gt; 24.hours { // 不直接调用time.Now()
+        t.Status = Expired
+        return false
+    }
+    //…
+}
+这样，我们的单元测试就能随心所欲的改变“当前时间”了</p>
+
+<p>1
+ 2
+ 3
+ 4
+ 5
+ 6
+ 7
+ 8
+ 9
+10
+11
+12
+13
+func Test_expired_transaction_Execute(t *testing.T) {
+    // 用同样的函数签名改写业务中需要的时间函数
+    // 这里能改变私有的全局变量是因为测试代码跟业务代码处于同一个包中
+    nowFn = func() time.Time {
+        return time.Now().Add(-24 * time.Hour)
+    }
+    // 依旧需要实例化一个假的的 client
+    transferer := &amp;MockedClient{
+        responseError: nil,
+    }
+    tnx := New(buyerID, sellerID, amount, transferer)
+    //…
+}
+这一次的 mock 虽然没有像上个那样显式的定义一个接口出来，但我们隐式的复用了time.Now的函数签名，将它当做一种“接口类型”来使用。可以看到，其实这两个 mock 用到的解耦思想都是一样的。</p>
+
+<p>Best Practices
+在使用接口+依赖注入实现第三方服务替换的这条路上，这里还有些值得分享的经验，让单元测试的编写更轻松：</p>
+
+<p>在使用的地方定义接口
+调用方最清楚自己使用了第三方服务的哪几个方法。本着最小依赖的原则，注入的接口最好是由自己定义的，而不要使用第三方服务提供的大而全的接口，这样在 mock 的时候就能减轻不少工作量。这也是 Dave 的观点：</p>
+
+<p>#golang top tip: the consumer should define the interface. If you’re defining an interface and an implementation in the same package, you may be doing it wrong.</p>
+
+<p>调用者应该负责定义接口，如果在一个包中同时定义了接口和实现，那么你可能就做错了。</p>
+
+<p>重新封装参数比较复杂的依赖调用
+有的依赖调用入参和出参比较复杂，如果原封不动的抽象成一个接口，那测试代码里就要花很大篇幅去构造那些参数。这个时候我们可以重新封装一下，将原接口的抽象范围扩大，使得整个接口的输入和输出变得更简单、更有业务含义。</p>
+
+<p>Goland 一键生成测试模板代码
+这是 Goland 的一个小功能，它能自动生成一堆table driven tests模板代码，我们只要往里面填测试数据就行了，这极大的加快了 UT 的编写。具体使用方法是在函数的任意位置右击，从弹出的菜单栏里选择Generate…，然后就会出现Test for function这个功能了。</p>
+
+<p>Generate test cases in Goland
+Conclusion
+理论上来说，单元测试的难点应当在于思考的缜密性，因为要考虑到各种临界情况。如果你写单元测试的时候主要精力不是花在这里，而是想着怎样用黑魔法改变某个函数的底层行为，那很可能你的方向就走错了。如果我们的代码都用接口+依赖注入的方式解耦掉了，依赖都做成可插拔的，那单元测试里面隔离依赖就是一件水到渠成的事情。</p>
+:ET

@@ -1,0 +1,176 @@
+---
+title: bytes.Buffer
+layout: post
+category: golang
+author: 夏泽民
+---
+Go标准库中的bytes.Buffer（下文用Buffer表示）类似于一个FIFO的队列，它是一个流式字节缓冲区。
+
+我们可以持续向Buffer尾部写入数据，从Buffer头部读取数据。当Buffer内部空间不足以满足写入数据的大小时，会自动扩容。
+<!-- more -->
+伸缩策略
+.......................................
+            ^             ^
+            |             |
+           bPos          ePos
+            |<- content ->|
+|<- bIdle ->|             |<- eIdle ->|
+|<-             capacity            ->|
+流式字节缓冲区一般会有两个下标位置：写入位置（下文用ePos表示），读取位置（下文用bPos表示）。
+
+bPos和ePos一开始都为0，ePos随写入内容时后移，bPos随读取内容时后移。
+
+bPos永远小于等于ePos。
+
+ePos减bPos即为待读取的内容大小（下文用content以及contentSize表示）。
+
+整个内存块的大小（下文用capacity表示）减去ePos，即为可直接写入内容的大小（下文用eIdle表示）。
+
+写入时，逻辑如下：
+
+当需写入内容的大小（下文用neededSize表示）小于eIdle时，直接在尾部追加写入即可。
+
+当neededSize超过eIdle时，此时有两种情况：
+
+第一，由于已写入Buffer的内容有一些可能已被上层读取，所以实际上bpos前面的空间（下文用bIdle表示）也是空闲的。
+
+如果eIdle加上bIdle大于neededSize，可以将content向左平移拷贝至从0位置开始，将bPos设置为0，ePos设置为刚才的（epos-bpos）。此时，eIdle变大，可直接在尾部追加写入。
+
+第二，如果eIdle加上bIdle仍然小于neededSize，只能重新申请一块更大的内存，将当前待读取内容拷贝至新内存块，并将老内存块释放。然后在新内存块的尾部追加需写入的内容。
+
+但是实际上，Buffer的实现和上面所说有些细微区别，或者可以说是一种优化吧：
+
+当neededSize超过eIdle时，只要contentSize加neededSize超过当前capacity的一半时，就进行扩容。即扩容策略更为激进，目的是减少后续平移拷贝频率，空间换效率。
+
+另外，Buffer扩容后新内存块的大小为：(2 * 当前capacity) + neededSize。
+
+最后，Buffer只有扩容策略，没有缩容策略，即扩容到多大就占多大的内存，即使内部contentSize很小，而capacity已增长到非常大。当前使用的内存块只有在Buffer对象释放时才能随之释放。
+
+Buffer在创建时并不会申请内存块，只有在往里写数据时才会申请，首次申请的大小即为写入数据的大小。如果写入的数据小于64字节，则按64字节申请。
+
+底层数据结构
+Buffer底层使用单个[]byte切片实现。
+
+capacity，即切片的cap。
+
+bPos使用了一个整型变量存储，即off。
+
+ePos运用了Go切片的特性。Go的切片实际上是一个结构体，包含了len, cap, p三个数据成员。当我们操作Buffer时，除了初始化和扩容时会重新申请底层内存块，其他时候只是对切片重新切片，也即只是改变了切片的len属性，以及p的指向，底层被指向的那整块内存块并不会发生改变。切片当前的len就是当前的ePos。
+
+结合暴露的方法做些说明
+先做个总的说明吧。
+
+Buffer满足了挺多常见的读、写interface，可以非常方便的和其他模块进行集成、交互。
+
+除了通过[]byte与外部进行数据交互，也支持byte，rune，string，使得用起来比较方便。还支持与外部的io.Reader，io.Writer进行数据交互，有时可以减少一些中间层的内存拷贝。
+
+常规的一些获取内部状态的方法都有，比如Len，Cap等。
+
+提供了Bytes，Next方法，可以预览Buffer的内容而不真正消费读取走。
+
+另外，紧跟上一条，Buffer还提供了一些对读操作的撤销方法，但是有一些限制。个人感觉有预览就足够了。
+
+提供Grow方法，在某些场景由外部手动扩容，可以减少自动扩容的次数、消耗。
+
+提供Truncate方法，直接丢弃待读取的部分内容，虽然用Read方法也可以把数据读走，但是用Truncate就不用申请内存来获取Read的结果了。
+
+提供了两个构造方法，在构造时即可写入一些内容。
+
+以下是所有方法的注释：
+
+// ---------- 满足了一些比较重要的interface
+
+// 将Buffer读取（拷贝）到p
+// @满足 interface io.Reader
+func (b *Buffer) Read(p []byte) (n int, err error)
+
+// 将p写入（拷贝）Buffer
+// @满足 interface io.Writer
+func (b *Buffer) Write(p []byte) (n int, err error)
+
+// 死循环读取r的内容，写入（拷贝）Buffer中，直到读取失败
+// @满足 interface io.ReaderFrom
+func (b *Buffer) ReadFrom(r io.Reader) (n int64, err error)
+
+// 将Buffer的内容全部写入（拷贝）w中
+// @满足 interface io.WriterTo
+func (b *Buffer) WriteTo(w io.Writer) (n int64, err error)
+
+// ---------- 满足了一些其他interface
+
+// 读取一个字节
+// @满足 interface io.ByteReader
+func (b *Buffer) ReadByte() (byte, error)
+
+// 撤销一个字节的读操作
+// 撤销是有前提的，比如前一个操作不能是写相关的操作，也不能是撤销的操作
+// @满足 interface io.ByteScanner
+func (b *Buffer) UnreadByte() error
+
+// 和 UTF8 Unicode 相关的读取
+// @满足 interface RuneReader
+func (b *Buffer) ReadRune() (r rune, size int, err error)
+
+// 撤销一个rune的读操作
+// @满足 interface RuneScanner
+func (b *Buffer) UnreadRune() error
+
+// 写入一个字节
+// @满足 interface io.ByteWriter
+func (b *Buffer) WriteByte(c byte) error
+
+// 见 func Write
+// @满足 interface StringWriter
+func (b *Buffer) WriteString(s string) (n int, err error)
+
+// ----------
+
+// 整个待读取的内容，类似于peek预览
+// @并不会真正消费
+// @不发生拷贝
+func (b *Buffer) Bytes() []byte
+
+// 预览待读取内容的前n个字节
+// @并不会真正消费
+// @不发生拷贝
+func (b *Buffer) Next(n int) []byte
+
+// 见 func Bytes
+func (b *Buffer) String() string
+
+// 待读取内容的大小
+func (b *Buffer) Len() int
+
+// 总容量大小
+func (b *Buffer) Cap() int
+
+// 读取直到delim字符的内容
+// @消费
+// @发生拷贝
+func (b *Buffer) ReadBytes(delim byte) (line []byte, err error)
+
+// 见ReadBytes
+func (b *Buffer) ReadString(delim byte) (line string, err error)
+
+// ----------
+
+// 丢弃待读取内容的前n个字节
+func (b *Buffer) Truncate(n int)
+
+// 清空所有数据
+func (b *Buffer) Reset()
+
+// 确保有n大小的剩余空间可供写入
+func (b *Buffer) Grow(n int)
+
+
+// 将r写入
+func (b *Buffer) WriteRune(r rune) (n int, err error)
+
+// ---------- 创建
+
+// 创建Buffer对象时就写入buf
+func NewBuffer(buf []byte) *Buffer
+
+// 见 func NewBuffer
+func NewBufferString(s string) *Buffer

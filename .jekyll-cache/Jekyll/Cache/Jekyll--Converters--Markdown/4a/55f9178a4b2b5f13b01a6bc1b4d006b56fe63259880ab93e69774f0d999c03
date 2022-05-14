@@ -1,0 +1,417 @@
+I"~4<!-- more -->
+<p>“encoding/json”的源码：
+func Unmarshal(data []byte, v interface{}) error {
+	// Check for well-formedness.
+	// Avoids filling out half a data structure
+	// before discovering a JSON syntax error.
+	var d decodeState
+	err := checkValid(data, &amp;d.scan)
+	if err != nil {
+		return err
+	}</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>d.init(data)
+return d.unmarshal(v) }
+</code></pre></div></div>
+
+<p>func (d *decodeState) unmarshal(v interface{}) (err error) {
+…
+//这里有类型强校验
+	rv := reflect.ValueOf(v)
+	if rv.Kind() != reflect.Ptr || rv.IsNil() {
+		return &amp;InvalidUnmarshalError{reflect.TypeOf(v)}
+	}
+	d.scan.reset()
+	// We decode rv not rv.Elem because the Unmarshaler interface
+	// test must be applied at the top level of the value.
+	//这里进行赋值
+	d.value(rv)
+	…
+}</p>
+
+<p>func (d *decodeState) value(v reflect.Value) {
+…
+switch op := d.scanWhile(scanSkipSpace); op {
+	default:
+		d.error(errPhase)</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>case scanBeginArray:
+	d.array(v)
+
+case scanBeginObject:
+	d.object(v)
+
+case scanBeginLiteral:
+	d.literal(v)
+} }
+</code></pre></div></div>
+
+<p>因此解析的时候，如果类型不一致会有error，但是加减字段则不会
+package main
+import (
+    “encoding/json”
+    “fmt”
+)
+// Product _
+type Product struct {
+    Name      string  <code class="language-plaintext highlighter-rouge">json:"name"</code>
+    ProductID int64   <code class="language-plaintext highlighter-rouge">json:"product_id,string"</code>
+    Number    int     <code class="language-plaintext highlighter-rouge">json:"number,int"</code>
+    Price     float64 <code class="language-plaintext highlighter-rouge">json:"price,string"</code>
+    IsOnSale  bool    <code class="language-plaintext highlighter-rouge">json:"is_on_sale"</code>
+}
+func main() {
+    var data = <code class="language-plaintext highlighter-rouge">{"name":"Xiao mi 6","product_id":"10","number":10000,"price":"2499","on_sale":true}</code>
+    p := &amp;Product{}
+    err := json.Unmarshal([]byte(data), p)
+    fmt.Println(err)
+    fmt.Println(*p)
+}
+输出：</p>
+<nil>
+{Xiao mi 6 10 10000 2499 false}
+
+如果放宽类型的检查有两种方法：
+1.使用simplejson库
+2，去掉 err！＝nil判断，不安全
+package main
+import (  
+       "github.com/bitly/go-simplejson" // for json get  
+       "fmt"
+	   "encoding/json"
+)
+//Person
+type Person struct{
+Name string`json:"name"`
+Age int `json:"age"`
+Email string `json:"email"`
+PhoneNum []string `json:"phoneNum"`
+}
+//PersonList
+type PersonList struct{
+PersonArr []Person `json:"person"` 
+}
+var jsonStr =  
+       `{  
+           "person": [{  
+              "name": "piao",  
+              "age": 30,  
+              "email": "piaoyunsoft@163.com",  
+              "phoneNum": [  
+                  "13974999999",  
+                  "13984999999"  
+              ]  
+           }, {  
+              "name": "aaaaa",  
+              "age": "20",  
+              "email": "aaaaaa@163.com",  
+              "phoneNum": [  
+                  "13974998888",  
+                  "13984998888"  
+              ]  
+           }, {  
+              "name": "bbbbbb",  
+              "email": "bbbbbb@163.com",  
+              "phoneNum": ""
+           }]  
+       }  
+       `  
+ var jsonStr1 =  
+       `{  
+           "person": [{  
+              "name": "piao",  
+              "age": 30,  
+              "email": "piaoyunsoft@163.com",  
+              "phoneNum": [  
+                  "13974999999",  
+                  "13984999999"  
+              ]  
+           }, {  
+              "name": "aaaaa",  
+              "email": "aaaaaa@163.com",  
+              "phoneNum": [  
+                  "13974998888",  
+                  "13984998888"  
+              ]  
+           }]
+		   }
+		   `
+		   
+func main() {  
+       js, err := simplejson.NewJson([]byte(jsonStr))  
+	          if err != nil {  
+              panic(err.Error())  
+       } 
+        personArr, err := js.Get("person").Array()  
+       fmt.Println(len(personArr))  
+       // 遍历  
+       for i, _ := range personArr {  
+              //fmt.Println(i, v)  
+              person := js.Get("person").GetIndex(i)  
+              name := person.Get("name").MustString()  
+              age := person.Get("age").MustInt()  
+              email := person.Get("email").MustString()  
+              fmt.Printf("name=%s, age=%d, email=%s\n", name, age, email)  
+              // 读取手机号  
+              phoneNumArr, _ := person.Get("phoneNum").Array()  
+              for ii, vv := range phoneNumArr {  
+                     fmt.Println(ii, vv)  
+					 }  
+       } 
+	  fmt.Println(personArr)
+	  
+      var personList1 PersonList
+  	  err2:=json.Unmarshal([]byte(jsonStr1),&amp;personList1)
+	      if(err2!=nil){
+	    panic(err.Error())  
+       } 
+	     fmt.Println("unMarshal",personList1.PersonArr)
+		  for _,person:=range personList1.PersonArr{
+	      fmt.Printf("name=%s, age=%d, email=%s\n", person.Name, person.Age, person.Email)  
+          // 读取手机号  
+              for ii, vv := range person.PhoneNum {  
+                     fmt.Println(ii, vv)  
+              } 
+	   }
+	  
+	  var personList PersonList
+	   err1:=json.Unmarshal([]byte(jsonStr),&amp;personList)
+	   if(err1!=nil){
+	   fmt.Println(err1,personList)
+	   // panic(err.Error())  
+       } 
+	   fmt.Println(personList.PersonArr)
+	   for _,person:=range personList.PersonArr{
+	      fmt.Printf("name=%s, age=%d, email=%s\n", person.Name, person.Age, person.Email)  
+             // 读取手机号  
+              for ii, vv := range person.PhoneNum {  
+                     fmt.Println(ii, vv)  
+             } 
+	   }
+}
+输出：
+3
+name=piao, age=30, email=piaoyunsoft@163.com
+0 13974999999
+1 13984999999
+name=aaaaa, age=0, email=aaaaaa@163.com
+0 13974998888
+1 13984998888
+name=bbbbbb, age=0, email=bbbbbb@163.com
+[map[name:piao age:30 email:piaoyunsoft@163.com phoneNum:[13974999999 13984999999]] map[name:aaaaa age:20 email:aaaaaa@163.com phoneNum:[13974998888 13984998888]] map[phoneNum: name:bbbbbb email:bbbbbb@163.com]]
+unMarshal [{piao 30 piaoyunsoft@163.com [13974999999 13984999999]} {aaaaa 0 aaaaaa@163.com [13974998888 13984998888]}]
+name=piao, age=30, email=piaoyunsoft@163.com
+0 13974999999
+1 13984999999
+name=aaaaa, age=0, email=aaaaaa@163.com
+0 13974998888
+1 13984998888
+json: cannot unmarshal string into Go struct field Person.age of type int {[{piao 30 piaoyunsoft@163.com [13974999999 13984999999]} {aaaaa 0 aaaaaa@163.com [13974998888 13984998888]} {bbbbbb 0 bbbbbb@163.com []}]}
+[{piao 30 piaoyunsoft@163.com [13974999999 13984999999]} {aaaaa 0 aaaaaa@163.com [13974998888 13984998888]} {bbbbbb 0 bbbbbb@163.com []}]
+name=piao, age=30, email=piaoyunsoft@163.com
+0 13974999999
+1 13984999999
+name=aaaaa, age=0, email=aaaaaa@163.com
+0 13974998888
+1 13984998888
+name=bbbbbb, age=0, email=bbbbbb@163.com
+
+临时忽略struct字段
+type User struct {
+ Email string `json:"email"`
+ Password string `json:"password"`
+ // many more fields…
+}
+临时忽略掉Password字段
+json.Marshal(struct {
+ *User
+ Password bool `json:"password,omitempty"`
+}{
+ User: user,
+})
+临时添加额外的字段
+type User struct {
+ Email string `json:"email"`
+ Password string `json:"password"`
+ // many more fields…
+}
+临时忽略掉Password字段，并且添加token字段
+json.Marshal(struct {
+ *User
+ Token string `json:"token"`
+ Password bool `json:"password,omitempty"`
+}{
+ User: user,
+ Token: token,
+})
+临时粘合两个struct
+type BlogPost struct {
+ URL string `json:"url"`
+ Title string `json:"title"`
+}
+ 
+type Analytics struct {
+ Visitors int `json:"visitors"`
+ PageViews int `json:"page_views"`
+}
+ 
+json.Marshal(struct{
+ *BlogPost
+ *Analytics
+}{post, analytics})
+一个json切分成两个struct
+json.Unmarshal([]byte(`{
+ "url": "attila@attilaolah.eu",
+ "title": "Attila's Blog",
+ "visitors": 6,
+ "page_views": 14
+}`), &amp;struct {
+ *BlogPost
+ *Analytics
+}{&amp;post, &amp;analytics})
+临时改名struct的字段
+type CacheItem struct {
+ Key string `json:"key"`
+ MaxAge int `json:"cacheAge"`
+ Value Value `json:"cacheValue"`
+}
+ 
+json.Marshal(struct{
+ *CacheItem
+ 
+ // Omit bad keys
+ OmitMaxAge omit `json:"cacheAge,omitempty"`
+ OmitValue omit `json:"cacheValue,omitempty"`
+ 
+ // Add nice keys
+ MaxAge int `json:"max_age"`
+ Value *Value `json:"value"`
+}{
+ CacheItem: item,
+ 
+ // Set the int by value:
+ MaxAge: item.MaxAge,
+ 
+ // Set the nested struct by reference, avoid making a copy:
+ Value: &amp;item.Value,
+})
+用字符串传递数字
+type TestObject struct {
+ Field1 int `json:",string"`
+}
+这个对应的json是 {"Field1": "100"}
+
+如果json是 {"Field1": 100} 则会报错
+
+容忍字符串和数字互转
+如果你使用的是jsoniter，可以启动模糊模式来支持 PHP 传递过来的 JSON。
+import "github.com/json-iterator/go/extra"
+ 
+extra.RegisterFuzzyDecoders()
+这样就可以处理字符串和数字类型不对的问题了。比如
+var val string
+jsoniter.UnmarshalFromString(`100`, &amp;val)
+又比如
+var val float32
+jsoniter.UnmarshalFromString(`"1.23"`, &amp;val)
+容忍空数组作为对象
+PHP另外一个令人崩溃的地方是，如果 PHP array是空的时候，序列化出来是[]。但是不为空的时候，序列化出来的是{"key":"value"} 。 我们需要把 [] 当成 {} 处理。
+
+如果你使用的是jsoniter，可以启动模糊模式来支持 PHP 传递过来的 JSON。
+import "github.com/json-iterator/go/extra"
+ 
+extra.RegisterFuzzyDecoders()
+这样就可以支持了
+var val map[string]interface{}
+jsoniter.UnmarshalFromString(`[]`, &amp;val)
+使用 MarshalJSON支持time.Time
+golang 默认会把 time.Time 用字符串方式序列化。如果我们想用其他方式表示 time.Time，需要自定义类型并定义 MarshalJSON。
+type timeImplementedMarshaler time.Time
+ 
+func (obj timeImplementedMarshaler) MarshalJSON() ([]byte, error) {
+ seconds := time.Time(obj).Unix()
+ return []byte(strconv.FormatInt(seconds, 10)), nil
+}
+序列化的时候会调用 MarshalJSON
+type TestObject struct {
+ Field timeImplementedMarshaler
+}
+should := require.New(t)
+val := timeImplementedMarshaler(time.Unix(123, 0))
+obj := TestObject{val}
+bytes, err := jsoniter.Marshal(obj)
+should.Nil(err)
+should.Equal(`{"Field":123}`, string(bytes))
+使用 RegisterTypeEncoder支持time.Time
+jsoniter 能够对不是你定义的type自定义JSON编解码方式。比如对于 time.Time 可以用 epoch int64 来序列化
+import "github.com/json-iterator/go/extra"
+extra.RegisterTimeAsInt64Codec(time.Microsecond)
+output, err := jsoniter.Marshal(time.Unix(1, 1002))
+should.Equal("1000001", string(output))
+如果要自定义的话，参见 RegisterTimeAsInt64Codec 的实现代码
+
+使用 MarshalText支持非字符串作为key的map
+虽然 JSON 标准里只支持 string 作为 key 的 map。但是 golang 通过 MarshalText() 接口，使得其他类型也可以作为 map 的 key。例如
+f, _, _ := big.ParseFloat("1", 10, 64, big.ToZero)
+val := map[*big.Float]string{f: "2"}
+str, err := MarshalToString(val)
+should.Equal(`{"1":"2"}`, str)
+其中 big.Float 就实现了 MarshalText()
+
+使用 json.RawMessage
+如果部分json文档没有标准格式，我们可以把原始的文本信息用string保存下来。
+type TestObject struct {
+ Field1 string
+ Field2 json.RawMessage
+}
+var data TestObject
+json.Unmarshal([]byte(`{"field1": "hello", "field2": [1,2,3]}`), &amp;data)
+should.Equal(` [1,2,3]`, string(data.Field2))
+使用 json.Number
+默认情况下，如果是 interface{} 对应数字的情况会是 float64 类型的。如果输入的数字比较大，这个表示会有损精度。所以可以 UseNumber() 启用 json.Number 来用字符串表示数字。
+decoder1 := json.NewDecoder(bytes.NewBufferString(`123`))
+decoder1.UseNumber()
+var obj1 interface{}
+decoder1.Decode(&amp;obj1)
+should.Equal(json.Number("123"), obj1)
+jsoniter 支持标准库的这个用法。同时，扩展了行为使得 Unmarshal 也可以支持 UseNumber 了。
+json := Config{UseNumber:true}.Froze()
+var obj interface{}
+json.UnmarshalFromString("123", &amp;obj)
+should.Equal(json.Number("123"), obj)
+统一更改字段的命名风格
+经常 JSON 里的字段名 Go 里的字段名是不一样的。我们可以用 field tag 来修改。
+output, err := jsoniter.Marshal(struct {
+ UserName string `json:"user_name"`
+ FirstLanguage string `json:"first_language"`
+}{
+ UserName: "taowen",
+ FirstLanguage: "Chinese",
+})
+should.Equal(`{"user_name":"taowen","first_language":"Chinese"}`, string(output))
+但是一个个字段来设置，太麻烦了。如果使用 jsoniter，我们可以统一设置命名风格。
+import "github.com/json-iterator/go/extra"
+ 
+extra.SetNamingStrategy(LowerCaseWithUnderscores)
+output, err := jsoniter.Marshal(struct {
+ UserName string
+ FirstLanguage string
+}{
+ UserName: "taowen",
+ FirstLanguage: "Chinese",
+})
+should.Nil(err)
+should.Equal(`{"user_name":"taowen","first_language":"Chinese"}`, string(output))
+使用私有的字段
+Go 的标准库只支持 public 的 field。jsoniter 额外支持了 private 的 field。需要使用 SupportPrivateFields() 来开启开关。
+import "github.com/json-iterator/go/extra"
+ 
+extra.SupportPrivateFields()
+type TestObject struct {
+ field1 string
+}
+obj := TestObject{}
+jsoniter.UnmarshalFromString(`{"field1":"Hello"}`, &amp;obj)
+should.Equal("Hello", obj.field1)
+</nil>
+:ET

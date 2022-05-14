@@ -1,0 +1,144 @@
+I"�"<p>kubectl port-forward POD [LOCAL_PORT:]REMOTE_PORT […[LOCAL_PORT_N:]REMOTE_PORT_N]</p>
+
+<p>http://kubernetes.kansea.com/docs/user-guide/kubectl/kubectl_port-forward/</p>
+
+<p>将本地端口转发到 Pod 中的端口
+将本地工作站上的 6379 端口转发到 redis-master pod 的 6379 端口：</p>
+
+<p>kubectl port-forward redis-master 6379:6379</p>
+
+<p>https://jimmysong.io/kubernetes-handbook/guide/connecting-to-applications-port-forward.html
+<!-- more -->
+转发一个本地端口到 pod 端口
+从 Kubernetes v1.10 开始，kubectl port-forward 允许使用资源名称 （例如 pod 名称）来选择匹配的 pod 来进行端口转发。</p>
+
+<p>kubectl port-forward redis-master-765d459796-258hz 7000:6379 
+这相当于</p>
+
+<p>kubectl port-forward pods/redis-master-765d459796-258hz 7000:6379
+或者</p>
+
+<p>kubectl port-forward deployment/redis-master 7000:6379 
+或者</p>
+
+<p>kubectl port-forward rs/redis-master 7000:6379
+或者</p>
+
+<p>kubectl port-forward svc/redis-master 7000:redis
+以上所有命令都应该有效。输出应该类似于：</p>
+
+<p>Forwarding from 127.0.0.1:7000 -&gt; 6379
+Forwarding from [::1]:7000 -&gt; 6379</p>
+
+<p>https://kubernetes.io/zh/docs/tasks/access-application-cluster/port-forward-access-application-cluster/</p>
+
+<p>https://kubernetes.io/zh/docs/tasks/debug-application-cluster/local-debugging/</p>
+
+<p>开发和调试现有的服务
+在 Kubernetes 上开发应用程序时，通常对单个服务进行编程或调试。 服务可能需要访问其他服务以进行测试和调试。 一种选择是使用连续部署流水线，但即使最快的部署流水线也会在程序或调试周期中引入延迟。</p>
+
+<p>使用 –swap-deployment 选项将现有部署与 Telepresence 代理交换。 交换允许你在本地运行服务并能够连接到远端的 Kubernetes 集群。 远端集群中的服务现在就可以访问本地运行的实例。</p>
+
+<p>要运行 telepresence 并带有 –swap-deployment 选项，请输入：</p>
+
+<p>telepresence –swap-deployment $DEPLOYMENT_NAME</p>
+
+<p>这里的 $DEPLOYMENT_NAME 是你现有的部署名称。</p>
+
+<p>运行此命令将生成 Shell。在该 Shell 中，启动你的服务。 然后，你就可以在本地对源代码进行编辑、保存并能看到更改立即生效。 你还可以在调试器或任何其他本地开发工具中运行服务</p>
+
+<p>https://cloud.google.com/community/tutorials/developing-services-with-k8s</p>
+
+<p>https://github.com/telepresenceio/telepresence</p>
+
+<p>telepresence的原理，本质上是后台调用kubectl与docker命令，因为kube-config中定义了集群地址及访问方式，因此达到直连k8s集群的目的。</p>
+
+<p>客户端在使用telepresence命令时，它会在远端集群中以特定的镜像(datawire/telepresence-k8s)启动deployment和service资源，
+并且监听参数中指定的一个端口。</p>
+
+<p>每个telepresence实例都在集群启动的容器资源被限制在cpu(25m~100m)，内存(64M~256M)。</p>
+
+<p>当本地启动一个应用程序，并且暴露的是上述监听的端口号，则telepresence将本地该端口上的流量代理到k8s集群中，
+就好像这个应用是运行在集群内部一样，可以直接使用集群中其它service名称来访问。</p>
+
+<p>telepresence提供了三种方式来建立代理通道，各有限制：</p>
+
+<p> </p>
+
+<p>vpn-tcp: 使用叫sshuttle的程序，通过SSH连接来建立一种类VPN通道。
+限制：   一台机子只能使用一个telepresence实例;</p>
+
+<p>     只能解析诸如 <em>servicename\servicename.namespace</em> 这种域名，而无法解析k8s中的完整域名如<em>servicename.namespace.svc.cluster.local</em></p>
+
+<p>           单台机子只能单实例运行的限制，官网建议通过 inject-tcp 的方式来运行多实例</p>
+
+<p> </p>
+
+<p>inject-tcp: 使用一种叫 LD_PRELOAD/DYLD_INSERT_LIBRARIES 的机制，通过TCP连接来注入一些共享库。
+限制： suid特权的二进制文件无法运行生效；</p>
+
+<p>          静态链接二进制文件无法运行生效；</p>
+
+<p>          需要解析文件<em>/etc/resolv.conf</em>的命令无法生效，如ping,nslookup等；</p>
+
+<p>         Golang程序无法运行，以你为Go使用了自带的dns解析器；官网建议Golang通过vpn-tcp方式代理；</p>
+
+<p>container: 基于vpn-tcp，sshuttle运行于容器内部。</p>
+
+<p>https://blog.csdn.net/a605692769/article/details/82257054</p>
+
+<p>https://www.telepresence.io/discussion/how-it-works</p>
+
+<p>有了这些代理之后：</p>
+
+<p>本地的服务就可以完整的访问到远程集群中的其他服务。
+本地的服务直接访问到 Kubernetes 里的各种资源，包括环境变量、Secrets、Config map 等。
+甚至集群中的服务还能直接访问到本地暴露出来的接口。</p>
+
+<p>假设我们有两个服务 A 和 B，服务 A 是依赖于服务 B 的</p>
+
+<p>调试服务 A</p>
+
+<p>服务 A 在本地运行，服务 B 运行在远端集群中。借助 Telepresence 搭建的代理，A 就能直接访问到 B。比方说我们的服务 B 是这样一个程序，它监听在 8000 端口上。每当有人访问时它就返回 Hello, world! 。</p>
+
+<p>$ kubectl run service-b –image=datawire/hello-world –port=8000 –expose
+$ kubectl get service service-b NAME        CLUSTER-IP   EXTERNAL-IP   PORT(S)    AGEservice-b   10.0.0.12    <none>        8000/TCP   1m</none></p>
+
+<p>现在在本地用默认参数启动 Telepresence ，等它连接好集群：</p>
+
+<p>$ telepresenceT: Starting proxy with method ‘V<strong>-tcp’, which has the following limitations: All processes are affected, only one telepresence can run per machine, and youT: can’t use other V</strong>s. You may need to add cloud hosts and headless services with –also-proxy. For a full list of method limitations seeT: https://telepresence.io/reference/methods.htmlT: Volumes are rooted at $TELEPRESENCE_ROOT. See https://telepresence.io/howto/volumes.html for details.T: Starting network proxy to cluster using new Deployment telepresence-1566230249-7112632-14485
+T: No traffic is being forwarded from the remote Deployment to your local machine. You can use the –expose option to specify which ports you want toT: forward.
+T: Setup complete. Launching your command.@test_cluster|bash-4.2#</p>
+
+<p>这时候就可以开始调试服务 A 了，因为服务 B 暴露出来的接口本地已经可以直接访问到：</p>
+
+<p>$ curl http://service-b:8000/Hello, world!</p>
+
+<p>这里要说明一下这背后发生的事情：</p>
+
+<p>当运行 Telepresence 命令的时候，它创建了一个 Deployment，这个 Deployment 又创建了一个用来做代理的 Pod ，我们可以这样查看到它 kubectl get pod -l telepresence。
+同时它还在本地创建了一个全局的 V<strong>，使得本地的所有程序都可以访问到集群中的服务。Telepresence 其实还支持其他的网络代理模式（使用 –method 切换），V</strong>-tcp 是默认的方式，其他的好像用处不大，inject-tcp 甚至要在后续的版本中取消掉。
+当本地的 curl 访问 http://service-b:8000/ 时，对应的 DNS 查询和 HTTP 请求都被 V** 路由到集群中刚刚创建的 Pod 去处理。
+除此之外 Telepresence 还将远端的文件系统通过 sshfs 挂载到本地 $TELEPRESENCE_ROOT 下面（你也可以用参数 –mount <MOUNT_PATH> 指定挂载的路径）。这样，我们的应用程序就可以在本地访问到远程的文件系统：</MOUNT_PATH></p>
+
+<p>$ ls $TELEPRESENCE_ROOT/var/run/secrets/kubernetes.io/serviceaccountca.crt  namespace  token</p>
+
+<p>如果我们退出 Telepresence 对应的 Shell，它也会做一些清理工作，比如取消本地 V**、删除刚刚创建的 Deployment 等。</p>
+
+<p>调试服务 B</p>
+
+<p>服务 B 与刚才的不同之处在于，它是被别人访问的，要调试它，首先得要有真实的访问流量。我们如何才能做到将别人对它的访问路由到本地来，从而实现在本地捕捉到集群中的流量呢？</p>
+
+<p>Telepresence 提供这样一个参数，–swap-deployment &lt;DEPLOYMENT_NAME[:CONTAINER]&gt;，用来将集群中的一个 Deployment 替换为本地的服务。对于上面的 service-b，我们可以这样替换：</p>
+
+<p>$ telepresence –swap-deployment service-b –expose 8000:8000</p>
+
+<p>这个时候集群中的服务 A 再想访问服务 B 的 8000 端口时，Telepresence 就会将这个请求转发到本地的 8000 端口。它的工作原理就是将集群中的 service-b 替换为 Telepresence 创建的 Proxy ，然后这个 Proxy 再将请求转发到本地客户端。</p>
+
+<p>https://cloud.tencent.com/developer/article/1537743</p>
+
+<p>https://www.telepresence.io/</p>
+
+<p>https://kubernetes.io/zh/docs/tasks/debug-application-cluster/local-debugging/</p>
+
+:ET

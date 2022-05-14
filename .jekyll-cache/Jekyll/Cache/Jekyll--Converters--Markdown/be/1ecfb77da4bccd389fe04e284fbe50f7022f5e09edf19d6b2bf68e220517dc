@@ -1,0 +1,161 @@
+I"; <p>wrk 负载测试时可以运行在一个或者多核CPU，wrk 结合了可伸缩的事件通知系统 epoll 和 kqueue 等多线程设计思想。wrk 不仅能测试单条 URL，还能通过LuaJIT脚本实现对不同的 URL 和参数、请求内容进行测试</p>
+
+<p>https://github.com/wg/wrk/blob/master/NOTICE
+sudo apt-get install build-essential libssl-dev git -y
+git clone https://github.com/wg/wrk.git wrk
+cd wrk
+make</p>
+<h1 id="把生成的wrk移到一个path目录下面-比如">把生成的wrk移到一个PATH目录下面, 比如</h1>
+<p>sudo cp wrk /usr/local/bin
+<!-- more -->
+wrk -t12 -c400 -d30s http://127.0.0.1:8080/index.html
+使用12个线程运行30秒, 400个http并发</p>
+
+<p>命令行选项
+-c, –connections: 总的http并发数</p>
+
+<p>-d, –duration:    持续压测时间, 比如: 2s, 2m, 2h</p>
+
+<p>-t, –threads:     总线程数</p>
+
+<p>-s, –script:      luajit脚本,使用方法往下看</p>
+
+<p>-H, –header:      添加http header, 比如. “User-Agent: wrk”</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>--latency:     在控制台打印出延迟统计情况
+
+--timeout:     http超时时间 复制代码lua脚本压测 在基本压测中, 每次发送的请求都是一样的,很多时候我们压测的请求体是每个请求都不一样, 这时候就要写lua基本来压测 使用POST方法压测 wrk.method = "POST" wrk.body   = "foo=bar&amp;baz=quux" wrk.headers["Content-Type"] = "application/x-www-form-urlencoded" 复制代码wrk -t2 -d30s -c1k -s xxx.lua http://192.168.17.1/ 复制代码每个request的参数都不一样 request = function()    uid = math.random(1, 10000000)    path = "/test?uid=" .. uid    return wrk.format(nil, path) end 复制代码解释一下wrk.format这个函数 wrk.format这个函数的作用,根据参数和全局变量wrk生成一个http请求 函数签名: function wrk.format(method, path, headers, body) method:http方法,比如GET/POST等 path: url上的路径(含函数) headers: http header body: http body 复制代码每个线程先登录然后压测 token = nil path  = "/authenticate"
+</code></pre></div></div>
+
+<p>request = function()
+   return wrk.format(“GET”, path)
+end</p>
+
+<p>response = function(status, headers, body)
+   if not token and status == 200 then
+      token = headers[“X-Token”]
+      path  = “/resource”
+      wrk.headers[“X-Token”] = token
+   end
+end
+复制代码发送json
+request = function()
+    local headers = { }
+    headers[‘Content-Type’] = “application/json”
+    body = {
+        mobile={“1533899828”},
+        params={code=math.random(1000,9999)}
+    }</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>local cjson = require("cjson")
+body_str = cjson.encode(body)
+return wrk.format('POST', nil, headers, body_str) end 复制代码 若运行的时候报错找不到cjson, 可以安装 luarocks install lua-cjson
+</code></pre></div></div>
+
+<p>wrk lua脚本说明</p>
+
+<p>wrk 压测脚本有3个生命周期, 分别是 启动阶段,运行阶段和结束阶段,每个线程都有自己的lua运行环境
+	<img src="https://xiazemin.github.io/MyBlog/img/wrk_lua.png" />
+	启动阶段
+function setup(thread)
+在脚本文件中实现setup方法，wrk就会在测试线程已经初始化但还没有启动的时候调用该方法。wrk会为每一个测试线程调用一次setup方法，并传入代表测试线程的对象thread作为参数。setup方法中可操作该thread对象，获取信息、存储信息、甚至关闭该线程。
+– thread提供了1个属性，3个方法
+– thread.addr 设置请求需要打到的ip
+– thread:get(name) 获取线程全局变量
+– thread:set(name, value) 设置线程全局变量
+– thread:stop() 终止线程
+复制代码运行阶段
+function init(args)
+– 每个线程仅调用1次，args 用于获取命令行中传入的参数, 例如 –env=pre</p>
+
+<p>function delay()
+– 每次请求调用1次，发送下一个请求之前的延迟, 单位为ms</p>
+
+<p>function request()
+– 每次请求调用1次，返回http请求</p>
+
+<p>function response(status, headers, body)
+– 每次请求调用1次，返回http响应</p>
+
+<p>复制代码
+init由测试线程调用，只会在进入运行阶段时，调用一次。支持从启动wrk的命令中，获取命令行参数； delay在每次发送request之前调用，如果需要delay，那么delay相应时间； request用来生成请求；每一次请求都会调用该方法，所以注意不要在该方法中做耗时的操作； reponse在每次收到一个响应时调用；为提升性能，如果没有定义该方法，那么wrk不会解析headers和body；
+结束阶段</p>
+
+<p>结束阶段
+function done(summary, latency, requests)</p>
+
+<p>latency.min              – minimum value seen
+latency.max              – maximum value seen
+latency.mean             – average value seen
+latency.stdev            – standard deviation
+latency:percentile(99.0) – 99th percentile value
+latency(i)               – raw value and count</p>
+
+<p>summary = {
+  duration = N,  – run duration in microseconds
+  requests = N,  – total completed requests
+  bytes    = N,  – total bytes received
+  errors   = {
+    connect = N, – total socket connection errors
+    read    = N, – total socket read errors
+    write   = N, – total socket write errors
+    status  = N, – total HTTP status codes &gt; 399
+    timeout = N  – total request timeouts
+  }
+}
+复制代码
+该方法在整个测试过程中只会调用一次，可从参数给定的对象中，获取压测结果，生成定制化的测试报告。</p>
+
+<p>线程变量
+wrk = {
+    scheme  = “http”,
+    host    = “localhost”,
+    port    = nil,
+    method  = “GET”,
+    path    = “/”,
+    headers = {},
+    body    = nil,
+    thread  = <userdata>,
+}</userdata></p>
+
+<p>– 生成整个request的string，例如：返回
+– GET / HTTP/1.1
+– Host: tool.lu
+function wrk.format(method, path, headers, body)
+– method: http方法, 如GET/POST/DELETE 等
+– path:   url的路径, 如 /index, /index?a=b&amp;c=d
+– headers: 一个header的table
+– body:    一个http body, 字符串类型</p>
+
+<p>– 获取域名的IP和端口，返回table，例如：返回 <code class="language-plaintext highlighter-rouge">{127.0.0.1:80}</code>
+function wrk.lookup(host, service)
+– host:一个主机名或者地址串(IPv4的点分十进制串或者IPv6的16进制串)
+– service：服务名可以是十进制的端口号，也可以是已定义的服务名称，如ftp、http等</p>
+
+<p>– 判断addr是否能连接，例如：<code class="language-plaintext highlighter-rouge">127.0.0.1:80</code>，返回 true 或 false
+function wrk.connect(addr)</p>
+
+<p>wrk 提供了几个 hook 函数，可以用 lua 来编写一些复杂场景下的测试：</p>
+
+<p>setup</p>
+
+<p>这个函数在目标 IP 地址已经解析完，并且所有 thread 已经生成，但是还没有开始时被调用，每个线程执行一次这个函数。可以通过 thread:get(name)， thread:set(name, value) 设置线程级别的变量。</p>
+
+<p>init</p>
+
+<p>每次请求发送之前被调用。可以接受 wrk 命令行的额外参数，通过 – 指定。</p>
+
+<p>delay</p>
+
+<p>这个函数返回一个数值，在这次请求执行完以后延迟多长时间执行下一个请求，可以对应 thinking time 的场景。</p>
+
+<p>request</p>
+
+<p>通过这个函数可以每次请求之前修改本次请求的属性，返回一个字符串，这个函数要慎用， 会影响测试端性能。</p>
+
+<p>response</p>
+
+<p>每次请求返回以后被调用，可以根据响应内容做特殊处理，比如遇到特殊响应停止执行测试，或输出到控制台等等。</p>
+
+<p>wrk 的一个很好的特性就是能用很少的线程压出很大的并发量. 原因是它使用了一些操作系统特定的高性能 io 机制, 比如 select, epoll, kqueue 等. 其实它是复用了 redis 的 ae 异步事件驱动框架.  确切的说 ae 事件驱动框架并不是 redis 发明的, 它来至于 Tcl的解释器 jim, 这个小巧高效的框架, 因为被 redis 采用而更多的被大家所熟知.</p>
+:ET

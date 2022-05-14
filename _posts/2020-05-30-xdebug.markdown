@@ -1,0 +1,324 @@
+---
+title: PHP 调试技巧 扩展调试
+layout: post
+category: php
+author: 夏泽民
+---
+https://www.zhihu.com/question/20348619/answer/101893104
+
+xdebug的xdebug_start_trace();
+/* 业务代码     */
+xdebug_stop_trace();
+他解决了我长久以来一个代码调试问题：比如有以下几个场景：1、一个有几百行的函数，里面有很多return，现在函数异常返回了，但是我不知道是从哪一行返回的，这时候呢，我一般的做法都是每一行echo();die();太费事了。2、接触一个新的框架，代码执行出现异常，怎么办呢，肯定也是一行一行的echo();die();3、想学习一个新框架，想知道代码的执行轨迹：执行了哪些类、调用了哪些类的方法，等等。现在呢，xdebug的代码跟踪，能帮我们轻松解决上面的问题。xdebug的安装（网上我看到了很多的都是在说xdebug、phpstorm、chrome咋配合起来远程调试，搞得大家好像觉得xdebug用起来那么费事，那么高级，其实没必要）：1、安装php xdebug扩展（不再细说）2、配置：这里只讲代码跟踪相关的配置：cat /etc/php.d/xdebug.ini
+extension=/usr/lib64/php/modules/xdebug.so 
+;代码跟踪日志文件位置,注意要先新建这个traces目录，并设置777
+xdebug.trace_output_dir = /tmp/traces
+;代码跟踪日志文件格式 
+xdebug.trace_output_name = trace.%c.%p
+;trace中显示函数的参数值，这个很有用，待会细说
+xdebug.collect_params = 4
+xdebug.collect_includes = On
+xdebug.collect_return = On
+xdebug.show_mem_delta = On
+;var_display_max_depth这个参数也很有用。用来设置数组或者对象显示的最大层级。
+;默认是3。参见官方文档的说明：Controls how many nested levels of array elements 
+;and object properties are when variables are displayed 
+;with either xdebug_var_dump(), xdebug.show_local_vars or through Function Traces.
+xdebug.var_display_max_depth = 2安装好之后，代码执行明细(trace)，就存放在/tmp/traces目录下了:
+<!-- more -->
+我截取一段trace日志，大家看下，就能感知到这个用法的方便了：
+
+1、显示了参数的值：就这一点，我想就会节省我们phper很多的调试时间（默认不显示参数值，只显示调用的函数。需要添加xdebug.collect_params这个配置）2、显示了代码的执行轨迹。类似于c语言的单步调试吧。就这些了，反正用了xdebug，我是觉得debug的时候节省了大量时间，分享给大家，希望对你们也有帮助。ps：如果大家都xdebug的安装有困惑，可以参考http://www.ibm.com/developerworks/cn/opensource/os-php-xdebug/index.html-------以下是2017.12.08补充-------再补充一种调试方法：利用symfony/var-dumper包中的dump()函数，格式化输出变量效果如下：<img src="https://pic1.zhimg.com/50/v2-b995144bdfaec5440bca2445c279de77_hd.jpg" data-caption="" data-size="normal" data-rawwidth="403" data-rawheight="607" class="content_image" width="403"/>当然，很多框架里面都内置了类似的打印函数，这里只所以推荐，更重要的一个原因是：可以通过全局安装，实现dump()函数对所有项目可见，无需在项目中引入任何代码库。安装方法如下：1、执行 composer global require symfony/var-dumper ，全局安装var-dumper包，默认会安装到${HOME}/.config/composer目录。2、在php.ini文件中加入一行:auto_prepend_file = ${HOME}/.config/composer/vendor/autoload.php
+//auto_prepend_file可以简单地理解成：执行所有的php代码之前先include你指定的文件从此以后，在你任意的php项目中调用dump($var);
+//调用dump函数的时候，会触发autoload，实现函数、类的自动加载。
+//关于composer autoload，不明白的可以参考
+//https://laravel-china.org/topics/1002/deep-composer-autoload就可以实现上述的打印效果了。2018-11-5号补充：xdebug trace 可视化工具：splitbrain/xdebug-trace-tree QCacheGrind (KCacheGrind) Windows build
+
+https://www.zhihu.com/question/20348619?sort=created
+
+
+https://www.php.net/manual/zh/internals2.buildsys.environment.php
+
+
+使用 gdb 调试 PHP 扩展
+
+php的扩展使用c/c++开发，可以很容易的使用gdb进行调试。具体步骤如下： 首先编译php的时候需要加上** --enable-debug**参数
+
+
+ 
+./configure --enable-debug
+
+make && make install
+
+ 
+在我的ubuntu机器上面测试，扩展的目录默认为 /usr/local/lib/php/extensions/debug-non-zts-20131226/
+这样进行php的源码调试也很方便。
+下一步进行扩展创建，进入php源码的ext目录，运行
+
+
+ 
+./ext_skel --extname=mydebug
+
+ 
+当前目录下会自动生成mydebug目录，然后进入该目录，编辑config.m4文件，去掉10~12行的dnl，如下
+
+
+ 
+PHP_ARG_WITH(mydebug, for mydebug support,
+
+Make sure that the comment is aligned:
+
+[ --with-mydebug Include mydebug support])
+
+在最后一行添加
+
+
+ 
+if test -z "$PHP_DEBUG"; then
+
+AC_ARG_ENABLE(debug,
+
+[--enable-debg compile with debugging system],
+
+[PHP_DEBUG=$enableval], [PHP_DEBUG=no]
+
+)
+
+fi
+
+这样就表示该扩展能够进行调试了，然后编译该扩展，使用命令
+
+phpize
+
+./configure --enable-debug
+
+make && make install
+
+ 
+这里的 phpize 和 php-config 需要事先配置好环境变量，然后加载该扩展。在我的机器上面地址为/usr/local/lib/php/extensions/debug-non-zts-20131226/。进入mydebug扩展源码目录，默认生成的函数为confirm_mydebug_compiled，定义在 mydebug.c，扩展自动生成的函数。
+
+
+ 
+PHP_FUNCTION(confirm_mydebug_compiled)
+
+{
+
+char *arg = NULL;
+
+int arg_len, len;
+
+char *strg;
+
+ 
+if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "s", &arg, &arg_len) == FAILURE) {
+
+return;
+
+}
+
+ 
+len = spprintf(&strg, 0, "Congratulations! You have successfully modified ext/%.78s/config.m4. Module %.78s is now compiled into PHP.", "mydebug", arg);
+
+RETURN_STRINGL(strg, len, 0);
+
+}
+
+大概意思就是获取字符串参数，然后拼成一句字符串返回。通过nm命令查看生成的mydebug.so导出的符号。
+
+
+ 
+运行 nm mydebug.so
+
+返回 zif_confirm_mydebug_compiled
+
+……
+
+PHP_FUNCTION 实际就是在函数名前面添加 zif_，然后进行gdb调试
+
+
+ 
+第一步运行: gdb php
+
+然后运行： break zif_confirm_mydebug_compiled
+
+终端提示：Function "zif_confirm_mydebug_compiled" not defined.
+
+Make breakpoint pending on future shared library load? (y or [n])
+
+输入： y
+
+输入: run /tmp/test.php
+
+此时会回显:Breakpoint 1, zif_confirm_mydebug_compiled (ht=1, return_value=0xb7bf0d44, return_value_ptr=0xb7bd6104, this_ptr=0x0, return_value_used=1)
+
+at /...../php-5.6.6/ext/mydebug/mydebug.c:56
+
+然后输入: l
+
+显示：
+ PHP_FUNCTION(confirm_mydebug_compiled)
+ {
+ char *arg = NULL;
+ int arg_len, len;
+ char *strg;
+ if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "s", &arg, &arg_len) == FAILURE) {
+
+ 
+其中文件/tmp/test.php的内容为：
+ 
+<?php
+
+echo confirm_mydebug_compiled("hello world");
+
+可以看到，函数源代码已经出来了，可以使用常用的gdb命令进行调试了。
+
+https://blog.csdn.net/luolaifa000/article/details/100518718
+
+https://blog.it2048.cn/article-php-ext/
+
+
+php扩展xdebug （php页面调试）
+https://blog.csdn.net/weixin_34405925/article/details/89797004
+
+https://www.laruence.com/2009/04/28/719.html
+
+
+实战
+vi config.m4
+if test -z "$PHP_DEBUG"; then
+AC_ARG_ENABLE(debug,
+[--enable-debg compile with debugging system],
+[PHP_DEBUG=$enableval], [PHP_DEBUG=no]
+)
+fi
+
+$./configure --enable-debug
+checking for grep that handles long lines and -e... /usr/bin/grep
+checking for egrep... /usr/bin/grep -E
+
+
+$make && make install
+
+
+$nm mydebug.so
+/Library/Developer/CommandLineTools/usr/bin/nm: mydebug.so: No such file or directory.
+
+$nm  /usr/local/lib/php/extensions/debug-non-zts-20160303/myFile.so
+
+                U _OnUpdateLong
+                 U _OnUpdateString
+                 U ___memcpy_chk
+                 U ___stack_chk_fail
+                 U ___stack_chk_guard
+                 U ___strcat_chk
+                 U ___strcpy_chk
+                 U ___zend_malloc
+                 U __array_init
+                 U __efree
+                 U __emalloc
+                 U __zval_ptr_dtor
+                 U _add_assoc_long_ex
+                 U _ap_php_snprintf
+                 U _asctime
+                 U _executor_globals
+                 U _fclose
+                 U _feof
+                 U _fopen
+                 U _fread
+                 U _fseek
+                 U _ftime
+                 U _fwrite
+0000000000001600 T _getTimems
+0000000000002940 T _get_module
+0000000000003170 s _ini_entries
+0000000000003440 b _le_myFile
+                 U _localtime
+                 U _malloc
+0000000000003290 S _myFile_functions
+0000000000003418 S _myFile_globals
+0000000000003370 D _myFile_module_entry
+0000000000002890 T _myStrConcat
+0000000000001650 T _my_execute_ex
+0000000000001930 t _my_get_file_class_function_name
+0000000000003438 b _my_zend_execute_ex
+0000000000002600 t _myfile_dtor
+                 U _php_info_print_table_end
+                 U _php_info_print_table_header
+                 U _php_info_print_table_start
+                 U _php_sprintf
+                 U _printf
+0000000000001410 T _save_log
+                 U _strcmp
+                 U _strlen
+                 U _strncmp
+                 U _strpprintf
+                 U _time
+                 U _zend_error
+                 U _zend_execute_ex
+                 U _zend_fetch_resource
+                 U _zend_hash_str_exists
+                 U _zend_list_close
+                 U _zend_parse_parameters
+                 U _zend_register_ini_entries
+                 U _zend_register_list_destructors_ex
+                 U _zend_register_resource
+0000000000002950 t _zend_string_alloc
+0000000000002a20 t _zend_string_forget_hash_val
+0000000000002340 t _zend_string_init
+                 U _zend_unregister_ini_entries
+0000000000001ea0 T _zif_confirm_myFile_compiled
+0000000000002030 T _zif_file_close
+00000000000024d0 T _zif_file_eof
+0000000000001f50 T _zif_file_open
+00000000000020b0 T _zif_file_read
+00000000000023a0 T _zif_file_write
+0000000000002650 T _zm_activate_myFile
+0000000000002710 T _zm_deactivate_myFile
+0000000000002900 T _zm_info_myFile
+0000000000002630 T _zm_shutdown_myFile
+00000000000025b0 T _zm_startup_myFile
+0000000000001e80 t _zval_get_type
+                 U dyld_stub_binder
+                 
+e$ lldb php
+(lldb) target create "php"
+Current executable set to 'php' (x86_64).
+(lldb) b  _zm_shutdown_myFile
+Breakpoint 1: no locations (pending).
+WARNING:  Unable to resolve breakpoint to any actual locations.
+(lldb)
+
+(lldb) file /usr/local/lib/php/extensions/debug-non-zts-20160303/myFile.so
+Current executable set to '/usr/local/lib/php/extensions/debug-non-zts-20160303/myFile.so' (x86_64).
+(lldb) b  _zm_shutdown_myFile
+Breakpoint 1: no locations (pending).
+WARNING:  Unable to resolve breakpoint to any actual locations.
+(lldb)
+
+
+(gdb) b _zm_shutdown_myFile
+Function "_zm_shutdown_myFile" not defined.
+Make breakpoint pending on future shared library load? (y or [n]) y
+Breakpoint 1 (_zm_shutdown_myFile) pending.
+(gdb)
+
+
+$lldb -c /cores/core.38839
+(lldb) target create --core "/cores/core.38839"
+warning: (x86_64) /cores/core.38839 load command 108 LC_SEGMENT_64 has a fileoff + filesize (0x28a0e000) that extends beyond the end of the file (0x28a0d000), the segment will be truncated to match
+warning: (x86_64) /cores/core.38839 load command 109 LC_SEGMENT_64 has a fileoff (0x28a0e000) that extends beyond the end of the file (0x28a0d000), ignoring this section
+
+error: myFile.so debug map object file '/Users/didi/PhpstormProjects/c/php-src/ext/myFile/.libs/myFile.o' has changed (actual time is 0x5ed26b84, debug map time is 0x5ed26abc) since this executable was linked, file will be ignored
+Core file '/cores/core.38839' (x86_64) was loaded.
+(lldb)
+Core file '/cores/core.38839' (x86_64) was loaded.
+(lldb) bt
+* thread #1: tid = 0x0000, 0x0000000103049e99 php`php_sprintf(s="%d", format="") + 361 at php_sprintf.c:37, stop reason = signal SIGSTOP
+  * frame #0: 0x0000000103049e99 php`php_sprintf(s="%d", format="") + 361 at php_sprintf.c:37
+    frame #1: 0x00000001042ea821 myFile.so`zm_deactivate_myFile + 305
+    frame #2: 0x00000001030f5b8e php`zend_deactivate_modules + 222 at zend_API.c:2574
+    frame #3: 0x000000010303d2a4 php`php_request_shutdown(dummy=0x0000000000000000) + 580 at main.c:1847
+    frame #4: 0x0000000103206e7e php`do_cli(argc=2, argv=0x00007fff5cffefd0) + 6958 at php_cli.c:1157
+    frame #5: 0x000000010320515a php`main(argc=2, argv=0x00007fff5cffefd0) + 1898 at php_cli.c:1378
+    frame #6: 0x00007fff8ad7c5ad libdyld.dylib`start + 1
+

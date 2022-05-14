@@ -1,0 +1,132 @@
+---
+title: go 远程调试
+layout: post
+category: golang
+author: 夏泽民
+---
+IntelliJ IDEA,可惜没有remote debug
+基本想法就是：在集成开发环境下写代码比较轻松，能够自动完补定位什么的，愈发检查通过了以后，再在特权容器里编译测试运行，甚至，通过IDEA远程调试，就是gdbserver那一套。
+
+想得简单，实际做了一下，出了gdb remote以外都还行，但是也有些不爽的地方。
+Remote gdb呢？ 没想到的是， IntelliJ IDEA虽然能轻松的调试本地的Go代码，但不能像Java那样远程调试到别的机器里的。
+
+暂时也没找到远程gdb插件。还是手动gdb命令行搞算了。
+<!-- more -->
+goland是基于intellij IDEA推出的开发go的IDE，所以很多之前Intellij的使用习惯可以保留下来，实属developer的福音，今天遇到一个新的问题，就是我要调试远程服务器上的go代码，远程系统是ubuntu或者centos，总之是没有图形界面的，我想在本地调试该怎么办呢，答案是使用Delve 这个专门的调试工具。
+
+step1 远程主机
+安装delve，项目地址：https://github.com/derekparker/delve
+按照官方的提示安装即可（注意因为GFW等你懂得的原因，网络下载可能较慢或不可用，请自行使用某高科技软件，如ss+proxychains等工具）。
+
+下载并安装完成后输入dlv就会看到帮助信息：
+
+step2 本地
+本地进入IDE，在要调试的地方打上断点，然后
+run--debug--eidit configurations-->添加remote主机信息。
+<img src="{{site.url}}{{site.baseurl}}/img/goremote.webp"/>
+
+step3 远端
+如我要对 main.go 这个项目debug，对main进行编译后，可以直接运行
+dlv --listen=:2345 --headless=true --api-version=2 exec ./main
+然后本地就收到了调试信息
+
+
+go get -u github.com/go-delve/delve/cmd/dlv -v -insecure
+
+或
+
+git clone https://github.com/go-delve/delve.git $GOPATH/src/github.com/go-delve/delve
+cd $GOPATH/src/github.com/go-delve/delve
+make install
+
+上面的都不行了,我用以下命令成功了
+
+git clone https://github.com/go-delve/delve.git $GOPATH/src/github.com/go-delve/delve
+cd $GOPATH
+go install github.com/go-delve/delve/cmd/dlv
+
+
+
+可以用 $GOPATH/bin/dlv 执行 也可以先将dlv放入PATH中
+
+ln -s $GOPATH/bin/dlv /usr/local/bin/dlv
+
+之后可以直接用 dlv 例如 dlv version
+
+服务端启动go程序
+示例工程
+示例源代码
+$GOPATH/src/mytest/main.go
+
+package main
+
+import (
+	"fmt"
+	"time"
+)
+
+const myDate = "2019-05-30 15:13"
+
+var (
+	Aa = 81
+	Bb = 82
+)
+
+func main() {
+	fmt.Println("myDate:", myDate)
+	func1()
+}
+func func1() {
+	a := 61
+	b := 62
+	i := 0
+	for true {
+		fmt.Println("fmt:", i, a, b, Aa, Bb)
+		i++
+		a += 2
+		Aa += 3
+		time.Sleep(time.Second)
+	}
+}
+
+编译go程序
+go install mytest
+
+运行go程序
+nohup bin/mytest >> out.log &
+
+显示
+
+[1] 7148
+[root@localhost go]# nohup: ignoring input and redirecting stderr to stdout
+1
+2
+数字 7148 就是 pid
+
+此时可以ctrl+c退出, 继续后面的操作
+
+ctrl+c后如果出现了 [1]+ Exit 代码,说明go程序终止了, 可能是go代码错误
+
+dlv attach go程序
+dlv attach 7148 --headless --listen=:2345 --api-version=2 --accept-multiclient
+
+GoLand配置
+Main menu->Run->Edit Configurations…
+
+-> Go Remote
+Host改成服务器ip
+
+Port: 2345
+
+保存 后 Debug go remote
+
+此时可以设置断点, 在 Variables 面板可以查看变量, 可以点击**+增加Watch**
+
+终止dlv和go程序
+dlv不终止, 则 go程序也无法终止
+而dlv只能通过终止进程的方式终止掉
+
+kill -9 `ps -ef | grep "dlv|mytest" -E | awk '{print $2}'`
+1
+TODO
+GoLand Console无法显示fmt.println的信息, 只能继续在shell中查看bin/mytest输出

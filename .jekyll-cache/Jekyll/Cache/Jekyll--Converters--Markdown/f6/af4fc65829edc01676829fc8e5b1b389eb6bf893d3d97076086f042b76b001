@@ -1,0 +1,421 @@
+I"8W<p>当检查你的Kubernetes集群的节点时，在节点上执行命令docker ps，你可能会注意到一些被称为“暂停（/pause）”的容器。
+$ docker ps
+CONTAINER ID IMAGE COMMAND …
+…
+3b45e983c859 gcr.io/google_containers/pause-amd64:3.0  “/pause” …
+…
+dbfc35b00062 gcr.io/google_containers/pause-amd64:3.0  “/pause” …
+…
+c4e998ec4d5d gcr.io/google_containers/pause-amd64:3.0  “/pause” …
+…
+508102acf1e7 gcr.io/google_containers/pause-amd64:3.0  “/pause” …</p>
+
+<p>这些“暂停”容器是啥，而且还这么多暂停的？这到底是什么情况？
+<!-- more -->
+为了回答这些问题，我们需要退一步看看Kubernetes中的pods如何实现，特别是在Docker/containerd运行时。如果你还不知道怎么做，可以先阅读我以前发表的关于Kubernetes pods 的文章。</p>
+
+<p>Docker支持容器，这非常适合部署单个软件单元。但是，当你想要一起运行多个软件时，这种模式会变得有点麻烦。当开发人员创建使用supervisord作为入口点的Docker镜像来启动和管理多个进程时，你经常会看到这一点。对于生产系统，许多人发现，将这些应用程序部署在部分隔离并部分共享环境的容器组中更为有用。</p>
+
+<p>Kubernetes为这种使用场景提供了一个称为Pod的干净的抽象。它在隐藏Docker标志的复杂性的同时会保留容器，共享卷等。它也隐藏了容器运行时的差异。例如，rkt原生支持Pod，所以Kubernetes的工作要少一些，但是不管怎样，作为Kubernetes用户的你都不用担心（Pod会帮你搞定这些）。</p>
+
+<p>原则上，任何人都可以配置Docker来控制容器组之间的共享级别——你只需创建一个父容器，在知道正确的标志配置的情况下来设置并创建共享相同环境的新容器，然后管理这些容器的生命周期。而管理所有这些片段的生命周期可能会变得相当复杂。</p>
+
+<p>在Kubernetes中，“暂停”容器用作你的Pod中所有容器的“父容器”。“暂停”容器有两个核心职责。首先，在Pod中它作为Linux命名空间共享的基础。其次，启用PID（进程ID）命名空间共享，它为每个Pod提供PID 1，并收集僵尸进程。
+共享命名空间
+在Linux中，当你运行新进程时，该进程从父进程继承其命名空间。在新命名空间中运行进程的方法是通过“取消共享”命名空间（与父进程），从而创建一个新的命名空间。以下是使用该unshare工具在新的PID，UTS，IPC和装载命名空间中运行shell的示例。
+sudo unshare –pid –uts –ipc –mount -f chroot rootfs / bin / sh</p>
+
+<p>一旦进程运行，你可以将其他进程添加到进程的命名空间中以形成一个Pod。可以使用setns系统调用将新进程添加到现有命名空间。</p>
+
+<p>Pod中的容器在其中共享命名空间。Docker可让你自动执行此过程，因此，让我们来看一下如何使用“暂停”容器和共享命名空间从头开始创建Pod的示例。首先，我们将需要使用Docker启动“暂停”容器，以便我们可以将容器添加到Pod中。
+docker run -d –name pause gcr.io/google_containers/pause-amd64:3.0</p>
+
+<p>然后我们可以运行我们的Pod的容器。首先我们将运行Nginx。这将在端口2368上设置Nginx到其localhost的代理请求。
+$ cat «EOF » nginx.conf</p>
+<blockquote>
+  <p>error_log stderr;
+events { worker_connections  1024; }
+http {
+    access_log /dev/stdout combined;
+    server {
+        listen 80 default_server;
+        server_name example.com www.example.com;
+        location / {
+            proxy_pass http://127.0.0.1:2368;
+        }
+    }
+}
+EOF
+$ docker run -d –name nginx -v <code class="language-plaintext highlighter-rouge">pwd</code>/nginx.conf:/etc/nginx/nginx.conf -p 8080:80 –net=container:pause –ipc=container:pause –pid=container:pause nginx</p>
+</blockquote>
+
+<p>然后，我们将为作为我们的应用服务器的ghost博客应用程序创建另一个容器。
+$ docker run -d –name ghost –net = container：pause –ipc = container：pause –pid = container：pause ghost</p>
+
+<p>在这两种情况下，我们将“暂停”容器指定为我们要加入其命名空间的容器。这将有效地创建我们的Pod。如果你访问 http://localhost:8080/ 你应该能够看到ghost通过Nginx代理运行，因为网络命名空间在pause，nginx和ghost容器之间共享。
+pause_container.png</p>
+
+<p>如果你觉得这一切好复杂，恭喜你，大家都这么就觉得；它确实很复杂（感觉像句废话）。而且我们甚至还没有了解如何监控和管理这些容器的生命周期。不过，值得庆幸的事，通过Pod，Kubernetes会为你很好地管理所有这些。
+收割僵尸
+在Linux中，PID命名空间中的所有进程会形成一个树结构，每个进程都会有一个父进程。只有在树的根部的进程没有父进程。这个进程就是“init”进程，即PID 1。</p>
+
+<p>进程可以使用fork和exec syscalls启动其他进程。当启动了其他进程，新进程的父进程就是调用fork syscall的进程。fork用于启动正在运行的进程的另一个副本，而exec则用于启动不同的进程。每个进程在OS进程表中都有一个条目。这将记录有关进程的状态和退出代码。当子进程运行完成，它的进程表条目仍然将保留直到父进程使用wait syscall检索其退出代码将其退出。这被称为“收割”僵尸进程。
+zombie.png</p>
+
+<p>僵尸进程是已停止运行但进程表条目仍然存在的进程，因为父进程尚未通过wait syscall进行检索。从技术层面来说，终止的每个进程都算是一个僵尸进程，尽管只是在很短的时间内发生的，但只要不终止他们就可以存活更久。</p>
+
+<p>当父进程wait在子进程完成后不调用syscall时，会发生较长的生存僵尸进程。这样的情况有很多，比如：当父进程写得不好并且简单地省略wait call时，或者当父进程在子进程之前死机，并且新的父进程没有调用wait去检索子进程时。当进程的父进程在子进程之前死机时，OS将子进程分配给“init”进程即PID 1。init进程“收养”子进程并成为其父进程。这意味着现在当子进程退出新的父进程（init）时，必须调用wait 来获取其退出代码否则其进程表项将保持永远，并且它也将成为一个僵尸进程。</p>
+
+<p>在容器中，一个进程必须是每个PID命名空间的init进程。使用Docker，每个容器通常都有自己的PID命名空间，ENTRYPOINT进程是init进程。然而，正如我在上一篇关于Kubernetes Pods的文章中所指出的，某个容器可以在另一个容器的命名空间中运行。在这种情况下，这个容器必须承担init进程的角色，而其他容器则作为init进程的子进程添加到命名空间中。</p>
+
+<p>在Kubernetes Pods的文章中，我在一个容器中运行Nginx，并将ghost添加到了Nginx容器的PID命名空间。
+$ docker run -d –name nginx -v <code class="language-plaintext highlighter-rouge">pwd</code>/nginx.conf:/etc/nginx/nginx.conf -p 8080:80 nginx
+$ docker run -d –name ghost –net=container:nginx –ipc=container:nginx –pid=container:nginx ghost</p>
+
+<p>在这种情况下，Nginx将承担PID 1的作用，并将ghost添加为Nginx的子进程。虽然这样貌似不错，但从技术上来看，Nginx现在需要负责任何ghost进程的子进程。例如，如果ghost分身或者使用子进程运行exec，并在子进程完成之前崩溃，那么这些子进程将被Nginx收养。但是，Nginx并不是设计用来作为一个init进程运行并收割僵尸进程的。这意味着将会有很多的这种僵尸进程，并且在整个容器的生命周期，他们都将持续存活。</p>
+
+<p>在Kubernetes Pods中，容器的运行方式与上述方式大致相同，但是每个Pod都有一个特殊的“暂停”容器。这个“暂停”容器运行一个非常简单的进程，它不执行任何功能，基本上是永远睡觉的（见pause()下面的调用）。因为它比较简单，在这里写下完整的源代码，如下：
+/*
+Copyright 2016 The Kubernetes Authors.
+Licensed under the Apache License, Version 2.0 (the “License”);
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+http://www.apache.org/licenses/LICENSE-2.0
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an “AS IS” BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+include <signal.h>
+include <stdio.h>
+include <stdlib.h>
+include &lt;sys/types.h&gt;
+include &lt;sys/wait.h&gt;
+include <unistd.h>
+static void sigdown(int signo) {
+psignal(signo, "Shutting down, got signal");
+exit(0);
+}</unistd.h></stdlib.h></stdio.h></signal.h></p>
+
+<p>static void sigreap(int signo) {
+while (waitpid(-1, NULL, WNOHANG) &gt; 0);
+}</p>
+
+<p>int main() {
+if (getpid() != 1)
+/* Not an error because pause sees use outside of infra containers. */
+fprintf(stderr, “Warning: pause should be the first process\n”);</p>
+
+<p>if (sigaction(SIGINT, &amp;(struct sigaction){.sa_handler = sigdown}, NULL) &lt; 0)
+return 1;
+if (sigaction(SIGTERM, &amp;(struct sigaction){.sa_handler = sigdown}, NULL) &lt; 0)
+return 2;
+if (sigaction(SIGCHLD, &amp;(struct sigaction){.sa_handler = sigreap,
+                                         .sa_flags = SA_NOCLDSTOP},
+            NULL) &lt; 0)
+return 3;</p>
+
+<p>for (;;)
+pause();
+fprintf(stderr, “Error: infinite loop terminated\n”);
+return 42;
+}</p>
+
+<p>正如你所看到的，它当然不会只知道睡觉。它执行另一个重要的功能——即它扮演PID 1的角色，并在子进程被父进程孤立的时候通过调用wait 来收割这些僵尸子进程（参见sigreap）。这样我们就不用担心我们的Kubernetes Pods的PID命名空间里会堆满僵尸了。
+PID命名空间共享的一些上下文
+值得注意的是，PID命名空间共享已经有了很多的前后关系。如果你启用了PID命名空间共享，那么只能通过暂停容器来收割僵尸，并且目前这一功能仅在Kubernetes 1.7+以上的版本中可用。如果使用Docker 1.13.1+运行Kubernetes 1.7，这一功能默认是开启的，除非使用kubelet标志（–docker-disable-shared-pid=true）禁用。这在Kubernetes 1.8 中正好相反的，现在默认情况下是禁用的，除非由kubelet标志（–docker-disable-shared-pid=false）启用。感兴趣的话，可以看看在GitHub issue中对增加支持PID命名空间共享的有关讨论。</p>
+
+<p>如果没有启用PID命名空间共享，则Kubernetes Pod中的每个容器都将具有自己的PID 1，并且每个容器将需要收集僵尸进程本身。很多时候，这不是一个问题，因为应用程序不会产生其他进程，但僵尸进程使用内存是一个经常被忽视的问题。因此，由于PID命名空间共享使你能够在同一个Pod中的容器之间发送信号，我衷心的希望PID命名空间共享可以成为Kubernetes中的默认选项。</p>
+
+<p>pause根容器
+在接触Kubernetes的初期，便知道集群搭建需要下载一个gcr.io/google_containers/pause-amd64:3.0镜像，然后每次启动一个容器，都会伴随一个pause容器的启动。</p>
+
+<p>但这个pause容器的功能是什么，它是如何做出来的，以及为何都伴随容器启动等等。这些问题一直在我心里，如今有缘学习相关内容。</p>
+
+<p>pause源码在kubernetes项目(v1.6.7版本)的kubernetes/build/pause/中。</p>
+
+<p>git clone -b v1.6.7 https://github.com/kubernetes/kubernetes.git</p>
+
+<p>ll kubernetes/build/pause
+«‘COMMENT’
+Dockerfile  Makefile  orphan.c  pause.c
+COMMENT
+pause的源码
+四个文件中，pause.c是pause的源码，用c语言编写，如下(除去注释):</p>
+
+<p>#include <signal.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include &lt;sys/types.h&gt;
+#include &lt;sys/wait.h&gt;
+#include <unistd.h></unistd.h></stdlib.h></stdio.h></signal.h></p>
+
+<p>static void sigdown(int signo) {
+  psignal(signo, “Shutting down, got signal”);
+  exit(0);
+}</p>
+
+<p>static void sigreap(int signo) {
+  while (waitpid(-1, NULL, WNOHANG) &gt; 0)
+    ;
+}</p>
+
+<p>int main() {
+  if (getpid() != 1)
+    /* Not an error because pause sees use outside of infra containers. */
+    fprintf(stderr, “Warning: pause should be the first process in a pod\n”);</p>
+
+<p>if (sigaction(SIGINT, &amp;(struct sigaction){.sa_handler = sigdown}, NULL) &lt; 0)
+    return 1;
+  if (sigaction(SIGTERM, &amp;(struct sigaction){.sa_handler = sigdown}, NULL) &lt; 0)
+    return 2;
+  if (sigaction(SIGCHLD, &amp;(struct sigaction){.sa_handler = sigreap,
+                                             .sa_flags = SA_NOCLDSTOP},
+                NULL) &lt; 0)
+    return 3;</p>
+
+<p>for (;;)
+    pause();
+  fprintf(stderr, “Error: infinite loop terminated\n”);
+  return 42;
+}
+可以看出来很简单。目前这段代码讲什么，还是没看懂。</p>
+
+<p>pause的Dockerfile
+剩余的文件orphan.c是个测试文件，不用管。Makefile用于制作pause镜像，制作镜像的模板便是Dockerfile。先看看这个Dockerfile(除去注释)：</p>
+
+<p>FROM scratch
+ARG ARCH
+ADD bin/pause-${ARCH} /pause
+ENTRYPOINT [“/pause”]
+FROM scratch</p>
+
+<p>基础镜像是一个空镜像(an explicitly empty image)</p>
+
+<p>ARG ARCH</p>
+
+<p>等待在docker build –build-arg时提供的ARCH参数</p>
+
+<p>ADD bin/pause-${ARCH} /pause</p>
+
+<p>添加外部文件到内部</p>
+
+<p>ENTRYPOINT [“/pause”]</p>
+
+<p>开启容器，运行命令</p>
+
+<p>可以看出这个bin/pause-${ARCH}非常关键，但是如何制作出来呢？</p>
+
+<p>pause的Makefile
+ARCH值</p>
+<h1 id="architectures-supported-amd64-arm-arm64-ppc64le-and-s390x">Architectures supported: amd64, arm, arm64, ppc64le and s390x</h1>
+<p>ARCH ?= amd64</p>
+
+<p>ALL_ARCH = amd64 arm arm64 ppc64le s390x
+可以看出架构支持很多类型，默认为amd64</p>
+
+<p>制作pause二进制文件
+TAG = 3.0
+CFLAGS = -Os -Wall -Werror -static
+BIN = pause
+SRCS = pause.c
+KUBE_CROSS_IMAGE ?= gcr.io/google_containers/kube-cross
+KUBE_CROSS_VERSION ?= $(shell cat ../build-image/cross/VERSION)</p>
+
+<p>bin/$(BIN)-$(ARCH): $(SRCS)
+	mkdir -p bin
+	docker run –rm -u \((id -u):\)(id -g) -v $$(pwd):/build <br />
+		$(KUBE_CROSS_IMAGE):$(KUBE_CROSS_VERSION) <br />
+		/bin/bash -c “<br />
+			cd /build &amp;&amp; <br />
+			$(TRIPLE)-gcc $(CFLAGS) -o $@ $^ &amp;&amp; <br />
+			$(TRIPLE)-strip $@”
+可以看出这分为两步，</p>
+
+<p>运行gcr.io/google_containers/kube-cross:xxxx容器</p>
+
+<p>这个镜像的制作，可在kubernetes/build/build-image/cross路径下，
+其中的Makefile很简单。Dockerfile的基础镜像是golang:1.7.6，
+可以看出这个镜像目的是This file creates a standard build environment for building 
+cross platform go binary for the architecture kubernetes cares about.
+该镜像也包含后续所需的gcc工具。
+制作二进制文件</p>
+
+<p>通过挂载，在容器内部制作pause二进制文件。
+制作pause镜像
+TAG = 3.0
+REGISTRY ?= gcr.io/google_containers
+IMAGE = $(REGISTRY)/pause-$(ARCH)</p>
+
+<p>.container-$(ARCH): bin/$(BIN)-$(ARCH)
+	docker build –pull -t $(IMAGE):$(TAG) –build-arg ARCH=$(ARCH) .
+一个很简单的制作过程。</p>
+
+<p>制作pause镜像
+这里绕开制作cross镜像，直接做pause镜像。</p>
+
+<p>cd kubernetes/build/pause
+mkdir -p bin</p>
+
+<p>sudo gcc -Os -Wall -Werror -static -o pause pause.c</p>
+
+<p>ls -hl
+«‘COMMENT’
+total 876K
+drwxr-xr-x. 2 root root    6 Oct 16 19:13 bin
+-rw-r–r–. 1 root root  679 Oct 11 15:19 Dockerfile
+-rw-r–r–. 1 root root 2.9K Oct 11 15:19 Makefile
+-rw-r–r–. 1 root root 1.1K Oct 11 15:19 orphan.c
+-rwxr-xr-x. 1 root root 858K Oct 16 19:11 pause
+-rw-r–r–. 1 root root 1.6K Oct 11 15:19 pause.c
+COMMENT</p>
+
+<p>file pause
+«‘COMMENT’
+pause: ELF 64-bit LSB executable, x86-64, version 1 (GNU/Linux), statically linked, for GNU/Linux 2.6.32, BuildID[sha1]=5a2385a62d252571c959bc5453569e60866baf53, not stripped
+COMMENT</p>
+
+<p>nm pause
+«‘COMMENT’
+00000000004183d0 T abort
+00000000006c2860 B __abort_msg
+00000000004530c0 W access
+00000000004530c0 T __access
+0000000000492a50 t add_fdes
+0000000000461bb0 t add_module.isra.1
+00000000004569a0 t add_name_to_object.isra.3
+00000000006c1728 d adds.8351
+0000000000418ea0 T __add_to_environ
+000000000048aac0 t add_to_global
+00000000006c2460 V __after_morecore_hook
+0000000000416350 t alias_compare
+0000000000409120 W aligned_alloc
+00000000006c24d0 b aligned_heap_area
+00000000004523f0 T __alloc_dir
+000000000049dd50 r archfname
+…
+COMMENT</p>
+
+<h1 id="开始strip">开始Strip</h1>
+<p>strip pause</p>
+
+<p>ls -lh pause
+«‘COMMENT’
+-rwxr-xr-x. 1 root root 781K Oct 16 19:22 pause
+COMMENT</p>
+
+<p>file pause
+«‘COMMENT’
+pause: ELF 64-bit LSB executable, x86-64, version 1 (GNU/Linux), statically linked, for GNU/Linux 2.6.32, BuildID[sha1]=5a2385a62d252571c959bc5453569e60866baf53, stripped
+COMMENT</p>
+
+<p>nm pause
+«‘COMMENT’
+nm: pause: no symbols
+COMMENT</p>
+
+<p>cp pause bin/pause-amd64</p>
+
+<p>docker build –pull -t gcr.io/google_containers/pause-amd64:3.0 –build-arg ARCH=amd64 .</p>
+
+<p>«‘COMMENT’
+Sending build context to Docker daemon  1.612MB
+Step 1/4 : FROM scratch
+ —&gt; 
+Step 2/4 : ARG ARCH
+ —&gt; Running in 6eec4bcd21b7
+ —&gt; 30b135219bee
+Removing intermediate container 6eec4bcd21b7
+Step 3/4 : ADD bin/pause-${ARCH} /pause
+ —&gt; acda3361fddc
+Removing intermediate container 79a21fb7baca
+Step 4/4 : ENTRYPOINT /pause
+ —&gt; Running in dd1d266bb882
+ —&gt; 18620a113848
+Removing intermediate container dd1d266bb882
+Successfully built 18620a113848
+Successfully tagged gcr.io/google_containers/pause-amd64:3.0
+COMMENT</p>
+
+<p>docker images</p>
+
+<p>«‘COMMENT’
+REPOSITORY                             TAG                 IMAGE ID            CREATED             SIZE
+gcr.io/google_containers/pause-amd64   3.0                 18620a113848        4 minutes ago       799kB
+busybox                                latest              2b8fd9751c4c        15 months ago       1.09MB
+COMMENT
+strip</p>
+
+<p>通过上面的对比，可以看出strip后，pause文件由858K瘦身到781K。strip执行前后，不改变程序的执行能力。在开发过程中，strip用于产品的发布，调试均用未strip的程序。</p>
+
+<p>file</p>
+
+<p>通过file命令可以看到pause的strip状态</p>
+
+<p>nm</p>
+
+<p>通过nm命令，可以看到strip后的pause文件没有符号信息</p>
+
+<p>pause容器的工作
+可知kubernetes的pod抽象基于Linux的namespace和cgroups，为容器提供了良好的隔离环境。在同一个pod中，不同容器犹如在localhost中。</p>
+
+<p>在Unix系统中，PID为1的进程为init进程，即所有进程的父进程。它很特殊，维护一张进程表，不断地检查进程状态。例如，一旦某个子进程由于父进程的错误而变成了“孤儿进程”，其便会被init进程进行收养并最终回收资源，从而结束进程。</p>
+
+<p>或者，某子进程已经停止但进程表中仍然存在该进程，因为其父进程未进行wait syscall进行索引，从而该进程变成“僵尸进程”，这种僵尸进程存在时间较短。不过如果父进程只wait，而未syscall的话，僵尸进程便会存在较长时间。</p>
+
+<p>同时，init进程不能处理某个信号逻辑，拥有“信号屏蔽”功能，从而防止init进程被误杀。</p>
+
+<p>容器中使用pid namespace来对pid进行隔离，从而每个容器中均有其独立的init进程。例如对于寄主机上可以用个发送SIGKILL或者SIGSTOP(也就是docker kill 或者docker stop)来强制终止容器的运行，即终止容器内的init进程。一旦init进程被销毁， 同一pid namespace下的进程也随之被销毁，并容器进程被回收相应资源。</p>
+
+<p>kubernetes中的pause容器便被设计成为每个业务容器提供以下功能：</p>
+
+<p>在pod中担任Linux命名空间共享的基础；</p>
+
+<p>启用pid命名空间，开启init进程。</p>
+
+<p>实践操作
+已有刚做好的pause镜像和busybox镜像</p>
+
+<p>docker images</p>
+
+<p>«‘COMMENT’
+REPOSITORY                             TAG                 IMAGE ID            CREATED             SIZE
+gcr.io/google_containers/pause-amd64   3.0                 18620a113848        4 minutes ago       799kB
+busybox                                latest              2b8fd9751c4c        15 months ago       1.09MB
+COMMENT</p>
+
+<p>docker run -idt –name pause gcr.io/google_containers/pause-amd64:3.0
+«‘COMMENT’
+7f6e459df5644a1db4bc9ad2206a0f99e40312de1892695f8a09d52faa9c1073
+COMMENT</p>
+
+<p>docker ps -a
+«‘COMMENT’
+CONTAINER ID        IMAGE                                      COMMAND             CREATED             STATUS              PORTS               NAMES
+7f6e459df564        gcr.io/google_containers/pause-amd64:3.0   “/pause”            11 seconds ago      Up 11 seconds                           pause
+COMMENT</p>
+
+<p>docker run -idt –name busybox –net=container:pause –pid=container:pause –ipc=container:pause busybox
+«‘COMMENT’
+ad3029c55476e431101473a34a71516949d1b7de3afe3d505b51d10c436b4b0f
+COMMENT</p>
+
+<p>docker ps -a
+«‘COMMENT’
+CONTAINER ID        IMAGE                                      COMMAND             CREATED             STATUS              PORTS               NAMES
+ad3029c55476        busybox                                    “sh”                36 seconds ago      Up 35 seconds                           busybox
+7f6e459df564        gcr.io/google_containers/pause-amd64:3.0   “/pause”            2 minutes ago       Up 2 minutes                            pause
+COMMENT</p>
+
+<p>docker exec -it ad3029c55476 /bin/sh
+«‘COMMENT’
+/ # ps aux
+PID   USER     TIME   COMMAND
+    1 root       0:00 /pause
+    5 root       0:00 sh
+    9 root       0:00 /bin/sh
+   13 root       0:00 ps aux
+COMMENT
+可以看出来，busybox中的PID 1由pause容器提供。</p>
+:ET

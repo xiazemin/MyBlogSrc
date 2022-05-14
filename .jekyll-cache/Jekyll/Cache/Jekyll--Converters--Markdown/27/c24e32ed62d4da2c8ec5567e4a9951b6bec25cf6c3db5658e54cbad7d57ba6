@@ -1,0 +1,1188 @@
+I"�<p>gqlgen 是一个使用 Go 语言实现的用于快速创建严格类型的 graphql 服务器的库。
+https://github.com/99designs/gqlgen
+https://github.com/rongfengliang/gqlgen-demo
+https://tutorialedge.net/golang/go-graphql-beginners-tutorial/
+https://tutorialedge.net/golang/go-graphql-beginners-tutorial-part-2/
+https://blog.csdn.net/liuyh73/article/details/85028977
+https://blog.csdn.net/liuyh73/article/details/85010148
+https://github.com/graph-gophers/graphql-go
+https://github.com/vektah/gqlparser</p>
+
+<p>https://github.com/Go-GraphQL-Group/GraphQL-Service
+<!-- more -->
+https://studygolang.com/articles/13825
+https://www.ctolib.com/amp/99designs-gqlgen.html
+https://github.com/Go-GraphQL-Group/SW-Crawler/tree/master/data
+https://github.com/boltdb/bolt
+https://graphql.org/learn/schema/</p>
+
+<p>GraphQL介绍
+All of the data you need, in one request</p>
+
+<p>GraphQL is an open spec for a flexible API layer.</p>
+
+<p>Ask exactly what you want.</p>
+
+<p>GraphQL是一个用于API的查询语言。GraphQL并没有和特定数据库或者存储引擎绑定，而是依靠现有的代码和数据支撑。和RESTful不同的是，GraphQL会在一个请求中获取所有想要的数据，比如我们想要从服务器获取id=1的书籍name信息和id=2的文章的title信息，则对于GraphQL请求，我们只需按照下方语法来发送请求即可获得想要的信息。</p>
+
+<p>query{
+  book(id:”1”) {
+    name
+  },
+  article(id:”2”) {
+  	title
+  }
+}
+1
+2
+3
+4
+5
+6
+7
+8
+但是，对于RESTful API，我们就不得不按照类似于host:port/api/book/1/和host:port/api/article/2/的url来向服务器发送两次请求，然后对返回的数据进行筛选得到name和title字段。这只是GraphQL和RESTful的其中一个区别，有关两者的比较，详见传送门。</p>
+
+<p>GraphQL相关文法
+基于GraphQL的服务构建主要有四个部分：数据定义（schema）、查询（query）、更改（Mutation）、数据解析（Resolver）</p>
+
+<p>数据定义
+Schema
+gqlgen is a schema-first library — before writing code, you describe your API using the GraphQL Schema Definition Language. This usually goes into a file called schema.graphql。</p>
+
+<p>首先，我们需要定义Schema（模型），在此文件中，我们需要定要定义各种数据类型。Schema 明确了服务端有哪些字段（用户自定义类型）可以用，每个字段的类型和子字段。每次查询时，服务器就会根据 Schema 验证并执行查询。</p>
+
+<p>在Schema文件中，有4个比较特殊的关键字：</p>
+
+<p>schema，标识这是一个GraphQL Schema定义，其中包含了用户可以进行的三种操作（可以省略）
+query，定义查询操作，必须有
+mutation，定义变更操作，可以省略
+subscription，定义订阅操作，可以省略
+schema {<br />
+ query: Query
+ mutation: Mutation
+ subscription: Subscription
+}
+1
+2
+3
+4
+5
+Type
+Type关键字是用来定义抽象数据类型，类似于golang中的Type但是并不相同。在每一个自定义数据类型中，可以有多个Field（字段），每个Field可以再次指向某个Type。</p>
+
+<p>标量Scalar
+Scalar是解析到单个标量对象的类型，无法再进行次级选择（次级选择的含义在阅读GraphQL查询语法之后会有所了解）。GraphQL中包含的标量有String，Int，Float，Boolean，Enum，ID。</p>
+
+<p>The ID scalar type represents a unique identifier, often used to refetch an object or as key for a cache.</p>
+
+<h1 id="定义性别标量">定义性别标量</h1>
+<p>enum Gender {
+    MALE
+    FEMALE
+}
+1
+2
+3
+4
+5
+对象Object
+与我们在其他语言中定义对象类似：下方Person这个自定义数据类型中包括了id、name等字段。</p>
+
+<p>type People {
+    name: String
+    birth_year: String
+    gender: String
+}
+1
+2
+3
+4
+5
+上述People类型中只有标量字段，我们同样可以使用自定义数据类型字段，例如，我们定义了Film数据类型，每一部Film都有一个director字段：</p>
+
+<p>type Film {
+	name: string
+	director: People
+	…
+}
+1
+2
+3
+4
+5
+接口Interface
+接口是一个抽象类型，相信学习过go和java的读者都不陌生，下面直接看定义：</p>
+
+<p>type Human {	# 实现Human的Type必须有这两个字段
+	age: Int
+    name: String
+}
+type Programmer implements Human {
+	age: Int			
+    name: String		
+    Hair: Int
+    field: String
+}
+type Student implements Human {
+	age: Int
+    name: String
+    id:	ID
+    major: String
+}</p>
+
+<p>列表和非空
+对于上面People类型中的name字段，假如我们想要让其不为空，则可以在数据类型后面添加感叹号!，如果我们要新增字段参演电影的列表films，则可以使用[]。</p>
+
+<p>type People {
+	name: String!
+    birth_year: String
+    gender: String
+	films: [Film]
+}</p>
+
+<p>同样，我们可以对列表进行非空限制：</p>
+
+<p>myField: [String!]</p>
+
+<h1 id="表示数组本身可以为空但是其不能有任何控制成员">表示数组本身可以为空，但是其不能有任何控制成员</h1>
+<p>myField: null # 有效
+myField: [] # 有效
+myField: [‘a’, ‘b’] # 有效
+myField: [‘a’, null, ‘b’] # 错误</p>
+
+<p>myField: [String]!</p>
+<h1 id="这表示数组本身不能为空但是其可以包含空值成员">这表示数组本身不能为空，但是其可以包含空值成员：</h1>
+<p>myField: null // 错误
+myField: [] // 有效
+myField: [‘a’, ‘b’] // 有效
+myField: [‘a’, null, ‘b’] // 有效</p>
+
+<p>联合类型
+联合类型和接口十分相似，但是它并不指定类型之间的任何共同字段。</p>
+
+<p>union SearchResult = Person | Film
+1
+任何返回一个 SearchResult 类型的地方，都可能得到一个 Person 或者 Film。注意，联合类型的成员需要是具体对象类型；不能使用接口或者其他联合类型来创造一个联合类型。</p>
+
+<p>输入类型Input
+输入常常用于变更（mutation）中，类似于post请求来新建对象。</p>
+
+<p>input PersonInput {
+	name: String
+    birth_year: String
+    gender: String
+    films: [Film]
+}
+1
+2
+3
+4
+5
+6
+数据操作
+查询（Query）
+定义查询
+在schema中，定义查询方法如下：</p>
+
+<h1 id="定义people查询方法参数为必填字段id返回数据类型为people">定义people查询方法，参数为必填字段id，返回数据类型为People</h1>
+<p>type Query {
+    people(id: ID!): People
+}
+1
+2
+3
+4
+下面介绍一下如何查询：</p>
+
+<p>参数查询
+在下属查询方法中，people()为定义的查询方法</p>
+
+<p>为查询起别名（Aliases）
+如果我们先要再一次请求中查询两个people，则会出现下方的错误：</p>
+
+<p>对于上述情况，我们可以使用别名的方式来进行查询：</p>
+
+<p>使用片段（Fragment）
+在上面的people5和people1的查询中，我们发现，两者都查询了name，此时只有一个字段还好，如果相同字段过多时，那应该怎么办呢？这种情况下我们便可以使用fragment：</p>
+
+<p>片段的概念经常用于将复杂的应用数据需求分割成小块，特别是你要将大量不同片段的 UI 组件组合成一个初始数据获取的时候。</p>
+
+<p>定义操作名称
+上述所有查询，我们都使用了query关键字作为查询标识，虽然可以省略，但依然推荐这么加上。实际上，我们还可以为我们的查询定义名称，这对我们在开发过程中寻找可能存在的漏洞提供帮助。例如：定义一个名称为filmQuery的查询操作</p>
+
+<p>query filmQuery{
+  film(id:”1”){
+    title
+  }
+}
+1
+2
+3
+4
+5
+后续将要讲述的mutation操作也可以定义名称。</p>
+
+<p>使用变量（Variable）
+使用变量的步骤：</p>
+
+<p>使用 $variableName 替代查询中的静态值。
+声明 $variableName 为查询接受的变量之一。
+将 variableName: value 通过传输专用（通常是 JSON）的分离的变量字典中。</p>
+
+<p>使用变量可以很方便的在客户端构造查询语法，客户端可以构造一个复选框，下拉菜单等方式来获取动态参数，然后将动态参数提取到查询之外，作为分离的字典传进去。而不用构建一个全新的查询。（为了安全起见，我们不能使用用户提供的值来进行字符串插值构建查询）</p>
+
+<p>我们也可以使用默认变量，定义如下：</p>
+
+<p>query peopleQuery($id: ID = “5”){
+    …
+}
+1
+2
+3
+变更（Mutation）
+上述介绍的全部都是查询操作，GraphQL也为我们提供了mutation变更操作，用于修改数据。</p>
+
+<p>定义变更</p>
+<h1 id="参数为episodeenum以及一个input类型的输入数据返回类型为review">参数为Episode（Enum）以及一个Input类型的输入数据，返回类型为Review</h1>
+<p>type Mutation {
+    createReview(episode: Episode!, review: ReviewInput!): Review
+}
+1
+2
+3
+4
+更新数据
+变更和查询一样都可以使用变量以及片段等：</p>
+
+<p>查询字段时，是并行执行，而变更字段时，是线性执行，一个接着一个。</p>
+
+<p>订阅（Subscription）
+订阅用于real-time实时请求。具体用法可以自行谷歌。</p>
+
+<p>数据解析Resolver
+当用户请求发送到服务器时，服务器如何进行相应并返回所需数据呢？下面介绍一下GraphQL的响应过程，以query查询为例：</p>
+
+<p>首先，GraphQL解析操作类型得知为query，查询方法为people。
+之后，会尝试调用people解析（Resolver）函数，在此解析函数中，我们会调用其他函数（此函数通常需要自己手动实现）从数据库查询id为35的people对象并返回，第一层解析结束。
+之后对第一层解析的返回值，进行第二层解析。当前查询字段为name，和films，
+title为String标量类型数据，则不必再深入解析
+films为Film列表类型，调用Film解析（Resolver）函数。查询字段为title，由于是标量类型，则不必再深入解析。
+……
+最后将解析结果整合之后返回给客户端即可。
+上述过程中大部分函数其实并不需要手动实现，这些操作对于我们来说相当于黑盒状态，我们接下来会介绍几个常用的GraphQL生成工具。</p>
+
+<p>关于GraphQL的相关内容就介绍到这里，如果想有进一步的了解，可以前往GraphQL官网进一步学习。</p>
+
+<p>GraphQL构建工具
+以go语言为例，graphql构建工具有：</p>
+
+<p>gqlgen
+gophers
+graphql-go
+thunder
+其中gqlgen支持语法最多，我的另一篇文章中介绍了如何使用gqlgen构建graphql服务。</p>
+
+<p>文章目录
+gqlgen工具介绍
+graphql服务执行流程
+server/server.go
+graphql.go
+GraphQL
+ServeHTTP
+generated.go
+Query()
+_Query()
+_Query_people
+_People
+_People_films
+_Film
+resolver.go
+属性分页
+修改schema
+新增model
+将model加入到gqlgen.yml中
+删除resolver.go
+重新生成GraphQL骨架
+定义FilmConnection
+查询结果
+gqlgen工具介绍
+gqlgen is a golang library for building graphql servers without any fuss. gqlgen is:</p>
+
+<p>Schema first: You define your API using the graphql Schema Definition Language
+Type safe: You should never see map[string]interface{} here.
+Codegen: Let us generate the boring bits, so you can build your app quickly.
+gqlgen是一个开源的GraphQL API服务构建工具，关于GraphQL的介绍参加我的另一篇文章GraphQL核心概念。下面进行项目的构建，以我的一次作业，使用GraphQL构建服务并复制SWAPI界面（小组合作开发）为例，完整代码详见Github。第一次使用GraphQL，项目结构还不够完善。</p>
+
+<p>文章所用代码为GraphQLdemo</p>
+
+<p>下载安装gqlgen工具：
+$ go get github.com/99designs/gqlgen
+1
+创建项目文件夹：
+$ mkdir -p $GOPATH/src/github.com/[username]/[project-name]</p>
+<h1 id="mkdir--p-gopathsrcgithubcomliuyh73graphqldemo-后续介绍都以graphqldemo为例">mkdir -p $GOPATH/src/github.com/liuyh73/GraphQLdemo 后续介绍都以GraphQLdemo为例</h1>
+<p>1
+2
+在项目文件夹根目录下，创建scripts/gqlgen.go，书写内容如下：
+package main</p>
+
+<p>import “github.com/99designs/gqlgen/cmd”</p>
+
+<p>func main() {
+	cmd.Execute()
+}
+由文章开头介绍可知，gqlgen是schema-first库，使用GraphQL来定义我们的API，所以现在创建schema，文件通常命名为schema.graphql，放在项目根目录下即可。此部分是由我的另外一位同学完成，具体介绍详见APIDOC，下面展示部分代码：
+type Query {
+    people(id: ID!): People								# 指定id查询people
+    peoples (first: Int, after: ID): PeopleConnection!	# 用户分页查询(加s只是为了区分)
+}</p>
+
+<p>type People {
+    id: ID!
+    name: String!
+    birth_year: String
+    eye_color: String
+    gender: String
+    hair_color: String
+    height: String
+    mass: String
+    skin_color: String
+    films: [Film]
+}</p>
+
+<p>type PeopleConnection {
+    pageInfo: PageInfo!
+    edges: [PeopleEdge!]
+    totalCount: Int!
+}</p>
+
+<p>type PeopleEdge {
+    node: People
+    cursor: ID!
+}</p>
+
+<p>type PageInfo {
+    hasNextPage: Boolean!
+    hasPreviousPage: Boolean!
+    startCursor: ID!
+    endCursor: ID!
+}</p>
+
+<p>type Film {
+    id: ID!
+    title: String!
+    episode_id: Int
+    opening_crawl: String
+    director: String
+    producer: String
+    release_date: String
+}</p>
+
+<p>然后，再项目根目录下执行命令：go run scripts/gqlgen.go init，会自动生成以下文件</p>
+
+<p>gqlgen.yml — The gqlgen config file, knobs for controlling the generated code.
+generated.go — The GraphQL execution runtime, the bulk of the generated code.
+models_gen.go — Generated models required to build the graph. Often you will override these with your own models. Still very useful for input types.
+resolver.go — This is where your application code lives. generated.go will call into this to get the data the user has requested.
+server/server.go — This is a minimal entry point that sets up an http.Handler to the generated GraphQL server.
+至此，我们的graphql服务架构已经构建完毕，但是我们依然还有很长的路要走…</p>
+
+<p>graphql服务执行流程
+在上述生成的文件中，我们需要更改的文件主要是resolver.go，在介绍此文件之前，我们需要了解以下gengql生成的graphql的服务的运行过程：</p>
+
+<p>首先，修改resolver.go文件下的People()函数：
+func (r <em>queryResolver) People(ctx context.Context, id string) (</em>People, error) {
+	return &amp;people{}, nil	// 替换panic（避免运行过程中退出，利于我们观察执行过程）
+}
+1
+2
+3
+启动服务
+go run server/server.go
+1
+访问127.0.0.1:8080，并进行一次People查询：</p>
+
+<p>由上图可知，我们的查询成功得到返回结果，各个字段都为空。下面我们来详细介绍graphql内部是如何进行查询的。</p>
+
+<p>server/server.go
+可以看到如下代码：</p>
+
+<p>http.Handle(“/”, handler.Playground(“GraphQL playground”, “/query”))
+http.Handle(“/query”, handler.GraphQL(GraphQLdemo.NewExecutableSchema(GraphQLdemo.Config{Resolvers: &amp;GraphQLdemo.Resolver{}})))
+1
+2
+其中第一行代码是根路由注册，即我们访问的127.0.0.1:8080的处理函数，在这里我们不做展开。</p>
+
+<p>主要关注第二行代码，注册query路由处理函数，使用的是gqlgen/handler包中的GrapgQL服务；右键点击GraphQL转到此函数的定义。</p>
+
+<p>在此之前，我们可以先看一下handler.GraphQL()的参数：</p>
+
+<p>GraphQLdemo.NewExecutableSchema(GraphQLdemo.Config{Resolvers: &amp;GraphQLdemo.Resolver{}})。
+1
+NewExecutableSchema、Config以及Resolver定义如下：</p>
+
+<p>// NewExecutableSchema creates an ExecutableSchema from the ResolverRoot interface.
+func NewExecutableSchema(cfg Config) graphql.ExecutableSchema {
+	return &amp;executableSchema{
+		resolvers:  cfg.Resolvers,
+		directives: cfg.Directives,
+		complexity: cfg.Complexity,
+	}
+}</p>
+
+<p>type executableSchema struct {
+	resolvers  ResolverRoot
+	directives DirectiveRoot
+	complexity ComplexityRoot
+}</p>
+
+<p>type Config struct {
+	Resolvers  ResolverRoot
+	Directives DirectiveRoot
+	Complexity ComplexityRoot
+}</p>
+
+<p>type Resolver struct{}</p>
+
+<p>func (r *Resolver) Query() QueryResolver {
+	return &amp;queryResolver{r}
+}
+所以NewExecutableSchema调用返回结果为包含了Resolver的executableSchema对象。executableSchema实现了ExecutableSchema接口所定义的函数。这些函数将在之后的查询过程中调用，之后我们将进行部分介绍。</p>
+
+<p>type ExecutableSchema interface {
+	Schema() *ast.Schema</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>Complexity(typeName, fieldName string, childComplexity int, args map[string]interface{}) (int, bool)
+Query(ctx context.Context, op *ast.OperationDefinition) *Response
+Mutation(ctx context.Context, op *ast.OperationDefinition) *Response
+Subscription(ctx context.Context, op *ast.OperationDefinition) func() *Response }
+</code></pre></div></div>
+
+<p>下面便来便来看以下executableSchema到底是如何作用的。</p>
+
+<p>graphql.go
+GraphQL
+下方代码即为GraphQL函数，在此函数中cfg、cache暂且不做考虑，我们只需关注handler对象。</p>
+
+<p>func GraphQL(exec graphql.ExecutableSchema, options …Option) http.HandlerFunc {
+	cfg := &amp;Config{
+		cacheSize: DefaultCacheSize,
+		upgrader: websocket.Upgrader{
+			ReadBufferSize:  1024,
+			WriteBufferSize: 1024,
+		},
+	}</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>for _, option := range options {
+	option(cfg)
+}
+
+var cache *lru.Cache
+if cfg.cacheSize &gt; 0 {
+	var err error
+	cache, err = lru.New(DefaultCacheSize)
+	if err != nil {
+		// An error is only returned for non-positive cache size
+		// and we already checked for that.
+		panic("unexpected error creating cache: " + err.Error())
+	}
+}
+if cfg.tracer == nil {
+	cfg.tracer = &amp;graphql.NopTracer{}
+}
+
+handler := &amp;graphqlHandler{
+	cfg:   cfg,
+	cache: cache,
+	exec:  exec,
+}
+
+return handler.ServeHTTP } handler为graphqlhandler的实例，并且graphqlhandler实现了ServeHTTP函数，该函数参数为(w http.ResponseWriter, r *http.Request)，所以此函数即为http.HandlerFunc类型，这也解释了http.Handle("/query", http.HandlerFunc)路由注册的正确性。
+</code></pre></div></div>
+
+<p>ServeHTTP
+在ServeHTTP函数中</p>
+
+<p>func (gh *graphqlHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodOptions {
+		w.Header().Set(“Allow”, “OPTIONS, GET, POST”)
+		w.WriteHeader(http.StatusOK)
+		return
+	}</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>if strings.Contains(r.Header.Get("Upgrade"), "websocket") {
+	connectWs(gh.exec, w, r, gh.cfg)
+	return
+}
+
+// 此部分代码解析请求数据，其中MethodPost可以将上传的数据（variables）构建为graphql语法
+// reqParams即为解析后的请求数据
+// type params struct {
+//     Query         string                 `json:"query"`			// Query语法
+//     OperationName string                 `json:"operationName"`	// 操作名称
+//     Variables     map[string]interface{} `json:"variables"`		// 变量（插入到语法中）
+// }
+
+var reqParams params
+switch r.Method {
+case http.MethodGet:
+	reqParams.Query = r.URL.Query().Get("query")
+	reqParams.OperationName = r.URL.Query().Get("operationName")
+
+	if variables := r.URL.Query().Get("variables"); variables != "" {
+		if err := jsonDecode(strings.NewReader(variables), &amp;reqParams.Variables); err != nil {
+			sendErrorf(w, http.StatusBadRequest, "variables could not be decoded")
+			return
+		}
+	}
+case http.MethodPost:
+	if err := jsonDecode(r.Body, &amp;reqParams); err != nil {
+		sendErrorf(w, http.StatusBadRequest, "json body could not be decoded: "+err.Error())
+		return
+	}
+default:
+	w.WriteHeader(http.StatusMethodNotAllowed)
+	return
+}
+w.Header().Set("Content-Type", "application/json")
+
+ctx := r.Context()
+
+...
+...
+// 此部分代码即为区分操作类型Query或Mutation（其中op为解析reqParams后的*OperationDefination对象，包括操作类型等数据）
+switch op.Operation {
+case ast.Query:
+	b, err := json.Marshal(gh.exec.Query(ctx, op))	// 此函数调用是我们所着重关注的（exec的作用也在此体现，调用Query函数进行查询操作）
+	if err != nil {
+		panic(err)
+	}
+	w.Write(b)			// 返回请求响应结果
+case ast.Mutation:
+	b, err := json.Marshal(gh.exec.Mutation(ctx, op))	// 此次demo中并没有用到Mutation
+	if err != nil {
+		panic(err)
+	}
+	w.Write(b)
+default:
+	sendErrorf(w, http.StatusBadRequest, "unsupported operation type")
+} }
+</code></pre></div></div>
+
+<p>Ctrl+右键进入gh.exec.Query(ctx, op)的Query函数。</p>
+
+<p>generated.go
+Query()
+看到下方的函数，服务端在此开始真正的查询操作，我们将一步一步观察query的执行过程。</p>
+
+<p>func (e *executableSchema) Query(ctx context.Context, op *ast.OperationDefinition) *graphql.Response {
+	// executionContext是一个利用上下文信息的查询struct
+	// type executionContext struct {
+	//     *graphql.RequestContext		// 请求上下文
+	//     *executableSchema			// executableSchema对象
+	// }
+	// 此类型实现了_Query()等一系列查询函数，后面我们将看到其强大之处
+	ec := executionContext{graphql.GetRequestContext(ctx), e}</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>buf := ec.RequestMiddleware(ctx, func(ctx context.Context) []byte {
+	// 回调函数中调用_Query()函数，并传入上下文，一次查询集合(进入此函数)
+	data := ec._Query(ctx, op.SelectionSet)
+	var buf bytes.Buffer
+	data.MarshalGQL(&amp;buf)
+	return buf.Bytes()
+})
+// 返回查询结果
+return &amp;graphql.Response{
+	Data:       buf,
+	Errors:     ec.Errors,
+	Extensions: ec.Extensions} }
+</code></pre></div></div>
+
+<p>_Query()
+func (ec *executionContext) _Query(ctx context.Context, sel ast.SelectionSet) graphql.Marshaler {
+	fields := graphql.CollectFields(ctx, sel, queryImplementors)</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>ctx = graphql.WithResolverContext(ctx, &amp;graphql.ResolverContext{
+	Object: "Query",
+})
+
+var wg sync.WaitGroup
+out := graphql.NewOrderedMap(len(fields))
+invalid := false
+for i, field := range fields {
+	out.Keys[i] = field.Alias
+
+	switch field.Name {
+	case "__typename":
+		out.Values[i] = graphql.MarshalString("Query")
+	case "people":	// 解析查询，若为People查询，则调用_Query_people进一步解析
+		wg.Add(1)
+		go func(i int, field graphql.CollectedField) {
+			out.Values[i] = ec._Query_people(ctx, field)
+			wg.Done()
+		}(i, field)
+	case "peoples": // 解析查询，若为Peoples查询，则调用_Query_peoples进一步解析
+		wg.Add(1)
+		go func(i int, field graphql.CollectedField) {
+			out.Values[i] = ec._Query_peoples(ctx, field)
+			if out.Values[i] == graphql.Null {
+				invalid = true
+			}
+			wg.Done()
+		}(i, field)
+	case "__type":
+		out.Values[i] = ec._Query___type(ctx, field)
+	case "__schema":
+		out.Values[i] = ec._Query___schema(ctx, field)
+	default:
+		panic("unknown field " + strconv.Quote(field.Name))
+	}
+}
+wg.Wait()
+if invalid {
+	return graphql.Null
+}
+// 返回查询结果
+return out } _Query_people func (ec *executionContext) _Query_people(ctx context.Context, field graphql.CollectedField) graphql.Marshaler {
+ctx = ec.Tracer.StartFieldExecution(ctx, field)
+defer func() { ec.Tracer.EndFieldExecution(ctx) }()
+rawArgs := field.ArgumentMap(ec.Variables)
+args, err := field_Query_people_args(rawArgs)
+if err != nil {
+	ec.Error(ctx, err)
+	return graphql.Null
+}
+rctx := &amp;graphql.ResolverContext{
+	Object: "Query",
+	Args:   args,
+	Field:  field,
+}
+ctx = graphql.WithResolverContext(ctx, rctx)
+ctx = ec.Tracer.StartFieldResolverExecution(ctx, rctx)
+resTmp := ec.FieldMiddleware(ctx, nil, func(rctx context.Context) (interface{}, error) {
+	ctx = rctx // use context from middleware stack in children
+	// 此函数中，我们需要关注此函数，executionContext拥有executableSchema的所有字段，所以可以使用resolvers属性的Query()方法。
+	// 回到我们之前介绍定义executableSchema的过程，executableSchema的resolvers属性为cfg.Resolvers，而cfg.Resolvers为我们在resolver.go文件中生成的Resolver结构体（此结构体实现Query()方法），并且Query()方法返回queryResolver对象：
+	// type queryResolver struct{ *Resolver }
+
+	// func (r *queryResolver) People(ctx context.Context, id string) (*People, error) {
+	//	   return &amp;People{}, nil
+	// }
+	// func (r *queryResolver) Peoples(ctx context.Context, first *int, after *string) (PeopleConnection, error) {
+	//     panic("not implemented")
+	// }
+	// 这就进入了resolver.go文件，这也正是我们需要实现的查询函数（访问数据库等操作即在此进行）
+	return ec.resolvers.Query().People(rctx, args["id"].(string))
+})
+
+if resTmp == nil {
+	return graphql.Null
+}
+res := resTmp.(*People)
+rctx.Result = res
+ctx = ec.Tracer.StartFieldChildExecution(ctx)
+
+if res == nil {
+	return graphql.Null
+}
+// 当我们获得查询结果后，我们需要筛选出用户所需要的字段，这也正是GraphQL比较关键的地方
+return ec._People(ctx, field.Selections, res) } _People func (ec *executionContext) _People(ctx context.Context, sel ast.SelectionSet, obj *People) graphql.Marshaler {
+fields := graphql.CollectFields(ctx, sel, peopleImplementors)
+
+out := graphql.NewOrderedMap(len(fields))
+invalid := false
+// 遍历用户查询fields（字段）
+for i, field := range fields {
+	out.Keys[i] = field.Alias
+
+	switch field.Name {
+	case "__typename":
+		out.Values[i] = graphql.MarshalString("People")
+	case "id":
+		out.Values[i] = ec._People_id(ctx, field, obj)
+		if out.Values[i] == graphql.Null {
+			invalid = true
+		}
+	case "name":
+		out.Values[i] = ec._People_name(ctx, field, obj)
+		if out.Values[i] == graphql.Null {
+			invalid = true
+		}
+	case "birth_year":
+		out.Values[i] = ec._People_birth_year(ctx, field, obj)
+	case "eye_color":
+		out.Values[i] = ec._People_eye_color(ctx, field, obj)
+	case "gender":
+		out.Values[i] = ec._People_gender(ctx, field, obj)
+	case "hair_color":
+		out.Values[i] = ec._People_hair_color(ctx, field, obj)
+	case "height":
+		out.Values[i] = ec._People_height(ctx, field, obj)
+	case "mass":
+		out.Values[i] = ec._People_mass(ctx, field, obj)
+	case "skin_color":
+		out.Values[i] = ec._People_skin_color(ctx, field, obj)
+	// 以上字段都为标量字段，所以调用各自的查询函数即返回最终结果
+	// 在此我们需要关注films字段，由于films为自定义类型Film列表，所以我们还需进行深层次筛选，产看_People_films函数
+	case "films":
+		out.Values[i] = ec._People_films(ctx, field, obj)
+	default:
+		panic("unknown field " + strconv.Quote(field.Name))
+	}
+}
+
+if invalid {
+	return graphql.Null
+}
+return out } 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47 48 49 50 _People_films func (ec *executionContext) _People_films(ctx context.Context, field graphql.CollectedField, obj *People) graphql.Marshaler {
+...
+...
+for idx1 := range res {
+	idx1 := idx1
+	rctx := &amp;graphql.ResolverContext{
+		Index:  &amp;idx1,
+		Result: res[idx1],
+	}
+	ctx := graphql.WithResolverContext(ctx, rctx)
+	f := func(idx1 int) {
+		if !isLen1 {
+			defer wg.Done()
+		}
+		arr1[idx1] = func() graphql.Marshaler {
+
+			if res[idx1] == nil {
+				return graphql.Null
+			}
+			// 当我们获得people中films列表，以及所要查询的film字段之后我们进一步调用_Film函数进行筛选
+			return ec._Film(ctx, field.Selections, res[idx1])
+		}()
+	}
+	if isLen1 {
+		f(idx1)
+	} else {
+		go f(idx1)
+	}
+}
+wg.Wait()
+return arr1 } 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 _Film func (ec *executionContext) _Film(ctx context.Context, sel ast.SelectionSet, obj *Film) graphql.Marshaler {
+fields := graphql.CollectFields(ctx, sel, filmImplementors)
+
+out := graphql.NewOrderedMap(len(fields))
+invalid := false
+// 子过程与_People调用类似，进行筛选，如果有必要则需要进一步筛选数据
+for i, field := range fields {
+	out.Keys[i] = field.Alias
+
+	switch field.Name {
+	case "__typename":
+		out.Values[i] = graphql.MarshalString("Film")
+	case "id":
+		out.Values[i] = ec._Film_id(ctx, field, obj)
+		if out.Values[i] == graphql.Null {
+			invalid = true
+		}
+	case "title":
+		out.Values[i] = ec._Film_title(ctx, field, obj)
+		if out.Values[i] == graphql.Null {
+			invalid = true
+		}
+	case "episode_id":
+		out.Values[i] = ec._Film_episode_id(ctx, field, obj)
+	case "opening_crawl":
+		out.Values[i] = ec._Film_opening_crawl(ctx, field, obj)
+	case "director":
+		out.Values[i] = ec._Film_director(ctx, field, obj)
+	case "producer":
+		out.Values[i] = ec._Film_producer(ctx, field, obj)
+	case "release_date":
+		out.Values[i] = ec._Film_release_date(ctx, field, obj)
+	default:
+		panic("unknown field " + strconv.Quote(field.Name))
+	}
+}
+
+if invalid {
+	return graphql.Null
+}
+return out } 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 到此，我们的People查询所进行的步骤已经结束，之后按照函数调用顺序依次返回查询即可，最终得到请求响应数据进行返回。同样我们的Peoples分页查询步骤于此类似，所以不再赘述。
+</code></pre></div></div>
+
+<p>resolver.go
+下面我们便需要实现resolver.go中的People和Peoples方法：</p>
+
+<p>type queryResolver struct{ *Resolver }</p>
+
+<p>func (r <em>queryResolver) People(ctx context.Context, id string) (</em>People, error) {
+	return &amp;People{}, nil
+}
+func (r *queryResolver) Peoples(ctx context.Context, first *int, after *string) (PeopleConnection, error) {
+	panic(“not implemented”)
+}
+1
+2
+3
+4
+5
+6
+7
+8
+在此Demo中，我使用boltdb数据库来存储数据，数据来源来自The Star Wars API，可以根据API爬取下来，当然也可以去github上下载。由于我们在schema中定义的People所含字段与数据库中存储并不一致，所以可以自行书写转化函数，将从数据库中获取到的数据转化为所需的People类型。</p>
+
+<p>之后我们实现的People和Peoples函数如下：</p>
+
+<p>func (r <em>queryResolver) People(ctx context.Context, id string) (</em>People, error) {
+	// GetPeopleByID即使我们要实现的获取people的函数
+	err, people := GetPeopleByID(id, nil)
+	checkErr(err)
+	return people, err
+}</p>
+
+<p>func (r <em>queryResolver) Peoples(ctx context.Context, first *int, after *string) (PeopleConnection, error) {
+	from := -1
+	if after != nil {
+		b, err := base64.StdEncoding.DecodeString(</em>after)
+		if err != nil {
+			return PeopleConnection{}, err
+		}
+		i, err := strconv.Atoi(strings.TrimPrefix(string(b), “cursor”))
+		if err != nil {
+			return PeopleConnection{}, err
+		}
+		from = i
+	}
+	count := 0
+	startID := “”
+	hasPreviousPage := true
+	hasNextPage := true
+	// 获取edges
+	edges := []PeopleEdge{}
+	db, err := bolt.Open(“./data/data.db”, 0600, nil)
+	CheckErr(err)
+	defer db.Close()
+	db.View(func(tx *bolt.Tx) error {
+		c := tx.Bucket([]byte(peopleBucket)).Cursor()</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>	// 判断是否还有前向页
+	k, v := c.First()
+	if from == -1 || strconv.Itoa(from) == string(k) {
+		startID = string(k)
+		hasPreviousPage = false
+	}
+
+	if from == -1 {
+		for k, _ := c.First(); k != nil; k, _ = c.Next() {
+			_, people := GetPeopleByID(string(k), db)
+			edges = append(edges, PeopleEdge{
+				Node:   people,
+				Cursor: encodeCursor(string(k)),
+			})
+			count++
+			if count == *first {
+				break
+			}
+		}
+	} else {
+		for k, _ := c.First(); k != nil; k, _ = c.Next() {
+			if strconv.Itoa(from) == string(k) {
+				k, _ = c.Next()
+				startID = string(k)
+			}
+			if startID != "" {
+				_, people := GetPeopleByID(string(k), db)
+				edges = append(edges, PeopleEdge{
+					Node:   people,
+					Cursor: encodeCursor(string(k)),
+				})
+				count++
+				if count == *first {
+					break
+				}
+			}
+		}
+	}
+
+	k, v = c.Next()
+	if k == nil &amp;&amp; v == nil {
+		hasNextPage = false
+	}
+	return nil
+})
+if count == 0 {
+	return PeopleConnection{}, nil
+}
+// 获取pageInfo
+pageInfo := PageInfo{
+	HasPreviousPage: hasPreviousPage,
+	HasNextPage:     hasNextPage,
+	StartCursor:     encodeCursor(startID),
+	EndCursor:       encodeCursor(edges[count-1].Node.ID),
+}
+
+return PeopleConnection{
+	PageInfo:   pageInfo,
+	Edges:      edges,
+	TotalCount: count,
+}, nil } // 编码游标（游标指向当前节点） func encodeCursor(k string) string {
+i, _ := strconv.Atoi(k)
+return base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("cursor%d", i))) } 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47 48 49 50 51 52 53 54 55 56 57 58 59 60 61 62 63 64 65 66 67 68 69 70 71 72 73 74 75 76 77 78 79 80 81 82 83 84 85 86 87 88 89 90 91 92 93 94 95 96 97 98 99 项目结构如下：
+</code></pre></div></div>
+
+<p>GraphQLdemo
+│  dbOp.go
+│  generated.go
+│  gqlgen.yml
+│  models_gen.go
+│  resolver.go
+│  schema.graphql
+│
+├─data
+│      data.db
+│
+├─scripts
+│      gqlgen.go
+│
+└─server
+        server.go
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+此时在此查询可得到如下结果：</p>
+
+<p>到此步骤，我们的功能基本上已经实现，但此时我们依然还有一个问题，对于People查询的films是否可以分页呢？答案是否定的，那我们应该怎样实现属性分页？</p>
+
+<p>属性分页
+修改schema
+想要进行属性分页，则该属性必须拥有类似于People(Int, ID!):People的查询函数，所以我们需要修改schema中People的定义：</p>
+
+<p>type People {
+    id: ID!
+    name: String!
+    birth_year: String
+    eye_color: String
+    gender: String
+    hair_color: String
+    height: String
+    mass: String
+    skin_color: String
+    films: [Film]	# 此字段可以保留，无需分页时使用此属性即可
+    filmConnection(first: Int, after: ID): FilmConnection!	# 此属性用于film分页查询
+}</p>
+<h1 id="新增字段">新增字段</h1>
+<p>type FilmConnection {
+    pageInfo: PageInfo!
+    edges: [FilmEdge!]
+    totalCount: Int!
+}</p>
+
+<p>type FilmEdge {
+    node: Film
+    cursor: ID!
+}
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+新增model
+在项目根目录下新建文件model.go，由于schema中People被我们修改，所以我们可以根据需要定义People：</p>
+
+<p>type People struct {
+	ID        string  <code class="language-plaintext highlighter-rouge">json:"id"</code>
+	Name      string  <code class="language-plaintext highlighter-rouge">json:"name"</code>
+	BirthYear <em>string <code class="language-plaintext highlighter-rouge">json:"birth_year"</code>
+	EyeColor  *string <code class="language-plaintext highlighter-rouge">json:"eye_color"</code>
+	Gender    *string <code class="language-plaintext highlighter-rouge">json:"gender"</code>
+	HairColor *string <code class="language-plaintext highlighter-rouge">json:"hair_color"</code>
+	Height    *string <code class="language-plaintext highlighter-rouge">json:"height"</code>
+	Mass      *string <code class="language-plaintext highlighter-rouge">json:"mass"</code>
+	SkinColor *string <code class="language-plaintext highlighter-rouge">json:"skin_color"</code>
+	Films     []</em>Film <code class="language-plaintext highlighter-rouge">json:"films"</code>
+}
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+将model加入到gqlgen.yml中
+models:
+  People:
+    model: github.com/liuyh73/GraphQLdemo.People
+1
+2
+3
+删除resolver.go
+删除之前注意备份一下</p>
+
+<p>重新生成GraphQL骨架
+$ go run scripts/gqlgen.go -v 
+Unable to bind People.filmConnection to github.com/liuyh73/GraphQLdemo.People
+  no method named filmConnection
+  no field named filmConnection
+  Adding resolver method
+Unable to bind People.filmConnection to github.com/liuyh73/GraphQLdemo.People
+  no method named filmConnection
+  no field named filmConnection
+  Adding resolver method
+查看重新生成的resolver.go，增加了如下定义和函数</p>
+
+<p>func (r *Resolver) People() PeopleResolver {
+	return &amp;peopleResolver{r}
+}</p>
+
+<p>type peopleResolver struct{ *Resolver }
+// 此函数便是我们实现films分页的关键步骤
+func (r *peopleResolver) FilmConnection(ctx context.Context, obj *People, first *int, after *string) (FilmConnection, error) {
+	panic(“not implemented”)
+}
+将之前备份的resolver.go中的函数重新粘贴到相应的位置。</p>
+
+<p>定义FilmConnection
+// 具体操作与People类似
+func (r <em>peopleResolver) FilmConnection(ctx context.Context, obj *People, first *int, after *string) (FilmConnection, error) {
+	from := -1
+	if after != nil {
+		b, err := base64.StdEncoding.DecodeString(</em>after)
+		if err != nil {
+			return FilmConnection{}, err
+		}
+		i, err := strconv.Atoi(strings.TrimPrefix(string(b), “cursor”))
+		if err != nil {
+			return FilmConnection{}, err
+		}
+		from = i
+	}
+	index := -1
+	count := 0
+	hasPreviousPage := false
+	hasNextPage := true
+	// 获取edges
+	edges := []FilmEdge{}
+	for i, film := range obj.Films {
+		if film.ID == strconv.Itoa(from) {
+			index = i
+			break
+		}
+	}
+	if index &gt; 0 {
+		hasPreviousPage = true
+	}
+	for i := index + 1; i &lt; len(obj.Films); i++ {
+		edges = append(edges, FilmEdge{
+			Node:   obj.Films[i],
+			Cursor: encodeCursor(obj.Films[i].ID),
+		})
+		count++
+		if count &gt;= *first {
+			break
+		}
+	}
+	if count &lt; *first {
+		hasNextPage = false
+	}
+	if count == 0 {
+		return FilmConnection{}, nil
+	}
+	// 获取pageInfo
+	pageInfo := PageInfo{
+		HasPreviousPage: hasPreviousPage,
+		HasNextPage:     hasNextPage,
+		StartCursor:     encodeCursor(edges[0].Node.ID),
+		EndCursor:       encodeCursor(edges[count-1].Node.ID),
+	}</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>return FilmConnection{
+	PageInfo:   pageInfo,
+	Edges:      edges,
+	TotalCount: count,
+}, nil } 查询结果
+</code></pre></div></div>
+
+<p>下面我们便来看看FilmConnection到底是什么时候被调用的。
+同样进入generated.go文件，此次我们直接定位到_People函数（1168行），观察以下代码：</p>
+
+<p>case “filmConnection”:
+    wg.Add(1)
+    go func(i int, field graphql.CollectedField) {
+        out.Values[i] = ec._People_filmConnection(ctx, field, obj)
+        if out.Values[i] == graphql.Null {
+            invalid = true
+        }
+        wg.Done()
+    }(i, field)
+这是新增的case，接下来我们进入_People_filmConnection，</p>
+
+<p>func (ec <em>executionContext) _People_filmConnection(ctx context.Context, field graphql.CollectedField, obj *People) graphql.Marshaler {
+	ctx = ec.Tracer.StartFieldExecution(ctx, field)
+	defer func() { ec.Tracer.EndFieldExecution(ctx) }()
+	rawArgs := field.ArgumentMap(ec.Variables)
+	args, err := field_People_filmConnection_args(rawArgs)
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	rctx := &amp;graphql.ResolverContext{
+		Object: “People”,
+		Args:   args,
+		Field:  field,
+	}
+	ctx = graphql.WithResolverContext(ctx, rctx)
+	ctx = ec.Tracer.StartFieldResolverExecution(ctx, rctx)
+	resTmp := ec.FieldMiddleware(ctx, obj, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		// 这里便是我们调用FilmConnection的地方
+		return ec.resolvers.People().FilmConnection(rctx, obj, args[“first”].(</em>int), args[“after”].(*string))
+	})
+	if resTmp == nil {
+		if !ec.HasError(rctx) {
+			ec.Errorf(ctx, “must not be null”)
+		}
+		return graphql.Null
+	}
+	res := resTmp.(FilmConnection)
+	rctx.Result = res
+	ctx = ec.Tracer.StartFieldChildExecution(ctx)
+	// 返回筛选结果
+	return ec._FilmConnection(ctx, field.Selections, &amp;res)
+}</p>
+
+:ET

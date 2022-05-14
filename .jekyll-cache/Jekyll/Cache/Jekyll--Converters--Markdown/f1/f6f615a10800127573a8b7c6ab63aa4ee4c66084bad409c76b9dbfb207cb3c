@@ -1,0 +1,351 @@
+I"�,<p>https://golang.org/pkg/net/http/httptest/
+https://ieftimov.com/post/testing-in-go-testing-http-servers/
+https://ieftimov.com/post/testing-in-go-subtests/</p>
+
+<p>net/http/httptest就是原生库里面提供Mock服务的包，使用它不用真正的启动一个http server（亦或者请求任意的server），而且创建方法非常简单。
+<!-- more -->
+Golang testing基础
+Go提供了一个testing包来写单元测试。假设我们有个文件叫person.go，那么我们的测试文件就需要明明为person_test.go：</p>
+
+<p>package person</p>
+
+<p>import (
+    “testing”
+)</p>
+
+<p>func TestPublishUnreachable(t *testing.T) {
+    api := “http://localhost:8090”
+    _, err := GetInfo(api)
+    if err != nil {
+        t.Errorf(“GetInfo() return an error”)
+    }
+}</p>
+
+<p>注：</p>
+<blockquote>
+  <p>测试函数以Test*开头。</p>
+</blockquote>
+
+<blockquote>
+  <p>测试函数将*testing.T作为参数，可以在失败的情况下使用Errorf()方法。</p>
+</blockquote>
+
+<blockquote>
+  <p>在包内使用go test -v来运行单元测试。</p>
+</blockquote>
+
+<p>这个单元测试将会失败，因为我们还没有实现GetInfo()方法，下面是person.go文件：</p>
+
+<p>package person</p>
+
+<p>import (
+    “net/http”
+    “fmt”
+)</p>
+
+<p>const (
+    ADDRESS = “shanghai”
+)</p>
+
+<p>type Person struct {
+    Name string <code class="language-plaintext highlighter-rouge">json:"name"</code>
+    Address string <code class="language-plaintext highlighter-rouge">json:"address"</code>
+    Age int <code class="language-plaintext highlighter-rouge">json:"age"</code>
+}</p>
+
+<p>func GetInfo(api string) ([]Person, error) {
+    url := fmt.Sprintf(“%s/person?addr=%s”, api, ADDRESS)
+    resp, err := http.Get(url)</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>if err != nil {
+    return []Person{}, err
+}
+ 
+if resp.StatusCode != http.StatusOK {
+    return []Person{}, fmt.Errorf("get info didn’t respond 200 OK: %s", resp.Status)
+}
+ 
+return nil, nil }
+</code></pre></div></div>
+
+<p>当然运行go test也会返回一个错误，因为请求地址的问题，请求的并不是一个实际上的http server，那么自然也不会有正常的返回。</p>
+
+<p>三、Golang httptest
+上面一个例子很有用，但是如何去发送一个真正的http request而不去真正的启动一个http server（亦或者请求任意的server）？答案是使用Go 的httptest包，这个包可以非常简单的创建一个测试的http server，那么下面我们将展示一下完整的代码，并解释一下整体的测试流程：</p>
+
+<p>person.go：</p>
+
+<p>package person</p>
+
+<p>import (
+    “net/http”
+    “fmt”
+    “io/ioutil”
+    “encoding/json”</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>"github.com/astaxie/beego/logs" )
+</code></pre></div></div>
+
+<p>const (
+    ADDRESS = “shanghai”
+)</p>
+
+<p>type Person struct {
+    Name string <code class="language-plaintext highlighter-rouge">json:"name"</code>
+    Address string <code class="language-plaintext highlighter-rouge">json:"address"</code>
+    Age int <code class="language-plaintext highlighter-rouge">json:"age"</code>
+}</p>
+
+<p>func GetInfo(api string) ([]Person, error) {
+    url := fmt.Sprintf(“%s/person?addr=%s”, api, ADDRESS)
+    resp, err := http.Get(url)</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>defer resp.Body.Close()
+ 
+if err != nil {
+    return []Person{}, err
+}
+ 
+if resp.StatusCode != http.StatusOK {
+    return []Person{}, fmt.Errorf("get info didn’t respond 200 OK: %s", resp.Status)
+}
+ 
+bodyBytes, _ := ioutil.ReadAll(resp.Body)
+personList := make([]Person,0)
+err = json.Unmarshal(bodyBytes, &amp;personList)
+if err != nil {
+    logs.Error("decode data fail")
+    return []Person{}, fmt.Errorf("decode data fail")
+}
+ 
+return personList, nil }
+</code></pre></div></div>
+
+<p>person_test.go：</p>
+
+<p>package person</p>
+
+<p>import (
+    “testing”
+    “net/http/httptest”
+    “net/http”
+    “fmt”
+    “encoding/json”
+)</p>
+
+<p>var personResponse = []Person{
+              {
+                Name : “wahaha”,
+                Address : “shanghai”,
+                Age : 20,
+              },
+                      {
+                Name : “lebaishi”,
+                Address : “shanghai”,
+                Age : 10,
+              },
+             }</p>
+
+<p>var personResponseBytes, _ = json.Marshal(personResponse)</p>
+
+<p>func TestPublishWrongResponseStatus(t *testing.T) {
+    ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        w.WriteHeader(http.StatusOK)
+        w.Write(personResponseBytes)
+        if r.Method != “GET”{
+            t.Errorf(“Expected ‘GET’ request, got ‘%s’”, r.Method)
+        }
+        if r.URL.EscapedPath() != “/person” {
+            t.Errorf(“Expected request to ‘/person’, got ‘%s’”, r.URL.EscapedPath())
+        }
+        r.ParseForm()
+        topic := r.Form.Get(“addr”)
+        if topic != “shanghai” {
+            t.Errorf(“Expected request to have ‘addr=shanghai’, got: ‘%s’”, topic)
+        }
+    }))</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>defer ts.Close()
+api := ts.URL
+fmt.Println("url:", api)
+resp, _ := GetInfo(api)
+ 
+fmt.Println("reps:", resp) }
+</code></pre></div></div>
+
+<p>解释一下：</p>
+<blockquote>
+  <p>我们通过httptest.NewServer创建了一个测试的http server</p>
+</blockquote>
+
+<blockquote>
+  <p>读请求设置通过变量r *http.Request，写变量（也就是返回值）通过w http.ResponseWriter</p>
+</blockquote>
+
+<blockquote>
+  <p>通过ts.URL来获取请求的URL（一般都是<a href="http://ip:port">http://ip:port</a>）</p>
+</blockquote>
+
+<blockquote>
+  <p>通过r.Method来获取请求的方法，来测试判断我们的请求方法是否正确</p>
+</blockquote>
+
+<blockquote>
+  <p>获取请求路径：r.URL.EscapedPath()，本例中的请求路径就是”/person”</p>
+</blockquote>
+
+<blockquote>
+  <p>获取请求参数：r.ParseForm，r.Form.Get(“addr”)</p>
+</blockquote>
+
+<blockquote>
+  <p>设置返回的状态码：w.WriteHeader(http.StatusOK)</p>
+</blockquote>
+
+<blockquote>
+  <p>设置返回的内容（这就是我们想要的结果）：w.Write(personResponseBytes)，注意w.Write()接收的参数是[]byte，因此需要将object对象列表通过json.Marshal(personResponse)转换成字节。</p>
+</blockquote>
+
+<p>综上，我们可以通过不发送httptest来模拟出httpserver和返回值来进行自己代码的测试了</p>
+
+<p>我们在写完接口之后都需要对接口进行测试，在 golang 标准库中提供 httptest 包来辅助测试。</p>
+
+<p>因为接口都是需要 IP 地址或域名来访问，httptest 包中默认定义了服务地址</p>
+
+<p>const DefaultRemoteAddr = “1.2.3.4”
+重要的方法
+NewRequest(请求体)
+NewRequest 方法用来创建一个 http 的请求体。</p>
+
+<p>方法定义：</p>
+
+<p>func NewRequest(method, target string, body io.Reader) *http.Request
+method 参数表示测试的接口的 HTTP 方法。
+target 参数表示接口定义的路由。
+body 参数表示请求体。
+NewRecorder(响应体)
+方法定义：</p>
+
+<p>func NewRecorder() *ResponseRecorder
+NewRecorder 方法用来创建 http 的响应体。返回的类型是 *httptest.ResponseRecorder ，包含接口返回信息，等价于 http.ResponseWriter。</p>
+
+<p>ResponseRecorder类型定义：</p>
+
+<p>type ResponseRecorder struct {
+        // http 响应码.
+        Code int
+        // 头部信息
+        HeaderMap http.Header
+        // 返回的 Body
+        Body *bytes.Buffer
+        // 是否调用 Flush 方法
+        Flushed bool
+}
+NewServer(http服务)
+方法定义：</p>
+
+<p>func NewServer(handler http.Handler) *Server
+NewServer 方法用来创建和启动新的服务。同类的还有 NewTLSServer，用来创建带 SSL 的服务。</p>
+
+<p>type Server struct {
+        URL      string // 服务地址
+        Listener net.Listener
+        // TLS 配置信息
+        TLS *tls.Config
+        Config *http.Server
+}
+测试 next/http 库创建的接口
+请求接口定义：</p>
+
+<p>func testAPI(w http.ResponseWriter, r *http.Request){}
+测试方法定义：</p>
+
+<p>func Test_testApi(t *testing.T) {
+    tests := []struct {
+        name string
+    }{
+        {
+            name: “test api”,
+        },
+    }
+    for _, tt := range tests {
+        t.Run(tt.name, func(t *testing.T) {
+            ts := httptest.NewServer(http.HandlerFunc(testAPI))
+            defer ts.Close()</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>        params := struct{
+            "params" string 
+        }{
+            "params": "paramsBody"
+        }
+        paramsByte, _ := json.Marshal(params)
+
+        resp, err := http.Post(ts.URL, "application/json", bytes.NewBuffer(paramsByte))
+        if err != nil {
+            t.Error(err)
+        }
+        defer resp.Body.Close()
+
+        t.Log(resp.StatusCode)
+        if resp.StatusCode != http.StatusCreated &amp;&amp; resp.StatusCode != http.StatusOK {
+            body, _ := ioutil.ReadAll(resp.Body)
+            t.Error(string(body))
+        }
+    })
+} } 测试时通过 httptest.NewServer 创建一个 testAPI 接口的服务。然后通过 http.Post 方法来调用我们创建的服务，达到接口测试时请求的目的。然后判断接口返回的信息是否正确。
+</code></pre></div></div>
+
+<p>测试 Gin 框架的接口
+请求接口定义：</p>
+
+<p>func testAPI(ctx *gin.Context){}
+测试方法定义：</p>
+
+<p>func Test_testAPI(t *testing.T) {
+    // 定义路由
+    router := gin.Default()
+    router.POST(“/test”, testAPI)</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>tests := []struct {
+    name string
+want string
+}{
+    {
+        name: "test api",
+        want: "ok",
+    },
+}
+for _, tt := range tests {
+    t.Run(tt.name, func(t *testing.T) {
+        params := struct{
+            "params" string 
+        }{
+            "params": "paramsBody"
+        }
+        paramsByte, _ := json.Marshal(params)
+        w := httptest.NewRecorder()
+        req := httptest.NewRequest("POST", "/test", bytes.NewBuffer(paramsByte))
+        setup.api.router.ServeHTTP(w, req)
+
+        assert.Equal(t, http.StatusOK, w.Code)
+
+        result, _ := ioutil.ReadAll(w.Body)
+        var ret string
+        if err := json.Unmarshal(result, &amp;ret); err != nil {
+            t.Error(err)
+        }
+        assert.Equal(t, tt.want, ret)
+    })
+} } 测试时需要定义好 gin 的路由，然后创建 httptest.NewRecorder 和 httptest.NewRequest 对象，并调用 gin 路由的 ServeHTTP 方法来执行接口。
+</code></pre></div></div>
+
+<p>ServeHTTP 是 *gin.Engine 实现了 http.Handler 接口。通过这种方式达到请求接口目的。然后判断接口返回的信息是否正确。</p>
+
+<p>小结
+接口的测试在开发当中是十分重要，我这里介绍了使用 net/http 和 gin 创建接口的测试用例。</p>
+
+<p>通过 httptest 包能方便的对接口进行单元测试，而不需要单独的起一个服务来进行测试。</p>
+
+<p>https://dave.cheney.net/2020/03/01/are-large-slices-more-expensive-than-smaller-ones</p>
+
+:ET

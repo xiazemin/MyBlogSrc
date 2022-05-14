@@ -1,0 +1,387 @@
+I"=9<p>json的反序列化方式有两种：</p>
+
+<p>Use json.Unmarshal passing the entire response string
+// func Unmarshal(data []byte, v interface{}) error
+data, err := ioutil.ReadAll(resp.Body)
+if err == nil &amp;&amp; data != nil {
+    err = json.Unmarshal(data, value)
+}
+using json.NewDecoder.Decode
+// func NewDecoder(r io.Reader) *Decoder
+// func (dec *Decoder) Decode(v interface{}) error
+err = json.NewDecoder(resp.Body).Decode(value)
+这两种方法看似差不多，但有不同的应用场景</p>
+
+<p>Use json.Decoder if your data is coming from an io.Reader stream, or you need to decode multiple values from a stream of data.</p>
+
+<p>For the case of reading from an HTTP request, I’d pick json.Decoder since you’re obviously reading from a stream.</p>
+
+<p>Use json.Unmarshal if you already have the JSON data in memory.</p>
+
+<p>例子
+从文件中读入一个巨大的json数组用json.Decoder</p>
+
+<p>https://www.cnblogs.com/276815076/p/8583589.html
+<!-- more --></p>
+<ol>
+  <li>将 JSON 中的数字解码为 interface 类型
+在 encode/decode JSON 数据时，Go 默认会将数值当做 float64 处理，比如下边的代码会造成 panic：</li>
+</ol>
+
+<p>func main() {
+    var data = []byte(<code class="language-plaintext highlighter-rouge">{"status": 200}</code>)
+    var result map[string]interface{}</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>if err := json.Unmarshal(data, &amp;result); err != nil {
+    log.Fatalln(err)
+}
+
+fmt.Printf("%T\n", result["status"])    // float64
+var status = result["status"].(int)    // 类型断言错误
+fmt.Println("Status value: ", status) } panic: interface conversion: interface {} is float64, not int 如果你尝试 decode 的 JSON 字段是整型，你可以：
+</code></pre></div></div>
+
+<p>将 int 值转为 float 统一使用
+将 decode 后需要的 float 值转为 int 使用
+// 将 decode 的值转为 int 使用
+func main() {
+    var data = []byte(<code class="language-plaintext highlighter-rouge">{"status": 200}</code>)
+    var result map[string]interface{}</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>if err := json.Unmarshal(data, &amp;result); err != nil {
+    log.Fatalln(err)
+}
+
+var status = uint64(result["status"].(float64))
+fmt.Println("Status value: ", status) } 使用 Decoder 类型来 decode JSON 数据，明确表示字段的值类型 // 指定字段类型 func main() {
+var data = []byte(`{"status": 200}`)
+var result map[string]interface{}
+
+var decoder = json.NewDecoder(bytes.NewReader(data))
+decoder.UseNumber()
+
+if err := decoder.Decode(&amp;result); err != nil {
+    log.Fatalln(err)
+}
+
+var status, _ = result["status"].(json.Number).Int64()
+fmt.Println("Status value: ", status) }
+</code></pre></div></div>
+
+<p>// 你可以使用 string 来存储数值数据，在 decode 时再决定按 int 还是 float 使用
+ // 将数据转为 decode 为 string
+ func main() {
+     var data = []byte({“status”: 200})
+      var result map[string]interface{}
+      var decoder = json.NewDecoder(bytes.NewReader(data))
+      decoder.UseNumber()
+      if err := decoder.Decode(&amp;result); err != nil {
+          log.Fatalln(err)
+      }
+    var status uint64
+      err := json.Unmarshal([]byte(result[“status”].(json.Number).String()), &amp;status);
+    checkError(err)
+       fmt.Println(“Status value: “, status)
+}
+​- 使用 struct 类型将你需要的数据映射为数值型</p>
+
+<p>// struct 中指定字段类型
+func main() {
+      var data = []byte(<code class="language-plaintext highlighter-rouge">{"status": 200}</code>)
+      var result struct {
+          Status uint64 <code class="language-plaintext highlighter-rouge">json:"status"</code>
+      }</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>  err := json.NewDecoder(bytes.NewReader(data)).Decode(&amp;result)
+  checkError(err)
+fmt.Printf("Result: %+v", result) } 可以使用 struct 将数值类型映射为 json.RawMessage 原生数据类型 适用于如果 JSON 数据不着急 decode 或 JSON 某个字段的值类型不固定等情况：
+</code></pre></div></div>
+
+<p>// 状态名称可能是 int 也可能是 string，指定为 json.RawMessage 类型
+func main() {
+    records := [][]byte{
+        []byte(<code class="language-plaintext highlighter-rouge">{"status":200, "tag":"one"}</code>),
+        []byte(<code class="language-plaintext highlighter-rouge">{"status":"ok", "tag":"two"}</code>),
+    }</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>for idx, record := range records {
+    var result struct {
+        StatusCode uint64
+        StatusName string
+        Status     json.RawMessage `json:"status"`
+        Tag        string          `json:"tag"`
+    }
+
+    err := json.NewDecoder(bytes.NewReader(record)).Decode(&amp;result)
+    checkError(err)
+
+    var name string
+    err = json.Unmarshal(result.Status, &amp;name)
+    if err == nil {
+        result.StatusName = name
+    }
+
+    var code uint64
+    err = json.Unmarshal(result.Status, &amp;code)
+    if err == nil {
+        result.StatusCode = code
+    }
+
+    fmt.Printf("[%v] result =&gt; %+v\n", idx, result)
+} }
+</code></pre></div></div>
+
+<p>有的时候上游传过来的字段是string类型的，但是我们却想用变成数字来使用。 本来用一个json:”,string” 就可以支持了，如果不知道golang的这些小技巧，就要大费周章了。</p>
+
+<p>1）临时忽略struct字段</p>
+
+<p>type User struct {
+     Email    string <code class="language-plaintext highlighter-rouge">json:"email"</code>
+     Password string <code class="language-plaintext highlighter-rouge">json:"password"</code>
+    // many more fields… }</p>
+
+<p>2）临时忽略掉Password字段</p>
+
+<p>json.Marshal(struct {
+     *User
+     Password bool <code class="language-plaintext highlighter-rouge">json:"password,omitempty"</code> }{
+     User: user, })</p>
+
+<p>3）临时添加额外的字段</p>
+
+<p>type User struct {
+    Email    string <code class="language-plaintext highlighter-rouge">json:"email"</code>
+    Password string <code class="language-plaintext highlighter-rouge">json:"password"</code>
+    // many more fields…
+}</p>
+
+<p>4）临时忽略掉Password字段，并且添加token字段</p>
+
+<p>json.Marshal(struct {
+    *User
+    Token    string <code class="language-plaintext highlighter-rouge">json:"token"</code>
+    Password bool <code class="language-plaintext highlighter-rouge">json:"password,omitempty"</code>
+}{
+    User: user,
+    Token: token,
+})</p>
+
+<p>5）临时粘合两个struct</p>
+
+<p>type BlogPost struct {
+    URL   string <code class="language-plaintext highlighter-rouge">json:"url"</code>
+    Title string <code class="language-plaintext highlighter-rouge">json:"title"</code>
+}</p>
+
+<p>type Analytics struct {
+    Visitors  int <code class="language-plaintext highlighter-rouge">json:"visitors"</code>
+    PageViews int <code class="language-plaintext highlighter-rouge">json:"page_views"</code>
+}</p>
+
+<p>json.Marshal(struct{
+    *BlogPost
+    *Analytics
+}{post, analytics})</p>
+
+<p>6）一个json切分成两个struct</p>
+
+<p>json.Unmarshal([]byte(<code class="language-plaintext highlighter-rouge">{
+  "url": "attila@attilaolah.eu",
+  "title": "Attila's Blog",
+  "visitors": 6,
+  "page_views": 14
+}</code>), &amp;struct {
+  *BlogPost
+  *Analytics
+}{&amp;post, &amp;analytics})</p>
+
+<p>7）临时改名struct的字段</p>
+
+<p>type CacheItem struct {
+    Key    string <code class="language-plaintext highlighter-rouge">json:"key"</code>
+    MaxAge int    <code class="language-plaintext highlighter-rouge">json:"cacheAge"</code>
+    Value  Value  <code class="language-plaintext highlighter-rouge">json:"cacheValue"</code>
+}</p>
+
+<p>json.Marshal(struct{
+    *CacheItem</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>// Omit bad keys
+OmitMaxAge omit `json:"cacheAge,omitempty"`
+OmitValue  omit `json:"cacheValue,omitempty"`
+
+// Add nice keys
+MaxAge int    `json:"max_age"`
+Value  *Value `json:"value"` }{
+CacheItem: item,
+
+// Set the int by value:
+MaxAge: item.MaxAge,
+
+// Set the nested struct by reference, avoid making a copy:
+Value: &amp;item.Value, })
+</code></pre></div></div>
+
+<p>8）用字符串传递数字</p>
+
+<p>type TestObject struct {
+    Field1 int    <code class="language-plaintext highlighter-rouge">json:",string"</code>
+}</p>
+
+<p>这个对应的json是 {“Field1”: “100”}</p>
+
+<p>如果json是 {“Field1”: 100} 则会报错</p>
+
+<p>容忍字符串和数字互转</p>
+
+<p>如果你使用的是jsoniter，可以启动模糊模式来支持 PHP 传递过来的 JSON。</p>
+
+<p>import “github.com/json-iterator/go/extra”</p>
+
+<p>extra.RegisterFuzzyDecoders()
+1
+这样就可以处理字符串和数字类型不对的问题了。比如</p>
+
+<p>var val string
+jsoniter.UnmarshalFromString(<code class="language-plaintext highlighter-rouge">100</code>, &amp;val)</p>
+
+<p>又比如</p>
+
+<p>var val float32
+jsoniter.UnmarshalFromString(<code class="language-plaintext highlighter-rouge">"1.23"</code>, &amp;val)</p>
+
+<p>9）容忍空数组作为对象</p>
+
+<p>PHP另外一个令人崩溃的地方是，如果 PHP array是空的时候，序列化出来是[]。但是不为空的时候，序列化出来的是{“key”:”value”}。 我们需要把 [] 当成 {} 处理。</p>
+
+<p>如果你使用的是jsoniter，可以启动模糊模式来支持 PHP 传递过来的 JSON。</p>
+
+<p>import “github.com/json-iterator/go/extra”</p>
+
+<p>extra.RegisterFuzzyDecoders()</p>
+
+<p>这样就可以支持了</p>
+
+<p>var val map[string]interface{}
+jsoniter.UnmarshalFromString(<code class="language-plaintext highlighter-rouge">[]</code>, &amp;val)</p>
+
+<p>10）使用 MarshalJSON支持time.Time</p>
+
+<p>golang 默认会把 time.Time 用字符串方式序列化。如果我们想用其他方式表示 time.Time，需要自定义类型并定义 MarshalJSON。</p>
+
+<p>type timeImplementedMarshaler time.Time</p>
+
+<p>func (obj timeImplementedMarshaler) MarshalJSON() ([]byte, error) {
+    seconds := time.Time(obj).Unix()
+    return []byte(strconv.FormatInt(seconds, 10)), nil
+}</p>
+
+<p>11）序列化的时候会调用 MarshalJSON</p>
+
+<p>type TestObject struct {
+    Field timeImplementedMarshaler
+}
+should := require.New(t)
+val := timeImplementedMarshaler(time.Unix(123, 0))
+obj := TestObject{val}
+bytes, err := jsoniter.Marshal(obj)
+should.Nil(err)
+should.Equal(<code class="language-plaintext highlighter-rouge">{"Field":123}</code>, string(bytes))</p>
+
+<p>12）使用 RegisterTypeEncoder支持time.Time</p>
+
+<p>jsoniter 能够对不是你定义的type自定义JSON编解码方式。比如对于 time.Time 可以用 epoch int64 来序列化</p>
+
+<p>import “github.com/json-iterator/go/extra”
+1
+extra.RegisterTimeAsInt64Codec(time.Microsecond)
+output, err := jsoniter.Marshal(time.Unix(1, 1002))
+should.Equal(“1000001”, string(output))</p>
+
+<p>如果要自定义的话，参见 RegisterTimeAsInt64Codec 的实现代码</p>
+
+<p>13）使用 MarshalText支持非字符串作为key的map</p>
+
+<p>虽然 JSON 标准里只支持 string 作为 key 的 map。但是 golang 通过 MarshalText() 接口，使得其他类型也可以作为 map 的 key。例如</p>
+
+<p>f, _, _ := big.ParseFloat(“1”, 10, 64, big.ToZero)
+val := map[*big.Float]string{f: “2”}
+str, err := MarshalToString(val)
+should.Equal(<code class="language-plaintext highlighter-rouge">{"1":"2"}</code>, str)</p>
+
+<p>其中 big.Float 就实现了 MarshalText()</p>
+
+<p>14）使用 json.RawMessage</p>
+
+<p>如果部分json文档没有标准格式，我们可以把原始的文本信息用string保存下来。</p>
+
+<p>type TestObject struct {
+    Field1 string
+    Field2 json.RawMessage
+}
+var data TestObject
+json.Unmarshal([]byte(<code class="language-plaintext highlighter-rouge">{"field1": "hello", "field2": [1,2,3]}</code>), &amp;data)
+should.Equal(<code class="language-plaintext highlighter-rouge"> [1,2,3]</code>, string(data.Field2))</p>
+
+<p>15）使用 json.Number</p>
+
+<p>默认情况下，如果是 interface{} 对应数字的情况会是 float64 类型的。如果输入的数字比较大，这个表示会有损精度。所以可以 UseNumber() 启用 json.Number 来用字符串表示数字。</p>
+
+<p>decoder1 := json.NewDecoder(bytes.NewBufferString(<code class="language-plaintext highlighter-rouge">123</code>))
+decoder1.UseNumber()
+var obj1 interface{}
+decoder1.Decode(&amp;obj1)
+should.Equal(json.Number(“123”), obj1)</p>
+
+<p>jsoniter 支持标准库的这个用法。同时，扩展了行为使得 Unmarshal 也可以支持 UseNumber 了。</p>
+
+<p>json := Config{UseNumber:true}.Froze()
+var obj interface{}
+json.UnmarshalFromString(“123”, &amp;obj)
+should.Equal(json.Number(“123”), obj)</p>
+
+<p>16）统一更改字段的命名风格</p>
+
+<p>经常 JSON 里的字段名 Go 里的字段名是不一样的。我们可以用 field tag 来修改。</p>
+
+<p>output, err := jsoniter.Marshal(struct {
+    UserName      string <code class="language-plaintext highlighter-rouge">json:"user_name"</code>
+    FirstLanguage string <code class="language-plaintext highlighter-rouge">json:"first_language"</code>
+}{
+    UserName:      “taowen”,
+    FirstLanguage: “Chinese”,
+})
+should.Equal(<code class="language-plaintext highlighter-rouge">{"user_name":"taowen","first_language":"Chinese"}</code>, string(output))</p>
+
+<p>但是一个个字段来设置，太麻烦了。如果使用 jsoniter，我们可以统一设置命名风格。</p>
+
+<p>import “github.com/json-iterator/go/extra”</p>
+
+<p>extra.SetNamingStrategy(LowerCaseWithUnderscores)
+output, err := jsoniter.Marshal(struct {
+    UserName      string
+    FirstLanguage string
+}{
+    UserName:      “taowen”,
+    FirstLanguage: “Chinese”,
+})
+should.Nil(err)
+should.Equal(<code class="language-plaintext highlighter-rouge">{"user_name":"taowen","first_language":"Chinese"}</code>, string(output))</p>
+
+<p>17）使用私有的字段</p>
+
+<p>Go 的标准库只支持 public 的 field。jsoniter 额外支持了 private 的 field。需要使用 SupportPrivateFields() 来开启开关。</p>
+
+<p>import “github.com/json-iterator/go/extra”</p>
+
+<p>extra.SupportPrivateFields()
+type TestObject struct {
+    field1 string
+}
+obj := TestObject{}
+jsoniter.UnmarshalFromString(<code class="language-plaintext highlighter-rouge">{"field1":"Hello"}</code>, &amp;obj)
+should.Equal(“Hello”, obj.field1)</p>
+
+<p>文中所用第三方库：https://github.com/json-iterator/go</p>
+
+:ET

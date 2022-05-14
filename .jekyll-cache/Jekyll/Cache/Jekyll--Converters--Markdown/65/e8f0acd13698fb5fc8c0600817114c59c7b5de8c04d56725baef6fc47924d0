@@ -1,0 +1,124 @@
+I"|<p>https://blog.csdn.net/u013474436/article/details/53309028?utm_source=blogxgwz1
+https://stackoverflow.com/questions/35006614/what-does-symbol-not-found-expected-in-flat-namespace-actually-mean
+https://stackoverflow.com/questions/18809986/undefined-reference-to-strnlen-s-strncpy-s-strncat-s
+https://www.hongweipeng.com/index.php/archives/1014/
+strlen_s 是微软的库，mac不能用
+<!-- more --></p>
+
+<p>https://tonybai.com/2009/04/11/glibc-strlen-source-analysis/</p>
+
+<p>在Zend/zend_string.h提供了一些zend_string处理的一些方法。
+ZSTR_开头的宏方法是zend_string结构专属的方法。主要有如下几个：
+#define ZSTR_VAL(zstr)  (zstr)-&gt;val
+#define ZSTR_LEN(zstr)  (zstr)-&gt;len
+#define ZSTR_H(zstr)    (zstr)-&gt;h
+#define ZSTR_HASH(zstr) zend_string_hash_val(zstr) 
+ZSTR_VAL ZSTR_LEN ZSTR_H宏方法分别对应zend_string结构的成员。ZSTR_HASH是获取字符串的hash值，如果不存在，就调用hash函数生成一个。</p>
+
+<p>https://juejin.im/entry/583e8f36ac502e006c3605ee</p>
+
+<p>https://blog.csdn.net/u012564936/article/details/15970891</p>
+
+<p>https://www.jellythink.com/archives/152</p>
+
+<p>上一篇文章总结了PHP中的__autoload机制。这一篇是上一篇的姊妹篇。关于__autoload现在基本都被抛弃了，使用的越来越少了，但是语言的发展都是向着开发友好化的。由于__autoload机制的缺点非常明显，为了解决这些痛点，就有了这篇需要总结的SPL Autoload。</p>
+
+<p>什么是SPL Autoload
+SPL是Standard PHP Library(标准PHP库)的缩写。它是PHP5引入的一个扩展库，其主要功能包括autoload机制的实现及包括各种Iterator接口或类。SPL autoload机制的实现是通过将函数指针autoload_func指向自己实现的具有自动装载功能的函数来实现的。</p>
+
+<p>SPL有两个不同的函数spl_autoload, spl_autoload_call，通过将autoload_func指向这两个不同的函数地址来实现不同的自动加载机制。</p>
+
+<p>spl_autoload实现机制
+spl_autoload是SPL实现的默认的自动加载函数，它的功能比较简单。它的函数声明如下：</p>
+
+<p>void spl_autoload ( string $class_name [, string $file_extensions ] )
+第一个参数是类名字，第二个参数是文件扩展名；在默认情况下，该函数先将类名转换成小写，再在小写的类名后加上.inc或.php的扩展名作为文件名，然后在所有的包含路径(include paths)中检查是否存在该文件。</p>
+
+<p>现在我们有一个A.class.php、B.class.php和Main.cpp，其中A.class.php代码如下：</p>
+
+<p>&lt;?php
+class A {
+    function __construct () 
+    { 
+        var_dump(‘construct A’);
+    } 
+}
+B.class.php内容如下：</p>
+
+<p>&lt;?php
+class B {
+    function __construct () 
+    { 
+        var_dump(‘construct B’);
+    } 
+}
+Main.php代码如下：</p>
+
+<p>&lt;?php
+set_include_path(get_include_path().PATH_SEPARATOR.’C:\Users\Jelly\Desktop\autoload’);
+spl_autoload_extensions(‘.class.php’);
+spl_autoload_register();</p>
+
+<p>new A();
+new B();
+输出内容如下：</p>
+
+<p>string(11) “construct A” string(11) “construct B”
+通过调用spl_autoload_extensions函数，设置spl_autoload加载的文件的扩展名。然后通过使用spl_autoload_register函数，在PHP脚本中第一次调用spl_autoload_register()时不使用任何参数，就可以将 autoload_func指向spl_autoload，从而使用spl_autoload作为默认的加载函数。</p>
+
+<p>spl_autoload_call实现机制
+通过上面的说明我们知道，spl_autoload的功能比较简单，和__autoload的功能区别不大，而且它是在SPL扩展中实现的，我们无法扩充它的功能。如果想实现自己的更灵活的自动加载机制怎么办呢？此时，我们就需要用到spl_autoload_call了。</p>
+
+<p>我们先来简单的说说spl_autoload_call的内部机制。在SPL模块内部，有一个全局变量autoload_functions，它本质上是一个HashTable，不过我们可以将其简单的看作一个链表，链表中的每一个元素都是一个函数指针,指向一个具有自动加载类功能的函数。spl_autoload_call本身的实现很简单，只是简单的按顺序执行这个链表中每个函数，在每个函数执行完成后都判断一次需要的类是否已经加载，如果加载成功就直接返回，不再继续执行链表中的其它函数。如果这个链表中所有的函数都执行完成后类还没有加载，spl_autoload_call就直接 退出，并不向用户报告错误。因此，使用了autoload机制，并不能保证类就一定能正确的自动加载，关键还是要看你的自动加载函数如何实现。</p>
+
+<p>说白了，spl_autoload_call彻底的解决了__autoload()是全局函数只能定义一次，不够灵活的缺陷，我们可以自行定义每个模块的autoload机制，然后将我们定义的加载机制通过spl_autoload_register函数注册到SPL模块内部维护的调用堆栈中即可。我们可以注册多个加载策略，反正SPL内部会依次执行我们注册的加载策略，从而加载找不到的类。基于此，我们还是通过代码来说明。</p>
+
+<p>现在有以下目录结构：</p>
+
+<p>project/
+    ├── ModuleA/
+    │  ├── A.class.php
+    │  ├── autoload.php
+    ├── ModuleB/
+    │  ├── B.class.php
+    │  ├── autoload.php
+    ├── Main.php
+ModuleA/autoload.php代码如下：</p>
+
+<p>&lt;?php
+function autoloadA($className) {
+    var_dump(‘autoloadA called’);
+    $fileName = <strong>DIR</strong> . ‘/’ . $className . ‘.class.php’;</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>if (file_exists($fileName)) {  
+    require_once($fileName);  
+} }
+</code></pre></div></div>
+
+<p>spl_autoload_register(‘autoloadA’);
+ModuleB/autoload.php代码如下：</p>
+
+<p>&lt;?php
+function autoloadB($className) {
+    var_dump(‘autoloadB called’);
+    $fileName = <strong>DIR</strong> . ‘/’ . $className . ‘.class.php’;</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>if (file_exists($fileName)) {    
+    require_once($fileName);     
+} }
+</code></pre></div></div>
+
+<p>spl_autoload_register(‘autoloadB’);
+Main.php代码如下：</p>
+
+<p>&lt;?php
+require <strong>DIR</strong>.’/ModuleA/autoload.php’;
+require <strong>DIR</strong>.’/ModuleB/autoload.php’;</p>
+
+<p>new A();
+new B();
+这样就通过spl_autoload_register函数实现了多模块自定义加载。当然了，上面的代码只是用于演示，实际框架中，当和composer结合时，又会有变化，但是万变不离其宗。了解了我这里总结的，再去理解其它的都不会有太大问题的。</p>
+
+<p>总结
+到此，关于PHP中的SPL Autoload机制就总结完毕了。该系列我还会一直总结下去。希望大家喜欢，也希望我的总结能够真正的帮助大家。期待大家和我一起沟通，交流。</p>
+:ET

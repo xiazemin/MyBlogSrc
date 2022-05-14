@@ -1,0 +1,87 @@
+I"�<p>phpunit的做法是把所有相关文件打包封装到一个phar包里去分发，我也可以这么干。</p>
+
+<p>首先配置php.ini里的phar.readonly=0，默认Php解释器对phar是只读访问的，不能修改phar的内容，以免意外修改整体交付的软件包。修改配置之后才可以用来打包生成phar。改好配置之后，建立程序目录结构如下：</p>
+
+<p>.
+├── bin
+├── generate-phar.php
+└── src
+    └── index.php
+其中src目录里有完整的代码文件，包括composer引入的第三方库。我们用generate-phar.php程序生成phar文件，并把它放到bin目录里去。</p>
+
+<p>&lt;?php
+//在bin目录下创建phar文件
+$phar = new Phar(<strong>DIR</strong> . DIRECTORY_SEPARATOR . ‘bin/mytool.phar’);</p>
+
+<p>//从src目录构建phar包
+$phar-&gt;buildFromDirectory(‘src’);</p>
+
+<p>//定义默认执行入口为index.php
+$defStub = Phar::createDefaultStub(‘index.php’);</p>
+
+<p>//设置php解释器shell头，让phar可以自己执行
+$phar-&gt;setStub(“#!/usr/bin/env php\n$defStub”);</p>
+
+<p>//用bzip2库压缩phar包里的文件（此步要求PHP安装了zlib和bz2扩展，可以跳过）
+$phar-&gt;compressFiles(Phar::BZ2);</p>
+
+<p>//将phar包改名，去掉phar扩展名
+rename(‘bin/mytool.phar’, ‘bin/mytool’);</p>
+
+<p>//授予phar包可执行权限
+chmod(‘bin/mytool’, 0755);
+现在可以用bin/mytool直接执行包中的程序了，phar会自动使用系统中安装的PHP解释器，如果想在任意目录运行此程序，可以把phar包拷到$PATH路径覆盖的目录中，比如/usr/local/bin
+<!-- more --></p>
+
+<p>报错$./composer.phar
+./composer.phar: line 1: ?php: No such file or directory
+./composer.phar: line 3: =: command not found
+./composer.phar: line 5: syntax error near unexpected token <code class="language-plaintext highlighter-rouge">'phar','
+./composer.phar: line 5: </code>if (in_array(‘phar’, stream_get_wrappers()) &amp;&amp; class_exists(‘Phar’, 0)) {‘</p>
+
+<p>原因没有设置shell 头没法识别php 文件</p>
+
+<p>方法一：
+php ./composer.phar</p>
+
+<p>方法二：
+//设置php解释器shell头，让phar可以自己执行
+$phar-&gt;setStub(“#!/usr/bin/env php\n$defStub”);</p>
+
+<p>phar文件的压缩和解压</p>
+
+<p>解压
+$cat depress.php
+&lt;?php
+define(‘ROOT’,<strong>DIR</strong>);
+$dir = ROOT.’/extract’;
+if(!is_dir($dir)){
+@mkdir($dir);
+}
+$phar = new Phar(ROOT.”/composer.phar”);
+$phar-&gt;extractTo($dir,null,true);
+echo “解压完成”.PHP_EOL;</p>
+
+<p>压缩
+ cat compress.php</p>
+
+<p>&lt;?php
+$exts = array(
+        ‘*’,
+    );
+$dir = <strong>DIR</strong>;
+$file = ‘composer.phar’;
+$phar = new Phar(<strong>DIR</strong> . ‘/’ . $file, FilesystemIterator::CURRENT_AS_FILEINFO | FilesystemIterator::KEY_AS_FILENAME, $file);
+$phar-&gt;startBuffering();
+foreach ($exts as $ext) {
+$phar-&gt;buildFromDirectory($dir, ‘/.’ . $ext . ‘$/’);
+}
+$phar-&gt;delete(‘compress.php’);
+$phar-&gt;setStub(“#!/usr/bin/env php\n”.$phar-&gt;createDefaultStub(‘bin/composer’));
+//设置php解释器shell头，让phar可以自己执行
+//$phar-&gt;setStub(“#!/usr/bin/env php\n$defStub”);
+$phar-&gt;compressFiles(Phar::GZ);
+$phar-&gt;stopBuffering();
+echo “打包完成”.PHP_EOL;</p>
+
+:ET

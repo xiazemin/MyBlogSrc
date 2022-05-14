@@ -1,0 +1,245 @@
+---
+title: shutdown 源码分析
+layout: post
+category: golang
+author: 夏泽民
+---
+我们知道在go 1.8.x后，golang在http里加入了shutdown方法，用来控制优雅退出。什么是优雅退出？ 简单说就是不处理新请求，但是会处理正在进行的请求，把旧请求都处理完，也就是都response之后，那么就退出。
+
+社区里不少http graceful动态重启，平滑重启的库，大多是基于http.shutdown做的。平滑启动的原理很简单，fork子进程，继承listen fd, 老进程优雅退出
+<!-- more -->
+http shutdown 源码分析
+
+先来看下http shutdown的主方法实现逻辑。用atomic来做退出标记的状态，然后关闭各种的资源，然后一直阻塞的等待无空闲连接，每500ms轮询一次。
+
+// xiaorui.cc
+
+var shutdownPollInterval = 500 * time.Millisecond
+
+func (srv *Server) Shutdown(ctx context.Context) error {
+    // 标记退出的状态
+    atomic.StoreInt32(&srv.inShutdown, 1)
+    srv.mu.Lock()
+    // 关闭listen fd，新连接无法建立。
+    lnerr := srv.closeListenersLocked()
+    
+    // 把server.go的done chan给close掉，通知等待的worekr退出
+    srv.closeDoneChanLocked()
+
+    // 执行回调方法，我们可以注册shutdown的回调方法
+    for _, f := range srv.onShutdown {
+        go f()
+    }
+
+    // 每500ms来检查下，是否没有空闲的连接了，或者监听上游传递的ctx上下文。
+    ticker := time.NewTicker(shutdownPollInterval)
+    defer ticker.Stop()
+    for {
+        if srv.closeIdleConns() {
+            return lnerr
+        }
+        select {
+        case <-ctx.Done():
+            return ctx.Err()
+        case <-ticker.C:
+        }
+    }
+}
+…
+
+是否没有空闲的连接
+func (s *Server) closeIdleConns() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	quiescent := true
+	for c := range s.activeConn {
+		st, unixSec := c.getState()
+		if st == StateNew && unixSec < time.Now().Unix()-5 {
+			st = StateIdle
+		}
+		if st != StateIdle || unixSec == 0 {
+			quiescent = false
+			continue
+		}
+		c.rwc.Close()
+		delete(s.activeConn, c)
+	}
+	return quiescent
+}
+关闭server.doneChan和监听的文件描述符
+
+// xiaorui.cc
+
+// 关闭doen chan
+func (s *Server) closeDoneChanLocked() {
+    ch := s.getDoneChanLocked()
+    select {
+    case <-ch:
+        // Already closed. Don't close again.
+    default:
+        // Safe to close here. We're the only closer, guarded
+        // by s.mu.
+        close(ch)
+    }
+}
+
+// 关闭监听的fd
+func (s *Server) closeListenersLocked() error {
+    var err error
+    for ln := range s.listeners {
+        if cerr := (*ln).Close(); cerr != nil && err == nil {
+            err = cerr
+        }
+        delete(s.listeners, ln)
+    }
+    return err
+}
+
+// 关闭连接
+func (c *conn) Close() error {
+    if !c.ok() {
+        return syscall.EINVAL
+    }
+    err := c.fd.Close()
+    if err != nil {
+        err = &OpError{Op: "close", Net: c.fd.net, Source: c.fd.laddr, Addr: c.fd.raddr, Err: err}
+    }
+    return err
+}
+这么一系列的操作后，server.go的serv主监听方法也就退出了。
+
+// xiaorui.cc 
+func (srv *Server) Serve(l net.Listener) error {
+    ...
+    for {
+        rw, e := l.Accept()
+        if e != nil {
+            select {
+             // 退出
+            case <-srv.getDoneChan():
+                return ErrServerClosed
+            default:
+            }
+            ...
+            return e
+        }
+        tempDelay = 0
+        c := srv.newConn(rw)
+        c.setState(c.rwc, StateNew) // before Serve can return
+        go c.serve(ctx)
+    }
+}
+
+// xiaorui.cc
+那么如何保证用户在请求完成后，再关闭连接的？
+
+// xiaorui.cc
+
+func (s *Server) doKeepAlives() bool {
+	return atomic.LoadInt32(&s.disableKeepAlives) == 0 && !s.shuttingDown()
+}
+
+
+// Serve a new connection.
+func (c *conn) serve(ctx context.Context) {
+	defer func() {
+                ... xiaorui.cc ...
+		if !c.hijacked() {
+                        // 关闭连接，并且标记退出
+			c.close()
+			c.setState(c.rwc, StateClosed)
+		}
+	}()
+        ...
+	ctx, cancelCtx := context.WithCancel(ctx)
+	c.cancelCtx = cancelCtx
+	defer cancelCtx()
+
+	c.r = &connReader{conn: c}
+	c.bufr = newBufioReader(c.r)
+	c.bufw = newBufioWriterSize(checkConnErrorWriter{c}, 4<<10)
+
+	for {
+                // 接收请求
+		w, err := c.readRequest(ctx)
+		if c.r.remain != c.server.initialReadLimitSize() {
+			c.setState(c.rwc, StateActive)
+		}
+                ...
+                ...
+                // 匹配路由及回调处理方法
+		serverHandler{c.server}.ServeHTTP(w, w.req)
+		w.cancelCtx()
+		if c.hijacked() {
+			return
+		}
+                ...
+                // 判断是否在shutdown mode, 选择退出
+		if !w.conn.server.doKeepAlives() {
+			return
+		}
+    }
+    ...
+使用实例
+package main
+
+import (
+    "context"
+    "fmt"
+    "net/http"
+    "os"
+    "os/signal"
+    "sync"
+    "syscall"
+    "time"
+)
+
+const addr = ":9527"
+
+func main() {
+    http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+        fmt.Fprint(w, "just another http server...")
+    })
+    //使用默认路由创建 http server
+    srv := http.Server{
+        Addr:    addr,
+        Handler: http.DefaultServeMux,
+    }
+    //使用WaitGroup同步Goroutine
+    var wg sync.WaitGroup
+    exit := make(chan os.Signal)
+    //监听 Ctrl+C 信号
+    signal.Notify(exit, syscall.SIGINT, syscall.SIGTERM)
+    go func() {
+        <-exit
+        wg.Add(1)
+        //使用context控制srv.Shutdown的超时时间
+        ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+        defer cancel()
+        err := srv.Shutdown(ctx)
+        if err != nil {
+            fmt.Println(err)
+        }
+        wg.Done()
+    }()
+
+    fmt.Println("listening at " + addr)
+    err := srv.ListenAndServe()
+
+    fmt.Println("waiting for the remaining connections to finish...")
+    wg.Wait()
+    if err != nil && err != http.ErrServerClosed {
+        panic(err)
+    }
+    fmt.Println("gracefully shutdown the http server...")
+}
+
+两种普遍的方法。这些方法可以被如下概括:
+
+你可以在套接字上设置 SO_REUSEPORT ，从而让多个进程能够被绑定到同一个端口上。利用这个方法，你会有多个接受队列向多个进程提供数据。
+复制套接字，并把它以文件的形式传送给一个子进程，然后在新的进程中重新创建这个套接字。使用这种方法，你将有一个接受队列向多个进程提供数据。]
+在我们初期的讨论中，我们了解到几个关于 SO_REUSEPORT 的问题。我们的一个工程师之前使用这个方法，并且注意到由于其多个接受队列，有时候会丢弃挂起的 TCP 连接。除此之外，当我们进行这些讨论的时候，Go 并没有很好地支持在一个 net.Listener 上设置 SO_REUSEPORT。然而，在过去的几天中，在这个问题上有了进展，看起来像 Go 不久就会支持设置套接字属性。
+
+第二种方法也很吸引人，因为它的简单性以及大多数开发人员熟悉的传统Unix 的 fork/exec 产生模型，即将所有打开文件传递给子进程的约定。需要注意的一点，os/exec 包实际上不赞同这种用法。主要是出于安全上的考量，它只传递 stdin , stdout 和 stderr 给子进程。然而， os 包确实提供较低级的原语，可用于将文件传递给子程序，这就是我们想做的。
+
+

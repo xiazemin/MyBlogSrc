@@ -1,0 +1,139 @@
+---
+title: k8s-client实现kubectl
+layout: post
+category: k8s
+author: 夏泽民
+---
+
+https://github.com/kubernetes/client-go
+k8s-client 是对k8s api的一个封装，应用k8s-client 我们可以实现kubectl 所有功能。
+
+通过读取配置文件可以获得*kubernetes.Clientset连接，剩下的所有操作都是在*kubernetes.Clientset上进行的。
+
+分两种场景
+
+1，在pod之外远程获取*kubernetes.Clientset
+
+func getClient() *kubernetes.Clientset {
+  kubeconfig := filepath.Join(os.Getenv("HOME"), ".kube", "config")
+
+  // BuildConfigFromFlags is a helper function that builds configs from a master url or
+  // a kubeconfig filepath.
+  config, err := clientcmd.BuildConfigFromFlags("", kubeconfig)
+  if err != nil {
+    log.Fatal(err)
+  }
+
+  // NewForConfig creates a new Clientset for the given config.
+  // https://godoc.org/k8s.io/client-go/kubernetes#NewForConfig
+  clientset, err := kubernetes.NewForConfig(config)
+  if err != nil {
+    log.Fatal(err)
+  }
+  return clientset
+}
+通过解析
+
+ ~/.kube/config
+进行认证，获取*kubernetes.Clientset
+
+
+
+2，在pod内部，获取*kubernetes.Clientset
+
+func getInpodClient() (*kubernetes.Clientset, error) {
+  config, err := rest.InClusterConfig()
+  if err != nil {
+    return nil, err
+  }
+  clientset, err := kubernetes.NewForConfig(config)
+  if err != nil {
+    return nil, err
+  }
+  return clientset, nil
+}
+  "k8s.io/client-go/rest"
+提供了一个接口来获取pod内部的配置
+<!-- more -->
+模拟实现kubectl的功能
+
+1，获取namespace
+
+% kubectl get ns
+NAME                   STATUS   AGE
+default                Active   30d
+ingress-nginx          Active   27d
+kube-node-lease        Active   30d
+kube-public            Active   30d
+kube-system            Active   30d
+kubernetes-dashboard   Active   29d
+clientset := getClient()
+  ctx := context.TODO()
+  nss, err := clientset.CoreV1().Namespaces().List(ctx, metav1.ListOptions{})
+  for _, n := range nss.Items {
+    fmt.Println("ns:", n.Name)
+  }
+输出
+
+ns: default
+ns: ingress-nginx
+ns: kube-node-lease
+ns: kube-public
+ns: kube-system
+ns: kubernetes-dashboard
+
+
+2，获取node
+
+% kubectl get nodes
+NAME             STATUS   ROLES    AGE   VERSION
+docker-desktop   Ready    master   30d   v1.19.7
+  clientset := getClient()
+  ctx := context.TODO()
+  nodes, err := clientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+  for _, n := range nodes.Items {
+    fmt.Println("nodes:", n.Name)
+  }
+nodes: docker-desktop
+3,获取svc
+
+% kubectl get svc -n kube-system
+NAME       TYPE        CLUSTER-IP   EXTERNAL-IP   PORT(S)                  AGE
+kube-dns   ClusterIP   10.96.0.10   <none>        53/UDP,53/TCP,9153/TCP   30d
+clientset := getClient()
+ctx := context.TODO()
+svcs, err := clientset.CoreV1().Services(namespace).List(ctx, metav1.ListOptions{})
+for _, s := range svcs.Items {
+    fmt.Println("svc:", s.Name)
+}
+svc: kube-dns
+4,获取pod ip
+
+% kubectl get pod -n kube-system -o wide
+NAME                                     READY   STATUS    RESTARTS   AGE   IP             NODE             NOMINATED NODE   READINESS GATES
+coredns-f9fd979d6-cg26k                  1/1     Running   6          30d   10.1.0.85      docker-desktop   <none>           <none>
+coredns-f9fd979d6-dqffw                  1/1     Running   6          30d   10.1.0.84      docker-desktop   <none>           <none>
+etcd-docker-desktop                      1/1     Running   8          30d   192.168.65.4   docker-desktop   <none>           <none>
+kube-apiserver-docker-desktop            1/1     Running   23         30d   192.168.65.4   docker-desktop   <none>           <none>
+kube-controller-manager-docker-desktop   1/1     Running   6          30d   192.168.65.4   docker-desktop   <none>           <none>
+kube-proxy-fw6rz                         1/1     Running   6          30d   192.168.65.4   docker-desktop   <none>           <none>
+kube-scheduler-docker-desktop            1/1     Running   60         30d   192.168.65.4   docker-desktop   <none>           <none>
+storage-provisioner                      1/1     Running   78         30d   10.1.0.86      docker-desktop   <none>           <none>
+vpnkit-controller                        1/1     Running   6          30d   10.1.0.87      docker-desktop   <none>           <none>
+  clientset := getClient()
+  ctx := context.TODO()
+  pi := clientset.CoreV1().Pods(namespace)
+  pods, err := pi.List(ctx, metav1.ListOptions{})
+  if err != nil {
+    return nil, err
+  }
+  //fmt.Println(pods)
+  var ips []string
+  for _, pod := range pods.Items {
+    ips = append(ips, pod.Status.PodIP)
+  }
+
+  fmt.Println(ips)
+[10.1.0.85 10.1.0.84 192.168.65.4 192.168.65.4 192.168.65.4 192.168.65.4 192.168.65.4 10.1.0.86 10.1.0.87]
+
+

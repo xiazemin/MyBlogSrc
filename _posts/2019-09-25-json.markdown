@@ -1,0 +1,495 @@
+---
+title: json
+layout: post
+category: golang
+author: 夏泽民
+---
+Golang的结构体可以增加类似于Java里面@JsonProperty("id")注释。在结构体里面通过反引号包含的字符串被称为Tag。
+
+type Cyeam struct {
+	Url   string `json:"url"`
+	Other string `json:"-"`
+}
+在Tag里加入对json的Tag的定义，就可以实现对输出的格式控制。而且，如果json字段的Tag定义为-的话，不会被解析。
+
+这么强大的功能，借助reflect包，实现起来也不难。
+
+c := Cyeam{Url: "blog.cyeam.com", Other: "..."}
+var t reflect.Type
+t = reflect.TypeOf(c)
+var v reflect.Value
+v = reflect.ValueOf(c)
+json := "{"
+for i := 0; i < t.NumField(); i++ {
+	if t.Field(i).Tag.Get("json") != "-" {
+		json += "\"" + t.Field(i).Tag.Get("json") + "\":\"" + v.FieldByName(t.Field(i).Name).String() + "\""
+	}
+}
+json += "}"
+fmt.Println(json)
+
+{"url":"blog.cyeam.com"}
+对于每一个对象，都能够得到它的类型Type以及值Value。t.NumField()方法能够得到结构体内包含值的数目，t.Field(i)能够得到索引值处变量的值Value。通过这两个方法，就能够对结构体变量进行遍历。t.Field(i).Tag.Get("json")可以获取当前字段的Tag，并且从中获取json的Tag值。如此一来，就能够完成结构体的遍历和最后JSON流的拼接生成。
+<!-- more -->
+直接来个encoding/json包里的func Marshal(v interface{}) ([]byte, error)和func Unmarshal(data []byte, v interface{}) error就能对Json进行编解码了。具体的文件就是采用反射的方法
+
+如下的map需要大家是如何解析的？
+
+{"10000000000":10000000000,"111":1}
+如果直接定义一个map来解析，定义成map[string]int64，我们是肯定可以解析成功的，解析的时候会将数据转换为我们需要的数据类型。那么问题来了：如果把类型定义成map[string]interface{}会是如何解析的呢？
+
+我一直是用显示定义的来解析，也就是map[string]int64，当我用map[string]interface{}解析的时候，我就想当然的认为，interface{}里面存的是int64的数据。后来调试了一通，最后才发现是本末倒置了。
+
+Json数据其实就是一个字符串，里面按照一定的格式保存我们的数据。Json支持的数据类型与Golang语言的关系如下：
+
+bool, for JSON booleans
+float64, for JSON numbers
+string, for JSON strings
+[]interface{}, for JSON arrays
+map[string]interface{}, for JSON objects
+nil for JSON null
+我们可以注意到，Json格式的数字和Golang语言里面的float64是相关联的。也就是说，默认情况下数字类型将会转换成float64类型。如果我们显示的指出了数字类型，比如int64，他会将数字再转成int64。
+
+我们看一下源码，encoding/json/decode.go func (d *decodeState) literalStore(item []byte, v reflect.Value, fromQuoted bool)
+
+unc (d *decodeState) literalStore(item []byte, v reflect.Value, fromQuoted bool) {
+	...
+	switch c := item[0]; c {
+		case 'n': // null
+		...
+		case 't', 'f': // true, false
+		...
+		case '"': // string
+		...
+		default: // number
+		if c != '-' && (c < '0' || c > '9') {
+			if fromQuoted {
+				d.error(fmt.Errorf("json: invalid use of ,string struct tag, trying to unmarshal %q into %v", item, v.Type()))
+			} else {
+				d.error(errPhase)
+			}
+		}
+		s := string(item)
+		switch v.Kind() {
+		default:
+			if v.Kind() == reflect.String && v.Type() == numberType {
+				v.SetString(s)
+				break
+			}
+			if fromQuoted {
+				d.error(fmt.Errorf("json: invalid use of ,string struct tag, trying to unmarshal %q into %v", item, v.Type()))
+			} else {
+				d.error(&UnmarshalTypeError{"number", v.Type(), int64(d.off)})
+			}
+		case reflect.Interface:
+			n, err := d.convertNumber(s)
+			if err != nil {
+				d.saveError(err)
+				break
+			}
+			if v.NumMethod() != 0 {
+				d.saveError(&UnmarshalTypeError{"number", v.Type(), int64(d.off)})
+				break
+			}
+			v.Set(reflect.ValueOf(n))
+
+		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+			n, err := strconv.ParseInt(s, 10, 64)
+			if err != nil || v.OverflowInt(n) {
+				d.saveError(&UnmarshalTypeError{"number " + s, v.Type(), int64(d.off)})
+				break
+			}
+			v.SetInt(n)
+
+		case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
+			n, err := strconv.ParseUint(s, 10, 64)
+			if err != nil || v.OverflowUint(n) {
+				d.saveError(&UnmarshalTypeError{"number " + s, v.Type(), int64(d.off)})
+				break
+			}
+			v.SetUint(n)
+
+		case reflect.Float32, reflect.Float64:
+			n, err := strconv.ParseFloat(s, v.Type().Bits())
+			if err != nil || v.OverflowFloat(n) {
+				d.saveError(&UnmarshalTypeError{"number " + s, v.Type(), int64(d.off)})
+				break
+			}
+			v.SetFloat(n)
+		}
+	}
+}
+
+func (d *decodeState) convertNumber(s string) (interface{}, error) {
+	if d.useNumber {
+		return Number(s), nil
+	}
+	f, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		return nil, &UnmarshalTypeError{"number " + s, reflect.TypeOf(0.0), int64(d.off)}
+	}
+	return f, nil
+}
+可以看出来，Json解析实现的时候通过反射来判断要生成的具体的类型。如果是interface{}类型，通过converNumber方法转成float64（里面是通过strconv.ParseFloat实现），如果类型是整形相关，通过strconv.ParseInt方法转换。无符号整形是通过strconv.ParseUint实现。
+
+{"body":"{\"sn\":\"aaaa\\\/bbbb\"}"}
+用json.Unmarshal来解析的话，显然要映射到这样的struct里：
+
+Copy
+    rawStr := `
+{"body":"{\"sn\":\"aaaa\\\/bbbb\"}"}
+`
+    data := struct {
+        Body string `json:"body"`
+    }{}
+    json.Unmarshal([]byte(rawStr), &data)
+这样的话 我得再定义一个struct，然后把body的string解析出来：
+
+Copy
+    body := struct {
+        Sn string
+    }{}
+    json.Unmarshal([]byte(data.Body), &body)
+能不能一次到位 定义好结构体一次解析到位呢？
+
+因为之前有通过实现encoding.TextMarshaler接口来完成结构体里string字段的自定义marshaler，所以理所当然地想到实现encoding.TextUnmarshaler接口来完成自定义的unmarshal
+
+Copy
+type dataEx struct {
+    Body bodyEx
+}
+
+type bodyEx struct {
+    Sn string
+}
+
+func (p *bodyEx) UnmarshalText(text []byte) error {
+    return nil
+}
+
+func marshalEx(rawStr string) {
+    data := &dataEx{}
+    err := json.Unmarshal([]byte(rawStr), data)
+    if err != nil {
+        panic(err)
+    }
+}
+先测试下，在unmarshaltext方法上打上断点，果然停住了。
+
+实现unmarshaltext，如果直接用dataEx结构体去接收，是解析不了的，因为json解析器在扫描到body字段的value的时候 是当做 json的string处理的，那么我们在UnmarshalText方法里拿到的就是那段字符串，因此只要将这段字符串再解析到bodyEx里就好了:
+本来预想的是这样就ok了：
+
+Copy
+func (p *bodyEx) UnmarshalText(text []byte) error {
+    return json.Unmarshal(text, p)
+}
+实际运行发现报错:
+
+Copy
+json: cannot unmarshal object into Go struct field dataEx.Body of type *main.bodyEx
+实际上 这段json解析到这样的结构体上应该是没问题的，现在报错 只能说是因为扩展了UnmarshalText方法导致的。因此暂时这样处理：
+
+Copy
+type dataEx struct {
+    Body bodyEx
+}
+
+type bodyEx struct {
+    Sn string
+}
+type bodyEx2 bodyEx
+
+func (p *bodyEx) UnmarshalText(text []byte) error {
+    t := bodyEx2{}
+    err := json.Unmarshal(text, &t)
+    if err != nil {
+        return err
+    }
+    *p = bodyEx(t)
+    return nil
+}
+至此，解决了json里被转义的json字符串一次解析到结构体里的问题。
+
+因为上面使用bodyEx2这样的处理只是自己的猜测和尝试，我想看看到底为啥实现了UnmarshalText后就不能解析了。因此翻看json.Encode()源码
+
+scanner#
+要实现对json字符串的解析，实际上就是对这段字符串进行词法分析，解析出json里的 obj、number、array、key、value等
+json包里有一个scanner，它就是一个状态机:
+
+Copy
+// A scanner is a JSON scanning state machine.
+// Callers call scan.reset() and then pass bytes in one at a time
+// by calling scan.step(&scan, c) for each byte.
+// The return value, referred to as an opcode, tells the
+// caller about significant parsing events like beginning
+// and ending literals, objects, and arrays, so that the
+// caller can follow along if it wishes.
+// The return value scanEnd indicates that a single top-level
+// JSON value has been completed, *before* the byte that
+// just got passed in.  (The indication must be delayed in order
+// to recognize the end of numbers: is 123 a whole value or
+// the beginning of 12345e+6?).
+scanner的结构如下:
+
+Copy
+type scanner struct {
+    // step 是遍历用的函数，它会随着状态的不同被赋予不同的实现方法
+    step func(*scanner, byte) int
+    // Reached end of top-level value.
+    endTop bool
+    // Stack of what we're in the middle of - array values, object keys, object values.
+    parseState []int
+    // Error that happened, if any.
+    err error
+    // total bytes consumed, updated by decoder.Decode
+    bytes int64
+}
+简单看一下stateBeginValue状态函数
+
+Copy
+
+// stateBeginValue 是开始读取的状态
+func stateBeginValue(s *scanner, c byte) int {
+    if c <= ' ' && isSpace(c) {
+        return scanSkipSpace
+    }
+    switch c {
+    case '{':
+        s.step = stateBeginStringOrEmpty
+        s.pushParseState(parseObjectKey)
+        return scanBeginObject
+    case '[':
+        s.step = stateBeginValueOrEmpty
+        s.pushParseState(parseArrayValue)
+        return scanBeginArray
+    case '"':
+        s.step = stateInString
+        return scanBeginLiteral
+    case '-':
+        s.step = stateNeg
+        return scanBeginLiteral
+    case '0': // beginning of 0.123
+        s.step = state0
+        return scanBeginLiteral
+    case 't': // beginning of true
+        s.step = stateT
+        return scanBeginLiteral
+    case 'f': // beginning of false
+        s.step = stateF
+        return scanBeginLiteral
+    case 'n': // beginning of null
+        s.step = stateN
+        return scanBeginLiteral
+    }
+    if '1' <= c && c <= '9' { // beginning of 1234.5
+        s.step = state1
+        return scanBeginLiteral
+    }
+    return s.error(c, "looking for beginning of value")
+}
+一段正常的json，开始读取的时候(跳过空格后)，如果读到'{'name就意味着是一个obj，如果遇到'['就意味着是一个array，如果遇到其他的，都会返回scanBeginLiteral标记，而这个标记就决定着unmarshal的时候如何映射到对应的结构体里。
+在decodeState的literalStore方法里，有各种处理:
+
+Copy
+
+// literalStore decodes a literal stored in item into v.
+//
+// fromQuoted indicates whether this literal came from unwrapping a
+// string from the ",string" struct tag option. this is used only to
+// produce more helpful error messages.
+func (d *decodeState) literalStore(item []byte, v reflect.Value, fromQuoted bool) error {
+    // Check for unmarshaler.
+    if len(item) == 0 {
+        //Empty string given
+        d.saveError(fmt.Errorf("json: invalid use of ,string struct tag, trying to unmarshal %q into %v", item, v.Type()))
+        return nil
+    }
+    isNull := item[0] == 'n' // null
+    u, ut, pv := indirect(v, isNull)
+    if u != nil {
+        return u.UnmarshalJSON(item)
+    }
+    if ut != nil {
+        if item[0] != '"' {
+            if fromQuoted {
+                d.saveError(fmt.Errorf("json: invalid use of ,string struct tag, trying to unmarshal %q into %v", item, v.Type()))
+                return nil
+            }
+            val := "number"
+            switch item[0] {
+            case 'n':
+                val = "null"
+            case 't', 'f':
+                val = "bool"
+            }
+            d.saveError(&UnmarshalTypeError{Value: val, Type: v.Type(), Offset: int64(d.readIndex())})
+            return nil
+        }
+        s, ok := unquoteBytes(item)
+        if !ok {
+            if fromQuoted {
+                return fmt.Errorf("json: invalid use of ,string struct tag, trying to unmarshal %q into %v", item, v.Type())
+            }
+            panic(phasePanicMsg)
+        }
+        return ut.UnmarshalText(s)
+    }
+
+    v = pv
+
+    switch c := item[0]; c {
+    case 'n': // null
+        // The main parser checks that only true and false can reach here,
+        // but if this was a quoted string input, it could be anything.
+        if fromQuoted && string(item) != "null" {
+            d.saveError(fmt.Errorf("json: invalid use of ,string struct tag, trying to unmarshal %q into %v", item, v.Type()))
+            break
+        }
+        switch v.Kind() {
+        case reflect.Interface, reflect.Ptr, reflect.Map, reflect.Slice:
+            v.Set(reflect.Zero(v.Type()))
+            // otherwise, ignore null for primitives/string
+        }
+    case 't', 'f': // true, false
+        value := item[0] == 't'
+        // The main parser checks that only true and false can reach here,
+        // but if this was a quoted string input, it could be anything.
+        if fromQuoted && string(item) != "true" && string(item) != "false" {
+            d.saveError(fmt.Errorf("json: invalid use of ,string struct tag, trying to unmarshal %q into %v", item, v.Type()))
+            break
+        }
+        switch v.Kind() {
+        default:
+            if fromQuoted {
+                d.saveError(fmt.Errorf("json: invalid use of ,string struct tag, trying to unmarshal %q into %v", item, v.Type()))
+            } else {
+                d.saveError(&UnmarshalTypeError{Value: "bool", Type: v.Type(), Offset: int64(d.readIndex())})
+            }
+        case reflect.Bool:
+            v.SetBool(value)
+        case reflect.Interface:
+            if v.NumMethod() == 0 {
+                v.Set(reflect.ValueOf(value))
+            } else {
+                d.saveError(&UnmarshalTypeError{Value: "bool", Type: v.Type(), Offset: int64(d.readIndex())})
+            }
+        }
+
+    case '"': // string
+        s, ok := unquoteBytes(item)
+        if !ok {
+            if fromQuoted {
+                return fmt.Errorf("json: invalid use of ,string struct tag, trying to unmarshal %q into %v", item, v.Type())
+            }
+            panic(phasePanicMsg)
+        }
+        switch v.Kind() {
+        default:
+            d.saveError(&UnmarshalTypeError{Value: "string", Type: v.Type(), Offset: int64(d.readIndex())})
+        case reflect.Slice:
+            if v.Type().Elem().Kind() != reflect.Uint8 {
+                d.saveError(&UnmarshalTypeError{Value: "string", Type: v.Type(), Offset: int64(d.readIndex())})
+                break
+            }
+            b := make([]byte, base64.StdEncoding.DecodedLen(len(s)))
+            n, err := base64.StdEncoding.Decode(b, s)
+            if err != nil {
+                d.saveError(err)
+                break
+            }
+            v.SetBytes(b[:n])
+        case reflect.String:
+            v.SetString(string(s))
+        case reflect.Interface:
+            if v.NumMethod() == 0 {
+                v.Set(reflect.ValueOf(string(s)))
+            } else {
+                d.saveError(&UnmarshalTypeError{Value: "string", Type: v.Type(), Offset: int64(d.readIndex())})
+            }
+        }
+
+    default: // number
+        if c != '-' && (c < '0' || c > '9') {
+            if fromQuoted {
+                return fmt.Errorf("json: invalid use of ,string struct tag, trying to unmarshal %q into %v", item, v.Type())
+            }
+            panic(phasePanicMsg)
+        }
+        s := string(item)
+        switch v.Kind() {
+        default:
+            if v.Kind() == reflect.String && v.Type() == numberType {
+                v.SetString(s)
+                if !isValidNumber(s) {
+                    return fmt.Errorf("json: invalid number literal, trying to unmarshal %q into Number", item)
+                }
+                break
+            }
+            if fromQuoted {
+                return fmt.Errorf("json: invalid use of ,string struct tag, trying to unmarshal %q into %v", item, v.Type())
+            }
+            d.saveError(&UnmarshalTypeError{Value: "number", Type: v.Type(), Offset: int64(d.readIndex())})
+        case reflect.Interface:
+            n, err := d.convertNumber(s)
+            if err != nil {
+                d.saveError(err)
+                break
+            }
+            if v.NumMethod() != 0 {
+                d.saveError(&UnmarshalTypeError{Value: "number", Type: v.Type(), Offset: int64(d.readIndex())})
+                break
+            }
+            v.Set(reflect.ValueOf(n))
+
+        case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+            n, err := strconv.ParseInt(s, 10, 64)
+            if err != nil || v.OverflowInt(n) {
+                d.saveError(&UnmarshalTypeError{Value: "number " + s, Type: v.Type(), Offset: int64(d.readIndex())})
+                break
+            }
+            v.SetInt(n)
+
+        case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
+            n, err := strconv.ParseUint(s, 10, 64)
+            if err != nil || v.OverflowUint(n) {
+                d.saveError(&UnmarshalTypeError{Value: "number " + s, Type: v.Type(), Offset: int64(d.readIndex())})
+                break
+            }
+            v.SetUint(n)
+
+        case reflect.Float32, reflect.Float64:
+            n, err := strconv.ParseFloat(s, v.Type().Bits())
+            if err != nil || v.OverflowFloat(n) {
+                d.saveError(&UnmarshalTypeError{Value: "number " + s, Type: v.Type(), Offset: int64(d.readIndex())})
+                break
+            }
+            v.SetFloat(n)
+        }
+    }
+    return nil
+}
+它会先判断 当前要映射的对象是否实现了 json.Unmarshaler接口和encoding.TextUnmarshaler接口，如果实现了前者，则直接调用前者的方法，否则，如果实现了后者，则针对引号开头的(quotedjson)，会调用其UnmarshalText方法，也就是我们之前实现的自定义方法。
+
+这里看到了为什么我们可以扩展，那为啥开始我们直接把字符串unmarshal到实现了UnmarshalText的对象上会报错呢？
+
+我们在自定义方法里进行unmarshal的时候，这时候要解析的json是一段正常的json，而非quotedjson了，因此走的是decodeState的object方法:
+
+Copy
+// object consumes an object from d.data[d.off-1:], decoding into v.
+// The first byte ('{') of the object has been read already.
+func (d *decodeState) object(v reflect.Value) error {
+    // Check for unmarshaler.
+    u, ut, pv := indirect(v, false)
+    if u != nil {
+        start := d.readIndex()
+        d.skip()
+        return u.UnmarshalJSON(d.data[start:d.off])
+    }
+    if ut != nil {
+        d.saveError(&UnmarshalTypeError{Value: "object", Type: v.Type(), Offset: int64(d.off)})
+        d.skip()
+        return nil
+    }
+    ...//略去一堆
+}
+上面可以看出，针对obj的情况，若是实现了encoding.TextUnmarshaler接口，则直接返回错误了。

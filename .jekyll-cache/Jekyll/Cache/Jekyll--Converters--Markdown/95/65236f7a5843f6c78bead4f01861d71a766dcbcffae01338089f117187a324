@@ -1,0 +1,647 @@
+I"Q<p>https://github.com/unknwon/gcblog/blob/master/content/04-go-caller.md</p>
+
+<p>Go 语言 runtime 包的 runtime.Caller / runtime.Callers / runtime.FuncForPC 等几个函数提供了获取函数调用者信息的方法.</p>
+
+<p>这几个函数的文档链接:</p>
+
+<p>http://golang.org/pkg/runtime/#Caller
+http://golang.org/pkg/runtime/#Callers
+http://golang.org/pkg/runtime/#FuncForPC</p>
+
+<p>func Caller(skip int) (pc uintptr, file string, line int, ok bool)
+   参数：skip是要提升的堆栈帧数，0-当前函数，1-上一层函数，….
+    返回值：
+      pc是uintptr这个返回的是函数指针
+      file是函数所在文件名目录
+      line所在行号
+     ok 是否可以获取到信息
+     
+func runtime.Callers(skip int, pc []uintptr) int
+runtime.Callers 函数和 runtime.Caller 函数虽然名字相似(多一个后缀s), 但是函数的参数/返回值和参数的意义都有很大的差异.</p>
+
+<p>runtime.Callers 把调用它的函数Go程栈上的程序计数器填入切片 pc 中. 参数 skip 为开始在 pc 中记录之前所要跳过的栈帧数, 若为 0 则表示 runtime.Callers 自身的栈帧, 若为 1 则表示调用者的栈帧. 该函数返回写入到 pc 切片中的项数(受切片的容量限制).</p>
+
+<p>下面是 runtime.Callers 的例子, 用于输出每个栈帧的 pc 信息:</p>
+
+<p>func main() {
+	pc := make([]uintptr, 1024)
+	for skip := 0; ; skip++ {
+		n := runtime.Callers(skip, pc)
+		if n &lt;= 0 {
+			break
+		}
+		fmt.Printf(“skip = %v, pc = %v\n”, skip, pc[:n])
+	}
+	// Output:
+	// skip = 0, pc = [4304486 4198562 4280114 4289760]
+	// skip = 1, pc = [4198562 4280114 4289760]
+	// skip = 2, pc = [4280114 4289760]
+	// skip = 3, pc = [4289760]
+}</p>
+
+<p>runtime.FuncForPC 的用途
+函数的签名如下:</p>
+
+<p>func runtime.FuncForPC(pc uintptr) *runtime.Func
+func (f *runtime.Func) FileLine(pc uintptr) (file string, line int)
+func (f *runtime.Func) Entry() uintptr
+func (f *runtime.Func) Name() string
+其中 runtime.FuncForPC 返回包含给定 pc 地址的函数, 如果是无效 pc 则返回 nil .</p>
+
+<p>runtime.Func.FileLine 返回与 pc 对应的源码文件名和行号. 安装文档的说明, 如果pc不在函数帧范围内, 则结果是不确定的.</p>
+
+<p>runtime.Func.Entry 对应函数的地址. runtime.Func.Name 返回该函数的名称.
+<!-- more -->
+package main</p>
+
+<p>import (
+	“fmt”
+	“runtime”
+)</p>
+
+<p>func main() {
+	for i := 0 ; i&lt; 4; i++ {
+		test(i)
+	}
+}</p>
+
+<p>func test(skip int) {
+	call(skip)
+}</p>
+
+<p>func call(skip int) {
+	pc,file,line,ok := runtime.Caller(skip)
+	pcName := runtime.FuncForPC(pc).Name()  //获取函数名
+	fmt.Println(fmt.Sprintf(“%v   %s   %d   %t   %s”,pc,file,line,ok,pcName))
+}
+结果：</p>
+
+<p>4887700   D:/GoProject/src /test/test5.go   19   true   main.call</p>
+
+<p>4887585   D:/GoProject/src/ test/test5.go   15   true   main.test</p>
+
+<p>4887481   D:/GoProject/src /test/test5.go   10   true   main.main</p>
+
+<p>4383501   C:/Go/src/runtime/proc.go   198   true   runtime.main</p>
+
+<p>runtime.FuncForPC 直接从函数指针获取函数名称所属文件
+package main</p>
+
+<p>import (
+    “log”
+    “reflect”
+    “runtime”
+)</p>
+
+<p>type Demo struct {
+}</p>
+
+<p>func (this *Demo) Hello() {</p>
+
+<p>}</p>
+
+<p>func main() {
+    demo := new(Demo)
+    pc := reflect.ValueOf(demo.Hello).Pointer()
+    f := runtime.FuncForPC(pc)
+    log.Println(f.Name())
+    log.Println(f.FileLine(pc))
+}</p>
+
+<p>2019/12/02 16:46:49 main.(*Demo).Hello-fm
+2019/12/02 16:46:49 /Users/didi/goLang/src/github.com/xiazemin/Caller/FuncForPC/main.go 18</p>
+
+<p>如何在Go的函数中得到调用者函数名?
+最简单的方式就是硬编码。 因为在编译之前，我们肯定知道打印的时候所在哪个函数，但是更好的方式是编写一个通用的函数，比如下面的例子：
+package main
+import (
+	“fmt”
+	“runtime”
+)
+func main() {
+	Foo()
+}
+func Foo() {
+	fmt.Printf(“我是 %s, 谁在调用我?\n”, printMyName())
+	Bar()
+}
+func Bar() {
+	fmt.Printf(“我是 %s, 谁又在调用我?\n”, printMyName())
+}
+func printMyName() string {
+	pc, _, _, _ := runtime.Caller(1)
+	return runtime.FuncForPC(pc).Name()
+}
+输出结果:
+我是 main.Foo, 谁在调用我?
+我是 main.Bar, 谁又在调用我?
+可以看到函数在被调用的时候，printMyName把函数本身的名字打印出来了，注意这里Caller的参数是1, 因为我们将业务代码封装成了一个函数。</p>
+
+<p>首先打印函数调用者的名称
+将上面的代码修改一下，增加一个新的printCallerName的函数，可以打印调用者的名称。
+func main() {
+	Foo()
+}
+func Foo() {
+	fmt.Printf(“我是 %s, %s 在调用我!\n”, printMyName(), printCallerName())
+	Bar()
+}
+func Bar() {
+	fmt.Printf(“我是 %s, %s 又在调用我!\n”, printMyName(), printCallerName())
+}
+func printMyName() string {
+	pc, _, _, _ := runtime.Caller(1)
+	return runtime.FuncForPC(pc).Name()
+}
+func printCallerName() string {
+	pc, _, _, _ := runtime.Caller(2)
+	return runtime.FuncForPC(pc).Name()
+}
+相关函数介绍
+你可以通过runtime.Caller、runtime.Callers、runtime.FuncForPC等函数更详细的跟踪函数的调用堆栈。</p>
+
+<p>func Caller(skip int) (pc uintptr, file string, line int, ok bool)
+Caller可以返回函数调用栈的某一层的程序计数器、文件信息、行号。</p>
+
+<p>0 代表当前函数，也是调用runtime.Caller的函数。1 代表上一层调用者，以此类推。</p>
+
+<p>func Callers(skip int, pc []uintptr) int
+Callers用来返回调用站的程序计数器, 放到一个uintptr中。</p>
+
+<p>0 代表 Callers 本身，这和上面的Caller的参数的意义不一样，历史原因造成的。 1 才对应这上面的 0。</p>
+
+<p>比如在上面的例子中增加一个trace函数，被函数Bar调用。
+func Bar() {
+	fmt.Printf(“我是 %s, %s 又在调用我!\n”, printMyName(), printCallerName())
+	trace()
+}
+func trace() {
+	pc := make([]uintptr, 10) // at least 1 entry needed
+	n := runtime.Callers(0, pc)
+	for i := 0; i &lt; n; i++ {
+		f := runtime.FuncForPC(pc[i])
+		file, line := f.FileLine(pc[i])
+		fmt.Printf(“%s:%d %s\n”, file, line, f.Name())
+	}
+}
+输出结果可以看到这个goroutine的整个栈都打印出来了：
+/usr/local/go/src/runtime/extern.go:218 runtime.Callers
+/Users/yuepan/go/src/git.intra.weibo.com/platform/tool/g/main.go:34 main.trace
+/Users/yuepan/go/src/git.intra.weibo.com/platform/tool/g/main.go:20 main.Bar
+/Users/yuepan/go/src/git.intra.weibo.com/platform/tool/g/main.go:15 main.Foo
+/Users/yuepan/go/src/git.intra.weibo.com/platform/tool/g/main.go:10 main.main
+/usr/local/go/src/runtime/proc.go:210 runtime.main
+/usr/local/go/src/runtime/asm_amd64.s:1334 runtime.goexit
+func CallersFrames(callers []uintptr) *Frames
+上面的Callers只是或者栈的程序计数器，如果想获得整个栈的信息，可以使用CallersFrames函数，省去遍历调用FuncForPC。</p>
+
+<p>上面的trace函数可以更改为下面的方式：
+func trace2() {
+	pc := make([]uintptr, 10) // at least 1 entry needed
+	n := runtime.Callers(0, pc)
+	frames := runtime.CallersFrames(pc[:n])
+	for {
+		frame, more := frames.Next()
+		fmt.Printf(“%s:%d %s\n”, frame.File, frame.Line, frame.Function)
+		if !more {
+			break
+		}
+	}
+}
+func FuncForPC(pc uintptr) *Func
+FuncForPC 是一个有趣的函数， 它可以把程序计数器地址对应的函数的信息获取出来。如果因为内联程序计数器对应多个函数，它返回最外面的函数。</p>
+
+<p>它的返回值是一个<em>Func类型的值，通过</em>Func可以获得函数地址、文件行、函数名等信息。</p>
+
+<p>除了上面获取程序计数器的方式，也可以通过反射的方式获取函数的地址：
+runtime.FuncForPC(reflect.ValueOf(foo).Pointer()).Name()
+获取程序堆栈
+在程序panic的时候，一般会自动把堆栈打出来，如果你想在程序中获取堆栈信息，可以通过debug.PrintStack()打印出来。比如你在程序中遇到一个Error,但是不期望程序panic,只是想把堆栈信息打印出来以便跟踪调试，你可以使用debug.PrintStack()。</p>
+
+<p>抑或，你自己读取堆栈信息，自己处理和打印：
+func DumpStacks() {
+	buf := make([]byte, 16384)
+	buf = buf[:runtime.Stack(buf, true)]
+	fmt.Printf(“=== BEGIN goroutine stack dump ===\n%s\n=== END goroutine stack dump ===”, buf)
+}
+参考 调试利器：dump goroutine 的 stacktrace。</p>
+
+<p>利用堆栈信息还可以获取goroutine的id, 参考: 再谈谈获取 goroutine id 的方法
+func GoID() int {
+	var buf [64]byte
+	n := runtime.Stack(buf[:], false)
+	idField := strings.Fields(strings.TrimPrefix(string(buf[:n]), “goroutine “))[0]
+	id, err := strconv.Atoi(idField)
+	if err != nil {
+		panic(fmt.Sprintf(“cannot get goroutine id: %v”, err))
+	}
+	return id
+}</p>
+
+<p>目前没有找到不使用runtime包获取执行文件和行号的解决方案。既然官方的包很难有优化空间，那可以考虑一下业务侧有什么解决方案。于是查了一些github上比较知名的项目，学习了一下。</p>
+
+<p>beego ( https://github.com/astaxie/beego )
+作为国内知名度最高的go-web框架，想必是有可取之处。话不多说上代码：github.com/beego/bee/cmd/commands/generate/generate.go#L91</p>
+
+<p>记录文件名和行号的用法是这样的：</p>
+
+<p>beeLogger.Log.Debugf(“GOPATH: %s”, utils.FILE(), utils.LINE(), gopath)
+我们来看下utils.FILE()和utils.LINE()的实现：github.com/beego/bee/utils/utils.go#L252</p>
+
+<p>// <strong>FILE</strong> returns the file name in which the function was invoked</p>
+
+<p>func FILE() string {</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>_, file, _, _ := runtime.Caller(1)
+
+return file
+</code></pre></div></div>
+
+<p>}</p>
+
+<p>// <strong>LINE</strong> returns the line number at which the function was invoked</p>
+
+<p>func LINE() int {</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>_, _, line, _ := runtime.Caller(1)
+
+return line
+</code></pre></div></div>
+
+<p>}
+在同一需求场景下，FILE和LINE分别调用了一次能耗较高的runtime.Caller，这个其实一次就行。可能作者出于功能单一性原则硬是分成两个函数分别获取，但是这并不是我们想要的。下一个</p>
+
+<p>log （Google出品）
+官方写的日志组件，在log包里的，值得参考一下: /usr/local/go/src/log/log.go#L149</p>
+
+<p>func (l *Logger) Output(calldepth int, s string) error {</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>now := time.Now() // get this early.
+
+var file string
+
+var line int
+
+l.mu.Lock()
+
+defer l.mu.Unlock()
+
+if l.flag&amp;(Lshortfile|Llongfile) != 0 {
+
+    // Release lock while getting caller info - it's expensive.
+
+    l.mu.Unlock()
+
+    var ok bool
+
+    _, file, line, ok = runtime.Caller(calldepth)
+
+    if !ok {
+
+        file = "???"
+
+        line = 0
+
+    }
+
+    l.mu.Lock()
+
+}
+
+...
+
+return er
+</code></pre></div></div>
+
+<p>}
+注释里说明官方也是知道runtime.Caller性能有问题。这里的Logger里带有一个Mutex锁，方便在高并发或者多协程的时候保护上下文数据一致。</p>
+
+<p>这里值得借鉴的是并没有所有的日志都记录文件名和行号，而是添加了标记位flag，只有在需要的业务场景下(Lshortfile或者Llongfile )，才调用runtime.Caller，避免不必要的开支。</p>
+
+<p>另外一方面，在调用性能比较差的runtime.Caller之前，把锁释放，执行完毕后再把锁加上，继续处理自己后续的业务。这个可以避免锁的时间过长，影响其他业务。</p>
+
+<p>zap （uber出品 5565星 https://github.com/uber-go/zap ）
+敢以zap命名就可以看出官方的自信，从官方的benchmark数据来看，的确是算得上很快的：</p>
+
+<p>Log a message and 10 fields:</p>
+
+<table>
+  <tbody>
+    <tr>
+      <td>Package</td>
+      <td>Time</td>
+      <td>Objects Allocated</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>| :— | :—: | :—: |</p>
+
+<table>
+  <tbody>
+    <tr>
+      <td>zap</td>
+      <td>3131 ns/op</td>
+      <td>5 allocs/op</td>
+    </tr>
+  </tbody>
+</table>
+
+<table>
+  <tbody>
+    <tr>
+      <td>zap (sugared)</td>
+      <td>4173 ns/op</td>
+      <td>21 allocs/op</td>
+    </tr>
+  </tbody>
+</table>
+
+<table>
+  <tbody>
+    <tr>
+      <td>zerolog</td>
+      <td>16154 ns/op</td>
+      <td>90 allocs/op</td>
+    </tr>
+  </tbody>
+</table>
+
+<table>
+  <tbody>
+    <tr>
+      <td>lion</td>
+      <td>16341 ns/op</td>
+      <td>111 allocs/op</td>
+    </tr>
+  </tbody>
+</table>
+
+<table>
+  <tbody>
+    <tr>
+      <td>go-kit</td>
+      <td>17049 ns/op</td>
+      <td>126 allocs/op</td>
+    </tr>
+  </tbody>
+</table>
+
+<table>
+  <tbody>
+    <tr>
+      <td>logrus</td>
+      <td>23662 ns/op</td>
+      <td>142 allocs/op</td>
+    </tr>
+  </tbody>
+</table>
+
+<table>
+  <tbody>
+    <tr>
+      <td>log15</td>
+      <td>36351 ns/op</td>
+      <td>149 allocs/op</td>
+    </tr>
+  </tbody>
+</table>
+
+<table>
+  <tbody>
+    <tr>
+      <td>apex/log</td>
+      <td>42530 ns/op</td>
+      <td>126 allocs/op</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>看一下实现行号和文件名的代码：go.uber.org/zap/logger.go#L284</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>// Only do further annotation if we're going to write this message; checked
+
+// entries that exist only for terminal behavior don't benefit from
+
+// annotation.
+
+if !willWrite {
+
+    return ce
+
+}
+
+// Thread the error output through to the CheckedEntry.
+
+ce.ErrorOutput = log.errorOutput
+
+if log.addCaller {
+
+    ce.Entry.Caller = zapcore.NewEntryCaller(runtime.Caller(log.callerSkip + callerSkipOffset))
+
+    if !ce.Entry.Caller.Defined {
+
+        fmt.Fprintf(log.errorOutput, "%v Logger.check error: failed to get caller\n", time.Now().UTC())
+
+        log.errorOutput.Sync()
+
+    }
+
+} 它们将Caller信息放在CallerEntry.Entry.Caller结构里，并且和google类似，提供了标记位(addCaller)，只有在需要的场景下才会调用runtime.Caller.
+</code></pre></div></div>
+
+<p>值得一提的是，zap提供了Sugar和Desugar的模式，所谓Sugar就是提供程序员更友好方便的日志记录方式，但是牺牲了部分性能，核心就是Caller的skipCaller+2。Desugar就是个逆向的过程，可以将Sugared的结构再次回退到性能较高的原始模式，核心是Caller的callerSkip-2。两者可以在代码里面共同存在使用。</p>
+
+<p>Sugar和Desuagr的实现：</p>
+
+<p>//go.uber.org/zap/logger.go#L126</p>
+
+<p>func (log *Logger) Sugar() *SugaredLogger {</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>core := log.clone()
+
+core.callerSkip += 2
+
+return &amp;SugaredLogger{core}
+</code></pre></div></div>
+
+<p>}</p>
+
+<p>//go.uber.org/zap/sugar.go#L53</p>
+
+<p>func (s *SugaredLogger) Desugar() *Logger {</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>base := s.base.clone()
+
+base.callerSkip -= 2
+
+return base
+</code></pre></div></div>
+
+<p>}
+顺便在这里提一下受zap启发的zerolog项目( https://github.com/rs/zerolog )，zerolog更是将行号和文件名的开关提到了顶层位置，使用时需要手动触发(log.With().Caller())才会去调用Caller: github.com/rs/zerolog/event.go#L635</p>
+
+<p>//add file name and file line number to log</p>
+
+<p>log.Logger = log.With().Caller().Logger()</p>
+
+<p>log.Info().Msg(“hello world”)</p>
+
+<p>// Caller adds the file:line of the caller with the zerolog.CallerFieldName key.</p>
+
+<p>func (e *Event) Caller() *Event {</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>return e.caller(CallerSkipFrameCount)
+</code></pre></div></div>
+
+<p>}</p>
+
+<p>func (e *Event) caller(skip int) *Event {</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>if e == nil {
+
+    return e
+
+}
+
+_, file, line, ok := runtime.Caller(skip)
+
+if !ok {
+
+    return e
+
+}
+
+e.buf = enc.AppendString(enc.AppendKey(e.buf, CallerFieldName), file+":"+strconv.Itoa(line))
+
+return e
+</code></pre></div></div>
+
+<p>}
+logrus (9017星，github同类最多星 https://github.com/sirupsen/logrus)
+logrus作为GitHub上标星最多的golang日志组件，还是有必要研究一下的。</p>
+
+<p>首先看下核心Logger的结构：github.com/logrus/logger.go#L11</p>
+
+<p>type Logger struct {</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>// The logs are `io.Copy`'d to this in a mutex. It's common to set this to a
+
+// file, or leave it default which is `os.Stderr`. You can also set this to
+
+// something more adventurous, such as logging to Kafka.
+
+Out io.Write
+
+// Hooks for the logger instance. These allow firing events based on logging
+
+// levels and log entries. For example, to send errors to an error tracking
+
+// service, log to StatsD or dump the core on fatal errors.
+
+Hooks LevelHooks
+
+// All log entries pass through the formatter before logged to Out. The
+
+// included formatters are `TextFormatter` and `JSONFormatter` for which
+
+// TextFormatter is the default. In development (when a TTY is attached) it
+
+// logs with colors, but to a file it wouldn't. You can easily implement you
+
+// own that implements the `Formatter` interface, see the `README` or included
+
+// formatters for examples.
+
+Formatter Formatte
+
+
+
+// Flag for whether to log caller info (off by default)
+
+ReportCaller bool
+
+
+
+// The logging level the logger should log at. This is typically (and defaults
+
+// to) `logrus.Info`, which allows Info(), Warn(), Error() and Fatal() to be
+
+// logged.
+
+Level Level
+
+// Used to sync writing to the log. Locking is enabled by Default
+
+mu MutexWrap
+
+// Reusable empty entry
+
+entryPool sync.Pool
+
+// Function to exit the application, defaults to `os.Exit()`
+
+ExitFunc exitFunc
+</code></pre></div></div>
+
+<p>}
+同样的，标示位ReportCaller用于标识哪些场合需要去获取行号和文件名等信息。而这里提升性能的一种解决方案是使用资源池entryPool sync.Pool，当然这里的资源池不是说runtime.Caller之类的可以复用，而是空的entry实例。使用资源池后，为了避免竞争出问题，自然而然用上了mutex。</p>
+
+<p>值得一提的是这里的Hooks,用于特殊日志出现时执行相应的动作。于是我想到，在设计日志组件的时候，是否可以将需要打印文件名和行号的日志作为特殊日志，为这类特殊日志添加hook，hook里才会去运行runtime.Calle</p>
+
+<p>和上面几个组件不同的是，logrus使用的并不是runtime.Caller，而是获取runtime.Frame。 行号和文件名从Frame里获取: github.com/logrus/entry.go#L146</p>
+
+<p>// getCaller retrieves the name of the first non-logrus calling function</p>
+
+<p>func getCaller() *runtime.Frame {</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>// Restrict the lookback frames to avoid runaway lookups
+
+pcs := make([]uintptr, maximumCallerDepth)
+
+depth := runtime.Callers(minimumCallerDepth, pcs)
+
+frames := runtime.CallersFrames(pcs[:depth])
+
+// cache this package's fully-qualified name
+
+callerInitOnce.Do(func() {
+
+    logrusPackage = getPackageName(runtime.FuncForPC(pcs[0]).Name())
+
+    // now that we have the cache, we can skip a minimum count of known-logrus functions
+
+    // XXX this is dubious, the number of frames may vary store an entry in a logger interface
+
+    minimumCallerDepth = knownLogrusFrames
+
+})
+
+for f, again := frames.Next(); again; f, again = frames.Next() {
+
+    pkg := getPackageName(f.Function)
+
+    // If the caller isn't part of this package, we're done
+
+    if pkg != logrusPackage {
+
+        return &amp;f
+
+    }
+
+}
+
+// if we got here, we failed to find the caller's context
+
+return nil
+</code></pre></div></div>
+
+<p>}
+题外话：这里顺带也提一下刚刚看到的logrus的一个issue，个人感觉还是比较有意思的：https://github.com/sirupsen/logrus/issues/63</p>
+
+<p>这个issue是2014年提出，讲的是当时logrus还不支持文件名和行号。而这个issue出现的时候，logrus已经有4年历史了。</p>
+
+<p>不知道这是bug还是feature的程序员当时感觉世界都崩了，都4012年了，竟然还有不支持文件名和行号等stacktrace信息的日志组件。</p>
+
+<p>作者当时也是出于性能考虑，特别谨慎对待这一特性，迟迟不肯加入这个功能，更是希望有需求的开发者，自己在Hook内实现。</p>
+:ET

@@ -1,0 +1,512 @@
+I"�^<p>安装Devle
+　　安装Devle非常简单，直接运行go  get 即可：</p>
+
+<p>go get -u github.com/derekparker/delve/cmd/dlv
+　　如果你的go版本为1.5请先设置环境变量GO15VENDOREXPERIMENT=1再运行go get。我的go版本为1.10，不用设置。
+　　
+　　git clone https://github.com/go-delve/delve.git $GOPATH/src/github.com/go-delve/delve
+cd $GOPATH/src/github.com/go-delve/delve
+make install</p>
+
+<!-- more -->
+<p>使用Devle调试golang服务
+　　先写一个简单的web服务，然后使用Devle来进行调试。
+　　
+package main</p>
+
+<p>import (
+    “fmt”
+    “log”
+    “net/http”
+    “os”
+)</p>
+
+<p>const port  = “8000”</p>
+
+<p>func main() {
+    http.HandleFunc(“/hi”, hi)</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>fmt.Println("runing on port: " + port)
+log.Fatal(http.ListenAndServe(":" + port, nil)) }
+</code></pre></div></div>
+
+<p>func hi(w http.ResponseWriter, r *http.Request) {
+    hostName, _ := os.Hostname()
+    fmt.Fprintf(w, “HostName: %s”, hostName)
+}</p>
+
+<p>简单吧，一个运行在8000端口上的web服务，访问 hi会返回机器的名称。上面代码的行号是很有用的，等会我们打断点的时候会用到。</p>
+
+<p>　  使用Delve运行我们的main.go</p>
+
+<p>dlv debug ./main.go</p>
+
+<p>很简单的一些命令</p>
+
+<p>　　我们先打在main方法上打一个断点：</p>
+
+<p>b main.main</p>
+
+<p>然后运行c 来运行到断点，
+在func li  里打一个断点，我们可以使用</p>
+
+<p>b main.hi
+或者使用   “文件:行号”来打断点</p>
+
+<p>b /home/goworkspace/src/github.com/mytest/main.go:20</p>
+
+<p>现在执行continue 让服务跑起来。访问一下我们的服务，看hi方法会不会停下来。</p>
+
+<p>curl localhost:8000/hi
+　　看到了没，在19号停下来了。
+　　
+输入 n 回车，执行到下一行</p>
+
+<p>　　输入s 回车，单步执行</p>
+
+<p>　　输入 print（别名p）输出变量信息　　</p>
+
+<p>　　输入 args 打印出所有的方法参数信息</p>
+
+<p>　　输入 locals 打印所有的本地变量</p>
+
+<p>使用Delve附加到运行的golang服务进行调试
+ 　　先编译一下我们的main.go然后去行main</p>
+
+<p>go build main.go</p>
+
+<p>./main</p>
+
+<p>然后使用Delve附加到我们的项目上，先看一下我们的项目的pid</p>
+
+<table>
+  <tbody>
+    <tr>
+      <td>ps aux</td>
+      <td>grep main</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>或者
+$ lsof -i tcp:8000
+COMMAND   PID USER   FD   TYPE             DEVICE SIZE/OFF NODE NAME
+main    56267 didi    3u  IPv6 0xf6b535637660b19f      0t0  TCP *:irdmi (LISTEN)</p>
+
+<p>dlv attach 56267</p>
+
+<p>远程调试</p>
+
+<table>
+  <tbody>
+    <tr>
+      <td>在服务器上 ps x</td>
+      <td>grep game 查找到gameserver的进程pid</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>然后服务器命令行输入：
+dlv attach $PID –headless –api-version=2 –log –listen=:8181</p>
+
+<p>本机只要输入：</p>
+
+<p>dlv connect remote_ip:8181 连接到服务器上的dlv进程，就可以在本机远程调试了。</p>
+
+<p>goland调试
+<img src="https://xiazemin.github.io/MyBlog/img/goland_dlv.png" />
+dlv停止调试可以用ctrl+|</p>
+
+<p>dlv attach go程序
+dlv attach 7148 –headless –listen=:2345 –api-version=2 –accept-multiclient</p>
+
+<p>GoLand配置
+Main menu-&gt;Run-&gt;Edit Configurations…</p>
+
+<p>-&gt; Go Remote
+Host改成服务器ip</p>
+
+<p>Port: 2345</p>
+
+<p>保存 后 Debug go remote</p>
+
+<p>此时可以设置断点, 在 Variables 面板可以查看变量, 可以点击<strong>+增加Watch</strong></p>
+
+<p>终止dlv和go程序
+dlv不终止, 则 go程序也无法终止
+而dlv只能通过终止进程的方式终止掉</p>
+
+<p>kill -9 <code class="language-plaintext highlighter-rouge">ps -ef | grep "dlv|mytest" -E | awk '{print $2}'</code></p>
+
+<p>为build或install参数加入关闭编译器优化的参数 -gcflags “-N -l”。例如:</p>
+
+<p>go install -gcflags “-N -l” svc/gamesvc</p>
+
+<p>LiteIDE中的delve调试器配置
+选择调试器
+在LiteIDE菜单中选择 调试-&gt;debugger/delve</p>
+
+<p>delve环境变量设置
+这个时候, LiteIDE依然找不到delve, 因为它不在环境变量PATH中, 这里无需修改环境变量, 只需要LiteIDE的环境配置。在LiteIDE菜单中选择 查看-&gt;编辑当前环境, 在弹出的文档中修改</p>
+
+<p>PATH=c:\mingw32\bin;%GOROOT%\bin;%PATH%;c:\your\path\to\delve
+1
+去掉PATH前的注释#, 在%PATH%添加分号, 然后和你到delve调试器的路径</p>
+
+<p>goland是基于intellij IDEA推出的开发go的IDE，所以很多之前Intellij的使用习惯可以保留下来，实属developer的福音，今天遇到一个新的问题，就是我要调试远程服务器上的go代码，远程系统是ubuntu或者centos，总之是没有图形界面的，我想在本地调试该怎么办呢，答案是使用Delve 这个专门的调试工具。</p>
+
+<p>前提：本地代码和远程代码保持一致，否则可能出现断点语句跟预期不一致或莫名其妙的情况。可以在Intellij中使用经典的remote host access插件来dowload或者upload代码实现同步。因为比较简单，具体使用姿势自行探索。</p>
+
+<p>step1 远程主机
+安装delve，项目地址：https://github.com/derekparker/delve
+按照官方的提示安装即可（注意因为GFW等你懂得的原因，网络下载可能较慢或不可用，请自行使用某高科技软件，如ss+proxychains等工具）。</p>
+
+<p>下载并安装完成后输入dlv就会看到帮助信息：</p>
+
+<p>step2 本地
+本地进入IDE，在要调试的地方打上断点，然后
+run–debug–eidit configurations–&gt;添加remote主机信息。</p>
+
+<p>点debug 确认后，就会等待远端传回的debug信息。切远端：</p>
+
+<p>step3 远端
+如我要对 main.go 这个项目debug，对main进行编译后，可以直接运行
+dlv –listen=:2345 –headless=true –api-version=2 exec ./main
+然后本地就收到了调试信息。</p>
+
+<p>golang remote debug和docker debug
+有时候我么需要远程调试golang程序,比如我们在macos写的代码,但是有时在linux上运行的,所以我们需要远程调试运行在linux系统的代码。另外一种情况是我们可以把goalng打包到docker 镜像中,代码跑在容器中同样可以调试。以goland为例。</p>
+
+<p>remote debug
+远程调试golang代码需要在运行代码的远程机器上按照delve,然后以delve运行要调试的程序。</p>
+
+<p>编译
+   export CGO_ENABLED=0 GOOS=linux GOARCH=amd64
+   go build -gcflags=’all -N -l’ main.go
+install delve
+   go get go get -u github.com/derekparker/delve/cmd/dlv 
+delve 运行程序
+ dlv –listen=:2345 –headless=true –api-version=2 exec ./main
+goland 设置remote debug
+host为远程主机ip 端口是刚才dlv设置的端口</p>
+
+<p>debug
+然后就像调试本地代码一样调试远程主机上的程序</p>
+
+<p>dlv –listen=:2345 –headless=true –api-version=2 –accept-multiclient exec ./test1</p>
+
+<table>
+  <tbody>
+    <tr>
+      <td>在服务器上 ps x</td>
+      <td>grep game 查找到gameserver的进程pid</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>然后服务器命令行输入：
+dlv attach $PID –headless –api-version=2 –log –listen=:8181</p>
+
+<p>本机只要输入：</p>
+
+<p>dlv connect www.example.com:8181 连接到服务器上的dlv进程，就可以在本机远程调试了。</p>
+
+<p>需要注意的是</p>
+
+<p>本机quit 以后，远程dlv进程也会结束。
+本机没有dlv connect，远程dlv直接关闭会导致 远程调试进程PID直接退出（很是忧伤）
+本机dlv输入quit以后，会让你选择是否关闭调试进程，这个有时候也方便，不过大多数都是选择N 不关闭调试进程PID</p>
+
+<p>could not attach to pid 56267: open : no such file or directory</p>
+
+<p>问题
+Goland和Idea使用debug报错，如下：could not launch process: decoding dwarf section info at offset 0x0: too short。</p>
+
+<p>解决方法
+1,更新dlv</p>
+
+<p>go get -u github.com/derekparker/delve/cmd/dlv
+2.修改goland或idea配置
+更新后的div在$gopath路径下的bin文件夹下。</p>
+
+<p>替换到idea或goland的这个目录下</p>
+
+<p>Delve（dlv）无法附加到进程
+I’m getting this error back from dlv</p>
+
+<p>could not attach to pid 20727: decoding dwarf section info at offset 0x0: too short
+The binary is built in this way:</p>
+
+<p>go build -a -v -ldflags “-w -X main.gitCommit=<sha> -linkmode 'auto' -extldflags '-static'"
+Could you confirm that is the
+-w
+flag that cause the following issue? Does it strip the debug symbol?</sha></p>
+
+<p>After I’ve removed the -w flag delve was able to attach to the process</p>
+
+<p>$ sudo dlv attach 69291
+could not attach to pid 69291: open : no such file or directory</p>
+
+<p>https://stackoverflow.com/questions/54338111/delve-dlv-is-not-able-to-attach-to-the-process</p>
+
+<p>https://stackoverflow.com/questions/53621853/golang-dlv-unable-to-see-source-no-such-file-or-directory</p>
+
+<p>could not attach to pid: decoding dwarf section info at offset 0x0: too short</p>
+
+<p>第一次使用dlv attach，就碰到了这个莫名的问题。查了好多资料，都说是dlv版本太低，让更新dlv，，，试了，无果。
+终于在derekparker/delve的issue中的一个问题找到查错思路，go build的参数？
+查看编译命令：go build -o $(APP) -x -ldflags “-w -s”
+参数中-ldflags “-w -s”含义：</p>
+
+<p>-ldflags ‘flag list’
+    ‘-s -w’: 压缩编译后的体积
+    -s: 去掉符号表
+    -w: 去掉调试信息，不能gdb调试了</p>
+
+<p>去掉了-ldflags “-w -s”后重新编包，问题解决。</p>
+
+<p>gdb是强大的调试工具。但对于golang程序来说，delve是个更好的选择，它能更好地理解Go runtime, data structures, and expressions，尤其是goroutine。</p>
+
+<p>以下描述引用自Debugging Go Code with GDB【1】</p>
+
+<p>Note that Delve is a better alternative to GDB when debugging Go programs built with the standard toolchain. It understands the Go runtime, data structures, and expressions better than GDB. Delve currently supports Linux, OSX, and Windows on amd64. For the most up-to-date list of supported platforms, please see the Delve documentation.</p>
+
+<p>GDB does not understand Go programs well. The stack management, threading, and runtime contain aspects that differ enough from the execution model GDB expects that they can confuse the debugger and cause incorrect results even when the program is compiled with gccgo. As a consequence, although GDB can be useful in some situations (e.g., debugging Cgo code, or debugging the runtime itself), it is not a reliable debugger for Go programs, particularly heavily concurrent ones. Moreover, it is not a priority for the Go project to address these issues, which are difficult.</p>
+
+<p>Delve is a debugger for the Go programming language【2】.</p>
+
+<p>安装
+安装过程参考https://github.com/go-delve/delve/tree/master/Documentation/installation</p>
+
+<p>安装好后，可以查看版本</p>
+
+<p>➜  _posts dlv version
+Delve Debugger
+Version: 1.1.0
+Build: $Id: 1990ba12450cab9425a2ae62e6ab988725023d5c
+调试方法
+dlv提供了多种调试命令，如debug、exec、attach、core等，具体见官网文档或help信息。接下介绍常用的几种。</p>
+
+<p>dlv debug
+这是一个代码工程实例, 位于目录GoWorks/GoDbg。</p>
+
+<p>image</p>
+
+<p>如果位于工程目录下，可以dlv debug开始调试；
+也可以指定目录，dlv debug GoWorks/GoDbg;
+如果要传入参数，添加–后指定， 如dlv debug GoWorks/GoDbg – -arg1 value
+➜  GoDbg dlv debug GoWorks/GoDbg
+Type ‘help’ for list of commands.
+(dlv) break main.main
+Breakpoint 1 set at 0x1089f6b for main.main() ./main.go:7
+(dlv) continue</p>
+<blockquote>
+  <p>main.main() ./main.go:7 (hits goroutine(1):1 total:1) (PC: 0x1089f6b)
+     2:	import (
+     3:		“GoWorks/GoDbg/mylib”
+     4:		“fmt”
+     5:		“os”
+     6:	)
+=&gt;   7:	func main() {
+     8:		fmt.Println(“Golang dbg test…”)
+     9:		var argc = len(os.Args)
+    10:		var argv = append([]string{}, os.Args…)
+    11:		fmt.Printf(“argc:%d\n”, argc)
+    12:		fmt.Printf(“argv:%v\n”, argv)
+(dlv) next
+main.main() ./main.go:8 (PC: 0x1089f82)
+     3:		“GoWorks/GoDbg/mylib”
+     4:		“fmt”
+     5:		“os”
+     6:	)
+     7:	func main() {
+=&gt;   8:		fmt.Println(“Golang dbg test…”)
+     9:		var argc = len(os.Args)
+    10:		var argv = append([]string{}, os.Args…)
+    11:		fmt.Printf(“argc:%d\n”, argc)
+    12:		fmt.Printf(“argv:%v\n”, argv)
+    13:		var var1 = 1
+具体有哪些debug命令，可以help来查看，与gdb的很类似，goroutine/goroutines的是dlv中特有的。</p>
+</blockquote>
+
+<p>(dlv) help
+The following commands are available:
+    args ———————— Print function arguments.
+    break (alias: b) ———— Sets a breakpoint.
+    breakpoints (alias: bp) —– Print out info for active breakpoints.
+    call ———————— Resumes process, injecting a function call (EXPERIMENTAL!!!)
+    clear ———————– Deletes breakpoint.
+    clearall ——————– Deletes multiple breakpoints.
+    condition (alias: cond) —– Set breakpoint condition.
+    config ———————- Changes configuration parameters.
+    continue (alias: c) ——— Run until breakpoint or program termination.   // 继续运行
+    deferred ——————– Executes command in the context of a deferred call.
+    disassemble (alias: disass) - Disassembler.
+    down ———————— Move the current frame down.
+    edit (alias: ed) ———— Open where you are in $DELVE_EDITOR or $EDITOR
+    exit (alias: quit | q) —— Exit the debugger.
+    frame ———————– Set the current frame, or execute command on a different frame.
+    funcs ———————– Print list of functions.
+    goroutine (alias: gr) ——- Shows or changes current goroutine
+    goroutines (alias: grs) —– List program goroutines.
+    help (alias: h) ————- Prints the help message.
+    libraries ——————- List loaded dynamic libraries
+    list (alias: ls | l) ——– Show source code.    // 显示代码
+    locals ———————- Print local variables.
+    next (alias: n) ————- Step over to next source line.  // 单步下一句
+    on ————————– Executes a command when a breakpoint is hit.
+    print (alias: p) ———— Evaluate an expression.
+    regs ———————— Print contents of CPU registers.
+    restart (alias: r) ———- Restart process.
+    set ————————- Changes the value of a variable.
+    source ———————- Executes a file containing a list of delve commands
+    sources ——————— Print list of source files.
+    stack (alias: bt) ———– Print stack trace.
+    step (alias: s) ————- Single step through program.  // 进入函数内,单步下一句
+    step-instruction (alias: si)  Single step a single cpu instruction.
+    stepout (alias: so) ——— Step out of the current function.
+    thread (alias: tr) ———- Switch to the specified thread.
+    threads ——————— Print out info for every traced thread.
+    trace (alias: t) ———— Set tracepoint.
+    types ———————– Print list of types
+    up ————————– Move the current frame up.
+    vars ———————— Print package variables.
+    whatis ———————- Prints type of an expression.
+Type help followed by a command for full documentation.
+dlv exec
+Execute a precompiled binary, and begin a debug session.</p>
+
+<p>➜  file ./main
+./main: Mach-O 64-bit executable x86_64
+➜  dlv exec ./main
+Type ‘help’ for list of commands.
+(dlv)
+dlv attach
+Attach to running process and begin debugging.</p>
+
+<p>注意：在退出时，有可选是否要kill该进程。</p>
+
+<p>[root@yg-man-uhost-set9-01 ~]# dlv attach 22063
+Type ‘help’ for list of commands.
+(dlv) q
+Would you like to kill the process? [Y/n] n
+dlv core
+Examine a core dump.</p>
+
+<p>注意：dlv不支持生成core，可以通过gdb attach上去后，执行gcore来生成core；然后再dlv core来调试。</p>
+
+<p>线上调试的例子
+排查过程
+线上一个服务出现了问题，看日志是一个接口的程序跑了一半，后面不再执行下去了。</p>
+
+<p>dlv attach上去后，看到有很多.runtime_SemacquireMutex这个的goroutine，一直卡着。</p>
+
+<p>Goroutine 28232679 - User: /usr/local/go/src/runtime/sema.go:62 sync.runtime_SemacquireMutex (0x43cb74)
+Goroutine 28232684 - User: /Users/patrick.xu/go/src/uframework/task/tcp_task.go:84 uframework/task.(<em>TCPTask).Run (0x6ce8cc)
+Goroutine 28232685 - User: /usr/local/go/src/runtime/sema.go:62 sync.runtime_SemacquireMutex (0x43cb74)
+Goroutine 28232686 - User: /usr/local/go/src/runtime/sema.go:62 sync.runtime_SemacquireMutex (0x43cb74)
+Goroutine 28232688 - User: /Users/patrick.xu/go/src/uframework/task/tcp_task.go:84 uframework/task.(</em>TCPTask).Run (0x6ce8cc)
+Goroutine 28232704 - User: /Users/patrick.xu/go/src/uframework/task/tcp_task.go:84 uframework/task.(<em>TCPTask).Run (0x6ce8cc)
+Goroutine 28232705 - User: /usr/local/go/src/runtime/sema.go:62 sync.runtime_SemacquireMutex (0x43cb74)
+Goroutine 28232710 - User: /Users/patrick.xu/go/src/uframework/task/tcp_task.go:84 uframework/task.(</em>TCPTask).Run (0x6ce8cc)
+Goroutine 28232714 - User: /Users/patrick.xu/go/src/uframework/task/tcp_task.go:84 uframework/task.(<em>TCPTask).Run (0x6ce8cc)
+Goroutine 28232715 - User: /usr/local/go/src/runtime/sema.go:62 sync.runtime_SemacquireMutex (0x43cb74)
+Goroutine 28232718 - User: /Users/patrick.xu/go/src/uframework/task/tcp_task.go:84 uframework/task.(</em>TCPTask).Run (0x6ce8cc)
+Goroutine 28232719 - User: /usr/local/go/src/runtime/sema.go:62 sync.runtime_SemacquireMutex (0x43cb74)
+Goroutine 28232721 - User: /usr/local/go/src/runtime/sema.go:62 sync.runtime_SemacquireMutex (0x43cb74)
+Goroutine 28232726 - User: /Users/patrick.xu/go/src/uframework/task/tcp_task.go:84 uframework/task.(<em>TCPTask).Run (0x6ce8cc)
+Goroutine 28232727 - User: /usr/local/go/src/runtime/sema.go:62 sync.runtime_SemacquireMutex (0x43cb74)
+Goroutine 28232939 - User: /Users/patrick.xu/go/src/uframework/task/tcp_task.go:84 uframework/task.(</em>TCPTask).Run (0x6ce8cc)
+Goroutine 28232940 - User: /usr/local/go/src/runtime/sema.go:62 sync.runtime_SemacquireMutex (0x43cb74)
+Goroutine 28239464 - User: /Users/patrick.xu/go/src/uframework/task/tcp_task.go:84 uframework/task.(<em>TCPTask).Run (0x6ce8cc)
+Goroutine 28239465 - User: /usr/local/go/src/runtime/sema.go:62 sync.runtime_SemacquireMutex (0x43cb74)
+Goroutine 28239914 - User: /Users/patrick.xu/go/src/uframework/task/tcp_task.go:84 uframework/task.(</em>TCPTask).Run (0x6ce8cc)
+Goroutine 28239915 - User: /usr/local/go/src/runtime/sema.go:62 sync.runtime_SemacquireMutex (0x43cb74)
+Goroutine 28239938 - User: /Users/patrick.xu/go/src/uframework/task/tcp_task.go:84 uframework/task.(<em>TCPTask).Run (0x6ce8cc)
+Goroutine 28239939 - User: /usr/local/go/src/runtime/sema.go:62 sync.runtime_SemacquireMutex (0x43cb74)
+Goroutine 28239965 - User: /Users/patrick.xu/go/src/uframework/task/tcp_task.go:84 uframework/task.(</em>TCPTask).Run (0x6ce8cc)
+Goroutine 28239966 - User: /usr/local/go/src/runtime/sema.go:62 sync.runtime_SemacquireMutex (0x43cb74)
+Goroutine 28239968 - User: /Users/patrick.xu/go/src/uframework/task/tcp_task.go:84 uframework/task.(<em>TCPTask).Run (0x6ce8cc)
+Goroutine 28239984 - User: /Users/patrick.xu/go/src/uframework/task/tcp_task.go:84 uframework/task.(</em>TCPTask).Run (0x6ce8cc)
+Goroutine 28239985 - User: /usr/local/go/src/runtime/sema.go:62 sync.runtime_SemacquireMutex (0x43cb74)
+Goroutine 28240001 - User: /usr/local/go/src/runtime/sema.go:62 sync.runtime_SemacquireMutex (0x43cb74)
+Goroutine 28240961 - User: /Users/patrick.xu/go/src/uframework/log/logext.go:281 uframework/log.RealWrite (0x6bff2d)
+Goroutine 28241103 - User: /Users/patrick.xu/go/src/uframework/utils/zookeeper/zk/conn.go:515 uframework/utils/zookeeper/zk.(<em>Conn).sendLoop (0x7c7835)
+Goroutine 28241104 - User: /usr/local/go/src/runtime/netpoll.go:164 net.runtime_pollWait (0x426ec9)
+Goroutine 28241126 - User: /usr/local/go/src/runtime/sema.go:47 sync.runtime_Semacquire (0x43ca94)
+看这个goroutine卡在了0x000000000046c45d in sync.(</em>Mutex).Lock，对应业务代码uhost-go/uhost-scheduler/logic.updateBuffer。</p>
+
+<p>(dlv) gr 28239985
+Switched from 28241159 to 28239985 (thread 31788)
+(dlv) bt
+0  0x000000000042c76a in runtime.gopark
+   at /usr/local/go/src/runtime/proc.go:272
+1  0x000000000042c84e in runtime.goparkunlock
+   at /usr/local/go/src/runtime/proc.go:277
+2  0x000000000043ce91 in runtime.semacquire
+   at /usr/local/go/src/runtime/sema.go:130
+3  0x000000000043cb74 in sync.runtime_SemacquireMutex
+   at /usr/local/go/src/runtime/sema.go:62
+4  0x000000000046c45d in sync.(<em>Mutex).Lock
+   at /usr/local/go/src/sync/mutex.go:87
+5  0x0000000000817b1d in uhost-go/uhost-scheduler/logic.updateBuffer
+   at /Users/patrick.xu/go/src/uhost-go/uhost-scheduler/logic/get_suitable_resource.go:418
+6  0x0000000000814bd7 in uhost-go/uhost-scheduler/logic.getSuitableResource
+   at /Users/patrick.xu/go/src/uhost-go/uhost-scheduler/logic/get_suitable_resource.go:328
+7  0x00000000006cecd4 in uframework/task.TCPTaskFunc.ServeTCP
+   at /Users/patrick.xu/go/src/uframework/task/tcp_task_handle.go:27
+8  0x00000000006d02b8 in uframework/task.(</em>TCPTask).Run.func1
+   at /Users/patrick.xu/go/src/uframework/task/tcp_task.go:66
+9  0x0000000000458dd1 in runtime.goexit
+   at /usr/local/go/src/runtime/asm_amd64.s:2197
+再去看业务代码， frame 5 list</p>
+
+<p>(dlv) frame 5 list
+Goroutine 28239985 frame 5 at /Users/patrick.xu/go/src/uhost-go/uhost-scheduler/logic/get_suitable_resource.go:418 (PC: 0x817b1d)
+Command failed: open /Users/patrick.xu/go/src/uhost-go/uhost-scheduler/logic/get_suitable_resource.go: no such file or directory
+由于线上没有源代码，提示文件不存在。到本地查看这行的代码。
+image</p>
+
+<p>定位到这行后，再结合业务逻辑去分析，就能定位到是哪里问题，造成了这里的死锁。</p>
+
+<p>最后退出来后，注意向上代码别重启。</p>
+
+<p>(dlv) q
+Would you like to kill the process? [Y/n] n
+和gdb的对比
+gdb能看出的信息有限，只能定位到线程这个层面，无法到goroutine这一层，很难定位出问题。</p>
+
+<p>(gdb) info threads</p>
+<ul>
+  <li>1 process 10732  runtime.epollwait () at /usr/local/go/src/runtime/sys_linux_amd64.s:560
+(gdb) thread apply all bt</li>
+</ul>
+
+<p>Thread 1 (process 10732):
+#0  runtime.epollwait () at /usr/local/go/src/runtime/sys_linux_amd64.s:560
+#1  0x00000000004280d1 in runtime.netpoll (block=true, ~r1=0x1) at /usr/local/go/src/runtime/netpoll_epoll.go:67
+#2  0x0000000000430f8f in runtime.findrunnable (gp#10=0xc42001c000, inheritTime=false) at /usr/local/go/src/runtime/proc.go:2084
+#3  0x0000000000431aec in runtime.schedule () at /usr/local/go/src/runtime/proc.go:2222
+#4  0x0000000000431deb in runtime.park_m (gp=0xc4200011e0) at /usr/local/go/src/runtime/proc.go:2285
+#5  0x000000000045626b in runtime.mcall () at /usr/local/go/src/runtime/asm_amd64.s:269
+#6  0x0000000000cebd00 in runtime.work ()
+#7  0x00007ffe3162bc70 in ?? ()
+#8  0x0000000000cebd80 in runtime.work ()
+#9  0x00007ffe3162bc60 in ?? ()
+#10 0x000000000042f0e4 in runtime.mstart () at /usr/local/go/src/runtime/proc.go:1149
+#11 0x00000000004560d9 in runtime.rt0_go () at /usr/local/go/src/runtime/asm_amd64.s:169
+#12 0x0000000000000009 in ?? ()
+#13 0x00007ffe3162bca8 in ?? ()
+#14 0x0000000000000009 in ?? ()
+#15 0x00007ffe3162bca8 in ?? ()
+#16 0x0000000000000000 in ?? ()
+但可以用gdb产生core，采集一些现场信息，然后重启尽快恢复业务，事后再用dlv分析core来定位原因。</p>
+
+<p>参考链接
+Debugging Go Code with GDB
+go-delve/delve
+Golang程序调试工具介绍(gdb vs dlv)
+实战分析一个运行起来会卡死的Go程序</p>
+
+<p>https://xusenqi.github.io/2019/08/25/%E9%80%9A%E8%BF%87delve-dlv-%E8%B0%83%E8%AF%95golang%E7%A8%8B%E5%BA%8F/</p>
+:ET

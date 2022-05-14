@@ -1,0 +1,69 @@
+---
+title: import
+layout: post
+category: golang
+author: 夏泽民
+---
+https://github.com/baixiaoustc/go_code_analysis
+https://studygolang.com/articles/19607?fr=sidebar
+
+使用golang提供的静态编译工具链
+我们依赖了如下三个golang工具链：
+
+"golang.org/x/tools/go/loader"
+"golang.org/x/tools/go/pointer"
+"golang.org/x/tools/go/ssa"
+go/loader
+Package loader loads a complete Go program from source code, parsing and type-checking the initial packages plus their transitive closure of dependencies. The ASTs and the derived facts are retained for later use.
+
+这个包的官方定义如上，大意是指从源代码加载整个项目，解析代码并作类型校验，分析package之间的依赖关系，返回ASTs和衍生的关系。
+
+go/ssa
+Package ssa defines a representation of the elements of Go programs (packages, types, functions, variables and constants) using a static single-assignment (SSA) form intermediate representation (IR) for the bodies of functions.
+
+SSA(Static Single Assignment，静态单赋值），是源代码和机器码中间的表现形式。从AST转换到SSA之后，编译器会进行一系列的优化。这些优化被应用于代码的特定阶段使得处理器能够更简单和快速地执行。
+
+go/pointer
+Package pointer implements Andersen's analysis, an inclusion-based pointer analysis algorithm first described in (Andersen, 1994).
+
+指针分析是一类特殊的数据流问题，它是其它静态程序分析的基础。算法最终建立各节点间的指向关系，具体可以参考文章Anderson's pointer analysis。
+
+
+<!-- more -->
+https://blog.csdn.net/dashuniuniu/article/details/78704741
+
+https://blog.csdn.net/majestyhao/article/details/49961585
+
+https://www.seas.harvard.edu/courses/cs252/2011sp/slides/Lec06-PointerAnalysis.pdf
+
+golang中如何通过包的importpath定位源码目录
+
+http://zhongpan.tech/2019/10/09/015-find-code-dir-from-package-importpath/
+详解go/build.Context.Import过程
+func (ctxt *Context) Import(path string, srcDir string, mode ImportMode)
+path：模块的Path或包的ImportPath
+srcDir：当前工程的源码路径，下面会讲在哪些情况会用到
+mode：FindOnly，AllowBinary，ImportComment，IgnoreVendor
+Import的主要过程如下：
+
+如果为本地包，也就是path为相对路径，相对的正是srcDir，这时先根据srcDir得到绝对路径，然后根据此绝对路径依次在GOROOT/src和GOPATH/src中寻找，绝对路径必须为其子目录，找到第一个符合即Import返回找到包，这种情况下srcDir不能为空，最后p.Dir的结果是Join(srcDir, path)
+
+如果非本地包：
+
+首先针对module尝试使用go list命令获取包信息，这时有一系列限制条件，具体见上文，其中需要判断srcDir不在GOROOT/src和GOPATH/src下且其路径上有go.mod文件，所以srcDir为空则直接寻找失败继续下一步，否则执行go list，命令的当前路径为srcDir，srcDir必须为module的路径，类似如下命令，如果成功则Import返回找到包，最后p.Dir的结果是go list返回的Dir
+{% raw %}
+go list -f {{.Dir}} path
+然后尝试在vendor目录中寻找，这时srcDir也不能为空，使用srcDir依次在GOROOT/src和GOPATH/src中寻找，srcDir必须为其子目录，找到第一个符合即Import返回找到包，最后p.Dir的结果是Join(Abs(srcDir), “vendor”, path)，否则下一步
+
+然后尝试在GOROOT/src中寻找，成功则Import返回找到包，p.Dir的结果为Join(GOROOT, “src”, path)，否则下一步
+
+然后尝试依次在所有GOPATH/src中寻找，找到第一个符合即Import返回找到包，p.Dir的结果为Join(GOPATH, “src”, path)
+
+以上过程都没有定位成功则Import返回失败
+
+根据上述过程，srcDir在下述三种情况下起到重要作用，如果为空则会导致找不到包：
+
+本地包，此时path是相对srcDir的
+module，此时还需要srcDir不能在GOROOT/src或GOPATH/src中，且路径上包含go.mod文件，srcDir需要为此module的路径
+vendor目录中的包，此时path在Join(srcDir, “vendor”)目录下
+{% endraw %}

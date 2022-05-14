@@ -1,0 +1,106 @@
+---
+title: mac mysql 开启binlog
+layout: post
+category: storage
+author: 夏泽民
+---
+mysql -uroot -p1
+查询是否支持binlog, 如下OFF代表不支持
+mysql> show variables like 'log_bin';
++---------------+-------+
+| Variable_name | Value |
++---------------+-------+
+| log_bin       | OFF   |
++---------------+-------+
+1 row in set (0.00 sec)
+.查看my.cnf路径
+mysql --help --verbose | grep my.cnf
+/etc/my.cnf /etc/mysql/my.cnf /usr/local/mysql/etc/my.cnf ~/.my.cnf
+默认mac 没有my.cnf
+不要修改/usr/local/Cellar/mysql/5.7.13/support-files/my-default.cnf
+否则会导致mysqld启动失败，各种权限错误
+<!-- more -->
+新建文件my.cnf并添加如下内容
+# log_bin
+log-bin = mysql-bin #开启binlog
+binlog-format = ROW #选择row模式
+server_id = 1 #配置mysql replication需要定义，不能和canal的slaveId重复
+出现如下错误：
+eror: Found option without preceding group in config file: /Users/gukey/.my.cnf at line: 1
+说明不符合格式要求，修改my.cnf
+[client]
+socket=/usr/local/var/mysql/mysql.sock
+[mysqld]
+socket=/usr/local/var/mysql/mysql.sock
+# log_bin
+log-bin = mysql-bin #开启binlog
+binlog-format = ROW #选择row模式
+server_id = 1
+
+$/usr/local/Cellar/mysql/5.7.13/support-files/mysql.server start
+Starting MySQL
+. ERROR! The server quit without updating PID file (/usr/local/var/mysql/bogon.pid).
+
+$sudo /usr/local/Cellar/mysql/5.7.13/support-files/mysql.server start
+Password:
+Starting MySQL
+. SUCCESS!
+
+mysql>    show variables like '%log_bin%';
++---------------------------------+--------------------------------------+
+| Variable_name                   | Value                                |
++---------------------------------+--------------------------------------+
+| log_bin                         | ON                                   |
+| log_bin_basename                | /usr/local/var/mysql/mysql-bin       |
+| log_bin_index                   | /usr/local/var/mysql/mysql-bin.index |
+| log_bin_trust_function_creators | OFF                                  |
+| log_bin_use_v1_row_events       | OFF                                  |
+| sql_log_bin                     | ON                                   |
++---------------------------------+--------------------------------------+
+6 rows in set (0.00 sec)
+
+$ls /usr/local/var/mysql/
+发现文件：	mysql-bin.000001
+至此已经成功
+
+查看：
+sudo mysqlbinlog -uroot -p12345678 /usr/local/var/mysql/mysql-bin.000001
+mysqlbinlog: [Warning] Using a password on the command line interface can be insecure.
+/*!50530 SET @@SESSION.PSEUDO_SLAVE_MODE=1*/;
+/*!50003 SET @OLD_COMPLETION_TYPE=@@COMPLETION_TYPE,COMPLETION_TYPE=0*/;
+DELIMITER /*!*/;
+# at 4
+#180927 21:18:07 server id 1  end_log_pos 123 CRC32 0xaa56c3a1 	Start: binlog v 4, server v 5.7.13-log created 180927 21:18:07 at startup
+# Warning: this binlog is either in use or was not closed properly.
+ROLLBACK/*!*/;
+BINLOG '
+j9isWw8BAAAAdwAAAHsAAAABAAQANS43LjEzLWxvZwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+AAAAAAAAAAAAAAAAAACP2KxbEzgNAAgAEgAEBAQEEgAAXwAEGggAAAAICAgCAAAACgoKKioAEjQA
+AaHDVqo=
+'/*!*/;
+
+登录到mysql查看binlog
+只查看第一个binlog文件的内容
+show binlog events;
+查看指定binlog文件的内容
+show binlog events in 'mysql-bin.000002';
+查看当前正在写入的binlog文件
+show master status\G
+获取binlog文件列表
+show binary logs;
+用mysqlbinlog工具查看
+注意:
+不要查看当前正在写入的binlog文件
+不要加--force参数强制访问
+如果binlog格式是行模式的,请加 -vv参数
+本地查看
+基于开始/结束时间
+mysqlbinlog --start-datetime='2013-09-10 00:00:00' --stop-datetime='2013-09-10 01:01:01' -d 库名 二进制文件
+基于pos值
+mysqlbinlog --start-postion=107 --stop-position=1000 -d 库名 二进制文件
+转换为可读文本
+mysqlbinlog –base64-output=DECODE-ROWS -v -d 库名 二进制文件
+远程查看
+指定开始/结束时间,并把结果重定向到本地t.binlog文件中.
+mysqlbinlog -u username -p password -hl-db1.dba.beta.cn6.qunar.com -P3306 \
+--read-from-remote-server --start-datetime='2013-09-10 23:00:00' --stop-datetime='2013-09-10 23:30:00' mysql-bin.000001 > t.binlog

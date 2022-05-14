@@ -1,0 +1,87 @@
+I"�<!-- more -->
+<p>最初开发 /proc 文件系统是为了提供有关系统中进程的信息。但是由于这个文件系统非常有用，因此内核中的很多元素也开始使用它来报告信息，或启用动态运行时配置。</p>
+
+<p>/proc 文件系统包含了一些目录（用作组织信息的方式）和虚拟文件。虚拟文件可以向用户呈现内核中的一些信息，也可以用作一种从用户空间向内核发送信息的手段。
+[root@plato]# ls /proc
+1     2040  2347  2874  474          fb           mdstat      sys
+104   2061  2356  2930  9            filesystems  meminfo     sysrq-trigger
+113   2073  2375  2933  acpi         fs           misc        sysvipc
+1375  21    2409  2934  buddyinfo    ide          modules     tty
+1395  2189  2445  2935  bus          interrupts   mounts      uptime
+1706  2201  2514  2938  cmdline      iomem        mtrr        version
+179   2211  2515  2947  cpuinfo      ioports      net         vmstat
+180   2223  2607  3     crypto       irq          partitions
+181   2278  2608  3004  devices      kallsyms     pci
+182   2291  2609  3008  diskstats    kcore        self
+2     2301  263   3056  dma          kmsg         slabinfo
+2015  2311  2805  394   driver       loadavg      stat
+2019  2337  2821  4     execdomains  locks        swaps
+[root@plato 1]# ls /proc/1
+auxv     cwd      exe  loginuid  mem     oom_adj    root  statm   task
+cmdline  environ  fd   maps      mounts  oom_score  stat  status  wchan
+[root@plato]# cat /proc/1/cmdline
+init [5]</p>
+
+<p>首先检查内核的 TCP/IP 栈中的 IP 转发的目前设置，然后再启用这种功能。
+[root@plato]# cat /proc/sys/net/ipv4/ip_forward
+0
+[root@plato]# echo “1” &gt; /proc/sys/net/ipv4/ip_forward
+[root@plato]# cat /proc/sys/net/ipv4/ip_forward
+1
+/proc 文件系统并不是 GNU/Linux 系统中的惟一一个虚拟文件系统。在这种系统上，sysfs 是一个与 /proc 类似的文件系统，但是它的组织更好（从 /proc 中学习了很多教训）。不过 /proc 已经确立了自己的地位，因此即使 sysfs 与 /proc 相比有一些优点，/proc 也依然会存在。还有一个 debugfs 文件系统，不过（顾名思义）它提供的更多是调试接口。debugfs 的一个优点是它将一个值导出给用户空间非常简单（实际上这不过是一个调用而已）。</p>
+
+<p>可加载内核模块（LKM）是用来展示 /proc 文件系统的一种简单方法，这是因为这是一种用来动态地向 Linux 内核添加或删除代码的新方法。LKM 也是 Linux 内核中为设备驱动程序和文件系统使用的一种流行机制。</p>
+
+<p>如果您曾经重新编译过 Linux 内核，就可能会发现在内核的配置过程中，有很多设备驱动程序和其他内核元素都被编译成了模块。如果一个驱动程序被直接编译到了内核中，那么即使这个驱动程序没有运行，它的代码和静态数据也会占据一部分空间。但是如果这个驱动程序被编译成一个模块，就只有在需要内存并将其加载到内核时才会真正占用内存空间。有趣的是，对于 LKM 来说，我们不会注意到有什么性能方面的差异，因此这对于创建一个适应于自己环境的内核来说是一种功能强大的手段，这样可以根据可用硬件和连接的设备来加载对应的模块。</p>
+
+<p>一个简单的但可以正常工作的 LKM（simple-lkm.c）
+#include &lt;linux/module.h&gt;
+/* Defines the license for this LKM <em>/
+MODULE_LICENSE(“GPL”);
+/</em> Init function called on module entry <em>/
+int my_module_init( void )
+{
+  printk(KERN_INFO “my_module_init called.  Module is now loaded.\n”);
+  return 0;
+}
+/</em> Cleanup function called on module exit <em>/
+void my_module_cleanup( void )
+{
+  printk(KERN_INFO “my_module_cleanup called.  Module is now unloaded.\n”);
+  return;
+}
+/</em> Declare entry and exit functions */
+module_init( my_module_init );
+module_exit( my_module_cleanup );</p>
+
+<p>包括了必须的模块头（它定义了模块的 API、类型和宏）。然后使用 MODULE_LICENSE 定义了这个模块使用的许可证。此处，我们定义的是 GPL，从而防止会污染到内核。</p>
+
+<p>然后又定义了这个模块的 init 和 cleanup 函数。my_module_init 函数是在加载这个模块时被调用的，它用来进行一些初始化方面的工作。my_module_cleanup 函数是在卸载这个模块时被调用的，它用来释放内存并清除这个模块的踪迹。注意此处 printk 的用法：这是内核的 printf 函数。KERN_INFO 符号是一个字符串，可以用来对进入内核回环缓冲区的信息进行过滤（非常类似于 syslog）。</p>
+
+<p>最后，使用 module_init 和 module_exit 宏声明了入口函数和出口函数。这样我们就可以按照自己的意愿来对这个模块的 init 和 cleanup 函数进行命名了，不过我们最终要告诉内核维护函数就是这些函数。</p>
+
+<p>结果会生成一个 simple-lkm.ko 文件。这个新的命名约定可以帮助将这些内核对象（LKM）与标准对象区分开来。现在可以加载或卸载这个模块了，然后可以查看它的输出。要加载这个模块，请使用 insmod 命令；反之，要卸载这个模块，请使用 rmmod 命令</p>
+
+<p>集成到 /proc 文件系统中
+内核程序员可以使用的标准 API，LKM 程序员也可以使用。LKM 甚至可以导出内核使用的新变量和函数。
+创建并删除 /proc 项
+要在 /proc 文件系统中创建一个虚拟文件，请使用 create_proc_entry 函数。这个函数可以接收一个文件名、一组权限和这个文件在 /proc 文件系统中出现的位置。create_proc_entry 的返回值是一个 proc_dir_entry 指针（或者为 NULL，说明在 create 时发生了错误）。然后就可以使用这个返回的指针来配置这个虚拟文件的其他参数，例如在对该文件执行读操作时应该调用的函数
+struct proc_dir_entry *create_proc_entry( const char *name, mode_t mode,
+                                             struct proc_dir_entry *parent );
+struct proc_dir_entry {
+    const char *name;           // virtual file name
+    mode_t mode;                // mode permissions
+    uid_t uid;              // File’s user id
+    gid_t gid;              // File’s group id
+    struct inode_operations *proc_iops; // Inode operations functions
+    struct file_operations *proc_fops;  // File operations functions
+    struct proc_dir_entry *parent;      // Parent directory
+    …
+    read_proc_t *read_proc;         // /proc read function
+    write_proc_t *write_proc;       // /proc write function
+    void *data;             // Pointer to private data
+    atomic_t count;             // use count
+    …
+};
+void remove_proc_entry( const char *name, struct proc_dir_entry *parent );</p>
+:ET

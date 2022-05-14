@@ -1,0 +1,465 @@
+---
+title: expect
+layout: post
+category: linux
+author: 夏泽民
+---
+expect是一个自动交互功能的工具。expect是开了一个子进程，通过spawn来执行shell脚本，监测到脚本的返回结果，通过expect判断要进行的交互输入内容（send）
+1.安装expect 
+需要先安装tcl：apt-get install tcl
+apt-get install expect
+2.expect使用
+2.1一个简单的输入密码操作
+{% highlight bash linenos %}
+ #！/usr/bin/expect
+set timeout 100
+set password "123456"
+spawn sudo rm -rf zzlogic
+expect "root123456"
+send "$password\n"
+interact
+{% endhighlight %}
+说明：
+第一行#！/usr/bin/expect表示使用expect的shell交互模式
+set是对变量password赋值
+set timeout 100：设置超时时间为100秒，如果要执行的shell命令很长可以设置超时时间长一些。expect超过超时时间没有监测到要找的字符串，则不执行，默认timeout为10秒
+spawn在expect下执行shell脚本
+expect对通过spawn执行的shell脚本的返回进行判断，是否包含“”中的字段
+send：如果expect监测到了包含的字符串，将输入send中的内容，\n相当于回车
+interact：退出expect返回终端，可以继续输入，否则将一直在expect不能退出到终端
+2.2expect的命令行参数
+[lindex $argv n]获得index为n的参数（index从0开始计算）
+$argc为命令行参数的个数
+[lrange $argv 0 0]表示第一个参数
+[lrange $argv 0 3]表示第1到第3个参数
+例如scp_service.sh文件，可以./scp_service.sh -rm来执行，这时是赋值了一个参数
+set option  [lindex $argv 0]（获得第一个参数存到变量option中，参数是的index是从0开始计算的）
+2.3if...elif...else...
+expect支持if语句，
+if {条件1} {
+     条件1执行语句
+} elif {条件2} {
+     条件2执行语句
+} else {
+     其他情况执行语句
+}
+说明：
+1.if的条件用{}来包含条件
+2.if和后面的{}必须有空格隔开
+3.两个花括号之间必须有空格隔开，比如if {} {}，否则会报错 expect:extra characters after close-brace
+3.使用{来衔接下一行，所以if的条件后需要加左花括号{
+4.else不能单独放一行，所以else要跟在}后面
+2.4 expect {}，多行期望，匹配到哪条执行哪条
+背景：有时执行shell后预期结果是不固定的，有可能是询问是yes/no，有可能是去输入密码，所以可以用expect{}
+花括号内放多行语句，从上至下匹配，匹配到哪个expect执行哪句。
+
+spawn是进入expect环境后才可以执行的expect内部命令。expect是一种脚本语言，它能够代替我们实现与终端的交互，我们不必再守候在电脑旁边输入密码，或是根据系统的输出再运行相应的命令。
+如果没有装expect或者直接在默认的SHELL下执行是找不到spawn命令的。所以不要用 “which spawn“之类的命令去找spawn命令。好比windows里的dir就是一个内部命令，这个命令由shell自带，你无法找到一个dir.com或dir.exe的可执行文件。它主要的功能是给运行进程加个壳，用来传递交互指令
+
+1. expect是基于tcl演变而来的，所以很多语法和tcl类似，基本的语法如下所示：
+1.1 首行加上/usr/bin/expect
+1.2 spawn: 后面加上需要执行的shell命令，比如说spawn sudo touch testfile
+1.3 expect: 只有spawn执行的命令结果才会被expect捕捉到，因为spawn会启动一个进程，只有这个进程的相关信息才会被捕捉到，主要包括：标准输入的提示信息，eof和timeout。
+1.4 send和send_user：send会将expect脚本中需要的信息发送给spawn启动的那个进程，而send_user只是回显用户发出的信息，类似于shell中的echo而已。
+
+expect的核心是spawn expect send set
+spawn 调用要执行的命令
+expect 等待命令提示信息的出现，也就是捕捉用户输入的提示：
+send 发送需要交互的值，替代了用户手动输入内容
+set 设置变量值
+interact 执行完成后保持交互状态，把控制权交给控制台，这个时候就可以手工操作了。如果没有这一句登录完成后会退出，而不是留在远程终端上。
+expect eof 这个一定要加，与spawn对应表示捕获终端输出信息终止，类似于if....endif
+expect脚本必须以interact或expect eof结束，执行自动化任务通常expect eof就够了。
+设置expect永不超时
+set timeout -1
+设置expect 300秒超时，如果超过300没有expect内容出现，则推出
+set timeout 300
+expect编写语法，expect使用的是tcl语法。
+一条Tcl命令由空格分割的单词组成. 其中, 第一个单词是命令名称, 其余的是命令参数
+cmd arg arg arg
+$符号代表变量的值. 在本例中, 变量名称是foo.
+$foo
+方括号执行了一个嵌套命令. 例如, 如果你想传递一个命令的结果作为另外一个命令的参数, 那么你使用这个符号
+[cmd arg]
+双引号把词组标记为命令的一个参数. "$"符号和方括号在双引号内仍被解释
+"some stuff"
+大括号也把词组标记为命令的一个参数. 但是, 其他符号在大括号内不被解释
+{some stuff}
+反斜线符号是用来引用特殊符号. 例如：n 代表换行. 反斜线符号也被用来关闭"$"符号, 引号,方括号和大括号的特殊含义
+
+Expect工作原理
+     从最简单的层次来说，Expect的工作方式象一个通用化的Chat脚本工具。Chat脚本最早用于UUCP网络内，以用来实现计算机之间需要建立连接时进行特定的登录会话的自动化。
+      Chat脚本由一系列expect-send对组成：expect等待输出中输出特定的字符，通常是一个提示符，然后发送特定的响应。例如下面的 Chat脚本实现等待标准输出出现Login:字符串，然后发送somebody作为用户名；然后等待Password:提示符，并发出响应 sillyme。
+Expect最简单的脚本操作模式本质上和Chat脚本工作模式是一样的。
+例子：实现自动执行
+ #!/usr/bin/expect  
+set user [lindex $argv 0]  
+spawn chsh $user  
+expect "]:"  
+send "/bin/tcsh "   
+expect eof  
+exit   
+说明：
+（1）首行指定用来执行该脚本的命令程序，这里是/usr/bin/expect。
+（2）程序第一行用来获得脚本的执行参数(其保存在数组$argv中，从0号开始是参数)，并将其保存到变量user中。
+（3）第二个参数使用expect的spawn命令来启动脚本和命令的会话，这里启动的是chsh命令，实际上命令是以衍生子进程的方式来运行的。
+（4）随后的expect和send命令用来实现交互过程。脚本首先等待输出中出现]:字符串，一旦在输出中出现chsh输出到的特征字符串(一般特征 字符串往往是等待输入的最后的提示符的特征信息)。对于其他不匹配的信息则会完全忽略。当脚本得到特征字符串时，expect将发送/bin/tcsh和 一个回车符给chsh命令。最后脚本等待命令退出(chsh结束)，一旦接收到标识子进程已经结束的eof字符，expect脚本也就退出结束。
+
+3、决定如何响应
+       系统管理员往往有这样的需求，希望根据当前的具体情况来以不同的方式对一个命令进行响应。我们可以通过后面的例子看到expect可以实现非常复杂的条件响应，而仅仅通过简单的修改预处理脚本就可以实现。下面的例子是一个更复杂的expect-send例子：
+expect -re "\[(.*)]:"  
+if {$expect_out(1,string)!="/bin/tcsh"} {  
+send "/bin/tcsh" }  
+send " "  
+expect eof   
+说明：
+（1）第一个expect命令现在使用了-re参数，这个参数表示指定的的字符串是一个正则表达式，而不是一个普通的字符串。对于上面这个例子里是查找一个左方括号字符(其必须进行三次逃逸(escape)，因此有三个符号，因为它对于expect和正则表达时来说都是特殊字符)后面跟有零个或多个字符，最后是一个右方括号字符。这里.*表示表示一个或多个任意字符，将其存放在()中是因为将匹配结果存放在一个变量中以实现随后的对匹配结果的访问。
+（2）当发现一个匹配则检查包含在[]中的字符串，查看是否为/bin/tcsh。如果不是则发送/bin/tcsh给chsh命令作为输入，如果是则仅仅发送一个回车符。这个简单的针对具体情况发出不同相响应的小例子说明了expect的强大功能。
+（3）在一个正则表达时中，可以在()中包含若干个部分并通过expect_out数组访问它们。各个部分在表达式中从左到右进行编码，从1开始(0包含有整个匹配输出)。()可能会出现嵌套情况，这这种情况下编码从最内层到最外层来进行的。
+
+4、使用超时
+下一个expect例子中将阐述具有超时功能的提示符函数。这个脚本提示用户输入，如果在给定的时间内没有输入，则会超时并返回一个默认的响应。这个脚本接收三个参数：提示符字串，默认响应和超时时间(秒)。
+{% highlight bash linenos %}
+#!/usr/bin/expect  
+#脚本的第一部分首先是得到运行参数并将其保存到内部变量中  
+set prompt [lindex $argv 0]  
+set def [lindex $argv 1]   
+set response $def  
+set tout [lindex $argv 2]   
+send_tty "$prompt: "  
+#send_tty命令用来实现在终端上显示提示符字串和一个冒号及空格  
+set timeout $tout  
+#set timeout命令设置后面所有的expect命令的等待响应的超时时间为$tout(-l参数用来关闭任何超时设置)。   
+expect " " {  
+set raw $expect_out(buffer)  
+# remove final carriage return  
+set response [string trimright "$raw" " "]  
+}  
+if {"$response" == "} {set response $def}  
+send "$response "  
+# Prompt function with timeout and default.  
+set prompt [lindex $argv 0]  
+set def [lindex $argv 1]   
+set response $def  
+set tout [lindex $argv 2]   
+{% endhighlight %}
+说明：
+（1）send_tty命令用来实现在终端上显示提示符字串和一个冒号及空格。
+（2）set timeout命令设置后面所有的expect命令的等待响应的超时时间为$tout(-l参数用来关闭任何超时设置)。
+（3）然后expect命令就等待输出中出现回车字符。如果在超时之前得到回车符，那么set命令就会将用户输入的内容赋值给变脸raw。随后的命令将用户输入内容最后的回车符号去除以后赋值给变量response。
+（4）如果response中内容为空则将response值置为默认值(如果用户在超时以后没有输入或者用户仅仅输入了回车符)。最后send命令将response变量的值加上回车符发送给标准输出。
+
+注意：
+（1）该脚本没有使用spawn命令。
+（2）该expect脚本会与任何调用该脚本的进程交互。
+（3）如果该脚本名为prompt，那么它可以用在任何C风格的shell中。
+% set a='prompt "Enter an answer" silence 10'   
+Enter an answer: test   
+% echo Answer was "$a"   
+Answer was test   
+prompt设定的超时为10秒。如果超时或者用户仅仅输入了回车符号，echo命令将输出
+Answer was "silence"   
+
+现代的Shell对程序提供了最小限度的控制(开始，停止，等等)，而把交互的特性留给了用户。这意味着有些程序，你不能非交互的运行，比如说 passwd。有一些程序可以非交互的运行，但在很大程度上丧失了灵活性，比如说fsck。这表明Unix的工具构造逻辑开始出现问题。Expect恰恰 填补了其中的一些裂痕，解决了在Unix环境中长期存在着的一些问题。
+
+Expect使用Tcl作为语言核心。不仅如此，不管程序是交互和还是非交互的，Expect都能运用。这是一个小语言和Unix的其他工具配合起来产生强大功能的经典例子。
+
+简介
+一个叫做fsck的Unix文件系统检查程序，可以从Shell里面用-y或者-n选项来执行。在手册[1]里面，-y选项的定义是象这样的：
+对于fsck的所有问题都假定一个“yes”响应；在这样使用的时候，必须特别的小心，因为它实际上允许程序无条件的继续运行，即使是遇到了一些非常严重的错误。
+相比之下，-n选项就安全的多，但它实际上几乎一点用都没有。这种接口非常的糟糕，但是却有许多的程序都是这种风格。文件传输程序ftp有一个选项可以禁止交互式的提问，以便能从一个脚本里面运行。但一旦发生了错误，它没有提供的处理措施。
+Expect是一个控制交互式程序的工具。他解决了fsck的问题，用非交互的方式实现了所有交互式的功能。Expect不是特别为fsck设计的，它也能进行类似ftp的出错处理。
+fsck和ftp的问题向我们展示了象sh,csh和别的一些shell提供的用户接口的局限性。Shell没有提供从一个程序读和象一个程序写的功 能。这意味着shell可以运行fsck但只能以牺牲一部分fsck的灵活性做代价。有一些程序根本就不能被执行。比如说，如果没有一个用户接口交互式的提供输入，就没法运行下去。其他还有象Telnet,crypt,su,rlogin等程序无法在shell脚本里面自动执行。还有很多其他的应用程序在 设计是也是要求用户输入的。
+
+Expect被设计成专门针和交互式程序的交互。一个Expect程序员可以写一个脚本来描述程序和用户的对话。接着Expect程序可以非交互的运行“交互式”的程序。写交互式程序的脚本和写非交互式程序的脚本一样简单。Expect还可以用于对对话的一 部分进行自动化，因为程序的控制可以在键盘和脚本之间进行切换。
+bes[2]里面有详细的描述。简单的说，脚本是用一种解释性语言写的。(也有C和C++的Expect库可供使用，但这超出了本文的范围).Expect提供了创建交互式进程和读写它们的输入和输出的命令。Expect是由于它的一个同名的命令而命名的。
+
+Expect综述
+Expect语言是基于Tcl的。Tcl实际上是一个子程序库，这些子程序库可以嵌入到程序里从而提供语言服务。 最终的语言有点象一个典型的 Shell语言。里面有给变量赋值的set命令，控制程序执行的if,for,continue等命令，还能进行普通的数学和字符串操作。当然了，还可以 用exec来调用Unix程序。所有这些功能，Tcl都有。Tcl在参考书籍 Outerhour[3][4]里有详细的描述。
+Expect是在Tcl基础上创建起来的，它还提供了一些Tcl所没有的命令：
+spawn命令激活一个Unix程序来进行交互式的运行。
+send命令向进程发送字符串。
+expect命令等待进程的某些字符串。expect支持正规表达式并能同时等待多个字符串，并对每一个字符串执行不同的操作。expect还能理解一些特殊情况，如超时和遇到文件尾。
+expect命令和Tcl的case命令的风格很相似。都是用一个字符串去匹配多个字符串。(只要有可能，新的命令总是和已有的Tcl命令相似，以使得该语言保持工具族的继承性)。下面关于expect的定义是从手册[5]上摘录下来的。
+expect patlist1 action1 patlist2 action2.....
+该命令一直等到当前进程的输出和以上的某一个模式相匹配，或者等到时间超过一个特定的时间长度，或者等到遇到了文件的结束为止。
+如果最后一个action是空的，就可以省略它。
+每一个patlist都由一个模式或者模式的表(lists)组成。如果有一个模式匹配成功，相应的action就被执行。执行的结果从expect返回。
+被精确匹配的字符串(或者当超时发生时，已经读取但未进行匹配的字符串)被存贮在变量expect_match里面。如果patlist是eof或者timeout，则发生文件结束或者超时时才执行相应的action。一般超时的时值是10秒，但可以用类似"set timeout 30"之类的命令把超时时值设定为30秒。
+下面的一个程序段是从一个有关登录的脚本里面摘取的。abort是在脚本的别处定义的过程，而其他的action使用类似与C语言的Tcl原语。
+{% highlight bash linenos %}
+expect "*welcome*" break
+  "*busy*" {print busy;continue}
+  "*failed*" abort
+  timeout abort
+{% endhighlight %}
+模式是通常的C Shell风格的正规表达式。模式必须匹配当前进程的从上一个expect或者interact开始的所有输出(所以统配符*使用的非常的普遍)。但是，一旦输出超过2000个字节，前面的字符就会被忘记，这可以通过设定match_max的值来改变。
+
+expect命令确实体现了expect语言的最好和最坏的性质。特别是，expect命令的灵活性是以经常出现令人迷惑的语法做代价。除了关键字模式 (比如说eof,timeout)那些模式表可以包括多个模式。这保证提供了一种方法来区分他们。但是分开这些表需要额外的扫描，如果没有恰当的用["]括起来，这有可能会把和当成空白字符。由于Tcl提供了两种字符串引用的方法:单引和双引，情况变的更糟。(在Tcl里面，如果不会出现二义性话， 没有必要使用引号)。在expect的手册里面，还有一个独立的部分来解释这种复杂性。幸运的是：有一些很好的例子似乎阻止了这种抱怨。但是，这个复杂性很有可能在将来的版本中再度出现。为了增强可读性，在本文中，提供的脚本都假定双引号是足够的。
+字符可以使用反斜杠来单独的引用，反斜杠也被用于对语句的延续，如果不加反斜杠的话，语句到一行的结尾处就结束了。这和Tcl也是一致的。Tcl在发现有开的单引号或者开的双引号时都会继续扫描。而且，分号可以用于在一行中分割多个语句。这乍听起来有点让人困惑，但是，这是解释性语言的风格，但是，这确实是Tcl的不太漂亮的部分。
+callback
+令人非常惊讶的是，一些小的脚本如何的产生一些有用的功能。下面是一个拨电话号码的脚本。他用来把收费反向，以便使得长途电话对计算机计费。这个脚本用 类似“expect callback.exp 12016442332”来激活。其中，脚本的名字便是callback.exp，而+1(201)644-2332是要拨的电话号码。
+{% highlight bash linenos %}
+#first give the user some time to logout
+exec sleep 4
+spawn tip modem
+expect "*connected*"
+send "ATD [lindex $argv 1]\r"
+#modem takes a while to connect
+set timeout 60
+expect "*CONNECT*"
+{% endhighlight %} 
+第一行是注释，第二行展示了如何调用没有交互的Unix程序。sleep 4会使程序阻塞4秒，以使得用户有时间来退出，因为modem总是会回叫用户已经使用的电话号码。
+
+下面一行使用spawn命令来激活tip程序，以便使得tip的输出能够被expect所读取，使得tip能从send读输入。一旦tip说它已经连接上，modem就会要求去拨打大哥电话号码。(假定modem都是贺氏兼容的，但是本脚本可以很容易的修改成能适应别的类型的modem)。不论发生了什么，expect都会终止。如果呼叫失败，expect脚本可以设计成进行重试，但这里没有。如果呼叫成功，getty会在expect退出后检测到DTR，并且向用户提示loging:。(实用的脚本往往提供更多的错误检测)。
+这个脚本展示了命令行参数的使用，命令行参数存贮在一个叫做argv的表里面(这和C语言的风格很象)。在这种情况下，第一个元素就是电话号码。方括号使得被括起来的部分当作命令来执行，结果就替换被括起来的部分。这也和C Shell的风格很象。
+这个脚本和一个大约60K的C语言程序实现的功能相似。
+passwd和一致性检查
+在前面，我们提到passwd程序在缺乏用户交互的情况下，不能运行，passwd会忽略I/O重定向，也不能嵌入到管道里边以便能从别的程序或者文件里读取输入。这个程序坚持要求真正的与用户进行交互。因为安全的原因，passwd被设计成这样，但结果导致没有非交互式的方法来检验passwd。这样一个对系统安全至关重要的程序竟然没有办法进行可靠的检验，真实具有讽刺意味。
+passwd以一个用户名作为参数，交互式的提示输入密码。下面的expect脚本以用户名和密码作为参数而非交互式的运行。
+{% highlight bash linenos %}
+spawn passwd [lindex $argv 1]
+set password [lindex $argv 2]
+expect "*password:"
+send "$password\r"
+expect "*password:"
+send "$password\r"
+expect eof
+{% endhighlight %}
+第一行以用户名做参数启动passwd程序，为方便起见，第二行把密码存到一个变量里面。和shell类似，变量的使用也不需要提前声明。
+在第三行，expect搜索模式"*password:"，其中*允许匹配任意输入，所以对于避免指定所有细节而言是非常有效的。 上面的程序里没有action,所以expect检测到该模式后就继续运行。
+一旦接收到提示后，下一行就就把密码送给当前进程，\r表明回车。(实际上，所有的C的关于字符的约定都支持)。上面的程序中有两个expect-send序列，因为passwd为了对输入进行确认，要求进行两次输入。在非交互式程序里面，这是毫无必要的，但由于假定passwd是在和用户进行交互，所以我们的脚本还是这样做了。
+最后，"expect eof"这一行的作用是在passwd的输出中搜索文件结束符，这一行语句还展示了关键字的匹配。另外一个关键字匹配就是timeout了， timeout被用于表示所有匹配的失败而和一段特定长度的时间相匹配。在这里eof是非常有必要的，因为passwd被设计成会检查它的所有I/O是否都成功了，包括第二次输入密码时产生的最后一个新行。
+
+这个脚本已经足够展示passwd命令的基本交互性。另外一个更加完备的例子会检查别的一些行为。比如说，下面的这个脚本就能检查passwd程序的别的几个方面。所有的提示都进行了检查。对垃圾输入的检查也进行了适当的处理。进程死亡，超乎寻常的慢响应，或者别的非预期的行为都进行了处理。
+{% highlight bash linenos %}
+spawn passwd [lindex $argv 1]
+expect eof               {exit 1}
+    timeout              {exit 2}
+    "*No such user.*"    {exit 3}
+    "*New password:"
+send "[index $argv 2]\r"
+expect eof                   {exit 4}
+    timeout                  {exit 2}
+    "*Password too long*"    {exit 5}
+    "*Password too short*"   {exit 5}
+    "*Retype new password:"
+send "[index $argv 3] "
+expect timeout               {exit 2}
+    "*Mismatch*"             {exit 6}
+    "*Password unchanged*"   {exit 7}
+    " "
+expect timeout               {exit 2}
+    "*"                      {exit 6}
+    eof
+{% endhighlight %}
+这个脚本退出时用一个数字来表示所发生的情况。0表示passwd程序正常运行，1表示非预期的死亡，2表示锁定，等等。使用数字是为了简单起见。expect返回字符串和返回数字是一样简单的，即使是派生程序自身产生的消息也是一样的。实际上，典型的做法是把整个交互的过程存到一个文件里面，只有当程序的运行和预期一样的时候才把这个文件删除。否则这个log被留待以后进一步的检查。
+这个passwd检查脚本被设计成由别的脚本来驱动。这第二个脚本从一个文件里面读取参数和预期的结果。对于每一个输入参数集，它调用第一个脚本并且把结果和预期的结果相比较。(因为这个任务是非交互的，一个普通的老式shell就可以用来解释第二个脚本)。比如说，一个passwd的数据文件很有可能就象下面一样。
+passwd.exp    3    bogus    -        -
+passwd.exp    0    fred    abledabl    abledabl
+passwd.exp    5    fred    abcdefghijklm    -
+passwd.exp    5    fred    abc        -
+passwd.exp    6    fred    foobar        bar
+passwd.exp    4    fred    ^C        -
+第一个域的名字是要被运行的回归脚本。第二个域是需要和结果相匹配的退出值。第三个域就是用户名。第四个域和第五个域就是提示时应该输入的密码。减号仅 仅表示那里有一个域，这个域其实绝对不会用到。在第一个行中，bogus表示用户名是非法的，因此passwd会响应说：没有此用户。expect在退出时会返回3，3恰好就是第二个域。在最后一行中，^C就是被切实的送给程序来验证程序是否恰当的退出。
+
+通过这种方法，expect可以用来检验和调试交互式软件，这恰恰是IEEE的POSIX 1003.2(shell和工具)的一致性检验所要求的。进一步的说明请参考Libes[6]。
+rogue和伪终端
+Unix用户肯定对通过管道来和其他进程相联系的方式非常的熟悉(比如说：一个shell管道)。expect使用伪终端来和派生的进程相联系。伪终端提供了终端语义以便程序认为他们正在和真正的终端进行I/O操作。
+比如说，BSD的探险游戏rogue在生模式下运行，并假定在连接的另一端是一个可寻址的字符终端。可以用expect编程，使得通过使用用户界面可以玩这个游戏。
+rogue这个探险游戏首先提供给你一个有各种物理属性，比如说力量值，的角色。在大部分时间里，力量值都是16，但在几乎每20次里面就会有一个力量值是18。很多的rogue玩家都知道这一点，但没有人愿意启动程序20次以获得一个好的配置。下面的这个脚本就能达到这个目的。
+{% highlight bash linenos %}
+for {} {1} {} {
+    spawn rogue
+    expect "*Str:18*" break
+        "*Str:16*" close
+    wait
+}
+interact
+{% endhighlight %}
+第一行是个for循环，和C语言的控制格式很象。rogue启动后，expect就检查看力量值是18还是16，如果是16，程序就通过执行close和wait来退出。这两个命令的作用分别是关闭和伪终端的连接和等待进程退出。rogue读到一个文件结束符就推出，从而循环继续运行，产生一个新的rogue游戏来检查。
+当一个值为18的配置找到后，控制就推出循环并跳到最后一行脚本。interact把控制转移给用户以便他们能够玩这个特定的游戏。
+想象一下这个脚本的运行。你所能真正看到的就是20或者30个初始的配置在不到一秒钟的时间里掠过屏幕，最后留给你的就是一个有着很好配置的游戏。唯一比这更好的方法就是使用调试工具来玩游戏。
+我们很有必要认识到这样一点：rogue是一个使用光标的图形游戏。expect程序员必须了解到：光标的运动并不一定以一种直观的方式在屏幕上体现。幸运的是，在我们这个例子里，这不是一个问题。将来的对expect的改进可能会包括一个内嵌的能支持字符图形区域的终端模拟器。
+ftp
+我们使用expect写第一个脚本并没有打印出"Hello,World"。实际上，它实现了一些更有用的功能。它能通过非交互的方式来运行ftp。ftp是用来在支持TCP/IP的网络上进行文件传输的程序。除了一些简单的功能，一般的实现都要求用户的参与。
+下面这个脚本从一个主机上使用匿名ftp取下一个文件来。其中，主机名是第一个参数。文件名是第二个参数。
+{% highlight bash linenos %}
+spawn ftp [lindex $argv 1]
+expect "*Name*"
+send   "anonymous "
+expect "*Password:*"
+send   [exec whoami]
+expect "*ok*ftp>*"
+send   "get [index $argv 2] "
+expect "*ftp>*"
+{% endhighlight %}
+上面这个程序被设计成在后台进行ftp。虽然他们在底层使用和expect类似的机制，但他们的可编程能力留待改进。因为expect提供了高级语言，你可以对它进行修改来满足你的特定需求。比如说，你可以加上以下功能：
+
+坚持－－如果连接或者传输失败，你就可以每分钟或者每小时，甚至可以根据其他因素，比如说用户的负载，来进行不定期的重试。
+通知－－传输时可以通过mail,write或者其他程序来通知你，甚至可以通知失败。
+初始化－每一个用户都可以有自己的用高级语言编写的初始化文件(比如说，.ftprc)。这和C shell对.cshrc的使用很类似。
+expect还可以执行其他的更复杂的任务。比如说，他可以使用McGill大学的Archie系统。Archie是一个匿名的Telnet服务，它提 供对描述Internet上可通过匿名ftp获取的文件的数据库的访问。通过使用这个服务，脚本可以询问Archie某个特定的文件的位置，并把它从 ftp服务器上取下来。这个功能的实现只要求在上面那个脚本中加上几行就可以。
+现在还没有什么已知的后台ftp能够实现上面的几项功能，能不要说所有的功能了。在expect里面，它的实现却是非常的简单。“坚持”的实现只要求在expect脚本里面加上一个循环。“通知”的实现只要执行mail和write就可以了。“初始化文件”的实现可以使用一个命令，source .ftprc，就可以了，在.ftprc里面可以有任何的expect命令。
+
+虽然这些特征可以通过在已有的程序里面加上钩子函数就可 以，但这也不能保证每一个人的要求都能得到满足。唯一能够提供保证的方法就是提供一种通用的语言。一个很好的解决方法就是把Tcl自身融入到ftp和其他的程序中间去。实际上，这本来就是Tcl的初衷。在还没有这样做之前，expect提供了一个能实现大部分功能但又不需要任何重写的方案。
+fsck
+fsck是另外一个缺乏足够的用户接口的例子。fsck几乎没有提供什么方法来预先的回答一些问题。你能做的就是给所有的问题都回答"yes"或者都回答"no"。
+下面的程序段展示了一个脚本如何的使的自动的对某些问题回答"yes"，而对某些问题回答"no"。下面的这个脚本一开始先派生fsck进程，然后对其中两种类型的问题回答"yes"，而对其他的问题回答"no"。
+{% highlight bash linenos %}
+for {} {1} {} {
+    expect
+        eof        break
+        "*UNREF FILE*CLEAR?"    {send "r "}
+        "*BAD INODE*FIX?"    {send "y "}
+        "*?"            {send "n "}
+}
+{% endhighlight %}
+在下面这个版本里面，两个问题的回答是不同的。而且，如果脚本遇到了什么它不能理解的东西，就会执行interact命令把控制交给用户。用户的击键直接交给fsck处理。当执行完后，用户可以通过按"+"键来退出或者把控制交还给expect。如果控制是交还给脚本了，脚本就会自动的控制进程的剩余部分的运行。
+{% highlight bash linenos %}
+for {} {1} {}{
+    expect
+        eof        break
+        "*UNREF FILE*CLEAR?"    {send "y "}
+        "*BAD INODE*FIX?"    {send "y "}
+        "*?"            {interact +}
+}
+{% endhighlight %}
+如果没有expect，fsck只有在牺牲一定功能的情况下才可以非交互式的运行。fsck几乎是不可编程的，但它却是系统管理的最重要的工具。许多别的工具的用户接口也一样的不足。实际上，正是其中的一些程序的不足导致了expect的诞生。
+
+控制多个进程：作业控制
+expect的作业控制概念精巧的避免了通常的实现困难。其中包括了两个问题：一个是expect如何处理经典的作业控制，即当你在终端上按下^Z键时expect如何处理；另外一个就是expect是如何处理多进程的。
+对第一个问题的处理是：忽略它。expect对经典的作业控制一无所知。比如说，你派生了一个程序并且发送一个^Z给它，它就会停下来(这是伪终端的完美之处)而expect就会永远的等下去。
+但是，实际上，这根本就不成一个问题。对于一个expect脚本，没有必要向进程发送^Z。也就是说，没有必要停下一个进程来。expect仅仅是忽略了一个进程，而把自己的注意力转移到其他的地方。这就是expect的作业控制思想，这个思想也一直工作的很好。
+从用户的角度来看是象这样的：当一个进程通过spawn命令启动时，变量spawn_id就被设置成某进程的描述符。由spawn_id描述的进程就被 认为是当前进程。(这个描述符恰恰就是伪终端文件的描述符，虽然用户把它当作一个不透明的物体)。expect和send命令仅仅和当前进程进行交互。所 以，切换一个作业所需要做的仅仅是把该进程的描述符赋给spawn_id。
+这儿有一个例子向我们展示了如何通过作业控制来使两个 chess进程进行交互。在派生完两个进程之后，一个进程被通知先动一步。在下面的循环里面，每一步动作都送给另外一个进程。其中，read_move和 write_move两个过程留给读者来实现。(实际上，它们的实现非常的容易，但是，由于太长了所以没有包含在这里)。
+{% highlight bash linenos %}
+spawn chess            ;# start player one
+set id1    $spawn_id
+expect "Chess "
+send "first "            ;# force it to go first
+read_move
+spawn chess            ;# start player two
+set id2    $spawn_id
+expect "Chess "
+for {} {1} {}{
+    send_move
+    read_move
+    set spawn_id    $id1
+ 
+    send_move
+    read_move
+    set spawn_id    $id2
+}
+{% endhighlight %}
+有一些应用程序和chess程序不太一样，在chess程序里，的两个玩家轮流动。下面这个脚本实现了一个冒充程序。它能够控制一个终端以便用户能够登录和正常的工作。但是，一旦系统提示输入密码或者输入用户名的时候，expect就开始把击键记下来，一直到用户按下回车键。这有效的收集了用户的密码和用户名，还避免了普通的冒充程序的"Incorrect password-tryagain"。而且，如果用户连接到另外一个主机上，那些额外的登录也会被记录下来。
+{% highlight bash linenos %}
+spawn tip /dev/tty17     ;# open connection to
+set tty $spawn_id        ;# tty to be spoofed
+spawn login
+set login $spawn_id 
+log_user 0
+for {} {1} {} {
+    set ready [select $tty $login]
+    case $login in $ready {
+        set spawn_id $login
+        expect
+          {"*password*" "*login*"}{
+              send_user $expect_match
+              set log 1
+             }
+          "*"        ;# ignore everything else
+        set spawn_id    $tty;
+        send $expect_match
+    }
+    case $tty in $ready {
+        set spawn_id    $tty
+        expect "* *"{
+                if $log {
+                  send_user $expect_match
+                  set log 0
+                }
+               }
+            "*" {
+                send_user $expect_match
+               }
+        set spawn_id     $login;
+        send $expect_match
+    }
+}
+{% endhighlight %}
+这个脚本是这样工作的。首先连接到一个login进程和终端。缺省的，所有的对话都记录到标准输出上(通过send_user)。因为我们对此并不感兴趣，所以，我们通过命令"log_user 0"来禁止这个功能。(有很多的命令来控制可以看见或者可以记录的东西)。
+在循环里面， select等待终端或者login进程上的动作，并且返回一个等待输入的spawn_id表。如果在表里面找到了一个值的话，case就执行一个 action。比如说，如果字符串"login"出现在login进程的输出中，提示就会被记录到标准输出上，并且有一个标志被设置以便通知脚本开始记录 用户的击键，直至用户按下了回车键。无论收到什么，都会回显到终端上，一个相应的action会在脚本的终端那一部分执行。
+这些例子显示了expect的作业控制方式。通过把自己插入到对话里面，expect可以在进程之间创建复杂的I/O流。可以创建多扇出，复用扇入的，动态的数据相关的进程图。
+相比之下，shell使得它自己一次一行的读取一个文件显的很困难。shell强迫用户按下控制键(比如，^C,^Z)和关键字(比如fg和bg)来实 现作业的切换。这些都无法从脚本里面利用。相似的是：以非交互方式运行的shell并不处理“历史记录”和其他一些仅仅为交互式使用设计的特征。这也出现 了和前面哪个passwd程序的相似问题。相似的，也无法编写能够回归的测试shell的某些动作的shell脚本。结果导致shell的这些方面无法进 行彻底的测试。
+
+如果使用expect的话，可以使用它的交互式的作业控制来驱动shell。一个派生的shell认为它是在交互的运行着，所以会正常的处理作业控制。它不仅能够解决检验处理作业控制的shell和其他一些程序的问题。还能够在必要的时候，让shell代替expect 来处理作业。可以支持使用shell 风格的作业控制来支持进程的运行。这意味着：首先派生一个shell，然后把命令送给shell来启动进程。如果进程被挂起，比如说，发送了一个^Z，进程就会停下来，并把控制返回给shell。对于expect而言，它还在处理同一个进程(原来那个shell)。
+expect的解决方法不仅具有很大的灵活性，它还避免了重复已经存在于shell中的作业控制软件。通过使用shell，由于你可以选择你想派生的 shell，所以你可以根据需要获得作业控制权。而且，一旦你需要(比如说检验的时候)，你就可以驱动一个shell来让这个shell以为它正在交互式 的运行。这一点对于在检测到它们是否在交互式的运行之后会改变输出的缓冲的程序来说也是很重要的。
+为了进一步的控制，在interact执行期间，expect把控制终端(是启动expect的那个终端，而不是伪终端)设置成 生模式 以便字符能够正确的传送给派生的进程。当expect在没有执行interact的时候，终端处于 熟模式 下，这时候作业控制就可以作用于expect本身。
+交互式的使用expect
+在前面，我们提到可以通过interact命令来交互式的使用脚本。基本上来说，interact命令提供了对对话的自由访问，但我们需要一些更精细的控制。这一点，我们也可以使用expect来达到，因为expect从标准输入中读取输入和从进程中读取输入一样的简单。但是，我们要使用 expect_user和send_user来进行标准I/O，同时不改变spawn_id。
+下面的这个脚本在一定的时间内从标准输入里面读取一行。这个脚本叫做timed_read，可以从csh里面调用，比如说，set answer="timed_read 30"就能调用它。
+{% highlight bash linenos %}
+#!/usr/local/bin/expect -f
+set timeout [index $argv 1]
+expect_user "* "
+send_user $expect_match
+{% endhighlight %}
+第三行从用户那里接收任何以新行符结束的任何一行。最后一行把它返回给标准输出。如果在特定的时间内没有得到任何键入，则返回也为空。
+第一行支持"#!"的系统直接的启动脚本。(如果把脚本的属性加上可执行属性则不要在脚本前面加上expect)。当然了脚本总是可以显式的用 "expect scripot"来启动。在-c后面的选项在任何脚本语句执行前就被执行。比如说，不要修改脚本本身，仅仅在命令行上加上-c "trace..."，该脚本可以加上trace功能了(省略号表示trace的选项)。
+在命令行里实际上可以加上多个命令，只要中间以";"分开就可以了。比如说，下面这个命令行：
+expect -c "set timeout 20;spawn foo;expect"
+一旦你把超时时限设置好而且程序启动之后，expect就开始等待文件结束符或者20秒的超时时限。如果遇到了文件结束符(EOF)，该程序就会停下来，然后expect返回。如果是遇到了超时的情况，expect就返回。在这两中情况里面，都隐式的杀死了当前进程。
+如果我们不使用expect而来实现以上两个例子的功能的话，我们还是可以学习到很多的东西的。在这两中情况里面，通常的解决方案都是fork另一个睡眠的子进程并且用signal通知原来的shell。如果这个过程或者读先发生的话，shell就会杀司那个睡眠的进程。传递pid和防止后台进程产生启动信息是一个让除了高手级shell程序员之外的人头痛的事情。提供一个通用的方法来象这样启动多个进程会使shell脚本非常的复杂。所以几乎可以肯定的是，程序员一般都用一个专门C程序来解决这样一个问题。
+expect_user,send_user,send_error(向标准错误终端输出)在比较长的，用来把从进程来的复杂交互翻译成简单交互的expect脚本里面使用的比较频繁。在参考[7]里面，Libs描述怎样用脚本来安全的包裹(wrap)adb，怎样把系统管理员从需要掌握adb的细 节里面解脱出来，同时大大的降低了由于错误的击键而导致的系统崩溃。
+一个简单的例子能够让ftp自动的从一个私人的帐号里面取文件。在这种情况里，要求提供密码。即使文件的访问是受限的，你也应该避免把密码以明文的方式存储在文件里面。把密码作为脚本运行时的参数也是不合适的，因 为用ps命令能看到它们。有一个解决的方法就是在脚本运行的开始调用 expect_user来让用户输入以后可能使用的密码。这个密码必须只能让这个脚本知道，即使你是每个小时都要重试 ftp。
+即使信息是立即输入进去的，这个技巧也是非常有用。比如说，你可以写一个脚本，把你每一个主机上不同的帐号上的密码都改掉，不管他们使用的是不是同一个密码 数据库。如果你要手工达到这样一个功能的话，你必须Telnet到每一个主机上，并且手工输入新的密码。而使用expect,你可以只输入密码一次而让脚本来做其它的事情。
+expect_user和interact也可以在一个脚本里面混合的使用。考虑一下在调试一个程序的循环时，经过好多步之后才失败的情况。一个expect脚本可以驱动哪个调试器，设置好断点，执行该程序循环的若干步，然后将控制返回给键盘。它也可以在返回控制之前，在循环体和条件测试之间来回 的切换。
+使用expect脚本的小窍门
+1、使用“-c”选项，从命令行执行expect脚本
+expect可以让你使用“-c”选项，直接在命令行中执行它，如下所示：
+$ expect -c 'expect "\n" {send "pressed enter\n"}  
+  pressed enter  
+$  
+如果你执行了上面的脚本，它会等待输入换行符（\n）。按“enter”键以后，它会打印出“pressed enter”这个消息，然后退出。
+2、使用“-i”选项交互地执行expect脚本
+使用“-i”选项，可以通过来自于标准输入的读命令来交互地执行expect脚本。如下所示：
+$ expect -i arg1 arg2 arg3  
+expect1.1>set argv  
+arg1 arg2 arg3  
+expect1.2>  
+正常情况下，当你执行上面的expect命令的时候（没有“-i”选项），它会把arg1当成脚本的文件名，所以“-i”选项可以让脚本把多个参数当成一个连续的列表。
+当你执行带有“-c”选项的expect脚本的时候，这个选项是十分有用的。因为默认情况下，expect是交互地执行的。
+3、当执行expect脚本的时候，输出调试信息
+当你用“-d”选项执行代码的时候，你可以输出诊断的信息。如下所示：
+$ cat sample.exp 
+{% highlight bash linenos %} 
+ # !/usr/bin/expect -fexpect "\n";send "pressed enter";$ expect -d sample.expexpect version 5.43.0argv[0] = expect  argv[1] = -d  argv[2] = sample.expset argc 0set argv0 "sample.exp"set argv ""executing commands from command file sample.exp  
+expect: does "" (spawn_id exp0) match glob pattern "\n"? no   
+expect: does "\n" (spawn_id exp0) match glob pattern "\n"? yes  
+expect: set expect_out(0,string) "\n"  
+expect: set expect_out(spawn_id) "exp0"  
+expect: set expect_out(buffer) "\n"  
+send: sending "pressed enter" to { exp0 pressed enter} 
+{% endhighlight %} 
+4、使用“-D”选项启动expect调试器
+“-D”选项用于启动调试器，它只接受一个布尔值的参数。这个参数表示提示器必须马上启动，还是只是初始化调试器，以后再使用它。 
+$ expect -D 1 script  
+“-D”选项左边的选项会在调试器启动以前被处理。然后，在调试器启动以后，剩下的命令才会被执行。
+$ expect -c 'set timeout 10' -D 1 -c 'set a 1'  
+1: set a 1  
+dbg1.0>  
+5、逐行地执行expect脚本
+通常，expect会在执行脚本之前，把整个脚本都读入到内存中。“-b”选项可以让expect一次只读取脚本中的一行。当你没有写完整个脚本的时候，这是十分有用的，expect可以开始执行这个不完整的脚本，并且，它可以避免把脚本写入到临时文件中。
+$ expect -b  
+6、让expect不解释命令行参数
+你可以使用标识符让expect不解释命令行参数。
+你可以像下面这样的读入命令行参数：
+$ cat  print_cmdline_args.exp  
+#!/usr/bin/expect  
+puts 'argv0 : [lindex $argv 0]';  
+puts 'argv1 : [lindex $argv 1]';  
+当执行上面的脚本的时候，会跳过命令行选项，它们会被当成参数（而不是expect选项），如下所示：
+$ expect print_cmdline_args.exp -d -c  
+argv0 : -d  
+argv1 : -c  

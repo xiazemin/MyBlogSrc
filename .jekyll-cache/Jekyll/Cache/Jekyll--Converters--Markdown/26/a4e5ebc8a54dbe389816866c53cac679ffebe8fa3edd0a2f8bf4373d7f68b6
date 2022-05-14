@@ -1,0 +1,108 @@
+I"�<p>安全也是Go语言设计者们在语言设计伊始就为Go设定的一个重要目标。在语言层面，Go提供了很多“安全保障”特性，比如：</p>
+
+<p>显式类型转换，不允许隐式转换；
+针对数组、切片的下标越界访问的检查；
+不安全代码隔离到unsafe包中，并提供安全使用unsafe包的几条rules；
+go module构建模式内置包hash校验，放置恶意包对程序的攻击；
+雇佣安全专家，提供高质量且及时更新的crypto包，尽量防止使用第三方加解密包带来的不安全性；
+支持纯静态编译，避免动态连接到恶意动态库；
+原生提供方便测试的工具链，并支持测试覆盖率统计。</p>
+
+<p>Fuzzing，又叫fuzz testing，中文叫做模糊测试或随机测试。其本质上是一种自动化测试技术，更具体一点，它是一种基于随机输入的自动化测试技术，常被用于发现处理用户输入的代码中存在的bug和问题。</p>
+
+<p>在具体实现上，Fuzzing不需要像单元测试那样使用预先定义好的数据集作为程序输入，而是会通过数据构造引擎自行构造或基于开发人员提供的初始数据构造一些随机数据，并作为输入提供给我们的程序，然后监测程序是否出现panic、断言失败、无限循环等。这些构造出来的随机数据被称为语料(corpus)。另外Fuzz testing不是一次性执行的测试，如果不限制执行次数和执行时间，Fuzz testing会一直执行下去，因此它也是一种持续测试的技术。</p>
+
+<p>Go对Fuzzing技术支持的简要回顾
+说过将Fuzzing技术引入Go，我们不能不提到一个人，它就是Go goroutine调度器的作者、前Intel Black Belt级工程师，现Google工程师的Dmitry Vyukov，它也是Go语言首个fuzzing工具go-fuzz的作者。</p>
+
+<p>2015年的GopherCon大会上，Dmitry Vyukov在其名为“[Go Dynamic Tools]”的presentation中就介绍了go-fuzz。我个人的gocmpp项目就是使用go-fuzz搭建的Fuzz test。
+<!-- more -->
+https://www.cnblogs.com/xyou/p/15812406.html</p>
+
+<p>https://github.com/dvyukov/go-fuzz</p>
+
+<p>go-fuzz（https://github.com/dvyukov/go-fuzz）是 Dmitry Vyukov 大神早在 go1.5 时代开源（Apache License 2.0 开源许可）的一款 golang 模糊测试工具，为解析复杂输入（文本或二进制）的系统提供了强大的鲁棒性验证手段。迄今为止，go-fuzz 已经为 go 语言（你没看错，就是 golang 自身）和一些三方库检测出了几百个缺陷</p>
+
+<p>Step0: 安装 go-fuzz-build 和 go-fuzz
+go get -u github.com/dvyukov/go-fuzz/go-fuzz@latest github.com/dvyukov/go-fuzz/go-fuzz-build@latest
+别忘了把 $GOPATH/bin 添加到 PATH 中</p>
+
+<p>Step1: 编写测试函数
+在代码中添加 method_fuzz.go，注意 // +build gofuzz 是必须添加的，接下来的构建步骤会对其进行识别。</p>
+
+<p>// +build gofuzz
+package tutorial</p>
+
+<p>func Fuzz(data []byte) int {
+  BrokenMethod(string(data))
+  return 0
+}
+Fuzz 函数的返回码目前有 3 个可选值：返回 1 表示当前的输入权重增加，返回 -1 表示当前的输入不添加进语料库，否则返回 0。</p>
+
+<p>Step2: 设计几个初始语料
+我们添加 F 和 FU 作为 BrokenMethod 的两个测试用例。当然，如果你的代码中有一些已经设计好的用例，也可以直接复制到 workdir/corpus 下。</p>
+
+<p>mkdir -p workdir/corpus
+echo -n “F”  &gt;workdir/corpus/1
+echo -n “FU” &gt;workdir/corpus/2
+添加初始语料不是必须的，但是 go-fuzz 作者建议初始语料越丰富越好，这对后续的模糊测试执行很有帮助！</p>
+
+<p>Step3: go-fuzz-build 生成测试工程
+go get -d github.com/dvyukov/go-fuzz-corpus
+go-fuzz-build
+这一步可能需要花一些时间，这跟工程的复杂度有关系。执行成功后，会在当前目录里看到一个 tutorial-fuzz.zip 的压缩包。</p>
+
+<p>go-fuzz 是 go1.5 时期的老家伙了，当前对 go module 的支持还处于早期阶段。构建测试前执行 go get -d github.com/dvyukov/go-fuzz-corpus 会在 go.mod 里添加一行并不需要的依赖，模糊测试执行完毕后使用 go mod tidy 即可恢复。</p>
+
+<p>Step4: go-fuzz 执行模糊测试
+go-fuzz -bin=tutorial-fuzz.zip -workdir=workdir
+这时我们看到控制台有如下输出：</p>
+
+<p>2021/05/16 13:56:45 workers: 4, corpus: 4 (2s ago), crashers: 1, restarts: 1/0, execs: 0 (0/sec), cover: 0, uptime: 3s
+2021/05/16 13:56:48 workers: 4, corpus: 4 (5s ago), crashers: 1, restarts: 1/0, execs: 0 (0/sec), cover: 6, uptime: 6s
+2021/05/16 13:56:51 workers: 4, corpus: 4 (8s ago), crashers: 1, restarts: 1/408, execs: 48969 (5440/sec), cover: 6, uptime: 9s
+…
+go-fuzz 执行测试时不会自动终止，当我们发现 crashers 字段的值不为 0 时（有用例触发了程序异常），就可以终止测试并查看测试结果了，导致程序异常的用例会存放在 workdir/crashers/ 目录中</p>
+
+<p>Step5: 分析测试结果
+$ tree workdir/crashers/
+workdir/crashers
+├── 0eb8e4ed029b774d80f2b66408203801cb982a60
+├── 0eb8e4ed029b774d80f2b66408203801cb982a60.output
+└── 0eb8e4ed029b774d80f2b66408203801cb982a60.quoted
+可见，workdir/crashers 中多出了 3 个文件，它们的文件名均为输入用例的 sha1sum 值。</p>
+
+<p>不带后缀的文件存放用例的原始输入
+后缀 .quoted 的文件存放字符串形式的用例输入（方便贴入代码直接进行调试，设计太友好了）
+后缀为 .output 的文件存放异常时的错误输出</p>
+
+<p>https://gocn.vip/topics/ZwLOz4FVQP
+http://blog.nsfocus.net/go-fuzz-0806/</p>
+
+<p>https://baijiahao.baidu.com/s?id=1708833269667273260&amp;wfr=spider&amp;for=pc
+https://www.zhihu.com/question/28303982</p>
+
+<p>https://www.code-intelligence.com/blog/automating-embedded-security</p>
+
+<p>https://firefox-source-docs.mozilla.org/tools/fuzzing/index.html</p>
+
+<p>http://www.oskip.com/post/golang/golang-build/</p>
+
+<p>// +build <tags>
+GOLANG</tags></p>
+<tags>说明：
+
+以空格分开表示AND
+以逗号分开表示OR
+!表示NOT
+标签可以指定为以下内容：
+
+操作系统，环境变量中GOOS的值，如：linux、darwin、windows等等。
+操作系统的架构，环境变量中GOARCH的值，如：arch64、x86、i386等等。
+使用的编译器,gc或者gccgo。
+是否开启CGO,cgo。
+golang版本号： 比如Go Version 1.1为go1.1,Go Version 1.12版本为go1.12，以此类推。
+其它自定义标签，通过go build -tags指定的值。
+
+</tags>
+:ET

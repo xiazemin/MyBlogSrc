@@ -1,0 +1,133 @@
+---
+title: grpc metadata Interceptor UnaryClientInterceptor
+layout: post
+category: golang
+author: 夏泽民
+---
+Unary Client Interceptor
+UnaryClientInterceptor intercepts the execution of a unary RPC on the client. Invoker is the handler to complete the RPC and it is the responsibility of the interceptor to call it. It is a function type with the signature:
+
+
+type UnaryClientInterceptor func(ctx context.Context, method string, req, reply interface{}, cc *ClientConn, invoker UnaryInvoker, opts ...CallOption) error
+
+
+func UnaryClientInterceptor(log logr.Logger, opts ...Option) grpc.UnaryClientInterceptor {
+	o := evaluateClientOpt(opts)
+	return func(ctx context.Context, method string, req, reply interface{}, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
+		request := req.(*api.ClientRequestType)
+		log.Info("requesting all product types from vendor: " + request.GetVendor())
+		fields := newClientLoggerFields(ctx, method)
+		startTime := time.Now()
+		err := invoker(ctx, method, req, reply, cc, opts...)
+		logFinalClientLine(o, log, fields, startTime, err, "finished client unary call")
+		return err
+	}
+}
+
+
+Unary Server Interceptor
+Unary server Interceptor has the signature:
+
+
+type UnaryServerInterceptor func(ctx context.Context, req interface{}, info *UnaryServerInfo, handler UnaryHandler) (resp interface{}, err error)
+
+
+It provides a hook to intercept the execution of a unary RPC on the server and it allow us to modify the response returned from the gRPC call. Context is used for timeouts but also to add/retrieve request metadata. info is the information on the gRPC server that is handling the request. handler has to be invoked to get the response back to the client. The Unary Server Interceptor looks fairly similar with the client, it is wraped within a function to evaluate the logging options if any.
+
+
+func UnaryServerInterceptor(log logr.Logger, opts ...Option) grpc.UnaryServerInterceptor {
+	o := evaluateServerOpt(opts)
+	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
+		request := req.(*api.ClientRequestType)
+		log.Info("have received a request for " + request.GetVendor() + " as vendor ")
+		startTime := time.Now()
+		newCtx := newLoggerForCall(ctx, info.FullMethod, startTime)
+
+		resp, err := handler(newCtx, req)
+
+		if !o.shouldLog(info.FullMethod, err) {
+			return resp, err
+		}
+		code := o.codeFunc(err)
+		level := o.levelFunc(code)
+		durField, durVal := o.durationFunc(time.Since(startTime))
+		fields := Extract(newCtx)
+		fields[durField] = durVal
+		fields["grpc.code"] = code.String()
+
+		levelLogf(log, level, "finished streaming call with code "+code.String(), fields, err)
+
+		return resp, err
+	}
+}
+
+https://dev-state.com/posts/grpc_framework_3/
+<!-- more -->
+https://dev.to/davidsbond/golang-creating-grpc-interceptors-5el5
+
+https://shijuvar.medium.com/writing-grpc-interceptors-in-go-bf3e7671fe48
+
+https://github.com/grpc-ecosystem/go-grpc-middleware/blob/master/retry/retry.go
+
+
+HTTP标头是否区分大小写？
+HTTP报头的名称是不区分大小写，根据RFC 2616：
+
+每个标题字段由一个名字后跟一个冒号（“：”）和字段值组成。字段名称不区分大小写。
+
+（字段值可能区分大小写，也可能不区分大小写）
+
+如果信任主要的浏览器遵守这一点，你就全部设置。
+
+顺便说一句，不像大多数的HTTP，方法（动词）是区分大小写的：
+
+方法标记指示在
+
+由请求URI标识的资源上执行的方法。该方法是区分大小写的。
+
+https://cloud.tencent.com/developer/ask/26311
+
+gRPC让我们可以像本地调用一样实现远程调用，对于每一次的RPC调用中，都可能会有一些有用的数据，而这些数据就可以通过metadata来传递。metadata是以key-value的形式存储数据的，其中key是string类型，而value是[]string，即一个字符串数组类型。metadata使得client和server能够为对方提供关于本次调用的一些信息，就像一次http请求的RequestHeader和ResponseHeader一样。http中header的生命周周期是一次http请求，那么metadata的生命周期就是一次RPC调用。
+
+这个包中实现了多种创建metadata的方法。首先我们来看看metadata的定义：
+
+type MD map[string][]string
+发送metadata
+在client中可以通过两个方法将metadata发送到server端。通过AppendToOutgoingContext方法可以将key-value对添加到已有的context中。如果对应的context没有metadata，那么就会创建一个；如果已有metadata了，那么就将数据添加到原来的metadata中：
+
+
+// create a new context with some metadata
+ctx := metadata.AppendToOutgoingContext(ctx, "k1", "v1", "k1", "v2", "k2", "v3")
+
+另一个方法是通过NewOutgoingContext方法将新创建的metadata添加到context中，这样会覆盖掉原来已有的metadata，所以使用的时候需要注意。同时，这个方法比AppendToOutgoingContext方法要慢
+
+4.1 接收metadata
+服务器需要在RPC调用中的context中获取客户端发送的metadata。如果是一个普通的RPC调用，那么就可以直接用context；如果是一个Streaming调用，服务器需要从相应的stream里获取context，然后获取metadata。
+
+Unary Call
+func (s *server) SomeRPC(ctx context.Context, in *pb.someRequest) (*pb.someResponse, error) {
+    md, ok := metadata.FromIncomingContext(ctx)
+    // do something with metadata
+}
+https://www.jianshu.com/p/863dad87d16f
+
+
+
+grpc SetHeader 和 SetTrailer 的区别和联系
+
+在使用grpc过程中发现，发送 matedata 有两种方式 一种是通过 grpc.SendHeader(ctx,md),另外一种是 grpc.SetTrailer(ctx,md)
+
+疑问 既然可以通过 SendHeader 发送元数据，为什么还需要通过 SetTrailer 发送呢？这两个的区别和联系是什么呢？
+
+过程
+首先，我们需要知道grpc通信模式分为四种
+
+一元RPC模式
+服务器流RPC模式
+客户端流RPC模式
+双向流RPC模式
+然后，我们看 一元RPC模式 和 双向流RPC模式 的区别
+header和trailer的接收时机不同，可以看出，在一元模式中，header和trailer是一起到达客户端的，此时客户端从header或者trailer中获取 metadata 是一样的，但是在流模式中，header是先到达，然后接收多个stream内容，最后才获取到trailer，获取的时机是不一样的，所以 grpc 提供了两种方式让我们发送 metadata
+
+https://blog.csdn.net/luo1324574369/article/details/115221853
+

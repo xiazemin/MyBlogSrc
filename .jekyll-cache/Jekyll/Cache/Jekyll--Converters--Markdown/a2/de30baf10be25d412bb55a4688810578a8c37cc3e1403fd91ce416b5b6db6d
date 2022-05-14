@@ -1,0 +1,66 @@
+I">+<p>https://eklitzke.org/how-tcp-sockets-work
+tcp 连接的可读可写有两种方式通知内核：轮询和中断
+内核收到可读事件可写事件后分配连接队列（backlog），listen的时候设置；或者拒绝连接。
+应用程序读写数据有两种方式：阻塞和非阻塞；阻塞方式是read／write系统调用后，一直等待，连接队列的接受／发送缓冲可读／写的时候，读／写数据，处理完了返回。非阻塞方式read／write系统调用后立即返回。连接队列的接受／发送缓冲可读／写的时候处罚读写事件，事件处理器（libevent）分发给处理函数处理。</p>
+
+<p>连接队列是网络传输和用户读写的一个中间缓冲队列。
+<!-- more -->
+In this post I’m going to explain at a high level how the TCP/IP stack works on Linux. In particular, I’ll explore how the socket system calls interact with kernel data structures, and how the kernel interacts with the actual network. Part of the motivation for this post is to explain how listen queue overflows work, as it’s related to a problem I’ve been working on at work.</p>
+
+<p>How Established Connections Work
+This explanation will be from the top down, so we’ll start with how already established connections work. Later I’ll explain how newly established connections work.</p>
+
+<p>For each TCP file descriptor tracked by the kernel there is a struct tracking some TCP-specific info (e.g. sequence numbers, the current window size, and so on), as well as a receive buffer (or “queue”) and a write buffer (or “queue”). I’ll use the terms buffer and queue interchangeably. If you’re curious about more details, you can see the implementation of socket structs in the Linux kernel’s net/sock.h.</p>
+
+<p>When a new data packet comes in on the network interface (NIC), the kernel is notified either by being interrupted by the NIC, or by polling the NIC for data. Typically whether the kernel is interrupt driven or in polling mode depends on how much network traffic is happening; when the NIC is very busy it’s more efficient for the kernel to poll, but if the NIC is not busy CPU cycles and power can be saved by using interrupts. Linux calls this technique NAPI, literally “New API”.</p>
+
+<p>When the kernel gets a packet from the NIC it decodes the packet and figures out what TCP connection the packet is associated with based on the source IP, source port, destination IP, and destination port. This information is used to look up the struct sock in memory associated with that connection. Assuming the packet is in sequence, the data payload is then copied into the socket’s receive buffer. At this point the kernel will wake up any processes doing a blocking read(2), or that are using an I/O multiplexing system call like select(2) or epoll_wait(2) to wait on the socket.</p>
+
+<p>When the userspace process actually calls read(2) on the file descriptor it causes the kernel to remove the data from its receive buffer, and to copy that data into a buffer supplied to the read(2) system call.</p>
+
+<p>Sending data works similarly. When the application calls write(2) it copies data from the user-supplied buffer into the kernel write queue. Subsequently the kernel will copy the data from the write queue into the NIC and actually send the data. The actual transmission of the data to the NIC could be somewhat delayed from when the user actually calls write(2) if the network is busy, if the TCP send window is full, if there are traffic shaping policies in effect, etc.</p>
+
+<p>One consequence of this design is that the kernel’s receive and write queues can fill up if the application is reading too slowly, or writing too quickly. Therefore the kernel sets a maximum size for the read and write queues. This ensures that poorly behaved applications use a bounded amount of memory. For instance, the kernel might cap each of the receive and write queues at 100 KB. Then the maximum amount of kernel memory each TCP socket could use would be approximately 200 KB (as the size of the other TCP data structures is negligible compared to the size of the queues).</p>
+
+<p>Read Semantics
+If the receive buffer is empty and the user calls read(2), the system call will block until data is available.</p>
+
+<p>If the receive buffer is nonempty and the user calls read(2), the system call will immediately return with whatever data is available. A partial read can happen if the amount of data ready in the read queue is less than the size of the user-supplied buffer. The caller can detect this by checking the return value of read(2).</p>
+
+<p>If the receive buffer is full and the other end of the TCP connection tries to send additional data, the kernel will refuse to ACK the packets. This is just regular TCP congestion control.</p>
+
+<p>Write Semantics
+If the write queue is not full and the user calls write(2), the system call will succeed. All of the data will be copied if the write queue has sufficient space. If the write queue only has space for some of the data then a partial write will happen and only some of the data will be copied to the buffer. The caller checks for this by checking the return value of write(2).</p>
+
+<p>If the write queue is full and the user calls write(2), the system call will block.</p>
+
+<p>How Newly Established Connection Work
+In the previous section we saw how established connections use receive and write queues to limit the amount of kernel memory allocated for each connection. A similar technique is used to limit the amount of kernel memory reserved for new connections.</p>
+
+<p>From a userspace point of view, newly established TCP connections are created by calling accept(2) on a listen socket. A listen socket is one that has been designated as such using the listen(2) system call.</p>
+
+<p>The prototype for accept(2) takes a socket and two fields storing information about the other end of the socket. The value returned by accept(2) is an integer representing the file descriptor for a new, established connection:</p>
+
+<p>int accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen);
+The prototype for listen(2) takes a socket file descriptor and a backlog parameter:</p>
+
+<p>int listen(int sockfd, int backlog);
+The backlog is a parameter that controls how much memory the kernel will reserve for new connections, when the user isn’t calling accept(2) fast enough.</p>
+
+<p>For instance, suppose you have a blocking single-threaded HTTP server, and each HTTP request takes about 100 ms. In this scenario the HTTP server will spend 100 ms processing each request before it is able to call accept(2) again. This means that at up to 10 rps there will be no queuing. If more than 10 rps come in the kernel has two choices.</p>
+
+<p>The first choice the kernel has is to not accept the connection at all. For instance, the kernel can just refused to ACK an incoming SYN packet. More commonly what will happen is the kernel will complete the TCP three-way handshake, and then terminate the connection with RST. Either way, the result is the same: no receive or write buffers need to be allocated if the connection is rejected. The argument for doing this is that if the userspace process isn’t accepting connections fast enough, the correct thing to do is to fail new requests. The argument against doing this is that it’s very aggressive, especially if new connections are “bursty” over time.</p>
+
+<p>The second choice the kernel has is to accept the connection and allocate a socket structure for it (including receive/write buffers), and then queue the socket object for use later. The next time the user calls accept(2), instead of blocking the system call will immediately get the already-allocated socket.</p>
+
+<p>The argument for the second behavior is that it’s more forgiving when the processing rate or connection rate tends to burst. For instance, in the server we just described, imagine that 10 new connections come in all at once, and then no more connections come in for the rest of the second. If the kernel queues new connections then all of the requests will be processed over the course of the second. If the kernel had been rejecting new connections then only one of the connections would have succeeded, even though the process was able to keep up with the aggregate request rate.</p>
+
+<p>There are two arguments against queueing. The first is that excessive queueing can cause a lot of kernel memory to be allocated. If the kernel is allocating thousands of sockets with large receive buffers then memory usage can grow quickly, and the userspace process might not even be able to process all of those requests anyway. The other argument against queueing is that it makes the application appear slow to the other side of the connection, the client. The client will see that it can establish new TCP connections, but when it tries to use them it will appear that the server is very slow to respond. The argument is that in this situation it would be better to just fail the new connections, since that provides more obvious feedback that the server is not healthy. Additionally, if the server is aggressively failing new connections the client can know to back off; this is another form of congestion control.</p>
+
+<p>Listen Queues &amp; Overflows
+As you might suspect, the kernel actually combines these two approaches. The kernel will queue new connections, but only a certain number of them. The amount of connections the kernel will queue is controlled by the backlog parameter to listen(2). Typically this is set to a relatively small value. On Linux, the socket.h header sets the value of SOMAXCONN to 128, and before kernel 2.4.25 this was the maximum value allowed. Nowadays the maximum value is specified in /proc/sys/net/core/somaxconn, but commonly you’ll find programs using SOMAXCONN (or a smaller hard-coded value) anyway.</p>
+
+<p>When the listen queue fills up, new connections will be rejected. This is called a listen queue overflow. You can observe when this is happening by reading /proc/net/netstat and checking the value of ListenOverflows. This is a global counter for the whole kernel. As far as I know, you can’t get listen overflow stats per listen socket.</p>
+
+<p>Monitoring for listen overflows is important when writing network servers, because listen overflows don’t trigger any user-visible behavior from the server’s perspective. The server will happily accept(2) connections all day without returning any indication that connections are being dropped. For example, suppose you are using Nginx as a proxy in front of a Python application. If the Python application is too slow then it can cause the Nginx listen socket to overflow. When this happens you won’t see any indication of this in the Nginx logs—you’ll keep seeing 200 status codes and so forth as usual. Thus if you’re just monitoring the HTTP status codes for your application you’ll fail to see that TCP errors are preventing requests from being forwarded to the application.</p>
+:ET

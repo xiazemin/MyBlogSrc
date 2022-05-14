@@ -1,0 +1,36 @@
+I"�<p>https://github.com/vishvananda/netlink
+ 添加一个网桥
+ 设置网桥地址 状态
+ 往网桥上attach设备
+ 设置iptables
+ 将veth设备中的一端加入到某个namespace中
+ 删除设备
+ https://www.jianshu.com/p/be7af63f666f?utm_campaign=maleskine&amp;utm_content=note&amp;utm_medium=seo_notes&amp;utm_source=recommendation
+<!-- more -->
+什么是netlink？</p>
+
+<p>netlink 是 Linux 系统里用户态程序、内核模块之间的一种 IPC 方式，特别是用户态程序和内核模块之间的 IPC 通信。比如在 Linux 终端里常用的 ip 命令，就是使用 netlink 去跟内核进行通信的。例如想在golang代码中实现ip link add xx的效果，一种办法是使用exec包执行对应的ip命令，另一种是采用netlink的方式，但是自己操作netlink还是有点繁琐。</p>
+
+<p>二、golang netlink库</p>
+
+<p>给大家推荐下https://github.com/vishvananda/netlink，使得在golang中使用netlink变的简单，对程序员小伙伴很友好。</p>
+
+<p>netlink 包为 go 提供了一个简单的 netlink 库。Netlink 是 linux用户态程序用来与内核通信的接口。它可用于添加和删除接口、设置 ip 地址和路由以及配置 ipsec。Netlink 通信需要提升权限，因此在大多数情况下，此代码需要以 root 身份运行。由于底层 netlink 消息晦涩不好理解和使用，因此该库尝试提供一个简易api，该 API 模仿了 iproute2 提供的 CLI。诸如 ip link add 之类的操作将通过类似命名的函数（如 AddLink()）来完成。这个库最初是 docker/libcontainer 中 netlink 功能的一个分支</p>
+
+<p>https://blog.csdn.net/RA681t58CJxsgCkJ31/article/details/120714569</p>
+
+<p>https://jishuin.proginn.com/p/763bfbd68ac8</p>
+
+<p>https://vimsky.com/examples/detail/golang-ex-github.com.vishvananda.netlink—LinkSetMaster-function.html</p>
+
+<p>https://segmentfault.com/a/1190000020360793
+同时在 pkg/chaosdaemon 包中，我们能看到 Chaos Daemon 处理请求的方法。</p>
+
+<p>func (s <em>Server) SetNetem(ctx context.Context, in *pb.NetemRequest) (</em>empty.Empty, error) {    log.Info(“Set netem”, “Request”, in)    pid, err := s.crClient.GetPidFromContainerID(ctx, in.ContainerId)    if err != nil {        return nil, status.Errorf(codes.Internal, “get pid from containerID error: %v”, err)    }    if err := Apply(in.Netem, pid); err != nil {        return nil, status.Errorf(codes.Internal, “netem apply error: %v”, err)    }    return &amp;empty.Empty{}, nil}// Apply applies a netem on eth0 in pid related namespacefunc Apply(netem *pb.Netem, pid uint32) error {    log.Info(“Apply netem on PID”, “pid”, pid)    ns, err := netns.GetFromPath(GenNetnsPath(pid))    if err != nil {        log.Error(err, “failed to find network namespace”, “pid”, pid)        return errors.Trace(err)    }    defer ns.Close()    handle, err := netlink.NewHandleAt(ns)    if err != nil {        log.Error(err, “failed to get handle at network namespace”, “network namespace”, ns)        return err    }    link, err := handle.LinkByName(“eth0”) // TODO: check whether interface name is eth0    if err != nil {        log.Error(err, “failed to find eth0 interface”)        return errors.Trace(err)    }    netemQdisc := netlink.NewNetem(netlink.QdiscAttrs{        LinkIndex: link.Attrs().Index,        Handle:    netlink.MakeHandle(1, 0),        Parent:    netlink.HANDLE_ROOT,    }, ToNetlinkNetemAttrs(netem))    if err = handle.QdiscAdd(netemQdisc); err != nil {        if !strings.Contains(err.Error(), “file exists”) {            log.Error(err, “failed to add Qdisc”)            return errors.Trace(err)        }    }    return nil}
+最终使用 vishvananda/netlink[11] 库操作 Linux 网络接口来完成工作。</p>
+
+<p>这里能够知道，NetworkChaos 混沌类型，操作了 Linux 宿主机网络来制造混沌，包含 iptables、ipset 等工具。</p>
+
+<p>https://cloud.tencent.com/developer/article/1895583
+https://www.infoq.cn/article/vQFqtXzSZHUeY7slSUlA</p>
+:ET

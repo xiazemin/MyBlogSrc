@@ -1,0 +1,77 @@
+---
+title: golang动态加载原生代码思路
+layout: post
+category: golang
+author: 夏泽民
+---
+
+golang动态加载原生代码思路（非plugin，非so文件。使用mmap形式运行机器码，可释放）
+
+ 
+
+1.用go tool objdump，可以看到任意函数的机器码、汇编指令、偏移。（go源码下面有一个cmd/internal/goobj包，可以读到.o文件的重定向信息，更好。）
+
+2.修改里面的golang内部函数的相对跳转，指向加载者相同的函数的地址（可以用cmd/internal/goobj包读取所有函数的地址），常见的有runtime.newobject、runtime.convT2Eslice、runtime.panicindex、runtime.morestack_noctxt等runtime系列函数。
+
+3.修改golang类型指针偏移（当对象转换成interface{}时候，需要一个类型指针），指向加载者相同的类型。
+
+4.修改指向字符串，全局变量，自定义函数的偏移（一般都是相对偏移）。还有其他的一些信息，这个可以做实验发现。
+
+5.写入mmap，并执行。
+<!-- more -->
+整体思路是，通过修改偏移，复用加载者所用到的函数、golang内部函数、golang类型信息等。
+
+ 
+
+缺点：
+
+1.可以自定义类型，但是不能将这些类型的对象赋值到interface{}（加载者已定义的类型可以），比如使用fmt.Println打印这些对象（但是可以打印这些对象的成员）。因为golang内部的一些全局变量（比如golang类型）可能存在指针，而且开始就初始化了。
+
+2.不能在函数外初始化全局变量。（可能的解决方法：定义一个入口函数，在里面初始化，或者读取main.init函数，取出初始化代码。）
+
+ 
+
+优点：
+
+仍然使用golang和golang编译工具。
+
+速度极快，体积极小。相当于复用了golang内部的调度器、内存分配器、类型系统等。
+
+可以自定义。golang函数内的汇编足够简单，可以开发自己的工具来实现上面的思路。
+
+ 
+
+用途：
+
+一些过滤，路由，缓存，前端逻辑。有很多逻辑直接在前端处理更好。
+
+直接处理，不想放到后端，不想重启程序的服务，类似openresty。
+
+「京东开涛」使用Nginx+Lua(OpenResty)开发高性能Web应用
+https://www.jianshu.com/p/36f1955edb8b
+
+京东三级列表页持续架构优化—Golang+Lua(OpenResty)最佳实践
+http://www.sohu.com/a/119466814_494947
+
+https://github.com/dearplain/goloader
+
+这个动态加载库是很有意思的项目，它直接重用了golang编译器的输出，不需要自己写编译器，就能支持所有golang的语言特征，免费使用编译器的优化。
+
+因为这个库只进行符号重定位，和提供runtime信息，所有这些逻辑是很少改动的，这样使得这个库兼容能力特别强，比如golang出新版本时候，只需要做很少的改动或者不改动，就能支持新版本。
+
+同时它也重用了不少go的内部库，特别是读取object文件的库，这些重用使得它变得轻量和便于维护。
+
+ 
+
+它对比plugin的优势，一是它是可以卸载加载的代码，二是它复用了runtime，不像plugin那么大，三是它同时支持windows、macos、linux。
+
+它也是唯一一个能动态加载卸载原生golang的库。
+
+另外，它加载的代码是可以调试的，而且支持pprof，就是说你可以在pprof工具里面看到加载的代码！
+
+目前goloader支持>=1.8的go版本，支持x86/x64、arm32指令集，支持windows、linux、macos。
+
+ 
+
+整个项目花了笔者不少时间，不过结果看起来还算满意，它的小巧和可卸载性、和golang一样的高性能、可调试性、可以pprof，使得它有自己的优点。
+https://www.cnblogs.com/dearplain/p/8543804.html

@@ -1,0 +1,263 @@
+---
+title: gostub
+layout: post
+category: golang
+author: 夏泽民
+---
+GoStub是一款轻量级的单元测试框架，接口友好，可以对全局变量、函数或过程进行打桩。
+GoStub安装：
+go get github.com/prashantv/gostub
+<!-- more -->
+二、GoStub常用方法
+gostub用于在测试时打桩变量，一旦测试运行时，重置原来的值。
+
+type Stubs struct {
+   // stubs is a map from the variable pointer (being stubbed) to the original value.
+   stubs   map[reflect.Value]reflect.Value
+   origEnv map[string]envVal
+}
+Stubs代表一系列可以重置的打桩变量。
+
+func Stub(varToStub interface{}, stubVal interface{}) *Stubs {
+   return New().Stub(varToStub, stubVal)
+}
+Stub使用stubVal替代存储在varToStub变量的值，返回*Stubs类型变量
+varToStub必须是指向变量的指针。
+stubVal是可赋值到变量的类型
+
+func StubFunc(funcVarToStub interface{}, stubVal ...interface{}) *Stubs {
+   return New().StubFunc(funcVarToStub, stubVal...)
+}
+StubFunc用返回stubval值的函数替换函数变量，返回*Stubs类型变量
+funcVarToStub是指向函数变量的指针。如果函数返回多个值，返回的多个值被传递给StubFunc。
+func New() *Stubs
+New返回用于打桩变量的*Stubs变量
+func (s *Stubs) Reset()
+Reset重置打桩的所有变量到其原始值
+func (s *Stubs) ResetSingle(varToStub interface{})
+ResetSingle重置打桩的单个变量到其原始值
+func (s *Stubs) SetEnv(k, v string) *Stubs
+SetEnv设置指定的环境变量到指定值
+func (s *Stubs) UnsetEnv(k string) *Stubs
+UnsetEnv还原指定环境变量的值
+func (s *Stubs) Stub(varToStub interface{}, stubVal interface{}) *Stubs
+Stub使用stubVal替代存储在varToStub变量的值
+varToStub必须是指向变量的指针。
+stubVal是可赋值到变量的类型
+func (s *Stubs) StubFunc(funcVarToStub interface{}, stubVal ...interface{}) *Stubs
+StubFunc用返回stubval值的函数替换函数变量，返回*Stubs类型变量
+funcVarToStub是指向函数变量的指针。如果函数返回多个值，返回的多个值被传递给StubFunc。
+
+三、GoStub应用示例
+1、GoStub应用场景
+GoStub框架的使用场景如下：
+A、为一个全局变量打桩
+B、为一个函数打桩
+C、为一个过程打桩
+D、由任意相同或不同的基本场景组合而成
+
+2、为全局变量打桩
+假设counter为被测函数中使用的一个全局整型变量，当前测试用例中假定counter的值为200，则打桩的代码如下：
+
+package main
+
+import (
+   "fmt"
+
+   "github.com/prashantv/gostub"
+)
+
+var counter = 100
+
+func stubGlobalVariable() {
+   stubs := gostub.Stub(&counter, 200)
+   defer stubs.Reset()
+   fmt.Println("Counter:", counter)
+}
+
+func main() {
+   stubGlobalVariable()
+}
+
+// output:
+// Counter: 200
+stubs是GoStub框架的函数接口Stub返回的对象，Reset方法将全局变量的值恢复为原值。
+
+package main
+
+import (
+   "io/ioutil"
+
+   "fmt"
+
+   "github.com/prashantv/gostub"
+)
+
+var configFile = "config.json"
+
+func GetConfig() ([]byte, error) {
+   return ioutil.ReadFile(configFile)
+}
+
+func stubGlobalVariable() {
+   stubs := gostub.Stub(&configFile, "/tmp/test.config")
+   defer stubs.Reset()
+   /// 返回tmp/test.config文件的内容
+   data, err := GetConfig()
+   if err != nil {
+      fmt.Println(err)
+   }
+   fmt.Println(data)
+}
+
+func main() {
+   stubGlobalVariable()
+}
+3、为函数打桩
+通常函数分为工程自定义函数与库函数。
+假设工程中自定义函数如下：
+
+func Exec(cmd string, args ...string) (string, error) {
+   ...
+}
+Exec函数是不能通过GoStub框架打桩的。如果想要通过GoStub框架对Exec函数进行打桩，则仅需对自定义函数进行简单的重构，即将Exec函数定义为匿名函数，同时将其赋值给Exec变量，重构后的代码如下：
+
+var Exec = func(cmd string, args ...string) (string, error) {
+   ...
+}
+当Exec函数重构成Exec变量后，并不影响既有代码中对Exec函数的调用。由于Exec变量是函数变量，因此一般函数变量也叫做函数。对Exec函数变量进行打桩的代码如下：
+
+stubs := Stub(&Exec, func(cmd string, args ...string) (string, error) {
+   return "test", nil
+})
+defer stubs.Reset()
+GoStub框架专门提供了StubFunc函数用于函数打桩，对于函数的打桩代码如下：
+
+stubs := StubFunc(&Exec,"test", nil)
+defer stubs.Reset()
+工程代码中会调用Golang库函数或第三方库函数，由于不能重构库函数，因此需要在工程代码中增加一层适配层，在适配层中定义库函数的变量，然后在工程代码中使用函数变量。
+
+package Adapter
+
+import (
+   "time"
+
+   "fmt"
+
+   "os"
+
+   "github.com/prashantv/gostub"
+)
+
+var timeNow = time.Now
+var osHostname = os.Hostname
+
+func getDate() int {
+   return timeNow().Day()
+}
+func getHostName() (string, error) {
+   return osHostname()
+}
+
+func StubTimeNowFunction() {
+   stubs := gostub.Stub(&timeNow, func() time.Time {
+      return time.Date(2015, 6, 1, 0, 0, 0, 0, time.UTC)
+   })
+   fmt.Println(getDate())
+   defer stubs.Reset()
+}
+
+func StubHostNameFunction() {
+   stubs := gostub.StubFunc(&osHostname, "LocalHost", nil)
+   defer stubs.Reset()
+   fmt.Println(getHostName())
+}
+使用示例：
+
+package main
+
+import "GoExample/GoStub/StubFunction"
+
+func main() {
+   Adapter.StubTimeNowFunction()
+   Adapter.StubHostNameFunction()
+}
+4、为过程打桩
+没有返回值的函数称为过程。通常将资源清理类函数定义为过程。
+
+package main
+
+import (
+   "fmt"
+
+   "github.com/prashantv/gostub"
+)
+
+var CleanUp = cleanUp
+
+func cleanUp(val string) {
+   fmt.Println(val)
+}
+
+func main() {
+   stubs := gostub.StubFunc(&CleanUp)
+   CleanUp("Hello go")
+   defer stubs.Reset()
+}
+5、复杂场景
+不论是调用Stub函数还是StubFunc函数，都会生成一个Stubs对象，Stubs对象仍然有Stub方法和StubFunc方法，所以在一个测试用例中可以同时对多个全局变量、函数或过程打桩。全局变量、函数或过程会将初始值存在一个map中，并在延迟语句中通过Reset方法统一做回滚处理。
+多次打桩代码如下：
+
+stubs := gostub.Stub(&v1, 1)
+defer stubs.Reset()
+
+// Do some testing
+stubs.Stub(&v1, 5)
+
+// More testing
+stubs.Stub(&b2, 6)
+多次打桩的级联表达式代码如下：
+defer gostub.Stub(&v1, 1).Stub(&v2, 2).Reset()
+使用GoConvey测试框架和GoStub测试框架编写的测试用例如下：
+
+package main
+
+import (
+   "fmt"
+   "testing"
+
+   "GoExample/GoStub/StubFunction"
+
+   "time"
+
+   "github.com/prashantv/gostub"
+   . "github.com/smartystreets/goconvey/convey"
+)
+
+var counter = 100
+var CleanUp = cleanUp
+
+func cleanUp(val string) {
+   fmt.Println(val)
+}
+
+func TestFuncDemo(t *testing.T) {
+   Convey("TestFuncDemo", t, func() {
+      Convey("for succ", func() {
+         stubs := gostub.Stub(&counter, 200)
+         defer stubs.Reset()
+         stubs.Stub(&Adapter.TimeNow, func() time.Time {
+            return time.Date(2015, 6, 1, 0, 0, 0, 0, time.UTC)
+         })
+         stubs.StubFunc(&CleanUp)
+         fmt.Println(counter)
+         fmt.Println(Adapter.TimeNow().Day())
+         CleanUp("Hello go")
+      })
+   })
+}
+6、不适用场景
+GoStub框架可以解决很多场景的函数打桩问题，但下列复杂场景除外：
+A、被测函数中多次调用了数据库读操作函数接口，并且数据库为key-value型。
+B、被测函数中有一个循环，用于一个批量操作，当某一次操作失败，则返回失败，并进行错误处理。
+C、被测函数中多次调用了同一底层操作函数。

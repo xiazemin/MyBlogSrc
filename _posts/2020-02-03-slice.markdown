@@ -1,0 +1,267 @@
+---
+title: slice
+layout: post
+category: golang
+author: 夏泽民
+---
+https://mp.weixin.qq.com/s/r3ZJVdq0dTkA1xHinIVLUA
+<!-- more -->
+Slice 作为 go 常用的数据类型，在日常编码中非常常见。相对于数组的定长不可变，slice 使用起来就灵活了许多。
+
+文章目录
+
+0x01 slice 到底是什么？
+
+0x02 slice 能比较么？
+
+0x03 花样的切片操作
+
+0x04 append 时发生了什么？
+
+0x05 append 内部优化
+
+扩容的策略是什么？
+
+扩容判断中`uint`的作用是啥？
+
+内存清零初始化: memclrNoHeapPointers vs typedmemclr?
+
+0x01 slice 到底是什么？
+
+首先我们看下源码中 slice 结构的定义
+
+// src/runtime/slice.go
+type slice struct {
+	array unsafe.Pointer
+	lenint
+	capint
+}
+slice 数据结构如上，Data 指向底层引用的数组内存地址, len 是已用长度，cap 是总容量。
+为验证如上所述，我们尝试声明一个 slice a，获取 a 的 sliceHeader 头信息sh，并用%p获取&a, sh, a, a[0]的地址 看看他们的地址是否相同。
+a := make([]int, 1, 3)
+//reflect.SliceHeader 为 slice运行时数据结构
+sh := (*reflect.SliceHeader)(unsafe.Pointer(&a))
+fmt.Printf("slice header: %#v\naddress of a: %p &a[0]: %p |  &a: %p sh:%p ",
+    sh, a, &a[0],&a, sh)
+
+//slice header: &reflect.SliceHeader{Data:0xc000018260, Len:1, Cap:3}
+//address of a: 0xc000018260 &a[0]: 0xc000018260 | &a: 0xc00000c080 sh:0xc00000c080
+结果发现a和&a[0]地址相同。
+
+这个好理解，切片指向地址即对应底层引用数组首个元素地址 而&a和sh及sh.Data指向地址相同。这个是因为这三个地址是指 slice 自身地址。
+
+这里【slice 自身地址不同于 slice 指向的底层数据结构地址】， 清楚这一点对于后边的一些问题会更容易判断。
+
+这里作为一个小插曲，我们看下当fmt.Printf("%p",a)时发生了什么 内部调用链 fmtPointer[1] -> Value.Pointer[2]然后根据 Pointer 方法对应 slice 的注释如下
+
+// If v's Kind is Slice, the returned pointer is to the first
+// element of the slice. If the slice is nil the returned value
+// is 0.  If the slice is empty but non-nil the return value is non-zero.
+发现没，正是我们上边说的，slice 不为空时，返回了第一个元素的地址 
+有点迷惑性是不是，但其实作为使用 slice 的我们，更关心的是底层指向的数据不是么。
+再一点就是，基于 go 中所有赋值和参数传递都是值传递，对于大数组而言，拷贝一个指向他的 slice 就高效多了 
+上一篇 [Go 之 for-range 排坑指南] 有过描述, 详见 0x03 对大数组这样遍历有啥问题？
+总结下， slice 是一个有底层数组引用的结构里，有长度，有容量。
+就这么简单？不，光这样还不足以让它比数组更好用。
+slice 还支持非常方便的切片操作和 append 时自动扩容，这让他更加 flexible
+0x02 slice 能比较么？
+答案是【只能和 nil 比较】
+
+s := make([]int, 5)
+a := s
+println(s == a)
+//invalid operation: s == a (slice can only be compared to nil)
+这个也其实好理解，当你比较两个 slice，你是想比较他们自身呢？（必然不同啊，因为有值拷贝） 还是比较他们底层的数组？（那长度和容量也一起比较么） 确实没有什么意义去做两个 slice 的比较。
+
+0x03 花样的切片操作
+slice 通过三段参数来操作：x[from:len:cap]
+即对 x 从from索引位置开始，截取len长度，cap大小的新切片返回 
+但是 len 和 cap 不能大于 x 原来的 len 和 cap 
+另外三个参数都可省略，默认为x[0:len(x):cap(x)]
+切片操作同样适用于 array 
+如下都是通过src[:]常规对切片（指向的底层数组）或数组的引用
+s:=make([]int,5)
+x:=s[:]
+
+arr:=[5]int{}
+y:=arr[:]
+配合 copy 和 append，slice 的操作还有很多，官方 wikiSlice Tricks[3] 有更丰富的例子 比如更通用的拷贝b = append(a[:0:0], a...)比如 cut 或 delete 时增加对不使用指针的 nil 标记释放(防止内存泄露)
+
+//Cut
+copy(a[i:], a[j:])
+for k, n := len(a)-j+i, len(a); k < n; k++ {
+	a[k] = nil// or the zero value of T
+}
+a = a[:len(a)-j+i]
+
+//Delete
+if i < len(a)-1 {
+  copy(a[i:], a[i+1:])
+}
+a[len(a)-1] = nil// or the zero value of T
+a = a[:len(a)-1]
+不熟悉的话，建议好好练习一下去感受
+
+0x04 append 时发生了什么？
+总的来说，append 时会按需自动扩容
+
+容量足够，无扩容则直接拷贝待 append 的数据到原 slice 底层指向的数组 之后（原slice的len之后），并返回指向该数组首地址的新slice（len改变）
+容量不够，有扩容则拷贝原有 slice 所指向部分数据到新开辟的数组，并对待 append 的数据附加到其后，并返回新数组首地址的新slice（底层数组，len，cap均改变）
+如下代码所示，容量不够时触发了扩容重新开辟底层数组，x 和 s 底层指向的数组已不是同一个
+
+s := make([]int, 5)
+x := append(s, 1)
+fmt.Printf("x dataPtr: %p len: %d cap: %d\ns dataPtr: %p len: %d cap: %d",
+    x, len(x), cap(x),
+    s, len(s), cap(s))
+// x dataPtr: 0xc000094000 len: 6 cap: 10
+// s dataPtr: 0xc000092030 len: 5 cap: 5
+0x05 append 内部优化
+具体查阅源码，你会发现编译时将 append 分为三类并优化
+
+除按需扩容外
+
+x = append(y, make([]T, y)...)
+使用 memClr 提高初始化效率
+x = append(l1, l2...) 或者 x = append(slice, string)
+直接复制 l2
+
+x = append(src, a, b, c)
+确定待 append 数目下，直接做赋值优化
+
+具体编译优化如下 注释有简化，详见internal/gc/walk.go: append[4]
+
+switch {
+case isAppendOfMake(r):
+// x = append(y, make([]T, y)...) will rewrite to
+
+    // s := l1
+    // n := len(s) + l2
+    // if uint(n) > uint(cap(s)) {
+    //   s = growslice(T, s, n)
+    // }
+    // s = s[:n]
+    // lptr := &l1[0]
+    // sptr := &s[0]
+    // if lptr == sptr || !hasPointers(T) {
+    //   // growslice did not clear the whole underlying array
+         // (or did not get called)
+    //   hp := &s[len(l1)]
+    //   hn := l2 * sizeof(T)
+    //   memclr(hp, hn)
+    // }
+
+    //使用memClr提高初始化效率
+    r = extendslice(r, init)
+case r.IsDDD(): // DDD is ... syntax
+// x = append(l1, l2...) will rewrite to
+
+    // s := l1
+    // n := len(s) + len(l2)
+    // if uint(n) > uint(cap(s)) {
+    //   s = growslice(s, n)
+    // }
+    // s = s[:n]
+    // memmove(&s[len(l1)], &l2[0], len(l2)*sizeof(T))
+
+    //直接复制l2
+    r = appendslice(r, init) // also works for append(slice, string).
+default:
+// x = append(src, a, b, c) will rewrite to
+
+    // s := src
+    // const argc = len(args) - 1
+    // if cap(s) - len(s) < argc {
+    //     s = growslice(s, len(s)+argc)
+    // }
+    // n := len(s)
+    // s = s[:n+argc]
+    // s[n] = a
+    // s[n+1] = b
+    // ...
+
+    //确定待append数目下，直接做赋值优化
+    r = walkappend(r, init, n)
+}
+这里关于 append 实现有几点可以提下
+
+扩容的策略是什么？
+答案是【总的来说是至少返回要求的长度 n 最大则为翻倍】 具体情况是：
+
+len<1024 时 2 倍扩容
+大于且未溢出时 1.25 倍扩容
+溢出则直接按申请大小扩容
+最后按mallocgc内存分配大小适配[5]来确定 len. (n-2n 之间)
+扩容留出最多一倍的余量，主要还是为了减少可能的扩容频率。
+
+
+
+mallocgc 内存适配实际是 go 内存管理做了内存分配的优化, 当然内部也有内存对齐的考虑。雨痕 Go 学习笔记第四章内存分配[6]，对这一块有很详尽的分析，值得一读。
+
+
+至于为啥要内存对齐可以参见golang memory alignment[7]，一篇不错的文章。
+扩容判断中uint的作用是啥？
+//n为目标slice总长度，类型int，cap(s)类型也为int
+ifuint(n) > uint(cap(s))
+    s = growslice(T, s, n)
+}
+答案是【为了避免溢出的扩容】
+
+int 有正负，最大值math.MaxInt64 = 1<<63 - 1
+
+uint 无负数最大值math.MaxUint64 = 1<<64 - 1
+
+uint 正值是 int 正值范围的两倍，int 溢出了变为负数，uint(n)则必大于原 s 的 cap，条件成立 
+
+到 growslice 内部，对于负值的 n 会 panic，以此避免了溢出的扩容
+
+内存清零初始化: memclrNoHeapPointers vs typedmemclr?
+答案是【这个取决于待清零的内存是否已经初始化为 type-safe（类型安全）状态，及类型是否包含指针】
+
+具体来看，memclrNoHeapPointers使用场景是
+
+带清零内存是初始化过的，且不含指针
+带清零内存未初始化过的，里边内容是“垃圾值”(即非 type-safe)，需要初始化并清零
+其他场景就是typedmemclr, 而且如果用于清零的 Type(类型)包含指针，他会多一步 WriteBarrier(写屏障),用于为 GC(垃圾回收)运行时标记对象的内存修改，减少 STW（stop the world）
+
+所以memclrNoHeapPointers第一个使用场景为啥不含指针就不用解释了。
+
+想了解更多可以看看zero-initialization-versus-zeroing[9]以及相关源码的注释memclrNoHeapPointers[10]和typedmemclr[11]
+
+如有问题欢迎留言交流 
+
+微信内链接不能跳转，戳阅读原文可以查看原文中代码链接
+
+参考资料
+[1]
+fmtPointer: https://github.com/golang/go/blob/4e8d27068df52eb372dc2ba7e929e47850934805/src/fmt/print.go#L502
+
+[2]
+Value.Pointer: https://github.com/golang/go/blob/4e8d27068df52eb372dc2ba7e929e47850934805/src/reflect/value.go#L1426
+
+[3]
+Slice Tricks: https://github.com/golang/go/wiki/SliceTricks
+
+[4]
+internal/gc/walk.go: append: https://github.com/golang/go/blob/master/src/cmd/compile/internal/gc/walk.go#L663-L677
+
+[5]
+内存分配大小适配: https://github.com/golang/go/blob/641e61db57f176e33828ed5354810fa3f13ac76d/src/runtime/sizeclasses.go#L83
+
+[6]
+雨痕Go学习笔记第四章内存分配: https://github.com/qyuhen/book/blob/master/Go%20%E5%AD%A6%E4%B9%A0%E7%AC%94%E8%AE%B0%20%E7%AC%AC%E5%85%AD%E7%89%88%20%E4%B8%8B%E5%8D%B7%20-%20%E9%A2%84%E8%A7%88.pdf
+
+[7]
+golang memory alignment: https://ms2008.github.io/2019/08/01/golang-memory-alignment/
+
+[8]
+golang memory alignment: https://ms2008.github.io/2019/08/01/golang-memory-alignment/
+
+[9]
+zero-initialization-versus-zeroing: https://github.com/golang/go/blob/master/src/runtime/HACKING.md#zero-initialization-versus-zeroing
+
+[10]
+memclrNoHeapPointers: https://github.com/golang/go/blob/master/src/runtime/stubs.go#L65-L78
+
+[11]
+typedmemclr: https://github.com/golang/go/blob/master/src/runtime/mbarrier.go#L310-L324

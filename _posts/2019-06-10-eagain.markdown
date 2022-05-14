@@ -1,0 +1,208 @@
+---
+title: eagain accept
+layout: post
+category: linux
+author: 夏泽民
+---
+在Linux环境下开发经常会碰到很多错误(设置errno)，其中EAGAIN是其中比较常见的一个错误(比如用在非阻塞操作中)。
+
+linux下使用write\send发送数据报 EAGAIN : Resource temporarily unavailable 错
+
+首先是我把套接字设置为异步的了，然后在使用write发送数据时采取的方式是循环发送大量的数据；由于是异步的，write\send将要发送的数据提交到发送缓冲区后是立即返回的，并不需要对端确认数据已接收。在这种情况下是很有可能出现发送缓冲区被填满，导致write\send无法再向缓冲区提交要发送的数据。因此就产生了Resource temporarily unavailable的错误，EAGAIN 的意思也很明显，就是要你再次尝试。
+
+    从字面上来看，是提示再试一次。这个错误经常出现在当应用程序进行一些非阻塞(non-blocking)操作(对文件或socket)的时候。例如，以 O_NONBLOCK的标志打开文件/socket/FIFO，如果你连续做read操作而没有数据可读。此时程序不会阻塞起来等待数据准备就绪返回，read函数会返回一个错误EAGAIN，提示你的应用程序现在没有数据可读请稍后再试。
+    又例如，当一个系统调用(比如fork)因为没有足够的资源(比如虚拟内存)而执行失败，返回EAGAIN提示其再调用一次(也许下次就能成功)。
+Linux - 非阻塞socket编程处理EAGAIN错误
+　在linux进行非阻塞的socket接收数据时经常出现Resource temporarily unavailable，errno代码为11(EAGAIN)，这是什么意思？
+　这表明你在非阻塞模式下调用了阻塞操作，在该操作没有完成就返回这个错误，这个错误不会破坏socket的同步，不用管它，下次循环接着recv就可以。对非阻塞socket而言，EAGAIN不是一种错误。在VxWorks和Windows上，EAGAIN的名字叫做EWOULDBLOCK。
+　另外，如果出现EINTR即errno为4，错误描述Interrupted system call，操作也应该继续。
+　最后，如果recv的返回值为0，那表明连接已经断开，我们的接收操作也应该结束。
+  iReadSizeOnce=read(iOpenCom,RxBuf+iReadSize,1024);
+    if (iReadSizeOnce != ZERO)
+    {
+        if (iReadSizeOnce != EAGAIN)
+        {
+            continue;
+        }
+        else
+        {
+            //stCComApiLog.LogError("读串口操作错误");
+            return(FUN_ERROR);
+        }
+    }
+<!-- more -->
+
+accept - 接受连接套接字上
+
+	内容简介
+
+	
+		
+			
+				#include <sys/types.h>
+#include <sys/socket.h> 
+
+				
+					int accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen);
+			
+		
+	
+
+
+	描述说明
+
+	accept()系统调用用于基于连接的套接字类型（SOCK_STREAM，SOCK_SEQPACKET）。提取完成连接队列中的第一个连接请求，创建一个新的连接套接字，并返回一个新的文件描述符，指该套接字。新创建的套接字处于监听状态。原始套接字 sockfd 不受此调用。
+
+	参数 sockfd 是一个套接字绑定到本地地址 bind(2) socket(2)，已创建侦听连接后 listen(2)。 
+
+	参数addr是一个指向结构sockaddr。被填充在此结构的对等套接字的地址，作为已知的通信层。地址返回 addr 的确切格式由套接字的地址族（参见socket（2）及相应协议的手册页）。
+
+	addrlen 参数是一个值结果参数：最初它应该包含大小addr所指向的结构，在函数返回时将包含实际的长度（以字节为单位）返回的地址。当没有填写addr是NULL。
+
+	如果没有挂起的连接队列，并没有被标记为非阻塞套接字，accept() 将阻塞，直到建立连接。如果套接字被标记无阻塞，没有未完成连接队列上，accept() 失败，并出现错误EAGAIN。
+
+	为了通知传入连接在套接字上，那么可以使用select（2）或 orpoll（2）。当尝试一个新的连接，然后可以调用accept() 获取套接字，连接一个可读事件将被传递。另外，您还可以设置套接字提供SIGIO活动发生在一个socket时，详情参见socket（7）。
+
+	需要一个明确的确认，如 DECNET 对于某些协议，accept() 可以被看作是仅仅从队列中取出下一个连接请求，不意味着确认。确认可以正常的读或写上新的文件描述符，暗示和排斥反应，可通过关闭新的套接字暗示。目前只有DECNet有这样的Linux上的语义。
+
+	注意
+
+	可能并不总是等待一个连接后 SIGIO 交付 select(2) 或 poll(2) 因为连接可能已被删除，被称为异步网络错误或另一个线程 accept() 返回一个可读性事件。如果发生这种情况，那么调用将阻塞等待下一个连接到达。
+
+	为了确保 accept() 从未阻塞，通过套接字sockfd中需要有O_NONBLOCK标志设置（参见socket（7））。
+
+	返回值
+
+	如果成功，accept()返回一个非负的整数，这是一个接受套接字描述符。上的错误，则返回-1，errno设置为合适。
+
+	错误处理
+
+	Linux 的 accept() 传递已经挂起的网络错误，在新的socket accept() 错误代码。此行为不同于其他的BSD套接字实现。对于可靠运行的应用程序应该检测网络错误定义的协议后accept() ，并把它们像EAGAIN重试。在这些情况下，TCP/ IP是ENETDOWN ENOPROTOOPT EPROTO，EHOSTDOWN，ENONET，EHOSTUNREACH，EOPNOTSUPP，和ENETUNREACH的。 
+
+	错误
+
+	accept()可能失败如下:
+
+	
+		
+			
+				标签
+			
+				描述
+		
+		
+			
+				EAGAINorEWOULDBLOCK
+			
+				The socket is marked non-blocking and no connections are present to be accepted.
+		
+		
+			
+				EBADF
+			
+				The descriptor is invalid.
+		
+		
+			
+				ECONNABORTED
+			
+				A connection has been aborted.
+		
+		
+			
+				EINTR
+			
+				The system call was interrupted by a signal that was caught before a valid connection arrived.
+		
+		
+			
+				EINVAL
+			
+				Socket is not listening for connections, or addrlen is invalid (e.g., is negative).
+		
+		
+			
+				EMFILE
+			
+				The per-process limit of open file descriptors has been reached.
+		
+		
+			
+				ENFILE
+			
+				The system limit on the total number of open files has been reached.
+		
+		
+			
+				ENOTSOCK
+			
+				The descriptor references a file, not a socket.
+		
+		
+			
+				EOPNOTSUPP
+			
+				The referenced socket is not of typeSOCK_STREAM.
+		
+	
+
+
+	accept() 可能会失败，如下:
+
+	
+		
+			
+				标签
+			
+				描述
+		
+		
+			
+				EFAULT
+			
+				The addr argument is not in a writable part of the user address space.
+		
+		
+			
+				ENOBUFS, ENOMEM
+			
+				Not enough free memory. This often means that the memory allocation is limited by the socket bufferlimits, not by the system memory.
+		
+		
+			
+				EPROTO
+			
+				Protocol error.
+		
+	
+
+
+	Linux accept() 可能会失败，如下:
+
+	
+		
+			
+				标签
+			
+				描述
+		
+		
+			
+				EPERM
+			
+				Firewall rules forbid connection.
+		
+	
+
+
+	此外，新的套接字的协议所定义的网络错误可能被返回。各种 Linux 内核可以返回其他错误，如ENOSR ESOCKTNOSUPPORT，EPROTONOSUPPORT ETIMEDOUT。在跟踪过程中，可能会出现值ERESTARTSYS。
+
+	遵循于
+
+	SVr4, 4.4BSD (accept() first appeared in 4.2BSD).
+
+	注意
+
+	最初是作为一个'‘int *’'声明 accept()的第三个参数（libc4和libc5和许多其他系统，如4.x的BSD，SunOS 4上，SGI）;下一个POSIX.1g标准草案希望改变它变成了'size_t*'，那是什么它是在SunOS5。后来POSIX汇票“socklen_t*”，这样做对单一Unix规范和glibc2。原文出自【易百教程】，商业转载请联系作者获得授权，非商业请保留原文链接：https://www.yiibai.com/unix_system_calls/accept.html
+
+

@@ -1,0 +1,440 @@
+I"H@<p>kubernetes可以为pod提供dns内部域名解析服务。其主要作用是为pod提供可以直接通过service的名字解析为对应service的ip的功能。</p>
+
+<p>部署kubernetes dns服务主要需要两部分。</p>
+
+<p>kubelet
+在kubelet中增加启动项，修改</p>
+
+<p>$ vi /etc/kubernetes/kubelet
+KUBELET_ARGS=”–cluster_dns=10.254.0.10 –cluster_domain=kube.local”
+创建dns rc和service
+<!-- more -->
+以下为两个dns rc和service的配置文件</p>
+
+<p>[root@localhost calico]# cat /etc/kubernetes/skydns-rc.yaml 
+apiVersion: v1
+kind: ReplicationController
+metadata:
+  name: kube-dns-v6
+  namespace: default
+  labels:
+    k8s-app: kube-dns
+    version: v6
+    kubernetes.io/cluster-service: “true”
+spec:
+  replicas: 1
+  selector:
+    k8s-app: kube-dns
+    version: v6
+  template:
+    metadata:
+      labels:
+        k8s-app: kube-dns
+        version: v6
+        kubernetes.io/cluster-service: “true”
+    spec:
+      containers:
+      - name: etcd
+        image: gcr.io/google_containers/etcd:2.0.9
+        command:
+        - /usr/local/bin/etcd
+        - -listen-client-urls
+        - http://0.0.0.0:2379,http://0.0.0.0:4001
+        - -advertise-client-urls
+        - http://127.0.0.1:2379,http://127.0.0.1:4001
+        - -initial-cluster-token
+        - skydns-etcd
+      - name: kube2sky
+        image: gcr.io/google_containers/kube2sky:1.11
+        resources:
+          limits:
+            cpu: 100m
+            memory: 50Mi
+        command:
+        - /kube2sky
+        - –kube_master_url=http://10.8.65.48:8080
+        - -domain=kube.local
+      - name: skydns
+        image: gcr.io/google_containers/skydns:2015-03-11-001
+        resources:
+        command:
+        - /skydns
+        - -machines=http://localhost:4001
+        - -addr=0.0.0.0:53
+        - -domain=kube.local.
+        ports:
+        - containerPort: 53
+          name: dns
+          protocol: UDP
+        - containerPort: 53
+          name: dns-tcp
+          protocol: TCP
+      dnsPolicy: Default</p>
+
+<p>[root@localhost calico]# cat /etc/kubernetes/skydns-svc.yaml 
+apiVersion: v1
+kind: Service
+metadata:
+  name: kube-dns
+  namespace: default
+  labels:
+    k8s-app: kube-dns
+    kubernetes.io/cluster-service: “true”
+    kubernetes.io/name: “KubeDNS”
+spec:
+  selector:
+    k8s-app: kube-dns
+  clusterIP: 10.254.0.10
+  ports:</p>
+<ul>
+  <li>name: dns
+port: 53
+protocol: UDP</li>
+  <li>name: dns-tcp
+port: 53
+protocol: TCP
+然后使用kubectl进行创建</li>
+</ul>
+
+<p>kubectl create -f /etc/kubernetes/skydns-rc.yaml 
+kubectl create -f /etc/kubernetes/skydns-svc.yaml 
+最后使用kubectl get rc和kubectl get service进行检查，验证其是否创建成功。</p>
+
+<p>dns实验
+在部署完成后，进行验证实验。首先创建一个名为mysql-service的service。</p>
+
+<p>[root@localhost k8s]# cat srv.yml 
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    name: mysql
+    role: service
+  name: mysql-service
+spec:
+  ports:
+    - port: 3306
+      targetPort: 3306
+  type: NodePort
+  selector:
+    name: mysql
+通过kubectl create -f srv.yml创建，然后进行查看</p>
+
+<p>[root@localhost k8s]# kubectl get service
+NAME            CLUSTER-IP      EXTERNAL-IP   PORT(S)         AGE
+kube-dns        10.254.0.10     <none>        53/UDP,53/TCP   3d
+kubernetes      10.254.0.1      <none>        443/TCP         3d
+mysql-service   10.254.162.44   nodes         3306/TCP        3d
+可以看到mysql-service服务创建成功。</none></none></p>
+
+<p>现在我再创建一个pod，查看其是否能正确解析域名。这里使用最简单的busybox镜像。</p>
+
+<p>[root@localhost k8s]# cat busybox.yml 
+apiVersion: v1
+kind: Pod
+metadata:
+  labels:
+    name: busybox
+    role: master
+  name: busybox
+spec:
+  containers:
+    - name: busybox
+      image: busybox<br />
+      command:
+      - sleep
+      - “360000”
+使用kubectl create -f busybox.yml创建。</p>
+
+<p>使用exec进入到容器中进行域名解析</p>
+
+<p>[root@localhost k8s]# kubectl exec -i -t busybox sh
+/ # nslookup mysql-service
+Server:    10.254.0.10
+Address 1: 10.254.0.10 localhost</p>
+
+<p>Name:      mysql-service
+Address 1: 10.254.162.44
+/ # nslookup mysql-service.default.kube.local
+Server:    10.254.0.10
+Address 1: 10.254.0.10</p>
+
+<p>Name:      mysql-service.default.kube.local
+Address 1: 10.254.162.44
+/ # nslookup mysql-service.default.svc.kube.local
+Server:    10.254.0.10
+Address 1: 10.254.0.10</p>
+
+<p>Name:      mysql-service.default.svc.kube.local
+Address 1: 10.254.162.44
+可以看到mysql-service、mysql-service.default.svc.kube.local、mysql-service.default.kube.local的域名均能正确解析为mysql-service的service中的ip10.254.162.44。</p>
+
+<p>其中mysql-service.default.kube.local为完整域名，其组成为<service-name>.<namespace>.<domain-name>。</domain-name></namespace></service-name></p>
+
+<p>kubernetes dns原理
+现在反过来看kubernetes dns的原理。</p>
+
+<p>首先在部署时候创建了一个dns的rc，最终会产生三个容器(不含pause)</p>
+
+<p>[root@localhost ~]# docker ps -a
+CONTAINER ID        IMAGE                                            COMMAND                  CREATED              STATUS              PORTS               NAMES
+033800f393b9        index.alauda.cn/tutum/centos:centos6             “/run.sh”                3 days ago           Up 3 days           22/tcp              awesome_newton
+0fb60dcfb8b4        gcr.io/google_containers/etcd:2.0.9              “/usr/local/bin/etcd “   3 days ago           Up 3 days                               k8s_etcd.8d001f7f_kube-dns-v6-ju8cb_default_149fdba5-4e50-11e6-ba47-0800273d5f3f_6afe5c27
+0a0efd5f0aaa        gcr.io/google_containers/skydns:2015-03-11-001   “/skydns -machines=ht”   3 days ago           Up 3 days                               k8s_skydns.5d0f4a29_kube-dns-v6-ju8cb_default_149fdba5-4e50-11e6-ba47-0800273d5f3f_f7c4ee06
+cfef318e4032        gcr.io/google_containers/kube2sky:1.11           “/kube2sky –kube_mas”   3 days ago           Up 3 days                               k8s_kube2sky.eb7ac18c_kube-dns-v6-ju8cb_default_149fdba5-4e50-11e6-ba47-0800273d5f3f_19b79770
+afad7b2ebd3d        docker.io/kubernetes/pause                       “/pause”                 3 days ago           Up 3 days                               k8s_POD.87e723e6_kube-dns-v6-ju8cb_default_149fdba5-4e50-11e6-ba47-0800273d5f3f_3c3f7c87
+dns解析过程
+在创建的pod中，可以查看其所使用的域名解析服务器:</p>
+
+<p>[root@localhost k8s]# kubectl exec -i -t busybox sh
+/ # cat /etc/resolv.conf 
+search default.svc.kube.local svc.kube.local kube.local 
+nameserver 10.254.0.10
+options ndots:5
+在kubelet创建pod时，会使用为kubelet配置的-cluster_dns=10.254.0.10 –cluster_domain=kube.local，在创建的pod中从而使用对应的dns服务器。</p>
+
+<p>而这一dns解析服务，实际是由dns的rc中的gcr.io/google_containers/skydns:2015-03-11-001容器0a0efd5f0aaa完成的。</p>
+
+<p>skydns的数据源来自于gcr.io/google_containers/etcd:2.0.9的容器0fb60dcfb8b4。</p>
+
+<p>[root@localhost ~]# docker exec -it 0fb etcdctl get /skydns/local/kube/svc/default/mysql-service/2f1020d6
+{“host”:”10.254.162.44”,”priority”:10,”weight”:10,”ttl”:30,”targetstrip”:0}
+[root@localhost ~]# docker exec -it 0fb etcdctl get /skydns/local/kube/default/mysql-service
+{“host”:”10.254.162.44”,”priority”:10,”weight”:10,”ttl”:30,”targetstrip”:0}
+service同步过程
+etcd的数据源自于gcr.io/google_containers/kube2sky:1.11创建的cfef318e4032容器。</p>
+
+<p>cfef318e4032容器通过watch kube-api的service，查看service的变化。</p>
+
+<p>当service创建/删除/修改时，cfef318e4032容器获取对应的service信息，将其保存在etcd的容器0fb60dcfb8b4中，进而提供给skydns使用。</p>
+
+<p>构建私有的域名解析主要是出于两个目的：(1）通过域名，而不是ip来记忆服务，是更方便的事情；（2）在做主备切换的时候，只需要更改域名对应的ip值，从而实现在服务域名不变的情况下实现主备切换，这里如果没有域名，实现起来怎样，读者可以思考下。</p>
+
+<p>       本文讲解用etcd+ skydns构建域名解析服务的方法。etcd集群保存域名记录，skydns负责域名解析，skydns和etcd出自同一个项目，两者之间有良好的配合接口。skydns是基于etcd的, etcd是一个键值存储仓库，用于配置共享和服务发现。</p>
+
+<p>     skydns的github：https://github.com/skynetservices/skydns1</p>
+
+<p>     etcd的github：https://github.com/coreos/etcd
+Kubernetes提供的虚拟DNS服务名为skydns，由四个组件组成：</p>
+
+<p>etcd：DNS存储
+kube2sky：强Kubernetes Master中的service（服务）注册到etcd。
+skyDNS：提供DNS域名解析服务。
+healthz：提供对skydns服务的健康检查。
+一 、skydns配置文件说明
+skydns服务将使用一个RC和一个Service实现，分别由配置文件skydns-rc.yaml和skydns-svc.yaml定义。</p>
+
+<p>RC的配置文件skydns-rc.yaml包含了定义实现四个组件的相应容器，具体内容如下：</p>
+
+<p>复制代码
+  1 apiVersion: v1
+  2 kind: ReplicationController
+  3 metadata:
+  4   name: kube-dns
+  5   namespace: kube-system
+  6   labels:
+  7     k8s-app: kube-dns
+  8     version: v12
+  9     kubernetes.io/cluster-service: “true”
+ 10 spec:
+ 11   replicas: 1
+ 12   selector:
+ 13     k8s-app: kube-dns
+ 14     version: v12
+ 15   template:
+ 16     metadata:
+ 17       labels:
+ 18         k8s-app: kube-dns
+ 19         version: v12
+ 20         kubernetes.io/cluster-service: “true”
+ 21     spec:
+ 22       containers:
+ 23       - name: etcd
+ 24         image: 192.168.3.51:5656/etcd-amd64:v2.2.5
+ 25         resources:
+ 26           limits:
+ 27             cpu: 100m
+ 28             memory: 50Mi
+ 29           requests:
+ 30             cpu: 100m
+ 31             memory: 50Mi
+ 32         command:
+ 33         - /usr/local/bin/etcd
+ 34         - –data-dir
+ 35         - /tmp/data
+ 36         - –listen-client-urls
+ 37         - http://127.0.0.1:2379,http://127.0.0.1:4001
+ 38         - –advertise-client-urls
+ 39         - http://127.0.0.1:2379,http://127.0.0.1:4001
+ 40         - –initial-cluster-token
+ 41         - skydns-etcd
+ 42         volumeMounts:
+ 43         - name: etcd-storage
+ 44           mountPath: /tmp/data
+ 45       - name: kube2sky
+ 46         image: 192.168.3.51:5656/kube2sky-amd64:v1.15
+ 47         resources:
+ 48           limits:
+ 49             cpu: 100m
+ 50             memory: 50Mi
+ 51           requests:
+ 52             cpu: 100m
+ 53             memory: 50Mi
+ 54        # livenessProbe:
+ 55        #   httpGet:
+ 56        #     path: /healthz
+ 57        #     port: 8080
+ 58        #     scheme: HTTP
+ 59        #   initialDelaySeconds: 60
+ 60        #   timeoutSeconds: 5
+ 61        #   successThreshold: 1
+ 62        #   failureThreshold: 5
+ 63        # readinessProbe:
+ 64        #   httpGet:
+ 65        #     path: /readiness
+ 66        #     port: 8081
+ 67        #     scheme: HTTP
+ 68        #   initialDelaySeconds: 30
+ 69        #   timeoutSeconds: 5
+ 70         args:
+ 71         - –kube-master-url=http://192.168.3.69:8080
+ 72         - –domain=cluster.local
+ 73       - name: skydns
+ 74         image: 192.168.3.51:5656/skydns-amd64:v1.0
+ 75         resources:
+ 76           limits:
+ 77             cpu: 100m
+ 78             memory: 50Mi
+ 79           requests:
+ 80             cpu: 100m
+ 81             memory: 50Mi
+ 82         args:
+ 83         - -machines=http://127.0.0.1:4001
+ 84         - -addr=0.0.0.0:53
+ 85         - -ns-rotate=false
+ 86         - -domain=cluster.local
+ 87         ports:
+ 88         - containerPort: 53
+ 89           name: dns
+ 90           protocol: UDP
+ 91         - containerPort: 53
+ 92           name: dns-tcp
+ 93           protocol: TCP
+ 94       - name: healthz
+ 95         image: 192.168.3.51:5656/exechealthz-amd64:v1.2.0
+ 96         resources:
+ 97           limits:
+ 98             cpu: 10m
+ 99             memory: 20Mi
+100           requests:
+101             cpu: 10m
+102             memory: 20Mi
+103         args:
+104         - -cmd=nslookup kubernetes.default.svc.cluster.local 127.0.0.1 &gt;/dev/null
+105         - -port=8080
+106         ports:
+107         - containerPort: 8080
+108           protocol: TCP
+109       volumes:
+110       - name: etcd-storage
+111         emptyDir: {}
+112       dnsPolicy: Default
+复制代码
+ 需要修改的几个配置参数如下：</p>
+
+<p>　　（1）kube2sky容器需要访问Kubernetes Master，需要配置Master所在物理主机的IP地址和端口号，本例中设置的参数–kube-master-url的值为http://192.168.3.69:8080；</p>
+
+<p>　　（2）四个容器的image参数这里使用的是作者私有的镜像库，如果您可以翻墙则可以使用“image:gcr.io/google_containers/imagename:version”，同样也可以使用docker search根据imagname进行搜索，根据结果进行修改。</p>
+
+<p>　　（3）kube2sky容器和skydns容器的启动参数–domain，设置Kubernetes集群中Service所属的域名，本例中为“cluster.local”。启动后，kube2sky会通过APIServer监控集群中全部的Service的定义，生成相应的记录并保存到etcd中。kube2sky为每个Service生成以下两条记录。</p>
+
+<service_name>.<namespace_name>.<domain>
+<service_name>.<namespace_name>.svc.<domain>　　　　
+skydns的Service配置文件skydns-svc.yaml的内容如下：
+
+复制代码
+ 1 apiVersion: v1
+ 2 kind: Service
+ 3 metadata:
+ 4   name: kube-dns
+ 5   namespace: kube-system
+ 6   labels:
+ 7     k8s-app: kube-dns
+ 8     kubernetes.io/cluster-service: "true"
+ 9     kubernetes.io/name: "KubeDNS"
+10 spec:
+11   selector:
+12     k8s-app: kube-dns
+13   clusterIP: 10.254.16.254
+14   ports:
+15   - name: dns
+16     port: 53
+17     protocol: UDP
+18   - name: dns-tcp
+19     port: 53
+20     protocol: TCP
+复制代码
+注意： 
+
+skydns服务使用的clusterIP需要指定一个固定的IP地址，每个Node的kubelet进程都将使用这个IP地址。
+这个IP地址需要在kube-apiserver启动参数--service-cluster-ip-range指定的IP地址范围内。
+二、修改每台Node上的kubelet的启动参数
+　　本例是通过修改/etc/kubernetes/kubelet来实现的：
+# Add your own!
+KUBELET_ARGS="--cluster-dns=10.254.16.254 --cluster-domain=cluster.local"
+　　注意根据自己的配置环境修改参数cluster_dns和cluster_domain。
+
+      然后，重启kubelet服务。
+
+三、创建skydns RC和Service
+    使用kubectl create完成skydns的RC和Service创建：
+#kubectl create -f skydns-rc.yaml
+#kubectl create -f skydns-svc.yaml
+　　查看RC、Pod和Service，确保容器启动成功：
+[root@master ~]# kubectl get rc --namespace=kube-system
+NAME       DESIRED   CURRENT   AGE
+kube-dns   1         1         14h
+[root@master~]# kubectl get pod --namespace=kube-system
+NAME                                    READY     STATUS    RESTARTS   AGE
+kube-dns-kvv13                          4/4       Running   0          14h
+[root@master ~]# kubectl get svc --namespace=kube-system
+NAME                   CLUSTER-IP      EXTERNAL-IP   PORT(S)         AGE
+kube-dns               10.254.16.254   <none>        53/UDP,53/TCP   14h
+四、通过DNS查找Service
+　　该工作是使用一个带有nslookup工具的Pod来验证DNS服务是否工作正常：
+# cat busybox.yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: busybox
+spec:
+  containers:
+  - name: busybox
+    image: 192.168.3.51:5656/busybox
+    command:
+    - sleep
+    - "3600"
+　　运行kubectl create -f busybox.yaml完成创建。
+
+     在容器运行成功启动之后，通过kubectl exec <service_name> nslookup进行测试：
+# kubectl exec busybox -- nslookup kubernetes
+Server:    10.254.16.254
+Address 1: 10.254.16.254
+ 
+Name:      kubernetes
+Address 1: 10.254.0.1
+　　如果某个服务属于不同的命名空间，那么进行Service查找时，需要带上namespace的名字，如下所示。
+# kubectl exec busybox -- nslookup kube-dns.kube-system
+Server:    10.254.16.254
+Address 1: 10.254.16.254
+ 
+Name:      kube-dns.kube-system
+Address 1: 10.254.16.254
+　　否则将会失败：
+# kubectl exec busybox -- nslookup kube-dns
+Server:    10.254.16.254
+Address 1: 10.254.16.254
+ 
+nslookup: can't resolve 'kube-dns'
+</service_name></none></domain></namespace_name></service_name></domain></namespace_name></service_name>
+:ET

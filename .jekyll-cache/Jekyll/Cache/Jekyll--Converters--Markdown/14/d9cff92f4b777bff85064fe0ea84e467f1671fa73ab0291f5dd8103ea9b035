@@ -1,0 +1,197 @@
+I"z<p>cond的主要作用就是获取锁之后，wait()方法会等待一个通知，来进行下一步锁释放等操作，以此控制锁合适释放，释放频率,适用于在并发环境下goroutine的等待和通知。</p>
+
+<p>针对Golang 1.9的sync.Cond，与Golang 1.10一样。 源代码位置：sync\cond.go。</p>
+
+<p>结构体</p>
+
+<p>type Cond struct {</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>noCopy noCopy  // noCopy可以嵌入到结构中，在第一次使用后不可复制,使用go vet作为检测使用
+
+// 根据需求初始化不同的锁，如*Mutex 和 *RWMutex
+
+L Locker
+
+notify  notifyList  // 通知列表,调用Wait()方法的goroutine会被放入list中,每次唤醒,从这里取出
+
+checker copyChecker // 复制检查,检查cond实例是否被复制
+</code></pre></div></div>
+
+<p>}
+<!-- more -->
+再来看看等待队列notifyList结构体：</p>
+
+<p>type notifyList struct {</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>wait   uint32
+
+notify uint32
+
+lock   uintptr
+
+head   unsafe.Pointer
+
+tail   unsafe.Pointer
+</code></pre></div></div>
+
+<p>}</p>
+
+<p>函数</p>
+
+<p>NewCond</p>
+
+<p>相当于Cond的构造函数，用于初始化Cond。</p>
+
+<p>参数为Locker实例初始化,传参数的时候必须是引用或指针,比如&amp;sync.Mutex{}或new(sync.Mutex)，不然会报异常:cannot use lock (type sync.Mutex) as type sync.Locker in argument to sync.NewCond。</p>
+
+<p>大家可以想想为什么一定要是指针呢？ 知道的可以给我留言回答。</p>
+
+<p>func NewCond(l Locker) *Cond {</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>return &amp;Cond{L: l}
+</code></pre></div></div>
+
+<p>}</p>
+
+<p>Wait</p>
+
+<p>等待自动解锁c.L和暂停执行调用goroutine。恢复执行后,等待锁c.L返回之前。与其他系统不同，等待不能返回，除非通过广播或信号唤醒。</p>
+
+<p>因为c。当等待第一次恢复时，L并没有被锁定，调用者通常不能假定等待返回时的条件是正确的。相反，调用者应该在循环中等待:</p>
+
+<p>func (c *Cond) Wait() {</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>// 检查c是否是被复制的，如果是就panic
+
+c.checker.check()
+
+// 将当前goroutine加入等待队列
+
+t := runtime_notifyListAdd(&amp;c.notify)
+
+// 解锁
+
+c.L.Unlock()
+
+// 等待队列中的所有的goroutine执行等待唤醒操作
+
+runtime_notifyListWait(&amp;c.notify, t)
+
+c.L.Lock()
+</code></pre></div></div>
+
+<p>}</p>
+
+<p>判断cond是否被复制。</p>
+
+<p>type copyChecker uintptr</p>
+
+<p>func (c *copyChecker) check() {</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>if uintptr(*c) != uintptr(unsafe.Pointer(c)) &amp;&amp;
+
+    !atomic.CompareAndSwapUintptr((*uintptr)(c), 0, uintptr(unsafe.Pointer(c))) &amp;&amp;
+
+    uintptr(*c) != uintptr(unsafe.Pointer(c)) {
+
+    panic("sync.Cond is copied")
+
+}
+</code></pre></div></div>
+
+<p>}</p>
+
+<p>Signal</p>
+
+<p>唤醒等待队列中的一个goroutine，一般都是任意唤醒队列中的一个goroutine，为什么没有选择FIFO的模式呢？这是因为FiFO模式效率不高，虽然支持，但是很少使用到。</p>
+
+<p>func (c *Cond) Signal() {</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>// 检查c是否是被复制的，如果是就panic
+
+c.checker.check()
+
+// 通知等待列表中的一个 
+
+runtime_notifyListNotifyOne(&amp;c.notify)
+</code></pre></div></div>
+
+<p>}</p>
+
+<p>Broadcast</p>
+
+<p>唤醒等待队列中的所有goroutine。</p>
+
+<p>func (c *Cond) Broadcast() {</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>// 检查c是否是被复制的，如果是就panic
+
+c.checker.check()
+
+// 唤醒等待队列中所有的goroutine
+
+runtime_notifyListNotifyAll(&amp;c.notify)
+</code></pre></div></div>
+
+<p>}</p>
+
+<p>实例</p>
+
+<p>package main</p>
+
+<p>import (</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>"fmt"
+
+"sync"
+
+"time"
+</code></pre></div></div>
+
+<p>)</p>
+
+<p>var locker = new(sync.Mutex)</p>
+
+<p>var cond = sync.NewCond(locker)</p>
+
+<p>func main() {</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>for i := 0; i &lt; 40; i++ {
+
+    go func(x int) {
+
+        cond.L.Lock()         //获取锁
+
+        defer cond.L.Unlock() //释放锁
+
+        cond.Wait()           //等待通知,阻塞当前goroutine
+
+        fmt.Println(x)
+
+        time.Sleep(time.Second * 1)
+
+    }(i)
+
+}
+
+time.Sleep(time.Second * 1)
+
+fmt.Println("Signal...")
+
+cond.Signal() // 下发一个通知给已经获取锁的goroutine
+
+time.Sleep(time.Second * 1)
+
+cond.Signal() // 3秒之后 下发一个通知给已经获取锁的goroutine
+
+time.Sleep(time.Second * 3)
+
+cond.Broadcast() //3秒之后 下发广播给所有等待的goroutine
+
+fmt.Println("Broadcast...")
+
+time.Sleep(time.Second * 60)
+</code></pre></div></div>
+
+<p>}</p>
+:ET

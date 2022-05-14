@@ -1,0 +1,58 @@
+---
+title: httpMock
+layout: post
+category: golang
+author: 夏泽民
+---
+调用Activate方法启动httpmock环境
+通过httpmock.RegisterResponder方法进行mock规则注册。
+这时候再通过http client发起的请求就都会被httpmock拦截，如果匹配到刚刚注册的规则就会按照注册的内容返回对应response。 --- 这里感觉httpmock有一点不太好用，那就是如果请求没有命中规则就会错误返回，而不是走真实请求。需要把整个过程涉及到的所有请求都注册上去。
+在defer里面调用DeactivateAndReset结束mock
+<!-- more -->
+httpmock原理解析
+Activate函数中通过http.DefaultTransport = DefaultTransport修改了所有通过http/net包发送的请求的transport
+DefaultTransport通过调用NewMockTransport方法实例化了一个MockTransport来代替DefaultTransport。这个MockTransport实现了http包中的RoundTripper接口。transport源码
+再来看一下MockTransport的结构体和RegisterResponder注册函数：
+
+type MockTransport struct {
+    mu               sync.RWMutex
+    responders       map[internal.RouteKey]Responder
+    regexpResponders []regexpResponder
+    noResponder      Responder
+    callCountInfo    map[internal.RouteKey]int
+    totalCallCount   int
+}
+
+func (m *MockTransport) RegisterResponder(method, url string, responder Responder) {
+    if isRegexpURL(url) {
+        m.registerRegexpResponder(regexpResponder{
+            origRx:    url,
+            method:    method,
+            rx:        regexp.MustCompile(url[2:]),
+            responder: responder,
+        })
+        return
+    }
+
+    key := internal.RouteKey{
+        Method: method,
+        URL:    url,
+    }
+
+    m.mu.Lock()
+    m.responders[key] = responder
+    m.callCountInfo[key] = 0
+    m.mu.Unlock()
+}
+
+可以看到其实就是在MockTransport中维护一组map
+
+key是正则匹配的路由
+value是则是type Responder func(http.Request) (http.Response, error)
+然后RegisterResponder的时候就是往这个map里面塞内容
+
+
+https://www.jianshu.com/p/545963b593de
+
+https://github.com/jarcoal/httpmock
+https://zhuanlan.zhihu.com/p/320135253

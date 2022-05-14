@@ -1,0 +1,167 @@
+---
+title: xorm
+layout: post
+category: golang
+author: 夏泽民
+---
+https://github.com/go-xorm/xorm
+
+使用 golang 操作数据库的同学都会遇到一个问题 —— 根据数据表结构创建对应的 struct 模型。因为 golang 的使用首字母控制可见范围，我们经常要设计 struct 字段名和数据库字段名的对应关系。久而久之，这是一个非常繁琐的过程。事情变得繁琐了，我们都会想，有没有好的办法自动生成 model 呢？今天，记录一种自动生成代码的方法 —— xorm 工具。
+
+关于 xorm
+xorm是一个简单而强大的Go语言ORM库. 通过它可以使数据库操作非常简便。我在项目中经常使用，它的特性如下、
+
+支持Struct和数据库表之间的灵活映射，并支持自动同步表结构
+事务支持
+支持原始SQL语句和ORM操作的混合执行
+使用连写来简化调用
+支持使用Id, In, Where, Limit, Join, Having, Table, Sql, Cols等函数和结构体等方式作为条件
+支持级联加载Struct
+支持LRU缓存(支持memory, memcache, leveldb, redis缓存Store) 和 Redis缓存
+支持反转，即根据数据库自动生成xorm的结构体
+支持事件
+支持created, updated, deleted和version记录版本（即乐观锁）
+xorm 工具
+xorm 是一组数据库操作命令的工具，包含如下命令：
+
+reverse 反转一个数据库结构，生成代码
+shell 通用的数据库操作客户端，可对数据库结构和数据操作
+dump Dump数据库中所有结构和数据到标准输出
+source 从标注输入中执行SQL文件
+driver 列出所有支持的数据库驱动
+那我们该如何使用 reverse 命令根据数据表结构生成 go 代码呢？
+
+go get github.com/go-xorm/cmd/xorm
+go get github.com/go-xorm/xorm
+
+
+<!-- more -->
+使用 golang 操作数据库的同学都会遇到一个问题 —— 根据数据表结构创建对应的 struct 模型。因为 golang 的使用首字母控制可见范围，我们经常要设计 struct 字段名和数据库字段名的对应关系。久而久之，这是一个非常繁琐的过程。事情变得繁琐了，我们都会想，有没有好的办法自动生成 model 呢？今天，记录一种自动生成代码的方法 —— xorm 工具。
+
+关于 xorm
+xorm是一个简单而强大的Go语言ORM库. 通过它可以使数据库操作非常简便。我在项目中经常使用，它的特性如下、
+
+支持Struct和数据库表之间的灵活映射，并支持自动同步表结构
+事务支持
+支持原始SQL语句和ORM操作的混合执行
+使用连写来简化调用
+支持使用Id, In, Where, Limit, Join, Having, Table, Sql, Cols等函数和结构体等方式作为条件
+支持级联加载Struct
+支持LRU缓存(支持memory, memcache, leveldb, redis缓存Store) 和 Redis缓存
+支持反转，即根据数据库自动生成xorm的结构体
+支持事件
+支持created, updated, deleted和version记录版本（即乐观锁）
+xorm 工具
+xorm 是一组数据库操作命令的工具，包含如下命令：
+
+reverse 反转一个数据库结构，生成代码
+shell 通用的数据库操作客户端，可对数据库结构和数据操作
+dump Dump数据库中所有结构和数据到标准输出
+source 从标注输入中执行SQL文件
+driver 列出所有支持的数据库驱动
+
+https://studygolang.com/articles/21989?fr=sidebar
+
+创建user表的sql语句
+
+CREATE TABLE `USER`(
+    `id` INT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT 'primary key',
+    `ip_address` INT  NOT NULL DEFAULT 0 COMMENT 'ip_address',
+    `nickname`    VARCHAR(128) NOT NULL DEFAULT '' COMMENT 'user note',
+    `description` VARCHAR(256) NOT NULL DEFAULT '' COMMENT 'user description',
+    `creator_email` VARCHAR(64) NOT NULL DEFAULT '' COMMENT 'creator email',
+    `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT 'create time',
+    `deleted_at` TIMESTAMP NULL DEFAULT NULL COMMENT 'delete time',
+    PRIMARY KEY(`id`)
+)ENGINE=InnoDB AUTO_INCREMENT=1 DEFAULT CHARSET=utf8mb4 COMMENT='user table';
+
+函数SqlToGo将其转化成下面的代码。其中，包名是可以选择的。
+
+package sql_to_go_test
+
+import (
+	"time"
+)
+
+type USER struct {
+	Id           uint      `comment:"primary key"`
+	IpAddress    int       `comment:"ip_address"`
+	Nickname     string    `comment:"user note"`
+	Description  string    `comment:"user description"`
+	CreatorEmail string    `comment:"creator email"`
+	CreatedAt    time.Time `comment:"create time"`
+	DeletedAt    time.Time `comment:"delete time"`
+}
+
+基本思想
+SqlToGo主要做了2件事。
+
+解析sql语句，这里使用第三方包github.com/xwb1989/sqlparser去解析，获取表的名字，字段名，字段类型，字段的注释。
+将解析的MySQL数据类型转化为Golang的数据类型，并且将以上的数据，做字符串的拼接，拼接成一个Golang的struct文件。
+MySQL与Golang的类型对应映射如下.
+var sqlTypeMap = map[string]string{
+	"int":                "int",
+	"integer":            "int",
+	"tinyint":            "int8",
+	"smallint":           "int16",
+	"mediumint":          "int32",
+	"bigint":             "int64",
+	"int unsigned":       "uint",
+	"integer unsigned":   "uint",
+	"tinyint unsigned":   "uint8",
+	"smallint unsigned":  "uint16",
+	"mediumint unsigned": "uint32",
+	"bigint unsigned":    "uint64",
+	"bit":                "byte",
+	"bool":               "bool",
+	"enum":               "string",
+	"set":                "string",
+	"varchar":            "string",
+	"char":               "string",
+	"tinytext":           "string",
+	"mediumtext":         "string",
+	"text":               "string",
+	"longtext":           "string",
+	"blob":               "string",
+	"tinyblob":           "string",
+	"mediumblob":         "string",
+	"longblob":           "string",
+	"date":               "time.Time",
+	"datetime":           "time.Time",
+	"timestamp":          "time.Time",
+	"time":               "time.Time",
+	"float":              "float64",
+	"double":             "float64",
+	"decimal":            "float64",
+	"binary":             "string",
+	"varbinary":          "string",
+}
+
+下划线命名改为驼峰式命名
+在SQL的命名规范中，字段的命名一般都是下划线分隔的,例如ip_address。而Golang的struct的字段的命名是驼峰式的。
+SqlToGo会将其字段命名转化为驼峰式的。对应的转化代码如下。
+基本思想是，扫描字符串，如果遇到字符_，并且_的字符是一个英文字母，将将其转化为大写，并且忽略这个_。
+
+// In sql, table name often is snake_case
+// In Go, struct name often is camel case
+func snakeCaseToCamel(str string) string {
+	builder := strings.Builder{}
+	index := 0
+	if str[0] >= 'a' && str[0] <= 'z' {
+		builder.WriteByte(str[0] - ('a' - 'A'))
+		index = 1
+	}
+	for i := index; i < len(str); i++ {
+		if str[i] == '_' && i+1 < len(str) {
+			if str[i+1] >= 'a' && str[i+1] <= 'z' {
+				builder.WriteByte(str[i+1] - ('a' - 'A'))
+				i++
+				continue
+			}
+		}
+		builder.WriteByte(str[i])
+	}
+	return builder.String()
+}
+总结
+经过SQL语句的解析，转换，字符串的拼接，就将一个SQL语句转化成Golang的结构体了。

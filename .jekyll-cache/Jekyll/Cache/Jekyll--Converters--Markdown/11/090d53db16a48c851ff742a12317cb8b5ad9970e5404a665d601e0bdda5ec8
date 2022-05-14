@@ -1,0 +1,94 @@
+I"�<p>这个问题要从net/http/pprof的原理说起，可以看到
+func init() {
+    http.HandleFunc(“/debug/pprof/”, Index)
+    http.HandleFunc(“/debug/pprof/cmdline”, Cmdline)
+    http.HandleFunc(“/debug/pprof/profile”, Profile)
+    http.HandleFunc(“/debug/pprof/symbol”, Symbol)
+    http.HandleFunc(“/debug/pprof/trace”, Trace)
+}
+引入 _ “net/http/pprof”，init函数会添加pprof的路由信息到defaultMutex，而如果http注册了其他路由，导致http.HandleFunc失效，也就会造成了404的问题
+<!-- more -->
+type Server struct {
+	Addr    string  // TCP address to listen on, “:http” if empty
+	Handler Handler // handler to invoke, http.DefaultServeMux if nil
+…
+}</p>
+
+<p>type serverHandler struct {
+	srv *Server
+}</p>
+
+<p>func (sh serverHandler) ServeHTTP(rw ResponseWriter, req <em>Request) {
+	handler := sh.srv.Handler
+	if handler == nil {
+		handler = DefaultServeMux
+	}
+	if req.RequestURI == “</em>” &amp;&amp; req.Method == “OPTIONS” {
+		handler = globalOptionsHandler{}
+	}
+	handler.ServeHTTP(rw, req)
+}</p>
+
+<p>如果sh.srv.Handler 非空就不会使用默认的router</p>
+
+<p>handler的注册
+func ListenAndServe(addr string, handler Handler) error {
+	server := &amp;Server{Addr: addr, Handler: handler}
+	return server.ListenAndServe()
+}</p>
+
+<p>默认路由的注册
+func HandleFunc(pattern string, handler func(ResponseWriter, *Request)) {
+	DefaultServeMux.HandleFunc(pattern, handler)
+}</p>
+
+<p>func (mux *ServeMux) HandleFunc(pattern string, handler func(ResponseWriter, *Request)) {
+	if handler == nil {
+		panic(“http: nil handler”)
+	}
+	mux.Handle(pattern, HandlerFunc(handler))
+}</p>
+
+<p>func (mux *ServeMux) Handle(pattern string, handler Handler) {
+	e := muxEntry{h: handler, pattern: pattern}
+	mux.m[pattern] = e
+}</p>
+
+<p>var DefaultServeMux = &amp;defaultServeMux</p>
+
+<p>var defaultServeMux ServeMux</p>
+
+<p>我使用的是httprouter包
+访问http://localhost:8080/debug/pprof/goroutine?debug=1等其他内部页面时，仍旧报404，再次分析原因，httprouter添加路由信息，如第一条，仅添加了/debug/pprof/的路由信息，并不会对子路径作路由牵引，导致404</p>
+
+<p>所以解决办法：</p>
+
+<p>用http.Handle(“/”, router) 将httprouter的路由注册给http路由，http.ListenAndServe(addr, nil) 替代http.ListenAndServe(addr, router)，这时，router和http/pprof都可以生效了</p>
+
+<p>http.Handle(“/”, router)
+http.ListenAndServe(addr, nil)
+当然还可以用第三方router的prefix功能，如Gorilla的</p>
+
+<p>router.NewRoute().PathPrefix(“/debug/pprof/”).HandlerFunc(pprof.Index)</p>
+
+<p>/debug/pprof/profile：访问这个链接会自动进行 CPU profiling，持续 30s，并生成一个文件供下载
+/debug/pprof/block：Goroutine阻塞事件的记录。默认每发生一次阻塞事件时取样一次。
+/debug/pprof/goroutines：活跃Goroutine的信息的记录。仅在获取时取样一次。
+/debug/pprof/heap： 堆内存分配情况的记录。默认每分配512K字节时取样一次。
+/debug/pprof/mutex: 查看争用互斥锁的持有者。
+/debug/pprof/threadcreate: 系统线程创建情况的记录。 仅在获取时取样一次。</p>
+
+<p>go tool pprof http://localhost:6060/debug/pprof/profile?seconds=600</p>
+
+<p>flat：给定函数上运行耗时
+flat%：同上的 CPU 运行耗时总比例
+sum%：给定函数累积使用 CPU 总比例
+cum：当前函数加上它之上的调用运行总耗时
+cum%：同上的 CPU 运行耗时总比例
+ go tool pprof http://localhost:56887/debug/pprof/heap</p>
+
+<p>-inuse_space：分析应用程序的常驻内存占用情况
+-alloc_objects：分析应用程序的内存临时分配情况</p>
+
+<p>https://github.com/caibirdme/hand-to-hand-optimize-go</p>
+:ET

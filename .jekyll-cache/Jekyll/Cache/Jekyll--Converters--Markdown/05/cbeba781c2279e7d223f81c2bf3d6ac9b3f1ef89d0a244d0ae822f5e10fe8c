@@ -1,0 +1,126 @@
+I"%3<p>http://bigbully.github.io/Dapper-translation/
+http://static.googleusercontent.com/media/research.google.com/zh-CN//archive/papers/dapper-2010-1.pdf
+https://github.com/TaXueWWL/lite-tracer
+https://www.ibm.com/developerworks/cn/web/wa-distributed-systems-request-tracing/index.html
+https://zipkin.io/
+https://github.com/openzipkin/zipkin
+https://github.com/naver/pinpoint
+基于HTTP同步调用，能实现TraceId的传递，SpanId的生成及传递，ParentSpanId的获取。
+应用层无感知，业务请求无需显示传递链路信息。
+由于我们是在应用层协议传递TraceId、SpanId、parentSpanId，则Http头是传递参数的最佳位置。这里只进行HTTP协议层的传递，如果要进一步
+实现在RPC协议中的传递，我们就需要在RPC的序列化协议中增加定制化字段，将TraceId、SpanId传递下去
+对于ParentSpanId而言，首次请求的时候，父Span不存在，因此默认为-1，后续进行分析的时候只要遇到某个Trace节点的父Span为-1，则表示这个请求
+是首次请求，也就是Dapper论文中提到的Trace树形结构中的根节点。
+<!-- more -->
+对于每个 Trace 树，Trace 都要定义一个全局唯一的 Trace ID，在这个跟踪中的所有 Span 都将获取到这个 Trace ID。 每个 Span 都有一个 Parent Span ID 和它自己的 Span ID。
+追踪系统中用 Span 来表示一个服务调用的开始和结束时间，也就是时间区间。追踪系统记录了 Span 的名称以及每个 Span ID 的 Parent Span ID，如果一个 Span 没有 Parent Span ID 则被称为 Root Span，当前节点的 Parent Span ID 即为调用链路上游的 Span ID，所有的 Span 都挂在一个特定的追踪上，共用一个 Trace ID。</p>
+
+<p>Span 对应的四个状态：</p>
+
+<p>Client Send（CS）：客户端发送时间，客户端发起一个请求，这个 Annotation 描述了这个 Span 的开始。
+Server Received（SR）：服务端接收时间，服务端获得请求并准备开始处理它，如果将其 SR 减去 CS 时间戳便可得到网络延迟。
+Server Send（SS）：服务端发送时间，Annotation 表明请求处理的完成（当请求返回客户端），如果 SS 减去 SR 时间戳便可得到服务端需要的处理请求时间。
+Client Received（CR）：客户端接收时间，表明 Span 的结束，客户端成功接收到服务端的回复，如果 CR 减去 CS 时间戳便可得到客户端从服务端获取回复的所有所需时间。
+通过收集这四个时间戳，就可以在一次请求完成后计算出整个 Trace 的执行耗时和网络耗时，以及 Trace 中每个 Span 过程的执行耗时和网络耗时:</p>
+
+<p>服务调用耗时 = CR – CS
+服务处理耗时 = SS – SR
+网络耗时 = 服务调用耗时 – 服务处理耗时
+生成 Span
+我们已经初步了解了 Span 的组成，那么怎么生成 Span 呢？Google Dapper 中使用到的是基于标注 (Annotation-based) 的监控方案。此方案会有代码侵入，所以应尽可能少改动代码。</p>
+
+<p>基于标注的方式就是根据请求中的 Trace ID 来获取 Trace 这个实例，各种编程语言有各自的方式。获取到 Trace 实例后就可以调用 Recorder 来记录 Span 了，记录值先直接以日志的形式存在本地，然后跟踪系统会启动一个 Collector Daemon 来收集日志，然后整理日志写入数据库。解析的日志结果建议放在 BigTable (Cassandra 或者 HDFS) 这类稀疏表的数据库里。因为每个 Trace 携带的 Span 可能不一样，最终的记录是每一行代表一个 Trace，这一行的每一列代表一个 Span</p>
+
+<p>什么时候生成</p>
+
+<p>服务接受到 Request时，若当前Request没有关联任何Span，便生成一个Span，包括：Span ID、TraceID
+向下游服务发送Request时，需生成一个Span，并把新生成的Span的父节点设置成上一步生成的Span</p>
+
+<p>服务之间需传递的信息
+Trace的基本信息需在上下游服务之间传递，如下信息是必须的：</p>
+
+<p>Trace ID：起始(根)服务生成的TraceID
+Span ID：调用下游服务时所生成的Span ID
+Parent Span ID：父Span ID
+Is Sampled：是否需要采样
+Flags：告诉下游服务，是否是debug Reqeust
+Trace Tree组成
+一个完整Trace 由一组Span组成，这一组Span必须具有相同的TraceID；Span具有父子关系，处于子节点的Span必须有parent_id，Span由一组 Annotation和BinaryAnnotation组成。整个Trace Tree通过Trace Id、Span ID、parent Span ID串起来的。</p>
+
+<p>其他要求
+Web入口处，需把SessionID、UserID(若登陆)、用户IP等信息记录到BinaryAnnotation里
+关键子子调用也需用zipkin追踪，比如：订单调用了Mysql，也许把个调用的耗时情况记录到 Annotation里
+关键出错日志或者异常也许记录到BinaryAnnotation里
+经过上述三条，用户任何访问所引起的后台服务间调用，完全可以串起来，并形成一颗调用树。通过调用树，哪个调用耗时多久，是否有异常等都可清晰定位到。</p>
+
+<p>TraceId 生成规则
+SOFATracer 通过 TraceId 来将一个请求在各个服务器上的调用日志串联起来，TraceId 一般由接收请求经过的第一个服务器产生，产生规则是： 服务器 IP + 产生 ID 时候的时间 + 自增序列 + 当前进程号 ，比如：</p>
+
+<p>0ad1348f1403169275002100356696
+前 8 位 0ad1348f 即产生 TraceId 的机器的 IP，这是一个十六进制的数字，每两位代表 IP 中的一段，我们把这个数字，按每两位转成 10 进制即可得到常见的 IP 地址表示方式 10.209.52.143，大家也可以根据这个规律来查找到请求经过的第一个服务器。 后面的 13 位 1403169275002 是产生 TraceId 的时间。 之后的 4 位 1003 是一个自增的序列，从 1000 涨到 9000，到达 9000 后回到 1000 再开始往上涨。 最后的 5 位 56696 是当前的进程 ID，为了防止单机多进程出现 TraceId 冲突的情况，所以在 TraceId 末尾添加了当前的进程 ID。</p>
+
+<p>TraceId 目前的生成的规则参考了阿里的鹰眼组件。</p>
+
+<p>SpanId 生成规则
+SOFATracer 中的 SpanId 代表本次调用在整个调用链路树中的位置，假设一个 Web 系统 A 接收了一次用户请求，那么在这个系统的 SOFATracer MVC 日志中，记录下的 SpanId 是 0，代表是整个调用的根节点，如果 A 系统处理这次请求，需要通过 RPC 依次调用 B，C，D 三个系统，那么在 A 系统的 SOFATracer RPC 客户端日志中，SpanId 分别是 0.1，0.2 和 0.3，在 B，C，D 三个系统的 SOFATracer RPC 服务端日志中，SpanId 也分别是 0.1，0.2 和 0.3；如果 C 系统在处理请求的时候又调用了 E，F 两个系统，那么 C 系统中对应的 SOFATracer RPC 客户端日志是 0.2.1 和 0.2.2，E，F 两个系统对应的 SOFATracer RPC 服务端日志也是 0.2.1 和 0.2.2。根据上面的描述，我们可以知道，如果把一次调用中所有的 SpanId 收集起来，可以组成一棵完整的链路树。</p>
+
+<p>如果parent spanid 透传给了孩子，那么，spanid可以简单生成：机器ip＋随机数
+设计思路
+认清rpc的两端
+一次rpc分发起的客户端，以及处理请求的服务端。如果想完整的记录这一次rpc，那么应该从2方面入手：</p>
+
+<p>记录客户端从发出request到收到response的耗时T1。
+记录服务端从收到request到返回response的耗时T2。
+有了这2个信息，就可以通过T1-T2大概计算出网络上的传输耗时，并且也知道rpc总耗时T1，以及服务端的处理耗时T2，基本覆盖全面了。</p>
+
+<p>重要结论：T1耗时应该由客户端来记录日志，T2耗时应该由服务端来记录日志，即一次rpc至少有2条日志需要被输出并采集，才能完整的复原出这次rpc。</p>
+
+<p>搞懂rpc的上下文
+当然，如果上述日志只是client把T1耗时写到文件里，server把T2耗时写到文件里，那完全是没有意义的，因为缺少”上下文”。</p>
+
+<p>为了事后复原rpc，至少应该记录一下T1耗时属于哪个traceid的哪次rpc吧，所以接下来就先说说”上下文”和traceid，spanid的关系。</p>
+
+<p>我们知道spanid自身的结构完整的表达了rpc之间的层级和顺序关系（如果忘了回头看看），因此1个spanid在一个traceid下可以唯一的代表某次rpc调用。</p>
+
+<p>而我们知道1次rpc调用会在client和server端分别打印一条日志记录相关的耗时信息，因此利用spanid将1次rpc的client和server输出的2条日志关联起来，从而描绘完整的一次rpc过程，是spanid的一个重要作用。</p>
+
+<p>从专业术语来说，在client端生成的rpc日志和在server端生成的rpc日志被称为span，也就是1次rpc有2个span，它们通过一样的spanid关联在一起，而上下文信息都记录在span里，也就是client和server输出的2条日志里。（这么说已经够直白了吧！）</p>
+
+<p>然而1次rpc的2个span记录的上下文信息除了spanid和traceid一样外，其他信息基本也没什么共同点了，毕竟要分别站在client和server两个角度去记录一些信息，必然是有所差异的，下面我们详细说一下哪些信息是必须要记录的。</p>
+
+<p>span的建立时机
+既然span代表了1次rpc两端的2行日志信息，那么client端的span应该伴随request的生成而生成，伴随response的收到而释放（写到日志中）。server端的span应该伴随request的收到而生成，伴随response的发出而释放（写到日志中）。</p>
+
+<p>span里存什么上下文信息
+无论对于client还是server来说，都要记录traceid表示所属的调用链，spanid表示本次rpc。</p>
+
+<p>为了标明span属于client还是server侧，因此需要有一个flag标记一下span的来源是client or server。</p>
+
+<p>对于client来说，要记录request的发出时间和response的收到时间，之间的耗时相减可以得到。</p>
+
+<p>对于server来说，要记录request的收到时间和response的发出时间，之间的耗时相减可以得到。</p>
+
+<p>为了更具体的描述1次rpc，应该在client的span里记录rpc发起方的服务名称（比如：交易服务），在server的span里记录rpc接收方的服务名称（比如：反作弊服务），这样rpc就描绘的更加具体了：交易服务 -&gt; 反作弊服务的1次rpc调用。</p>
+
+<p>类似的，记录其他信息也是很重要的，比如：记录本机（client和server各自获取）的IP，request请求的地址（比如URL）是什么（也就是rpc调用的接口是什么），甚至client和server创建span时的函数名，代码行号是什么，等等。</p>
+
+<p>关于上下文透传
+为了维护整个调用链，需要在所有的请求中透传traceid和spanid。其中traceid用于找出所有日志，而spanid则维护rpc的层级和时序。</p>
+
+<p>注意，调用链trace日志记录是所有的rpc调用，相当于调用树中一条一条的边而不是点，只是这个边记录了两端的信息而已。</p>
+
+<p>当client发起rpc调用时，应该生成该rpc的spanid并创建对应的span，spanid随着rpc并透传给server，当server收到request后会根据透传spanid创建一个span对应本次rpc。比如：前一个rpc的server端spanid=0，它转而发起了1次rpc，那么新的rpc的spanid=0.1，新rpc的server端收到spanid=0.1的请求后，如果继续向其他server发起rpc，那么新rpc的spanid=0.1.1，也就是说spanid是标识rpc的，不是标识服务节点的，它是”边”不是”顶点”。</p>
+
+<p>总结：</p>
+
+<p>spanid代表一条rpc，rpc分client和server共2个参与者，它们各自生成一条span日志，代表了spanid这条边的2个端点。
+如果一个server被调用时，又作为client发起了其他rpc，那么新的rpc应该创建request并开启新的client span，对应的spanid应该在之前的spanid基础上继续扩展。
+关于UI展示
+这些日志采集后应该存储起来，可以将traceid+spanid作为key，存储到es或者hbase里，前者支持检索，后者支持范围scan，都可以根据traceid快速的拿到关联的所有日志记录。</p>
+
+<p>有了1个traceid关联的所有span后，首先要像上面的表格一样排序，也就是将spanid按.分割，然后从左边开始比较，哪个数字（整形）小就排在前面，哪个spanid短就排在前面，排序后就可以体现出调用时序从先到后的关系了。</p>
+
+<p>接下来，应该扫描一次表格，对相邻的相同spanid进行日志聚合，将client端，server端以及annotation信息全部聚合到同一个spanid下，因为一个spanid代表一个rpc，也就是每个rpc的信息都整合到了一起。</p>
+
+<p>最后，就是在UI上画出时序图，这一点可以利用client的start_time去画，因为start_time从上向下是递增的。可以在UI图的左侧体现出每一行rpc的层级，根据spanid按.分割后的片段数量即可获知。</p>
+:ET

@@ -1,0 +1,42 @@
+---
+title: processlist
+layout: post
+category: mysql
+author: 夏泽民
+---
+mysql show processlist 显示完整的info_mysql 显示完整的processlist中info信息
+
+show processlist
+
+如果有SUPER权限，则可以看到全部的线程，否则，只能看到自己发起的线程(这是指，当前对应的MySQL帐户运行的线程)。
+<!-- more -->
+先简单说一下各列的含义和用途，
+
+第一列 id，不用说了吧，一个标识，你要kill一个语句的时候很有用。
+
+第二列 user列，显示单前用户，如果不是root，这个命令就只显示你权限范围内的sql语句。
+
+第三列 host列，显示这个语句是从哪个ip的哪个端口上发出的。可以用来追踪出问题语句的用户。
+
+第四列 db列，显示这个进程目前连接的是哪个数据库。
+
+第五列 command列，显示当前连接的执行的命令，一般就是休眠(sleep)，查询(query)，连接(connect)。
+
+第六列 time列，此这个状态持续的时间，单位是秒。
+
+第七列 state列，显示使用当前连接的sql语句的状态，很重要的列，后续会有所有的状态的描述，请注意，state只是语句执行中的某一个状态，一个sql语句，已查询为例，可能需要经过copying to tmp table，Sorting result，Sending data等状态才可以完成。
+
+第八列 info列，显示这个sql语句，因为长度有限，所以长的sql语句就显示不全，但是一个判断问题语句的重要依据。
+
+使用show processlist;但是显示info信息是不全的，导致无法看到具体查询语句
+
+解决方法：
+
+最后通过
+
+1：show full processlist
+
+2：select * from information_schema.processlist
+
+这两条语句可以查询到
+https://blog.csdn.net/weixin_39661353/article/details/113912171

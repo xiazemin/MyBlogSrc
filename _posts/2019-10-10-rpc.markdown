@@ -1,0 +1,128 @@
+---
+title: rpc
+layout: post
+category: golang
+author: 夏泽民
+---
+https://www.openapis.org/
+https://github.com/OAI/OpenAPI-Specification/issues
+https://www.jsonrpc.org/specification
+https://www.grpc.io/docs/guides/concepts/
+
+<!-- more -->
+REST (or JSON over HTTP 1.1)
+广义来说当然也算是RPC, 不过现在”RPC”貌似都是特指使用二进制协议的轮子
+
+优点:
+
+简单, 可以用 curl / 浏览器等工具调试
+生态圈丰富
+和后台开发可以复用一套API接口 (例如网盟中间层和网盟后台, 广告查询接口)
+广泛可选的基于HTTP的基础组件服务, 如Caching, Load Balance, …
+缺点:
+
+HTTP 请求的 Header 字段 overhead 较高, 请求参数解析开销较高, JSON 格式序列化开销很高; 因此在某些追求性能的场合, 使用二进制的协议更加高效
+设计检查工具:
+
+Open API and Swagger
+JSON-RPC
+--> { "method": "echo", "params": ["Hello JSON-RPC"], "id": 1}
+<-- { "result": "Hello JSON-RPC", "error": null, "id": 1}
+不一定需要依赖于 HTTP, 一问一答方式通讯
+JSON-RPC 2.0 功能更加丰富
+src/net/rpc/jsonrpc: Go标准库自带实现
+问题还是JSON格式, 解析开销太大, 另外请求及返回参数的overhead较高
+Redis Protocol
+了解到公司内部也在使用, 好处是通讯协议异常简单, 也是基于文本的协议.
+
+可以使用nc, redis-cli等工具调试
+可以很好的复用已有的 Client library
+适合于基于redis查询的业务逻辑迁移, 或者是redis数据读写不能满足需求时的KV数据库重构
+表达复杂的数据结构还是比较蛋疼
+gRPC
+源于Google的内部RPC框架, 使用protobuf进行编码解码.
+
+优点:
+
+使用 Protocol Buffer 序列化高效, 生成数据小
+比 Thrift 强
+支持 JSON 结构映射
+传输协议基于HTTP/2
+可以共享基于HTTP/2的各种基础服务/组件, 前景广阔
+multiplexing over single TCP conn, 慢请求不会影响快速响应的调用
+(bidirectional) streaming rpc support
+适合作为CS交互协议, 比如以后和SDK通讯啥的
+Google 背书, 主导开发, 文档维护啥的好些
+一个爸爸, Go生态圈比较完善
+http://github.com/grpc-ecosystem/go-grpc-middleware
+支持 OpenTracing
+context / tracing / …
+有现成翻译 REST API 的项目可用, 便于DEBUG和其他Client的调用
+etcd 等明星项目背书
+Thrift
+目前看来, 性能似乎明显好于 gRPC
+私有传输协议
+Facebook 贡献的开源项目, 现在不玩了 (FB家开源维护不够, 自己又另起炉灶了), 缺少主导, 推力有限, 文档不好
+Apache 系等项目普遍采用 Hadoop / Storm / HBase / Parquet 见这里
+Thrift vs gRPC
+实际体验来讲, 感觉和 Thrift 相比, gRPC 对于 Go 更加完善, API更加简洁, 文档帮助更加完善
+gRPC 使用 HTTP2, 前景更好
+gRPC 对于 Thrift 的性能劣势, 主要在于 HTTP2 的 Header overhead. 不过这一部分对于 统一的 鉴权, 缓存等的处理, 还是值得的
+gRPC CNCF 钦点
+… 编不下去了, 就是主观看不上 Thrift, 你看那官网丑的
+Avro RPC
+调研Avro格式原因: Avro格式在Hadoop以及AWS大数据的生态圈里面. 考虑”不远的”将来ETL过程日志计划统一用Avro格式存储. Avro也有RPC支持, 虽然日志序列化和RPC没啥关系, 但是如果能够用一套序列化方案是不是更加简单一些.
+
+题外话: 日志/数据最终列式存储, 落地到S3 / HDFS, 一般采用 Parquet 格式, 从 Avro / Thrift / Protobuf 格式生成 Parquet 文件的便利性需要调研. (Avro => Parquet , 由于都是Apache系列, 支持是没有问题的)
+
+优点: 预编译是一个可选项, 一个JSON描述的数据结构. 更加适合动态语言.
+
+缺点:
+
+由于每次通讯需要预先沟通格式, 作为RPC来说overhead太高, 还是适合以自解释的数据文件存储方式
+Go / PHP 不在官方优先支持之列
+goavro 项目
+缺少对于RPC的支持
+缺少对于struct格式的支持, 不方便, 这个 star 太少, 不敢用
+TChannel
+优点:
+
+同时支持 HTTP+JSON 和 Thrift, 易用性/性能得兼
+缺点:
+
+非主流
+目前不支持PHP
+Go 自带的 RPC
+性能不错
+gob 序列化方式, 无法跨语言, 放弃
+Go端开发考量
+go-kit 比较成熟的Go微服务开发框架
+HTTP, gRPC, thrift, net/RPC 都支持
+PHP端调用的考量
+追求性能得上 swoole, 类似 NodeJS 事件回调的写法
+2.0 支持类似goroutine的Coroutine, 用同步代码实现异步程序
+Redis Protocol 简单, 另外client library成熟, overhead 比 JSON over HTTP 强, 但是数据结构支持是硬伤, 请求/返回内容不好规范化
+Thrift / gRPC PHP client 可能会踩坑, 需要进一步调研
+Thrift 序列化慢, 得上专门的扩展
+据说 Thrift PHP client 有坑, 得自己改
+据说 gRPC 的 PHP 扩展有内存泄露问题
+如果考虑 gRPC, PHP 对于 HTTP2 支持成熟度需要调研
+更简单鲁棒的办法: 自己写个简单的二进制协议, 用 Protocol Buffer 做数据格式
+以后PHP整体迁移掉后协议不用怎么改
+Reference
+gRPC 相关
+http://www.grpc.io/faq/
+https://talks.Go.org/2015/gotham-grpc.slide
+https://blog.gopheracademy.com/advent-2015/etcd-distributed-key-value-store-with-grpc-http2/
+https://www.youtube.com/watch?v=Z_yD7YPL2oE
+Thrift 相关
+http://diwakergupta.github.io/thrift-missing-guide/
+https://sookocheff.com/post/thrift/so-you-want-to-use-thrift/
+RPC 间的比较
+https://sookocheff.com/post/api/swagger-thrift-or-grpc/
+https://apihandyman.io/do-you-really-know-why-you-prefer-rest-over-rpc/
+序列化方式的比较
+http://ganges.usc.edu/pgroupW/images/a/a9/Serializarion_Framework.pdf
+https://www.slideshare.net/IgorAnishchenko/pb-vs-thrift-vs-avro
+https://martin.kleppmann.com/2012/12/05/schema-evolution-in-avro-protocol-buffers-thrift.html
+http://old.floatingsun.net/articles/thrift-vs-protocol-buffers/

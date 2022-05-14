@@ -1,0 +1,62 @@
+I"�	<p>某些场景我们需要获取客户端的ip，比如埋点、反作弊、审计等等</p>
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>ip := net.ParseIP(ctx.ClientIP())
+ip = ip.To4()
+ipInt32 := binary.BigEndian.Uint32(ip)
+</code></pre></div></div>
+<p>上面这段代码乍看没有问题，但是实际应用中可能panic
+<!-- more -->
+我们来看下echo中相关函数的实现</p>
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>func (c *Context) ClientIP() string {
+	if c.engine.ForwardedByClientIP {
+		clientIP := c.requestHeader("X-Forwarded-For")
+		clientIP = strings.TrimSpace(strings.Split(clientIP, ",")[0])
+		if clientIP == "" {
+			clientIP = strings.TrimSpace(c.requestHeader("X-Real-Ip"))
+		}
+		if clientIP != "" {
+			return clientIP
+		}
+	}
+</code></pre></div></div>
+<p>这里直接通过逗号分隔X-Forwarded-For，取第一个字符串，众所周知X-Forwarded-For是可以篡改的，如果用户不遵守代理协议，把第一个ip地址写成非法的ip地址，比如一个字符串，那么这个函数返回的就是一个字符串</p>
+
+<p>接下来我们看看解析ip的函数</p>
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>// ParseIP parses s as an IP address, returning the result.
+// The string s can be in IPv4 dotted decimal ("192.0.2.1"), IPv6
+// ("2001:db8::68"), or IPv4-mapped IPv6 ("::ffff:192.0.2.1") form.
+// If s is not a valid textual representation of an IP address,
+// ParseIP returns nil.
+func ParseIP(s string) IP {
+	for i := 0; i &lt; len(s); i++ {
+		switch s[i] {
+		case '.':
+			return parseIPv4(s)
+		case ':':
+			return parseIPv6(s)
+		}
+	}
+	return nil
+}
+</code></pre></div></div>
+<p>我们可以看到对于不合法的ip地址，返回的直接是个nil</p>
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>// To4 converts the IPv4 address ip to a 4-byte representation.
+// If ip is not an IPv4 address, To4 returns nil.
+func (ip IP) To4() IP {
+	if len(ip) == IPv4len {
+		return ip
+	}
+	if len(ip) == IPv6len &amp;&amp;
+		isZeros(ip[0:10]) &amp;&amp;
+		ip[10] == 0xff &amp;&amp;
+		ip[11] == 0xff {
+		return ip[12:16]
+	}
+	return nil
+}
+</code></pre></div></div>
+<p>转换函数也一样，如果不是合法的ipv4 或者ipv6地址，那么返回的仍然是个nil</p>
+
+<p>如何修复呢
+1，代码加nil判断
+2，接入成对X-Forwarded-For  清洗</p>
+:ET

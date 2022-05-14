@@ -1,0 +1,92 @@
+I"<p>https://colobu.com/2020/03/19/Custom-JSON-Marshalling-in-Go/
+http://choly.ca/post/go-json-marshalling/</p>
+
+<p>我们知道，通过tag,可以有条件地实现定制Go JSON序列化的方式，比如json:”,omitempty”, 当字段的值为空的时候，我们可以在序列化后的数据中不包含这个值，而json:”-“可以直接不被JSON序列化,如果想被序列化key-，可以设置tag为json:”-,”,加个逗号。
+<!-- more --></p>
+
+<p>如果你为类型实现了MarshalJSON() ([]byte, error)和UnmarshalJSON(b []byte) error方法，那么这个类型在序列化反序列化时将采用你定制的方法。</p>
+
+<p>这些都是我们常用的设置技巧。</p>
+
+<p>如果临时想为一个struct增加一个字段的话，可以采用本译文的技巧，临时创建一个类型，通过嵌入原类型的方式来实现。他和JSON and struct composition in Go一文中介绍的技巧还不一样(译文和jsoniter-go扩展可以阅读陶文的Golang 中使用 JSON 的一些小技巧)。JSON and struct composition in Go一文中是通过嵌入的方式创建一个新的类型，你序列化和反序列化的时候需要使用这个新类型，而本译文中的方法是无痛改变原类型的MarshalJSON方式，采用Alias方式避免递归解析，确实是一种非常巧妙的方法。</p>
+
+<p>以下是译文：</p>
+
+<p>Go的 encoding/json序列化strcut到JSON数据:</p>
+
+<p>package main
+import (
+	“encoding/json”
+	“os”
+	“time”
+)
+type MyUser struct {
+	ID       int64     <code class="language-plaintext highlighter-rouge">json:"id"</code>
+	Name     string    <code class="language-plaintext highlighter-rouge">json:"name"</code>
+	LastSeen time.Time <code class="language-plaintext highlighter-rouge">json:"lastSeen"</code>
+}
+func main() {
+	_ = json.NewEncoder(os.Stdout).Encode(
+		&amp;MyUser{1, “Ken”, time.Now()},
+	)
+}
+序列化的结果:</p>
+
+<p>1
+{“id”:1,”name”:”Ken”,”lastSeen”:”2009-11-10T23:00:00Z”}
+但是如果我们想改变一个字段的显示结果我们要怎么做呢？例如，我们想把LastSeen显示为unix时间戳。</p>
+
+<p>最简单的方式是引入另外一个辅助struct,在MarshalJSON中使用它进行正确的格式化：</p>
+
+<p>func (u *MyUser) MarshalJSON() ([]byte, error) {
+	return json.Marshal(&amp;struct {
+		ID       int64  <code class="language-plaintext highlighter-rouge">json:"id"</code>
+		Name     string <code class="language-plaintext highlighter-rouge">json:"name"</code>
+		LastSeen int64  <code class="language-plaintext highlighter-rouge">json:"lastSeen"</code>
+	}{
+		ID:       u.ID,
+		Name:     u.Name,
+		LastSeen: u.LastSeen.Unix(),
+	})
+}
+这样做当然没有问题，但是如果有很多字段的话就会很麻烦，如果我们能把原始struct嵌入到新的struct中，并让它继承所有不需要改变的字段就太好了:</p>
+
+<p>func (u *MyUser) MarshalJSON() ([]byte, error) {
+	return json.Marshal(&amp;struct {
+		LastSeen int64 <code class="language-plaintext highlighter-rouge">json:"lastSeen"</code>
+		*MyUser
+	}{
+		LastSeen: u.LastSeen.Unix(),
+		MyUser:   u,
+	})
+}
+但是等等，问题是这个辅助struct也会继承原始struct的MarshalJSON方法，这会导致这个方法进入无限循环中，最后堆栈溢出。</p>
+
+<p>解决办法就是为原始类型起一个别名，别名会有原始struct所有的字段，但是不会继承它的方法：</p>
+
+<p>func (u <em>MyUser) MarshalJSON() ([]byte, error) {
+	type Alias MyUser
+	return json.Marshal(&amp;struct {
+		LastSeen int64 <code class="language-plaintext highlighter-rouge">json:"lastSeen"</code>
+		*Alias
+	}{
+		LastSeen: u.LastSeen.Unix(),
+		Alias:    (</em>Alias)(u),
+	})
+}
+同样的技术也可以应用于UnmarshalJSON方法:
+func (u <em>MyUser) UnmarshalJSON(data []byte) error {
+	type Alias MyUser
+	aux := &amp;struct {
+		LastSeen int64 <code class="language-plaintext highlighter-rouge">json:"lastSeen"</code>
+		*Alias
+	}{
+		Alias: (</em>Alias)(u),
+	}
+	if err := json.Unmarshal(data, &amp;aux); err != nil {
+		return err
+	}
+	u.LastSeen = time.Unix(aux.LastSeen, 0)
+	return nil
+}</p>
+:ET

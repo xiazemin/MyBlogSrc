@@ -1,0 +1,280 @@
+I":#<p>pprof 原理是对cpu 或内存 相关数据进行采样。因此前提是程序在运行或者 web有请求，否则 由于采集不到数据而显示：profile is empty
+heap 采样出现这个问题可能是采样频率设置不合理</p>
+
+<p>火焰图是对pprof 数据的可视化表现形式
+<!-- more -->
+环境搭建：
+$ echo $GOPATH
+/home/xiaoju/work
+$ cd  $GOPATH
+安装golang 火焰图生成工具
+$ go get github.com/uber/go-torch
+安装 profile转化成svg图的工具
+$ git clone https://github.com/brendangregg/FlameGraph.git
+$ export PATH=$PATH:/home/xiaoju/work/FlameGraph
+$  sudo yum install graphviz
+设置采样频率
+$ export GODEBUG=”memprofilerate=1”
+如果失败，安装完整版的pprof工具
+$  go get -u github.com/google/pprof</p>
+
+<p>安装 http压测工具
+$ git clone https://github.com/wg/wrk.git
+$ cd wrk/
+$ make</p>
+
+<p>$ vi ~/.bashrc
+ export PATH=$PATH:/home/xiaoju/work/wrk/wrk
+$ source ~/.bashrc</p>
+
+<p>有时候环境问题，需要移动下pl脚本位置
+cd FlameGraph/
+sudo cp flamegraph.pl /usr/local/bin</p>
+
+<p>＃开始写一个http服务的例子
+cd src/github.com/xiazemin/
+vi main9876.go
+package main
+import (
+    “bytes”
+    “io/ioutil”
+    “log”
+    “math/rand”
+    “net/http”</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>_ "net/http/pprof" )
+</code></pre></div></div>
+
+<p>func main() {
+    http.HandleFunc(“/test”, handler)
+    log.Fatal(http.ListenAndServe(“:9876”, nil))
+}</p>
+
+<p>func handler(w http.ResponseWriter, r *http.Request) {
+    err := r.ParseForm()
+    if nil != err {
+        w.Write([]byte(err.Error()))
+        return
+    }
+    doSomeThingOne(10000)
+    buff := genSomeBytes()
+    b, err := ioutil.ReadAll(buff)
+    if nil != err {
+        w.Write([]byte(err.Error()))
+        return
+    }
+    w.Write(b)
+}</p>
+
+<p>func doSomeThingOne(times int) {
+    for i := 0; i &lt; times; i++ {
+        for j := 0; j &lt; times; j++ {</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    }
+} }
+</code></pre></div></div>
+
+<p>func genSomeBytes() *bytes.Buffer {
+    var buff bytes.Buffer
+    for i := 1; i &lt; 20000; i++ {
+        buff.Write([]byte{‘0’ + byte(rand.Intn(10))})
+    }
+    return &amp;buff
+}
+启动服务
+go build main9876.go
+./main9876 &amp;
+发起压测请求
+./wrk -c 400 -t 8 -d 3m http://localhost:9876/test</p>
+
+<p>查看pprof结果
+http://10.96.83.51:9876/debug/pprof/
+/debug/pprof/</p>
+
+<p>profiles:
+0	block
+5	goroutine
+1792	heap
+0	mutex
+55	threadcreate</p>
+
+<p>full goroutine stack dump</p>
+
+<p>生成内存火焰图
+$ go-torch -u http://10.96.83.51:9876/debug/pprof/heap?debug=1
+INFO[12:25:17] Run pprof command: go tool pprof -raw -seconds 30 http://10.96.83.51:9876/debug/pprof/profile?debug=1
+INFO[12:25:48] Writing svg to torch.svg</p>
+
+<p>cp torch.svg ~/aladdin/download/
+http://10.96.83.51:8999/download/torch.svg 可以打开看到火焰图</p>
+
+<p>go-torch -u http://10.96.83.51:9876/debug/pprof/goroutine?debug=2
+INFO[12:30:32] Run pprof command: go tool pprof -raw -seconds 30 http://10.96.83.51:9876/debug/pprof/profile?debug=2
+INFO[12:31:03] Writing svg to torch.svg</p>
+
+<p>cp torch.svg ~/aladdin/download/torch1.svg
+ <img src="https://xiazemin.github.io/MyBlog/img/torch.svg" /></p>
+
+<p>生成调用图
+$ curl http://10.96.83.51:9876/debug/pprof/profile -O
+$ ls
+main9876  main9876.go  profile</p>
+
+<p>$  go tool pprof main9876 profile
+进入交互式
+top 可以看到 cpu 占用前 10 的函数，我们可以对此分析进行优化。
+只是这样可能还不是很直观。
+我们输入命令 web（需要事先安装 graphviz，macOS 下可以 brew install graphviz），会在浏览器中打开</p>
+
+<p>Entering interactive mode (type “help” for commands)
+(pprof) web
+exec: “firefox”: executable file not found in $PATH
+(pprof) top
+35.28s of 36.40s total (96.92%)
+Dropped 131 nodes (cum &lt;= 0.18s)
+Showing top 10 nodes out of 29 (cum &gt;= 1.53s)
+      flat  flat%   sum%        cum   cum%
+    33.77s 92.77% 92.77%     33.77s 92.77%  main.doSomeThingOne
+     0.34s  0.93% 93.71%      0.34s  0.93%  runtime.procyield
+     0.30s  0.82% 94.53%      0.61s  1.68%  sync.(<em>Mutex).Lock
+     0.19s  0.52% 95.05%      1.48s  4.07%  math/rand.(</em>Rand).Int31n
+(pprof) svg
+Generating report in profile001.svg
+cp profile001.svg  ~/aladdin/download/
+http://10.96.83.51:8999/download/profile001.svg</p>
+
+<p>可以看到整个连路调用和耗时
+ <img src="https://xiazemin.github.io/MyBlog/img/profile001.svg" /></p>
+
+<p>通用程序使用 pprof
+ 我们写的 Go 程序并非都是 Web 程序，这时候再使用上面的方法就不行了。
+我们仍然可以使用 pprof 工具，但引入的位置为 runtime/pprof 。</p>
+
+<p>vi main.go 
+package main
+import(
+“runtime/pprof”
+“os”
+“log”
+“time”
+“fmt”
+)
+func main(){
+go cpuProfile()
+go heapProfile()
+for i:=0;i&lt;10000000;i++{
+fmt.Println(i);
+}
+}
+// 生成 CPU 报告
+func cpuProfile() {
+    f, err := os.OpenFile(“cpu.prof”, os.O_RDWR|os.O_CREATE, 0644)
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer f.Close()</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>log.Println("CPU Profile started")
+pprof.StartCPUProfile(f)
+defer pprof.StopCPUProfile()
+
+time.Sleep(60 * time.Second)
+fmt.Println("CPU Profile stopped") }
+</code></pre></div></div>
+
+<p>// 生成堆内存报告
+func heapProfile() {
+    f, err := os.OpenFile(“heap.prof”, os.O_RDWR|os.O_CREATE, 0644)
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer f.Close()</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>time.Sleep(30 * time.Second)
+
+pprof.WriteHeapProfile(f)
+fmt.Println("Heap Profile generated") }
+</code></pre></div></div>
+
+<p>go build main.go
+两个函数分别会生成 cpu.prof 和 heap.prof 文件。仍然可以使用 go tool pprof 工具进行分析
+ ./main
+ $ ls
+cpu.prof  heap.prof  main
+$  go tool pprof main cpu.prof
+Entering interactive mode (type “help” for commands)
+(pprof) top
+13230ms of 14980ms total (88.32%)
+Dropped 42 nodes (cum &lt;= 74.90ms)
+Showing top 10 nodes out of 44 (cum &gt;= 10030ms)
+      flat  flat%   sum%        cum   cum%
+    9470ms 63.22% 63.22%     9810ms 65.49%  syscall.Syscall
+     790ms  5.27% 68.49%      800ms  5.34%  runtime.addspecial
+     670ms  4.47% 72.96%     1990ms 13.28%  runtime.pcvalue</p>
+
+<p>$  go tool pprof main heap.prof
+Entering interactive mode (type “help” for commands)
+(pprof) top
+329.66kB of 344.45kB total (95.71%)
+Dropped 98 nodes (cum &lt;= 1.72kB)
+Showing top 10 nodes out of 67 (cum &gt;= 10.17kB)
+      flat  flat%   sum%        cum   cum%
+     228kB 66.19% 66.19%   228.06kB 66.21%  runtime.procresize
+   32.50kB  9.44% 75.63%    32.50kB  9.44%  runtime.malg
+   14.53kB  4.22% 79.85%    14.53kB  4.22%  runtime.makemap</p>
+
+<p>$  go-torch main cpu.prof
+INFO[13:33:42] Run pprof command: go tool pprof -raw -seconds 30 main cpu.prof
+INFO[13:33:43] Writing svg to torch.svg</p>
+
+<p>$ cp torch.svg ~/aladdin/download/torch_cpu.svg
+http://10.96.83.51:8999/download/torch_cpu.svg
+<img src="https://xiazemin.github.io/MyBlog/img/torch_cpu.svg" /></p>
+
+<p>$  go-torch main heap.prof
+INFO[13:35:37] Run pprof command: go tool pprof -raw -seconds 30 main heap.prof
+INFO[13:35:38] Writing svg to torch.svg
+$ cp torch.svg ~/aladdin/download/torch_heap.svg</p>
+
+<p>#追踪报告
+import(
+“runtime/trace”
+….
+func main(){
+go traceProfile()
+….</p>
+
+<p>// 生成追踪报告
+func traceProfile() {
+    f, err := os.OpenFile(“trace.out”, os.O_RDWR|os.O_CREATE, 0644)
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer f.Close()</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>log.Println("Trace started")
+trace.Start(f)
+defer trace.Stop()
+
+time.Sleep(60 * time.Second)
+fmt.Println("Trace stopped") }
+</code></pre></div></div>
+
+<p>$ ls
+cpu.prof  heap.prof  main  main.go  torch.svg  trace.out</p>
+
+<p>使用工具 go tool trace 进行分析，会得到非常详细的追踪报告，供更深入的程序分析优化。
+$ go tool trace trace.out
+2019/08/25 13:40:35 Parsing trace…
+failed to parse trace: no EvFrequency event</p>
+
+<h1 id="用--u-分析cpu使用情况">用 -u 分析CPU使用情况</h1>
+<p>./go-torch -u http://127.0.0.1:8080</p>
+<h1 id="用--alloc_space-来分析内存的临时分配情况">用 -alloc_space 来分析内存的临时分配情况</h1>
+<p>./go-torch -alloc_space http://127.0.0.1:8080/debug/pprof/heap –colors=mem</p>
+<h1 id="用--inuse_space-来分析程序常驻内存的占用情况">用 -inuse_space 来分析程序常驻内存的占用情况；</h1>
+<p>./go-torch -inuse_space http://127.0.0.1:8080/debug/pprof/heap –colors=mem</p>
+<h1 id="画出内存分配图">画出内存分配图</h1>
+<p>go tool pprof -alloc_space -cum -svg http://127.0.0.1:8080/debug/pprof/heap &gt; heap.svg</p>
+
+:ET

@@ -1,0 +1,142 @@
+---
+title: uintptr
+layout: post
+category: golang
+author: 夏泽民
+---
+在 Go 的源码中 uintptr 的定义如下：
+
+/* uintptr is an integer type that is large enough to hold the bit pattern of any pointer.
+从英文注释可以看出 uintptr是一个整形，它的大小能够容纳任何指针的位模式，它是无符号的，最大值为：18446744073709551615，怎么来的，int64最大值 * 2 +1  
+*/
+type uintptr uintptr
+位模式：内存由字节组成。每个字节由 8 位 bit 组成，每个 bit 状态只能是 0 或 1. 所谓位模式，就是变量所占用内存的所有 bit 的状态的序列
+指针大小：一个指针的大小是多少呢？在 32 位操作系统上，指针大小是 4 个字节，在 64 位操作系统上，指针的大小是 8 字节，
+所以 uintptr 能够容纳任何指针的位模式，总的说 uintptr 表示的指针地址的值，可以用来进行数值计算
+GC 不会把 uintptr 当作指针，uintptr 不会持有一个对象，uintptr 类型的目标会被 GC 回收
+<!-- more -->
+unasfe
+在 Go 中，unsafe 是一个包，内容也比较简短，但注释非常多，这个包主要是用来在一些底层编程中，让你能够操作内存地址计算，也就是说 Go 本身是不支持指针运算，但还是留了一个后门，而且 Go 也不建议研发人员直接使用 unsafe 包的方法，因为它绕过了 Go 的内存安全原则，是不安全的，容易使你的程序出现莫名其妙的问题，不利于程序的扩展与维护但为什么说它呢，因为很多框架包括 SDK 中的源代码都用到了这个包的知识，在看源代码时这块不懂，容易懵。下面看看这个包定义了什么？
+
+//ArbitraryType的类型也是int，但它被赋予特殊的含义，代表一个Go的任意表达式类型
+type ArbitraryType int
+
+//Pointer是一个int指针类型，在Go种，它是所有指针类型的父类型，也就是说所有的指针类型都可以转化为Pointer, uintptr和Pointer可以相互转化
+type Pointer *ArbitraryType
+
+//返回指针变量在内存中占用的字节数(记住，不是变量对应的值占用的字节数)
+func Sizeof(x ArbitraryType) uintptr
+
+/*Offsetof返回变量指定属性的偏移量，这个函数虽然接收的是任何类型的变量，但是有一个前提，就是变量要是一个struct类型，且还不能直接将这个struct类型的变量当作参数，只能将这个struct类型变量的属性当作参数*/
+func Offsetof(x ArbitraryType) uintptr
+
+//返回变量对齐字节数量
+func Alignof(x ArbitraryType) uintptr
+什么是内存对齐？为什么要内存对齐？
+在我了解比较深入的语言中（Java Go）都有内存对齐的概念，百度百科对内存对齐的概念是这样定义的：“内存对齐” 应该是编译器的 “管辖范围”。编译器为程序中的每个 “数据单元” 安排在适当的位置上，所谓的数据单元其实就是变量的值。
+
+为什么要内存对齐呢？
+
+平台原因 (移植原因)：不是所有的硬件平台都能访问任意地址上的任意数据的；某些硬件平台只能在某些地址处取某些特定类型的数据，否则抛出硬件异常（32 位平台上运行 64 位平台上编译的程序要求必须 8 字节对齐，否则发生 panic）
+性能原因：数据结构 (尤其是栈) 应该尽可能地在自然边界上对齐。原因在于，为了访问未对齐的内存，处理器需要作两次内存访问；而对齐的内存访问仅需要一次访问
+对齐规则：也就是对齐的边界，多少个字节内存对齐，在 32 位操作系统上，是 4 个自己，在 64 位操作系统上是 8 个字节
+
+通过一幅图来理解上面的内容，下图只是举个例子，位数并没有画全
+
+Go
+
+指针运算和内存对齐实践
+内存对齐实践
+理论总是枯燥的，但必须了解，也许看了理论还是不懂，接下来通过实践让你明白
+
+//创建一个变量
+var i int8 = 10
+
+//建一个变量转化成Pointer 和 uintptr
+p := unsafe.Pointer(&i) //入参必须是指针类型的
+fmt.Println(p) //是内存地址0xc0000182da
+u := uintptr(i)
+fmt.Println(u) //结果就是10
+
+//Pointer转换成uintptr
+temp := uintptr(p)
+//uintptr转Pointer
+p= unsafe.Pointer(u)
+
+//获取指针大小
+u = unsafe.Sizeof(p) //传入指针，获取的是指针的大小
+fmt.Println(u) // 打印u是：8
+ //获取的是变量的大小
+u = unsafe.Sizeof(i)
+fmt.Println(u) //打印u是：1
+
+//创建两个个结构体
+type Person1 struct{
+    a bool
+    b int64
+    c int8
+    d string
+}
+type Person2 struct{
+    b int64
+    c int8
+    a bool
+    d string
+}
+//接下来演示一下内存对齐,猜一猜下面l两个打印值是多少呢?
+person1 := Person1{a:true,b:1,c:1,d:"spw"}
+fmt.Println(unsafe.Sizeof(person1))
+person2 := Person2{b:1,c:1,a:true,d:"spw"}
+fmt.Println(unsafe.Sizeof(person2))
+//第一个结果是40,第二个结果是32，为什么会有这些差距呢？其实就是内存对齐做的鬼，我来详细解释一下
+我们知道在 Person1 和 Person2 种变量类型都一样，只是顺序不太一样，
+bool 占 1 个字节，
+int64 占 8 个字节，
+int8 占一个字节，
+string 占用 16 个字节，
+总的结果应该是 1+8+1+16= 26，为啥 Person1 是 40 呢，Person2 是 32，看下图
+
+Go
+
+根据上图，我们就明白了，在结构体编写中存在内存对齐的概念，而且我们应该小心，尽可能的避免因内存对齐导致结构体大小增大，在书写过程中应该让小字节的变量挨着。我们可以工具进行检测（golangci-lint）。
+
+我们可以通过 func Alignof(x ArbitraryType) uintptr 这个方法返回内存对齐的字节数量，如下代码
+
+type Person1 struct{
+    a bool
+    b int64
+    c int8
+    d string
+}
+p := Person{a:true,b:1,c:1,d:"spw"}
+fmt.Println(unsafe.Alignof(person))
+type Person2 struct{
+    a bool
+    c int8
+}
+p1 := Person1{a:true,b:1,c:1,d:"spw"}
+fmt.Println(unsafe.Alignof(p1))
+p2 := Person2{a:true,c:1}
+fmt.Println(unsafe.Alignof(p2))
+//你任务上面两个println打印多少呢？结果是8，1，在结构体中，内存对齐是按照结构体中最大字节数对齐的(但不会超过8)
+指针运算实践
+我们还是用代码来举例说明
+
+
+type W struct {
+   b int32
+   c int64
+}
+var w *W = new(W)
+//这时w的变量打印出来都是默认值0，0
+fmt.Println(w.b,w.c)
+
+//现在我们通过指针运算给b变量赋值为10
+b := unsafe.Pointer(uintptr(unsafe.Pointer(w)) + unsafe.Offsetof(w.b))
+*((*int)(b)) = 10
+//此时结果就变成了10，0
+fmt.Println(w.b,w.c)
+解释一下上面的代码
+uintptr(unsafe.Pointer(w)) 获取了 w 的指针起始值，
+unsafe.Offsetof(w.b) 获取 b 变量的偏移量
+两个相加就得到了 b 的地址值，将通用指针 Pointer 转换成具体指针 ((*int)(b))，通过 符号取值，然后赋值，((int)(b)) 相当于把（int） 转换成 int 了，最后对变量重新赋值成 10，这样指针运算就完成了。

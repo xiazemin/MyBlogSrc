@@ -1,0 +1,159 @@
+I"�<p>ython里面有很多的以__开始和结尾的函数，利用它们可以完成很多复杂的逻辑代码，而且提高了代码的简洁性，本文主要总结了迭代器用到的魔术方法，并且主要以代码例子进行解释。</p>
+
+<p><strong>iter</strong> 和 <strong>next</strong>
+其实这里需要引入一个概念，叫迭代器，常见的就是我们在使用for语句的时候，python内部其实是把for后面的对象上使用了内建函数iter，比如：</p>
+
+<p>a = [1, 2, 3]
+for i in a:
+    do_something()
+其实在python内部进行了类似如下的转换：</p>
+
+<p>a = [1, 2, 3]
+for i in iter(a):
+    do_something()
+那么iter返回的是什么呢，就是一个迭代对象，它主要映射到了类里面的__iter__函数，此函数返回的是一个实现了__next__的对象。注意理解这句话，比如：</p>
+
+<p>class B(object):
+    def <strong>next</strong>(self):
+        raise StopIteration</p>
+
+<p>class A(object):
+    def <strong>iter</strong>(self):
+        return B()
+我们可以看见，A这个类实现了一个__iter__函数，返回的是B()的实例对象，其中B里面实现了__next__这个函数。</p>
+
+<p>下面引入几个概念：
+Iterable: 有迭代能力的对象，一个类，实现了__iter__，那么就认为它有迭代能力，通常此函数必须返回一个实现了__next__的对象，如果自己实现了，你可以返回self，当然这个返回值不是必须的；
+Iterator: 迭代器(当然也是Iterable)，同时实现了__iter__和__next__的对象，缺少任何一个都不算是Iterator，比如上面例子中，A()可以是一个Iterable，但是A()和B()都不能算是和Iterator，因为A只实现了__iter__，而B只实现了__next__()。</p>
+
+<p>我们可以使用collections里面的类型来进行验证：</p>
+
+<p>class B(object):
+    def <strong>next</strong>(self):
+        raise StopIteration</p>
+
+<p>class A(object):
+    def <strong>iter</strong>(self):
+        return B()</p>
+
+<p>from collections.abc import *</p>
+
+<p>a = A()
+b = B()
+print(isinstance(a, Iterable))
+print(isinstance(a, Iterator))</p>
+
+<p>print(isinstance(b, Iterable))
+print(isinstance(b, Iterator))
+结果是：</p>
+
+<p>True
+False
+False
+False
+<!-- more --></p>
+
+<p>让我们稍微对B这个类做一点修改：</p>
+
+<p>class B(object):
+    def <strong>next</strong>(self):
+        raise StopIteration</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>def __iter__(self):
+    return None
+</code></pre></div></div>
+
+<p>class A(object):
+    def <strong>iter</strong>(self):
+        return B()</p>
+
+<p>from collections.abc import *</p>
+
+<p>a = A()
+b = B()
+print(isinstance(a, Iterable))
+print(isinstance(a, Iterator))</p>
+
+<p>print(isinstance(b, Iterable))
+print(isinstance(b, Iterator))
+结果是：</p>
+
+<p>True
+False
+True
+True
+真正的迭代器
+上面只是做了几个演示，这里具体说明一下:
+当调用iter函数的时候，生成了一个迭代对象，要求__iter__必须返回一个实现了__next__的对象，我们就可以通过next函数访问这个对象的下一个元素了，并且在你不想继续有迭代的情况下抛出一个StopIteration的异常(for语句会捕获这个异常，并且自动结束for)，下面实现了一个自己的类似range函数的功能。</p>
+
+<p>class MyRange(object):
+    def <strong>init</strong>(self, end):
+        self.start = 0
+        self.end = end</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>def __iter__(self):
+    return self
+
+def __next__(self):
+    if self.start &lt; self.end:
+        ret = self.start
+        self.start += 1
+        return ret
+    else:
+        raise StopIteration
+</code></pre></div></div>
+
+<p>from collections.abc import *</p>
+
+<p>a = MyRange(5)
+print(isinstance(a, Iterable))
+print(isinstance(a, Iterator))</p>
+
+<p>for i in a:
+    print(i)
+结果是：</p>
+
+<p>True
+True
+0
+1
+2
+3
+4
+接下来我们使用next函数模拟一次：</p>
+
+<p>class MyRange(object):
+    def <strong>init</strong>(self, end):
+        self.start = 0
+        self.end = end</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>def __iter__(self):
+    return self
+
+def __next__(self):
+    if self.start &lt; self.end:
+        ret = self.start
+        self.start += 1
+        return ret
+    else:
+        raise StopIteration
+</code></pre></div></div>
+
+<p>a = MyRange(5)
+print(next(a))
+print(next(a))
+print(next(a))
+print(next(a))
+print(next(a))
+print(next(a)) # 其实到这里已经完成了，我们在运行一次查看异常
+可以看见一个很明显的好处是，每次产生的数据，是产生一个用一个，什么意思呢，比如我要遍历[0, 1, 2, 3…..]一直到10亿，如果使用列表的方式，那么是会全部载入内存的，但是如果使用迭代器，可以看见，当用到了(也就是在调用了next)才会产生对应的数字，这样就可以节约内存了，这是一种懒惰的加载方式。</p>
+
+<p>总结
+可以使用collection.abs里面的Iterator和Iterable配合isinstance函数来判断一个对象是否是可迭代的，是否是迭代器对象
+iter实际是映射到了__iter__函数
+只要实现了__iter__的对象就是可迭代对象(Iterable)，正常情况下，应该返回一个实现了__next__的对象(虽然这个要求不强制)，如果自己实现了__next__，当然也可以返回自己
+同时实现了__iter__和__next__的是迭代器(Iterator)，当然也是一个可迭代对象了，其中__next__应该在迭代完成后，抛出一个StopIteration异常
+for语句会自动处理这个StopIteration异常以便结束for循环</p>
+
+<p>https://www.jianshu.com/p/1b0686bc166d</p>
+:ET

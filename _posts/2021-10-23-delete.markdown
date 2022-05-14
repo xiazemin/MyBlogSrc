@@ -1,0 +1,190 @@
+---
+title: es删除字段
+layout: post
+category: elasticsearch
+author: 夏泽民
+---
+elasticsearch 删除mapping字段思路
+mapping中字段不能直接删除，所以只能曲线救国
+
+创建新索引
+新索引创建新mapping
+原索引导出数据到新索引
+新索引创建原索引一致的别名
+删除原索引
+
+
+es删除字段,只能重建索引，不能原地删除，因为数据模型是不可更改的
+原索引mappings如下，有full_name和short_name两个字段
+
+{
+    "audit_demo": {
+        "mappings": {
+            "_doc": {
+                "properties": {
+                    "full_name": {
+                        "type": "text",
+                        "analyzer": "ik_max_word"
+                    },
+                    "short_name": {
+                        "type": "keyword"
+                    }
+                }
+            }
+        }
+    }
+}
+想要删掉short_name字段，修改后mappings如下
+
+{
+    "audit_demo_bak": {
+        "mappings": {
+            "_doc": {
+                "properties": {
+                    "full_name": {
+                        "type": "text",
+                        "analyzer": "ik_max_word"
+                    }
+                }
+            }
+        }
+    }
+}
+
+
+步骤1 删除原索引中待删除字段的数据
+注意
+1.只是删除数据，不是删除字段
+2.如果不删除字段数据，后面reindex时依然会把待删除字段的值带到新索引，即使设置新索引的dynamic为false
+
+POST {{di}}/audit_demo/_update_by_query
+{
+    "script": {
+        "lang": "painless",
+        "inline": "ctx._source.remove(\"short_name\")"
+    },
+    "query": {
+        "match_all": {}
+    }
+}
+步骤2 新建一个索引，索引结构在原索引上删除short_name字段
+PUT {{di}}/audit_demo_bak
+{
+    "settings": {
+        "number_of_shards": "2",
+        "number_of_replicas": "2",
+        "max_result_window": 100000,
+        "analysis": {
+            "analyzer": {
+                "ik": {
+                    "tokenizer": "ik_max_word"
+                }
+            }
+        }
+    },
+    "mappings": {
+        "_doc": {
+            "properties": {
+                "full_name": {
+                    "type": "text",
+                    "analyzer": "ik_max_word"
+                }
+            }
+        }
+    }
+}
+步骤3 同步数据
+POST {{di}}/_reindex
+{
+    "source": {
+        "index": "audit_demo"
+    },
+    "dest": {
+        "index": "audit_demo_bak"
+    }
+}
+步骤4 删除原索引
+DELETE {{di}}/audit_demo
+步骤5 新建一个名为原索引名的索引，reindex同步数据，然后删除步骤2新建的索引
+
+
+注意事项
+步骤4和步骤5，这两个步骤，耗时较长，在这段时间，索引是不可用的，一般在业务低峰期执行操作没啥问题。如果想要减少索引不可用的时间，有以下两个方案
+
+方案1
+删除原索引后，为新索引设置别名为原索引
+备注：原索引未删除时，为新索引设置别名为原索引会报错
+
+PUT {{di}}/audit_demo_bak/_alias/audit_demo
+方案2
+步骤1开始之前，就为原索引设置别名，应用程序通过别名访问索引，步骤4开始之前，删除原索引与别名的关系，新增新索引与别名的关系，应用程序通过别名可以访问到新索引。
+虽然这两个步骤的耗时极小，但是还是有可能在这段期间有数据更改，所以还是尽量在业务低峰期操作。
+<!-- more -->
+https://www.jianshu.com/p/c9f73f72c4ac
+
+
+Mapping
+ES 的索引一旦建立，对Mapping的修改只能新增字段，不能对Mapping中已有的字段进行修改、删除。在默认情况下，Mapping的动态映射Dynamic = true，会自动推测字段的类型并添加到Mapping中。
+
+如果是新增加的字段，根据 Dynamic 的设置分为以下三种状况：
+
+当 Dynamic 设置为 true 时，一旦有新增字段的文档写入，Mapping 也同时被更新。
+当 Dynamic 设置为 false 时，索引的 Mapping 是不会被更新的，新增字段的数据无法被索引，也就是无法被搜索，但是信息会出现在 _source 中。
+当 Dynamic 设置为 strict 时，文档写入会失败。
+
+
+https://blog.csdn.net/cooper20/article/details/108780376
+
+https://segmentfault.com/a/1190000019911538
+
+
+使用 Delete By Query API 的方式删除ES索引中的数据
+怎么理解这个API呢？实际是批量删除数据的意思   功能：根据特定的查询条件对ES相关索引中某些特定的文档进行批量删除。
+
+POST index_name/_delete_by_query
+{
+  "query": { //这些是自定义查询条件，根据查询条件去批量删除
+    "match": {//请求体跟Search API是一样的
+      "message": "some message"
+    }
+  }
+}
+
+Delete By Query 删除原理：
+    Delete_by_query并不是真正意义上物理文档删除，而是只是版本变化并且对文档增加了删除标记。当我们再次搜索的时候，会搜索全部然后过滤掉有删除标记的文档。因此，该索引所占的空间并不会随着该API的操作磁盘空间会马上释放掉，只有等到下一次段合并的时候才真正被物理删除，这个时候磁盘空间才会释放。相反，在被查询到的文档标记删除过程同样需要占用磁盘空间，这个时候，你会发现触发该API操作的时候磁盘不但没有被释放，反而磁盘使用率上升了。
+
+使用Delete By Query 删除API注意事项：
+ 1， 一般生产环境中，使用该API操作的索引都很大，文档都是千万甚至数亿级别。索引大小在几百G甚至几个T，因此，这个操作建议在业务低峰期或者晚上进行操作，因为大数据量情况下删除的需要消耗较多的i/o  CPU 资源，容易对生产集群造成影响。
+
+ 2，在删除过程中要确定集群磁盘有一定的余量，因为标记删除需要占用磁盘空间。如果磁盘空间不够，这个操作的失败率还是很大的。
+
+3，Delete By Query有很多配置参数，这里不详解，具体可以参考文档：
+
+https://www.elastic.co/guide/en/elasticsearch/reference/7.2/docs-delete-by-query.html
+
+
+三、段合并 -->  强制段合并  --> Force merge 《高资源消耗动作》
+     由于自动刷新流程每秒会创建一个新的段 ，这样会导致短时间内的段数量暴增。而段数目太多会带来较大的麻烦。 每一个段都会消耗文件句柄、内存和cpu运行周期。更重要的是，每个搜索请求都必须轮流检查每个段；所以段越多，搜索也就越慢。Elasticsearch通过在后台进行段合并来解决这个问题。小的段被合并到大的段，然后这些大的段再被合并到更大的段。段合并的时候会将那些旧的已删除文档从文件系统中清除。被删除的文档（或被更新文档的旧版本）不会被拷贝到新的大段中。启动段合并不需要你做任何事。进行索引和搜索时会自动进行。
+
+    Elasticseach会有后台线程根据Lucene的合并规则定期进行segment merging合并操作，一般不需要用户担心或者采取任何行动。被删除的文档在segment合并时，才会被真正删除掉。在此之前，它仍然会占用着JVM heap和操作系统的文件cache、磁盘等资源。在某些特定情况下，我们需要强制Elasticsearch进行segment merging，已释放其占用的大量系统、磁盘等资源。具体操作如下：
+
+POST /index_name/_forcemerge
+  _forcemerge 命令可强制进行segment合并，并删除所有标记为删除的文档。Segment merging要消耗CPU，以及大量的I/O资源，所以一定要在你的ElasticSearch集群处于维护窗口期间，并且有足够的I/O空间的（如：SSD）的条件下进行；否则很可能造成集群崩溃和数据丢失.<这个非常重要>
+
+_forcemergeAPI 有几个常用的参数：
+
+max_num_segments   是表示将某个索引的每个分片强制合并为几个段的意思。
+
+only_expunge_deletes  是表示仅将标记删除为文档的进行强制合并物理删除，不进行其它合并操作。
+
+比如下面的API，表示：
+
+POST /index_name/_forcemerge?max_num_segments=1
+上面API的意思表示合并索引中的每个分片为一个单独的段，可以先设置大一点，10-5-1，一点一点慢慢降到1。一般推荐为1.
+
+或者如下操作：
+
+POST /index_name/_forcemerge?max_num_segments=1&only_expunge_deletes=true
+
+
+https://cloud.tencent.com/developer/article/1737025

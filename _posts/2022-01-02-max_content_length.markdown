@@ -1,0 +1,10 @@
+---
+title: max_content_length
+layout: post
+category: elasticsearch
+author: 夏泽民
+---
+Given that the default http.max_content_length is set to 100MB, Elasticsearch will refuse to index any document that is larger than that. You might decide to increase that particular setting, but Lucene still has a limit of about 2GB.
+<!-- more -->
+https://www.elastic.co/guide/en/elasticsearch/reference/current/general-recommendations.html
+

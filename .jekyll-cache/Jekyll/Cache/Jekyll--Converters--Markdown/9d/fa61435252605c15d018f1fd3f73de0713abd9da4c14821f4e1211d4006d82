@@ -1,0 +1,243 @@
+I"�$<p>https://guidao.github.io/go_debug.html#orgheadline3
+1 调试工具gdb
+gdb 是一个调试工具，可以调试很多种语言，当然其中就有golang。由于gdb不能显示go的数据类型，所以在go的runtime源码下有一个python代码文件,runtime-gdb.py，提供给gdb一个扩展。</p>
+
+<p>1.1 gdb 调试go程序
+先写一个很简单的小程序</p>
+
+<p>package main</p>
+
+<p>import (
+  “fmt”
+)</p>
+
+<p>func main() {
+  b := make(map[string]string)
+  b[“write”] = “write”
+  b[“black”] = “black”
+  fmt.Println(b)
+}
+go build -gcflags “-N -l” test8.go
+编译代码，-gcflags是给go编译器的参数，gc是go compile的意思。-N是不要优化代码，-l 是禁止内联代码。</p>
+
+<blockquote>
+  <p>gdb test8
+GNU gdb (Ubuntu 7.10-1ubuntu2) 7.10
+Copyright (C) 2015 Free Software Foundation, Inc.
+License GPLv3+: GNU GPL version 3 or later <a href="http://gnu.org/licenses/gpl.html">http://gnu.org/licenses/gpl.html</a>
+This is free software: you are free to change and redistribute it.
+There is NO WARRANTY, to the extent permitted by law.  Type “show copying”
+and “show warranty” for details.
+This GDB was configured as “x86_64-linux-gnu”.
+Type “show configuration” for configuration details.
+For bug reporting instructions, please see:</p>
+</blockquote>
+<p><a href="http://www.gnu.org/software/gdb/bugs/">http://www.gnu.org/software/gdb/bugs/</a>.
+Find the GDB manual and other documentation resources online at:
+<a href="http://www.gnu.org/software/gdb/documentation/">http://www.gnu.org/software/gdb/documentation/</a>.
+For help, type “help”.
+Type “apropos word” to search for commands related to “word”…
+Reading symbols from test8…done.
+warning: File “/home/47/go/src/runtime/runtime-gdb.py” auto-loading has been declined by your <code class="language-plaintext highlighter-rouge">auto-load safe-path' set to "$debugdir:$datadir/auto-load".
+To enable execution of this file add
+  add-auto-load-safe-path /home/47/go/src/runtime/runtime-gdb.py
+line to your configuration file "/home/47/.gdbinit".
+To completely disable this security protection add
+  set auto-load safe-path /
+line to your configuration file "/home/47/.gdbinit".
+For more information about this security protection see the
+"Auto-loading safe path" section in the GDB manual.  E.g., run from the shell:
+  info "(gdb)Auto-loading safe path"
+(gdb) info files
+Symbols from "/home/47/code/golang/src/test3/test8".
+Local exec file:
+  </code>/home/47/code/golang/src/test3/test8’, file type elf64-x86-64.
+  Entry point: 0x456750
+  0x0000000000401000 - 0x00000000004aa960 is .text
+  0x00000000004ab000 - 0x000000000052dc62 is .rodata
+  0x000000000052dc68 - 0x000000000052fd28 is .typelink
+  0x000000000052fd28 - 0x000000000052fd28 is .gosymtab
+  0x000000000052fd40 - 0x00000000005800d8 is .gopclntab
+  0x0000000000581000 - 0x0000000000582ce8 is .noptrdata
+  0x0000000000582d00 - 0x0000000000585250 is .data
+  0x0000000000585260 - 0x000000000059fab8 is .bss
+  0x000000000059fac0 - 0x00000000005a48c0 is .noptrbss
+  0x0000000000400fc8 - 0x0000000000401000 is .note.go.buildid
+(gdb) l main.main
+2 
+3 import (
+4   “fmt”
+5 )
+6 
+7 func main() {
+8   fmt.Println(“begin===============”)
+9   b := make(map[string]string)
+10    b[“write”] = “write”
+11    b[“black”] = “black”
+(gdb) b 10
+Breakpoint 1 at 0x401151: file /home/jyk-47/code/golang/src/test3/test8.go, line 10.
+(gdb) r
+Starting program: /home/jyk-47/code/golang/src/test3/test8 
+[New LWP 21285]
+[New LWP 21286]
+[New LWP 21287]
+begin===============</p>
+
+<p>Breakpoint 1, main.main () at /home/jyk-47/code/golang/src/test3/test8.go:10
+10    b[“write”] = “write”
+(gdb) l
+5 )
+6 
+7 func main() {
+8   fmt.Println(“begin===============”)
+9   b := make(map[string]string)
+10    b[“write”] = “write”
+11    b[“black”] = “black”
+12    fmt.Println(b)
+13  }
+(gdb) p b
+$1 = (map[string]string) 0xc8200121e0
+(gdb) p *b
+$2 = {count = 0, flags = 0 ‘\000’, B = 0 ‘\000’, hash0 = 1888351057, buckets = 0x0, oldbuckets = 0x0, nevacuate = 0, overflow = 0x0}
+(gdb) n
+11    b[“black”] = “black”
+(gdb) bt
+#0  main.main () at /home/jyk-47/code/golang/src/test3/test8.go:11
+(gdb) bp
+可以看到上面已经加载了golang的扩展脚本runtime-gdb.py, l main.main 是查看main函数的源码，b 10 在第10行设置断点。r 运行程序。p b 是打印变量。n 是单步。gdb不能打印go中map具体的内容，只能够打印map底层的结构，用起来有点不爽。</p>
+
+<p>2 golang 调试工具delve
+由于gdb对golang支持比较差，只能支持一些简单的功能,比如断点，单步等，但对goroutine, 内置对象的打印等还是不怎么好。所以go有了自己的debug工具delve。安装等可以参考官方文档：https://github.com/derekparker/delve.</p>
+
+<p>Delve is a source level debugger for Go programs.</p>
+
+<p>Delve enables you to interact with your program by controlling the execution of the process,
+evaluating variables, and providing information of thread / goroutine state, CPU register state and more.</p>
+
+<p>The goal of this tool is to provide a simple yet powerful interface for debugging Go programs.</p>
+
+<p>Usage:
+  dlv [command]</p>
+
+<p>Available Commands:
+  attach      Attach to running process and begin debugging.
+  connect     Connect to a headless debug server.
+  debug       Compile and begin debugging main package in current directory, or the package specified.
+  exec        Execute a precompiled binary, and begin a debug session.
+  run         Deprecated command. Use ‘debug’ instead.
+  test        Compile test binary and begin debugging program.
+  trace       Compile and begin tracing program.
+  version     Prints version.</p>
+
+<p>Flags:
+      –accept-multiclient[=false]: Allows a headless server to accept multiple client connections. Note that the server API is not reentrant and clients will have to coordinate.
+      –api-version=1: Selects API version when headless.
+      –build-flags=””: Build flags, to be passed to the compiler.
+      –headless[=false]: Run debug server only, in headless mode.
+  -h, –help[=false]: help for dlv
+      –init=””: Init file, executed by the terminal client.
+  -l, –listen=”localhost:0”: Debugging server listen address.
+      –log[=false]: Enable debugging server logging.</p>
+
+<p>Use “dlv [command] –help” for more information about a command.
+delve 的帮助文档说的非常清楚。我们还是用上面的那个例子来说明.</p>
+
+<blockquote>
+  <p>dlv exec ./test8
+Type ‘help’ for list of commands.
+//查看主函数的代码
+(dlv) ls main.main 
+   2: 
+   3: import (
+   4:   “fmt”
+   5: )
+   6: 
+   7: func main() {
+   8:   fmt.Println(“begin===============”)
+   9:   b := make(map[string]string)
+  10:   b[“write”] = “write”
+  11:   b[“black”] = “black”
+  12:   fmt.Println(b)
+//设置断点
+(dlv) b main.main
+Breakpoint 1 set at 0x40101b for main.main() ./test8.go:7
+//运行到断点处
+(dlv) c
+main.main() ./test8.go:7 (hits goroutine(1):1 total:1) (PC: 0x40101b)
+     2: 
+     3: import (
+     4:   “fmt”
+     5: )
+     6: 
+=&gt;   7: func main() {
+     8:   fmt.Println(“begin===============”)
+     9:   b := make(map[string]string)
+    10:   b[“write”] = “write”
+    11:   b[“black”] = “black”
+    12:   fmt.Println(b)
+//单步执行
+(dlv) n
+main.main() ./test8.go:8 (PC: 0x401022)
+     3: import (
+     4:   “fmt”
+     5: )
+     6: 
+     7: func main() {
+=&gt;   8:   fmt.Println(“begin===============”)
+     9:   b := make(map[string]string)
+    10:   b[“write”] = “write”
+    11:   b[“black”] = “black”
+    12:   fmt.Println(b)
+    13: }
+(dlv) 
+begin===============
+main.main() ./test8.go:9 (PC: 0x40111c)
+     4:   “fmt”
+     5: )
+     6: 
+     7: func main() {
+     8:   fmt.Println(“begin===============”)
+=&gt;   9:   b := make(map[string]string)
+    10:   b[“write”] = “write”
+    11:   b[“black”] = “black”
+    12:   fmt.Println(b)
+    13: }
+(dlv) n
+main.main() ./test8.go:10 (PC: 0x401151)
+     5: )
+     6: 
+     7: func main() {
+     8:   fmt.Println(“begin===============”)
+     9:   b := make(map[string]string)
+=&gt;  10:   b[“write”] = “write”
+    11:   b[“black”] = “black”
+    12:   fmt.Println(b)
+    13: }
+(dlv) n
+main.main() ./test8.go:11 (PC: 0x4011bb)
+     6: 
+     7: func main() {
+     8:   fmt.Println(“begin===============”)
+     9:   b := make(map[string]string)
+    10:   b[“write”] = “write”
+=&gt;  11:   b[“black”] = “black”
+    12:   fmt.Println(b)
+    13: }
+//打印b的值
+(dlv) p b
+map[string]string [
+  “write”: “write”, 
+]
+(dlv)
+dlv还提供一些命令，总的来说对于简单的调试足够了。用起来还是比较方便, 不过如果调试go汇编代码，就有点不足，-0- 单步都不能使用。</p>
+</blockquote>
+
+<p>3 相关链接
+Debugging Go Code with GDB
+https://github.com/derekparker/delve
+<!-- more -->
+dlv前端(gdlv)
+dlv提供了类似gdb的cli调试系统，而有第三方还提供了dlv的GUI前端(gdlv)，对于那些习惯了使用GUI进行调试的人来说，结合gdlv和dlv，调试会更加方便。gdlv有个问题是：他无法在xwindows server上运行，只能在server本地运行
+https://github.com/aarzilli/gdlv
+go get -u github.com/aarzilli/gdlv</p>
+:ET

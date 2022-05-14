@@ -1,0 +1,112 @@
+I"<p>https://pengrl.com/p/20028/
+本文基于Go 1.13。</p>
+
+<p>内联，就是将一个函数调用原地展开，替换成这个函数的实现。尽管这样做会增加编译后二进制文件的大小，但是它可以提高程序的性能。那么Go语言中，什么样的函数可以被内联呢？我们一起来看。</p>
+
+<p>规则
+让我们从一个示例开始。下面这个程序的源码，分别编写在两个文件中，作用是对一组数字进行加或减：</p>
+
+<p>main.go</p>
+
+<p>func main() {
+   n := []float32{120.4, -46.7, 32.50, 34.65, -67.45}
+   fmt.Printf(“The total is %.02f\n”, sum(n))
+}</p>
+
+<p>func sum(s []float32) float32 {
+   var t float32
+   for _, v := range s {
+      if t &lt; 0 {
+         t = add(t, v)
+      } else {
+         t = sub(t, v)
+      }
+   }</p>
+
+<p>return t
+}</p>
+
+<p>op.go</p>
+
+<p>func add(a, b float32) float32 {
+   return a + b
+}</p>
+
+<p>func sub(a, b float32) float32 {
+   return a - b
+}
+使用参数-gflags=”-m”运行，可显示被内联的函数：</p>
+
+<p>./op.go:3:6: can inline add
+./op.go:7:6: can inline sub
+./main.go:16:11: inlining call to sub
+./main.go:14:11: inlining call to add
+./main.go:7:12: inlining call to fmt.Printf
+可以看到add方法被内联了。但是，为什么sum方法没有被内联呢？使用运行参数-gflags=”-m -m”可以看到原因：</p>
+
+<p>./main.go:10:6: cannot inline sum: unhandled op RANGE
+Go不会内联包含循环的方法。实际上，包含以下内容的方法都不会被内联：闭包调用，select，for，defer，go关键字创建的协程。并且除了这些，还有其它的限制。当解析AST时，Go申请了80个节点作为内联的预算。每个节点都会消耗一个预算。比如，a = a + 1这行代码包含了5个节点：AS, NAME, ADD, NAME, LITERAL。以下是对应的SSA dump：</p>
+
+<p>1</p>
+
+<p>当一个函数的开销超过了这个预算，就无法内联。以下是一个更复杂的add函数对应的输出：</p>
+
+<p>/op.go:3:6: cannot inline add: function too complex: cost 104 exceeds budget 80
+当一个函数满足上面的所有条件，它就可以被内联。然而，依据以往的开发经验，内联优化可能带来一些其他问题。
+<!-- more -->
+挑战
+举个例子，当发生panic时，开发者需要知道panic的准确堆栈信息，获取源码文件以及行号。那么问题来了，被内联的函数是否还有正确的堆栈信息呢？以下是一个包含了panic的内联方法：</p>
+
+<p>func add(a, b float32) float32 {
+   if b &lt; 0 {
+      panic(<code class="language-plaintext highlighter-rouge">Do not add negative number</code>)
+   }</p>
+
+<p>return a+b
+}
+运行这个程序，我们可以看到panic显示了正确的源码行号，尽管它被内联了：</p>
+
+<p>panic: Do not add negative number</p>
+
+<p>goroutine 1 [running]:
+main.add(…)
+    op.go:5
+main.sum(0xc00007cf2c, 0x5, 0x5, 0xc00007cf20)
+    main.go:14 +0x80
+main.main()
+    main.go:7 +0x59
+exit status 2
+这是因为，Go在内部维持了一份内联函数的映射关系。首先它会生成一个内联树，我们可以通过-gcflags=”-d pctab=pctoinline”参数查看。以下是用sum方法的汇编代码构建出的内联树：
+	<img src="https://xiazemin.github.io/MyBlog/img/inline_go_80.png" />
+	Go在生成的代码中映射了内联函数。并且，也映射了行号，可以通过-d pctab=pctoline参数查看。以下是sum方法的输出：
+	源码文件，可以通过-gcflags=”-d pctab=pctofile”查看：
+	现在，我们得到了一张映射表：
+	这张表被嵌入到了二进制文件中，所以在运行时可以得到准确的堆栈信息。</p>
+
+<p>内联带来的性能提升
+内联是高性能编程的一种重要手段。每个函数调用都有开销：创建栈帧，读写寄存器，这些开销可以通过内联避免。但话说回来，对函数体进行拷贝也会增大二进制文件的大小。以下是内联与非内联时的一个benchmark对比：</p>
+
+<p>name                     old time/op    new time/op    delta
+BinaryTree17-8              2.34s ± 2%     2.43s ± 3%   +3.77%
+Fannkuch11-8                2.21s ± 1%     2.26s ± 1%   +2.01%
+FmtFprintfEmpty-8          33.6ns ± 6%    35.2ns ± 3%   +4.85%
+FmtFprintfString-8         55.3ns ± 3%    62.8ns ± 1%  +13.48%
+FmtFprintfInt-8            63.1ns ± 3%    70.0ns ± 2%  +11.04%
+FmtFprintfIntInt-8         95.9ns ± 3%   102.3ns ± 3%   +6.68%
+FmtFprintfPrefixedInt-8     105ns ± 4%     111ns ± 1%   +5.83%
+FmtFprintfFloat-8           165ns ± 4%     175ns ± 1%   +6.16%
+FmtManyArgs-8               405ns ± 2%     427ns ± 0%   +5.38%
+GobDecode-8                4.69ms ± 2%    4.78ms ± 4%   +1.77%
+GobEncode-8                3.84ms ± 2%    3.93ms ± 3%     ~ <br />
+Gzip-8                      210ms ± 3%     208ms ± 1%     ~ <br />
+Gunzip-8                   28.1ms ± 7%    29.4ms ± 1%   +4.69%
+HTTPClientServer-8         70.0µs ± 2%    70.9µs ± 1%   +1.21%
+JSONEncode-8               7.28ms ± 5%    7.00ms ± 2%   -3.91%
+JSONDecode-8               33.9ms ± 3%    33.1ms ± 1%   -2.32%
+Mandelbrot200-8            3.74ms ± 0%    3.74ms ± 1%     ~
+内联的性能大概要好5~6%左右。</p>
+
+<p>英文地址： https://medium.com/a-journey-with-go/go-inlining-strategy-limitation-6b6d7fc3b1be</p>
+
+<p>https://blog.jetbrains.com/go/2020/03/03/how-to-find-goroutines-during-debugging/</p>
+:ET

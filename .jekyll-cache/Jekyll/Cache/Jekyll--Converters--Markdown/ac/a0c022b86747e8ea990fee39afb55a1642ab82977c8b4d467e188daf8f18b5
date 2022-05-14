@@ -1,0 +1,253 @@
+I"�5<p>进入Docker容器比较常见的几种做法如下：</p>
+
+<p>使用docker attach
+使用SSH
+使用nsenter
+使用exec
+<!-- more -->
+一、使用docker attach进入Docker容器
+Docker提供了attach命令来进入Docker容器。
+接下来我们创建一个守护态的Docker容器，然后使用docker attach命令进入该容器。</p>
+
+<p>$ sudo docker run -itd ubuntu:14.04 /bin/bash</p>
+
+<p>然后我们使用docker ps查看到该容器信息，接下来就使用docker attach进入该容器</p>
+
+<p>$ sudo docker attach 44fc0f0582d9
+可以看到我们已经进入到该容器中了。
+但在，使用该命令有一个问题。当多个窗口同时使用该命令进入该容器时，所有的窗口都会同步显示。如果有一个窗口阻塞了，那么其他窗口也无法再进行操作。下来我们来演示一下。打开两个窗口，都使用attach命令进入同一个容器里面。</p>
+
+<p>接下来我们只在第一个窗口进行操作，可以看到第一个窗口的操作同步到第二个窗口显示了</p>
+
+<p>因为这个原因，所以docker attach命令不太适合于生产环境，平时自己开发应用时可以使用该命令。</p>
+
+<p>二、使用SSH进入Docker容器
+在生产环境中排除了使用docker attach命令进入容器之后，相信大家第一个想到的就是ssh。在镜像（或容器）中安装SSH Server，这样就能保证多人进入容器且相互之间不受干扰了，相信大家在当前的生产环境中（没有使用Docker的情况）也是这样做的。但是使用了Docker容器之后不建议使用ssh进入到Docker容器内</p>
+
+<p>三、使用nsenter进入Docker容器
+在上面两种方式都不适合的情况下，还有一种比较方便的方法，即使用nsenter进入Docker容器。
+https://github.com/jpetazzo/nsenter</p>
+
+<p>nsenter是一个小的工具，用来进入命名空间中。技术上，它可以进入现有的命名空间，或者产生一个进程进入新的一组命名空间。“命名空间是什么?”他们是容器的重要组成部分。简单点说：通过使用 nsenter ，你可以进入一个已经存在的container中，尽管这个container没有运行ssh 或者任意特殊用途的守护进程。</p>
+
+<p>在了解了什么是nsenter之后，我们需要把nsenter安装到主机中（注意是主机而非容器或镜像），具体的安装命令如下：</p>
+
+<p>$ wget https://www.kernel.org/pub/linux/utils/util-linux/v2.24/util-linux-2.24.tar.gz
+$ tar -xzvf util-linux-2.24.tar.gz
+$ cd util-linux-2.24/
+$ ./configure –without-ncurses
+$ make nsenter
+$ sudo cp nsenter /usr/local/bin
+安装好nsenter之后可以查看一下该命令的使用。
+nsenter可以访问另一个进程的名称空间。所以为了连接到某个容器我们还需要获取该容器的第一个进程的PID。可以使用docker inspect命令来拿到该PID。</p>
+
+<p>docker inspect命令使用如下：
+$ sudo docker inspect –help</p>
+
+<p>inspect命令可以分层级显示一个镜像或容器的信息。比如我们当前有一个正在运行的容器
+可以使用docker inspect来查看该容器的详细信息。</p>
+
+<p>$ sudo docker inspect 44fc0f0582d9</p>
+
+<p>如果要显示该容器第一个进行的PID可以使用如下方式
+$ sudo docker inspect -f {{.State.Pid}} 44fc0f0582d9</p>
+
+<p>在拿到该进程PID之后我们就可以使用nsenter命令访问该容器了。</p>
+
+<p>$ sudo nsenter –target 3326 –mount –uts –ipc –net –pid
+其中的3326即刚才拿到的进程的PID</p>
+
+<p>当然，如果你认为每次都输入那么多参数太麻烦的话，网上也有许多做好的脚本供大家使用。</p>
+
+<p>https://yeasy.gitbooks.io/docker_practice/content/</p>
+
+<p>在大多数Linux发行版中，util-linux包中含有nsenter.如果没有，你需要安装它.</p>
+
+<p>cd /tmp
+curl https://www.kernel.org/pub/linux/utils/util-linux/v2.24/util-linux-2.24.tar.gz <br />
+	| tar -zxf-
+cd util-linux-2.24
+./configure –without-ncurses
+make nsenter
+cp nsenter /usr/local/bin
+使用shell脚本 docker-enter，将如下代码保存为docker-enter, chomod +x docker-enter</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>#!/bin/sh
+
+if [ -e $(dirname "$0")/nsenter ]; then
+	# with boot2docker, nsenter is not in the PATH but it is in the same folder
+	NSENTER=$(dirname "$0")/nsenter
+else
+	NSENTER=nsenter
+fi
+
+if [ -z "$1" ]; then
+	echo "Usage: `basename "$0"` CONTAINER [COMMAND [ARG]...]"
+	echo ""
+	echo "Enters the Docker CONTAINER and executes the specified COMMAND."
+	echo "If COMMAND is not specified, runs an interactive shell in CONTAINER."
+else
+	PID=$(docker inspect --format "\{\{.State.Pid\}\}" "$1")
+	if [ -z "$PID" ]; then
+		exit 1
+	fi
+	shift
+
+	OPTS="--target $PID --mount --uts --ipc --net --pid --"
+
+	if [ -z "$1" ]; then
+		# No command given.
+		# Use su to clear all host environment variables except for TERM,
+		# initialize the environment variables HOME, SHELL, USER, LOGNAME, PATH,
+		# and start a login shell.
+		"$NSENTER" $OPTS su - root
+	else
+		# Use env to clear all host environment variables.
+		"$NSENTER" $OPTS env --ignore-environment -- "$@"
+	fi
+fi 运行 docker-enter &lt;container id&gt; ，这样就进入到指定的容器中
+</code></pre></div></div>
+
+<p>四、使用docker exec进入Docker容器
+除了上面几种做法之外，docker在1.3.X版本之后还提供了一个新的命令exec用于进入容器，这种方式相对更简单一些，下面我们来看一下该命令的使用：
+$ sudo docker exec –help
+接下来我们使用该命令进入一个已经在运行的容器
+$ sudo docker ps
+$ sudo docker exec -it 775c7c9ee1e1 /bin/bash</p>
+
+<p>网上还有一种做法是使用nsinit</p>
+
+<p>https://www.oschina.net/translate/why-you-dont-need-to-run-sshd-in-docker?cmp</p>
+
+<p>docker run -t -i ubuntu /bin/bash
+官网是这么说的：</p>
+
+<p>docker run: runs a container.
+ubuntu: is the image you would like to run.
+-t: flag assigns a pseudo-tty or terminal inside the new container.
+-i: flag allows you to make an interactive connection by grabbing the standard in (STDIN) of the container.
+/bin/bash: launches a Bash shell inside our container.
+理解很简单：</p>
+
+<p>docker run：启动container</p>
+
+<p>ubuntu：你想要启动的image</p>
+
+<p>-t：进入终端</p>
+
+<p>-i：获得一个交互式的连接，通过获取container的输入</p>
+
+<p>/bin/bash：在container中启动一个bash shell</p>
+
+<p>进入container（容器）
+4.1 使用“docker attach”命令进入
+这个时候container运行在后台，如果想进入它的终端，则：</p>
+
+<p>docker attach goofy_almeida
+就可以了。</p>
+
+<p>4.2 使用“docker exec -it”命令进入
+使用“docker attach”命令进入container（容器）有一个缺点，那就是每次从container中退出到前台时，container也跟着退出了。</p>
+
+<p>要想退出container时，让container仍然在后台运行着，可以使用“docker exec -it”命令。每次使用这个命令进入container，当退出container后，container仍然在后台运行，命令使用方法如下：</p>
+
+<p>docker exec -it goofy_almeida /bin/bash
+goofy_almeida：要启动的container的名称
+/bin/bash：在container中启动一个bash shell
+这样输入“exit”或者按键“Ctrl + C”退出container时，这个container仍然在后台运行，通过：
+docker ps
+就可以查找到。
+5 退出container
+输入：
+exit
+或者按键：</p>
+
+<p>Ctrl + D</p>
+
+<p>我们经常需要进到容器里去做一些工作，比如查看日志、调试、启动其他进程等。有两种方法进入容器：attach 和 exec。</p>
+
+<p>docker attach
+通过 docker attach 可以 attach 到容器启动命令的终端，例如：</p>
+
+<p>这次我们通过 “长ID” attach 到了容器的启动命令终端，之后看到的是echo 每隔一秒打印的信息。</p>
+
+<p>注：可通过 Ctrl+p 然后 Ctrl+q 组合键退出 attach 终端。</p>
+
+<p>docker exec
+通过 docker exec 进入相同的容器：</p>
+
+<p>说明如下：</p>
+
+<p>① -it 以交互模式打开 pseudo-TTY，执行 bash，其结果就是打开了一个 bash 终端。</p>
+
+<p>② 进入到容器中，容器的 hostname 就是其 “短ID”。</p>
+
+<p>③ 可以像在普通 Linux 中一样执行命令。ps -elf 显示了容器启动进程while 以及当前的 bash 进程。</p>
+
+<p>④ 执行 exit 退出容器，回到 docker host。</p>
+
+<p>docker exec -it <container> bash|sh 是执行 exec 最常用的方式。</container></p>
+
+<p>attach VS exec
+attach 与 exec 主要区别如下:</p>
+
+<p>attach 直接进入容器 启动命令 的终端，不会启动新的进程。</p>
+
+<p>exec 则是在容器中打开新的终端，并且可以启动新的进程。</p>
+
+<p>如果想直接在终端中查看启动命令的输出，用 attach；其他情况使用 exec。</p>
+
+<p>当然，如果只是为了查看启动命令的输出，可以使用 docker logs 命令：</p>
+
+<p>nsenter
+从util-linux版本2.23开始，nsenter工具就包含在其中。它用来访问另一个进程的名字空间。nsenter要正常工作需要有root权限。很不幸，Ubuntu 14.4仍然使用的是util-linux版本2.20。安装最新版本的util-linux（2.24)版，请按照以下步骤：</p>
+
+<p>cd /tmp
+curl https://www.kernel.org/pub/linux/utils/util-linux/v2.24/util-linux-2.24.tar.gz | tar -zxf-cd util-linux-2.24./configure –without-ncursesmake nsentercp nsenter /usr/local/bin
+为了连接到容器，你还需要找到容器的第一个进程的PID。</p>
+
+<p>docker inspect –format “{{ .State.Pid }}” <container-id>
+通过这个PID，你就可以连接到这个容器：</container-id></p>
+
+<p>nsenter –target $PID –mount –uts –ipc –net –pid
+nsinit
+从0.9版本开始，Docker自身就具有一个管理容器的库，名字为 libcontainer。libcontainer中的nsinit工具允许用户直接访问linux名字空间和cgroup内核。在安装nsinit之前，你首先需要安装Go运行时环境：
+apt-get install git golang-go
+ mkdir -p $HOME/go-dev/binmkdir -p $HOME/go-dev/src
+ echo “export GOPATH=$HOME/go-dev” » ~/.profileecho “PATH=$PATH:$GOPATH/bin” » ~/.profile
+ source ~/.profile
+接下来才安装nsinit:</p>
+
+<p>mkdir -p $GOPATH/src/github.com/dotcloudcd $GOPATH/src/github.com/dotcloud
+ git clone https://github.com/dotcloud/docker.gitcd $GOPATH/src/github.com/dotcloud/docker
+ /usr/bin/go get -v github.com/dotcloud/docker/vendor/src/github.com/docker/libcontainer/nsinit
+nsinit读取的是位于/var/lib/docer/execdriver/native/<container-id>容器目录下的配置数据。要运行nsinit，你需要切换到容器目录下。由于/var/lib/docker目录对于root用户是只读权限，因此你还需要root权限。通过docker的ps命令，你可以确定容器ID。一旦你进入/var/lib/docker目录，你就可以连接容器了：</container-id></p>
+
+<p>nsinit exec /bin/bash
+lxc(-attach)
+直到Docker 0.8.1版本为止，LXC一直是管理容器的基本工具，Docker一直支持这个工具。但是从0.9.0版本开始，Docker默认使用libcontainer管理容器，不再依赖LXC了。因此默认情况下，你不能使用lxc-attach了。</p>
+
+<p>如果你仍然希望使用lxc-attach，那么你需要使用-e lxc选项来重新启动Docker服务进程。使用这个选项，Docker的内部将再次使用LXC管理容器了。完成这个任务最简单的做法就是创建/etc/default/docker文件（如果这个文件仍然不存在），并添加以下内容：</p>
+
+<p>DOCKER_OPTS=” -e lxc”</p>
+
+<p>现在你可以重新启动Docker服务了。要连接容器，你需要知道完整的容器ID:</p>
+
+<p>docker ps –no-trunc
+接下来，你就可以连接这个容器了。要完成下面工作，你还需要root权限：</p>
+
+<p>lxc-attach -n <container-id> -- /bin/bash
+sshd
+上面所有三种方法都要求具有主机系统的root权限。为了不采用root权限，通过ssh访问容器将是一个很好的选择。</container-id></p>
+
+<p>要做到这一点，你需要构建一个支持SSH服务的基础映像。此时，我们可能遇到这样的问题：我们是不是用Docker CMD或者ENTRYPOINT运行一条命令就可以了？如果此时有sshd进程运行，那么我们就不要再运行其他进程了。接下来的工作是创建一个脚本或者使用像supervisord这样的进程管理工具来启动其它所有需要启动的进程。有关如何使用supervisord的 优秀的文档可以在Docker的web站点上找到。一旦你启动了具有sshd进程的容器，你就可以像以往一样通过ssh客户端了连接这个容器了。</p>
+
+<p>结论
+sshd方法可能是最简单的连接容器的方法，而且大多数用户习惯通过ssh连接虚拟机。另外，连接容器时你也不需要一定使用root权限。不过，对于是否一个容器是否应当管理不止一个进程仍然存在许多争议。这种方法最终使得每个容器了多了一个sshd进程，这从根本上来说不是进程虚拟化的所提倡的。</p>
+
+<p>另外三种方法都需要root权限。到0.8.1版本为止，Docker都是使用LXC来管理容器的。正是由于这个原因，使用lxc-attach连接容器就非常容易。不过从版本0.9.0开始Docker服务就必须使用 -e lxc选项启动才能在内部支持LXC管理容器。不过，由于设置了这个选项，Docker将再次依赖LXC，而LXC可能随着发布或者安装的不同可能被剔除。</p>
+
+<p>nsenter和nsinit总的来说是相同的。这两个工具的主要区别是nsinit在本身的容器了建立了一个新的进程，而nsenter只是访问了名字空间。Jerome Petazzoni在Docker博客文章里对这一点说的很透彻。
+https://github.com/docker/libcontainer/blob/master/README.md#nsinit</p>
+
+:ET

@@ -1,0 +1,167 @@
+---
+title: float 的表示和进度转换
+layout: post
+category: golang
+author: 夏泽民
+---
+写代码的时候发现php和go计算金钱的时候差了1分，追了下原因
+背景知识
+
+golang汇编指令含义
+//MOVSD	传送（复制）双字
+浮点立即数16进制表示
+ $f64.3fe3777777777777
+ 其中$表示立即数
+ f64.表示64位浮点数即 float64
+ $f32.42bc0000
+ f32.表示32位浮点数即 float32
+ 
+package main
+
+
+import (
+	"fmt"
+	//"reflect"
+	"strconv"
+	"math"
+)
+
+
+func main() {
+	f0:=float32(94.0)  // MOVSS   $f32.42bc0000(SB), X0
+	fmt.Println(f0)
+	f := (93.0 - 20.0) / (140.0 - 20.0)
+	f1:=f*300.0
+	f2:=(93.0-20.0)/(140.0-20.0)*300.0
+	fmt.Println(f1,f2, (93.0-20.0)/(140.0-20.0)*300.0)
+	//fmt.Println(reflect.TypeOf(f1),reflect.TypeOf(f2))
+	//182.49999999999997 182.5 182.5
+	HexTofloat64("4066cfffffffffff")
+	HexTofloat64("4066d00000000000")
+
+}
+
+func HexTofloat64(hex string)  {
+	//
+	n, _:= strconv.ParseUint(hex,16,64)
+	//fmt.Sprintf("%016b", n)
+	fmt.Println(n)
+	//str1 := strconv.FormatFloat(n, 'f', 2, 64)
+	//fmt.Println(str1) //3.14
+
+	nf:= math.Float64frombits(uint64(n))
+	fmt.Println(nf)
+
+	//fmt.Printf("%x\n", math.Float32bits(-561.2863))
+}
+<!-- more -->
+Go和大多数语言一样, 使用标准的IEEE754表示浮点数, 0.1使用二进制表示结果是一个无限循环数, 只能舍入后表示, 累加10次之后就会出现偏差.
+
+php代码：
+php >  $f=(93.000-20.0000)/(140.0-20.0);
+php > var_dump($f,$f*300.0,(93.0-20.0)/(140.0-20.0)*300.0);
+float(0.60833333333333)
+float(182.5)
+float(182.5)
+golang代码1
+package main
+ 
+ 
+import "fmt"
+ 
+ 
+func main() {
+    f := (93.0 - 20.0) / (140.0 - 20.0)
+    fmt.Println(f,f*300.0, (93.0-20.0)/(140.0-20.0)*300.0)
+}
+ 
+ 
+//0.6083333333333333 182.49999999999997 182.5
+golang代码2
+package main
+ 
+import (
+    "fmt"
+)
+ 
+func main() {
+ 
+    fmt.Println((float64(93)-float64(20))/(float64(140)-float64(20))*float64(300), (float32(93)-float32(20))/(float32(140)-float32(20))*float32(300))
+}
+//182.49999999999997 182.5
+A，不同语言间默认类型不一致
+“php 代码”和“golang代码1”很像，但是有一个地方不一样
+
+类型
+
+php默认类型是float，
+
+golang 默认类型是 float64
+
+golang 和php的类型对应是
+
+float	float32
+double	float64
+B，同一语言float和double 输出结果不一致
+对比“golang代码1”和“golang代码2”发现，float32和float64 计算结果不一致
+
+C，四舍五入
+在四舍5五入的时候，一般会用
+
+math.Floor( money+0.5)
+这个函数的入参是float64，我们很容易计算money的时候用float64
+
+3，解法
+1，如果两个语言中都要计算，那么类型一定要一致
+
+2，跨语言传输的时候用整型（json／xml）
+
+3，序列化的时候也用整形（mysql）
+
+4，业界方案
+1，MySQL提供了decimal(p,d)/numberlic(p,d)类型的定点数表示法, 由p位数字(不包括符号、小数点)组成, 小数点后面有d位数字, 占p+2个字节, 计算性能会比double/float类型弱一些
+
+2，Java有成熟的标准库java.lang.BigDecimal,Python有标准库Decimal, 可惜GO没有. 在GitHub搜decimal, star数量比较多的是TiDB里的MyDecimal和github.com/shopspring/decimal
+
+shopspring的Decimal实现比较简单, 思路是使用十进制定点数表示法, 有多少位小数就小数点后移多少位, value保存移之后的整数, exp保存小数点后的数位个数,
+
+3，TiDB里的MyDecimal定义位于github.com/pingcap/tidb/util/types/mydecimal.go
+
+ 其思路是:
+digitsInt保存数字的整数部分数字个数, digitsFrac保存数字的小数部分数字个数, resultFrac保存计算及序列化时保留至小数点后几位, negative标明数字是否为负数, wordBuf是一个定长的int32数组(长度为9), 数字去掉小数点的主体保存在这里, 一个int32有32个bit, 最大值为(2**31-1)2147483647(10个十进制数), 所以一个int32最多能表示9个十进制数位, 因此wordBuf 最多能容纳9*9个十进制数位.
+
+// MyDecimal represents a decimal value.
+type MyDecimal struct {
+ digitsInt int8 // the number of *decimal* digits before the point.
+
+ digitsFrac int8 // the number of decimal digits after the point.
+
+ resultFrac int8 // result fraction digits.
+
+ negative bool
+
+ // wordBuf is an array of int32 words.
+ // A word is an int32 value can hold 9 digits.(0 <= word < wordBase)
+ wordBuf [maxWordBufLen]int32
+}
+
+
+5,拓展问题
+f := (93.0 - 20.0) / (140.0 - 20.0)
+f1:=f*300.0
+f2:=(93.0-20.0)/(140.0-20.0)*300.0
+fmt.Println(f1,f2, (93.0-20.0)/(140.0-20.0)*300.0)
+//182.49999999999997 182.5 182.5
+既然都是浮点数为啥结果不一致呢
+
+看汇编
+
+0x002f 00047 (main.go:11)       MOVSD   $f64.3fe3777777777777(SB), X1
+0x0037 00055 (main.go:11)       MOVSD   X1, "".f+64(SP)
+ 
+0x003d 00061 (main.go:12)       MOVSD   $f64.4066cfffffffffff(SB), X1   //182.49999999999997
+0x0045 00069 (main.go:12)       MOVSD   X1, "".f1+56(SP)
+ 
+0x004b 00075 (main.go:13)       MOVSD   $f64.4066d00000000000(SB), X1   //182.5
+0x0053 00083 (main.go:13)       MOVSD   X1, "".f2+48(SP)
+发现编译器在编译的时候进行了规约，保存的浮点数就不一样

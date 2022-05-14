@@ -1,0 +1,168 @@
+I"�<p>Martini核心
+我们从最简单的官方实例入手：</p>
+
+<p>package main</p>
+
+<p>import “github.com/go-martini/martini”</p>
+
+<p>func main() {
+  m := martini.Classic()
+  m.Get(“/”, func() string {
+    return “Hello world!”
+  })
+  m.Run()
+}
+martini.Martini是自带的核心结构，负责完成依赖注入和调用的过程。martini.ClassicMartini是路由martini.Router和martini.Martini的组合，实现路由分发和逻辑调用的过程。m := martini.Classic()返回的就是martini.ClassicMartini。具体在martini.go#L104:</p>
+
+<p>func Classic() <em>ClassicMartini {
+	r := NewRouter()
+	m := New()
+	m.Use(Logger())
+	m.Use(Recovery())
+	m.Use(Static(“public”))
+	m.MapTo(r, (</em>Routes)(nil))
+	m.Action(r.Handle)
+	return &amp;ClassicMartini{m, r}
+}
+里面的m := New()定义在martini.go#L38:</p>
+
+<p>func New() *Martini {
+	m := &amp;Martini{Injector: inject.New(), action: func() {}, logger: log.New(os.Stdout, “[martini] “, 0)}
+	m.Map(m.logger)
+	m.Map(defaultReturnHandler())
+	return m
+}
+依赖注入
+上面很明显的看到两个奇特方法：m.Map()、m.MapTo()。这里，需要注意martini的一个最重要原则，注入的任何类型的结构，都是唯一的。即如：</p>
+
+<p>type User struct{
+    Id int
+}</p>
+
+<p>m.Map(&amp;User{Id:1})
+m.Map(&amp;User{Id:2})</p>
+
+<p>martini在寻找&amp;User类型的时候，只能获取到&amp;User{Id:2}结构（最后注册的）。Map的作用，就是向内部注册对应类型的具体对象或者值。类型索引是reflect.Type。从而我们可以理解到m.New()的代码中将m.Logger(*log.Logger)和defaultReturnHandler(martini.ReturnHandler)(括号中是类型索引)注入到内部。</p>
+
+<p>这里出现了一个问题。接口这种类型，是无法用reflect.Type()直接获取的（因为传来的都是已经实现接口的具体结构）。解决方法就是m.MapTo()。</p>
+
+<p>m.MapTo(r, (*Routes)(nil))
+即将r(martini.router)按照martini.Router接口（注意大小写）类型注入到内部。</p>
+
+<p>(*Routes)(nil)
+也是高明的构造。接口的默认值不是nil，无法直接new。但是指针的默认值是nil，可以直接赋值，比如var user *User; user = nil。因此他注册一个接口指针类型的空指针，用reflect.Type.Elem()方法就可以获取到指针的内部类型，即接口类型，并以接口类型索引注入到内部。</p>
+
+<p>路由过程
+HTTP处理
+martini.Martini实现了http.Handler方法，实际的HTTP执行过程在代码martini.go#L68:</p>
+
+<p>func (m <em>Martini) ServeHTTP(res http.ResponseWriter, req *http.Request) {
+	m.createContext(res, req).run()
+}
+这里需要我们关注m.createContext，它返回</em>martini.context类型，代码martini.go#L87：</p>
+
+<p>func (m <em>Martini) createContext(res http.ResponseWriter, req *http.Request) *context {
+	c := &amp;context{inject.New(), m.handlers, m.action, NewResponseWriter(res), 0}
+	c.SetParent(m)
+	c.MapTo(c, (</em>Context)(nil))
+	c.MapTo(c.rw, (<em>http.ResponseWriter)(nil))
+	c.Map(req)
+	return c
+}
+创建</em>martini.context类型；然后SetParent设置寻找注入对象的时候同时从m(<em>martini.Martini)中寻找（</em>martini.context和*martini.Martini两个独立的inject），这样就可以获取m.Map注入的数据。</p>
+
+<p>这里叉出来说：从代码看出实际上注入的数据有两层，分别在<em>martini.context和</em>martini.Martini。*martini.context中的是当前请求可以获取的（每个请求都会m.createContext()，都是新的对象）;martini.Martini是全局的，任何请求都可以获取到。</p>
+
+<p>回到上一段，c.MapTo把<em>martini.context按martini.Context接口，将martini.ResponseWriter按http.ResponseWriter接口，把req(</em>http.Request)注入到当前上下文。</p>
+
+<p>context.run方法定义在martini.go#L163:</p>
+
+<p>func (c *context) run() {
+	for c.index &lt;= len(c.handlers) {
+		_, err := c.Invoke(c.handler())
+		if err != nil {
+			panic(err)
+		}
+		c.index += 1</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>	if c.Written() {
+		return
+	}
+} } 它在循环c.handlers(来自m.handlers,createContext代码中)。这里想解释三个细节。
+</code></pre></div></div>
+
+<p>c.Invoke是inject.Invoke方法，内部就是获取c.hanlder()返回的martini.Handler(func)类型的传入参数reflect.Type.In()，根据参数个数和类型去内部找对应的结构，然后拼装成[]reflect.Value给函数的reflect.Value(func).Call()。</p>
+
+<p>c.handler()的返回来自两个方面,c.hanlders和c.action。c.handlers来自m.Use()添加,c.action来自r.Handle(*martini.router.Handle)(见上文martini.ClassicMartini.New中的m.Action(r.Handle))。因此，可以发现实际上handlers是有两个列表，一个是c.handlers([]martini.handler)和r.handlers(martini.routerContext.handlers)。而且前者先执行。也就是说无论m.Use写在哪儿，都要比router添加的func先执行。</p>
+
+<p>c.Written判断请求是否已经发送。他实际上是判断martini.ResponseWriter.status是否大于0。因此只要发送了response status，handlers过程就会停止。</p>
+
+<p>路由调用
+从上面可以知道，路由调用过程有两个方面：一是m.Use()添加的handlers，二是路由添加比如m.Get(“/”,handlers…)中的handlers。m.Use的handlers调用就是上文的*martini.context.run方法，不再赘述。路由中的handlers执行是在router.go#L218:</p>
+
+<p>func (r <em>route) Handle(c Context, res http.ResponseWriter) {
+	context := &amp;routeContext{c, 0, r.handlers}
+	c.MapTo(context, (</em>Context)(nil))
+	context.run()
+}
+和router.go#L315:</p>
+
+<p>func (r *routeContext) run() {
+	for r.index &lt; len(r.handlers) {
+		handler := r.handlers[r.index]
+		vals, err := r.Invoke(handler)
+		if err != nil {
+			panic(err)
+		}
+		r.index += 1</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>	// if the handler returned something, write it to the http response
+	if len(vals) &gt; 0 {
+		ev := r.Get(reflect.TypeOf(ReturnHandler(nil)))
+		handleReturn := ev.Interface().(ReturnHandler)
+		handleReturn(r, vals)
+	}
+
+	if r.Written() {
+		return
+	}
+} } 如果你已经理解上文中说明，这个过程和martini.context.run是一样的。唯一这里要解释的是martini.ReturnHandler。它与很上文中的m.Map(defaultReturnHandler())遥相呼应。
+</code></pre></div></div>
+
+<p>中间件
+从上文不难理解，中间件其实就是martini.Handler被m.Use添加到m.handlers中。这里我们来说明官方的一个中间件martini.Logger()，实现代码在logger.go:</p>
+
+<p>func Logger() Handler {
+	return func(res http.ResponseWriter, req *http.Request, c Context, log *log.Logger) {
+		start := time.Now()
+		log.Printf(“Started %s %s”, req.Method, req.URL.Path)</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>	rw := res.(ResponseWriter)
+	c.Next()
+
+	log.Printf("Completed %v %s in %v\n", rw.Status(), http.StatusText(rw.Status()), time.Since(start))
+} } 首先看func的传入参数，http.ResponseWriter和*http.Request来自：
+</code></pre></div></div>
+
+<p>c := &amp;context{inject.New(), m.handlers, m.action, NewResponseWriter(res), 0}
+// …
+c.MapTo(c.rw, (*http.ResponseWriter)(nil))
+c.Map(req)
+Context来自：</p>
+
+<p>context := &amp;routeContext{c, 0, r.handlers}
+c.MapTo(context, (*Context)(nil))
+*log.Logger来自：</p>
+
+<p>m := &amp;Martini{Injector: inject.New(), action: func() {}, logger: log.New(os.Stdout, “[martini] “, 0)}
+m.Map(m.logger)
+然后看rw := res.(ResponseWriter)。实际上c.rw是NewReponseWriter(res)返回的martini.ResponseWriter类型，一次可以在这里直接转换（注意在外部调用，不是martini包中，要import并写res.(martini.ResponseWriter)）。</p>
+
+<p>最后是c.Next()方法，源码在martini.go#L154:</p>
+
+<p>func (c *context) Next() {
+	c.index += 1
+	c.run()
+}
+意思就是index自增，指向下一个handler，c.run走完所有handler，然后继续中间件里的log.Printf…。</p>
+:ET

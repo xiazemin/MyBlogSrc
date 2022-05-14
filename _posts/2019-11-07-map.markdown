@@ -1,0 +1,210 @@
+---
+title: map 如何进行删除
+layout: post
+category: golang
+author: 夏泽民
+---
+只要你的channel没有引用关系了，就算你没有close关闭或者chan有大量的堆积数据没有消费，最终会被gc释放。 通过runtime的memstats可以看到memory heap stats各个数据的状态。
+
+但是我们直接通过top查看该进程的内存, 还是有1.5G的空间占用。
+<!-- more -->
+在经过几次ForceGC和scavenge后，才会释放内存给操作系统。 尝试过多次，基本在15分钟左右。
+
+在没有释放内存的时间窗口里，空闲的mspan没有释放回去，可能被mcache freelist拿着，可能被mcentral拿着，也就是说，没有归还给操作系统sys。
+
+channel和map，在没有引用关系的情况下，等待一段时间后内存会释放。
+
+但是全局的channel和map会有啥体现？ 我曾经测试过全局的channel在消费干净后，内存会在几次scvg之后被释放。 但是全局的大map在全部key被delete后不会释放干净，只会释放一部分内存，等了好久也没有继续释放。
+
+我们知道go内存池为了避免频繁的malloc内存，减少系统调用，所以把内存放置到go内存池里。 但好几个大g被占用，说不过去。虽然Runtime会每隔2分钟进行强制GC，每隔5分钟调用scvg释放归还系统内存，但全局map总是释放不干净。
+
+
+解决方案
+
+我们优先应该想到的是怎么解除引用关系？
+
+使用新对象替换全局对象或者是重置成nil，但是nil明显不合理，会造成panic。map和channel都是引用类型，没有引用关系了，自然就会被gc和scavenge。 
+
+如果不能使用替换引用的方法，可以使用 runtime提供的 debug.FreeOSMemory 方法,  文档https://golang.org/pkg/runtime/debug/#FreeOSMemory，在各类go社区里大家说这个方法危险，毕竟他前面有个debug。 但怎么就危险了，貌似没人说明白。 
+
+我自己用FreeOSMemory的两个使用技巧:
+
+第一种，监听自定义的信号，当接收signal时，回调 debug.FreeOSMemory 。
+
+第二种，启一个协程专门来监控当前内存状态，在适当的时候进行debug.FreeOSMemory 。 
+下面是GODEBUG=gctrace=1的日志，debug.FreeOSMemory调用之前的gctrace
+
+我们先看下sysmon()监控方法。在我们启动go服务的时候，有一个线程是用来专门跑sysmon()的。 sysmon不仅可以用来抢占P，而且可以做强制runtime.GC 和 scavenge内存方式逻辑。 下面是runtime/proc.go的代码，清楚的说明2分钟为强制GC，5分钟调用scavenge释放内存。
+
+debug.FreeOSMemory的源码，发现他会先调用一次GC，然后调用mheap的scavenge方法。
+
+不管是sysmon和手动FreeOSMemory都调用mheap_.scavenge() ，为啥手动freeOSMemory就好用？ 很明显他们之间的不同在于参数。 sysmon的释放有些严谨，freeOSMemory直接一串-1，0，0。 看起来是个最大值
+
+这个比较容易理解，map是基于hash算法实现的，通过计算key的hash值来分布和查找对象，如果key的hash值相同的话，一般会通过拉链法解决冲突（Java）。如果容量太小，冲突就比较严重。数据查询速度难免降低；如果需要提供数据查询速度，需要以空间换时间，加大容量。如果初始容量太小，而你需要存入大量的数据，一定就会发生数据复制和rehash（很有可能发生多次，go map 的负载因子是：6.5 // Maximum average load of a bucket that triggers growth.loadFactor =6.5）。所以预估容量就比较重要了。既能减少空间浪费，同时能避免运行时多次内存复制和rehash。
+
+对于小对象，直接将数据交由 map 保存，远比用指针高效。这不但减少了堆内存分配，关键还在于垃圾回收器不会扫描非指针类型 key/value 对象。
+
+map 不会收缩 “不再使用” 的空间。就算把所有键值删除，它依然保留内存空间以待后用。
+如果一个非常大的map里面的元素很少的话，可以考虑新建一个map将老的map元素手动复制到新的map中。
+
+map 的删除操作
+Golang 内置了哈希表，总体上是使用哈希链表实现的，如果出现哈希冲突，就把冲突的内容都放到一个链表里面。
+
+Golang 还内置了delete函数，如果作用于哈希表，就是把 map 里面的 key 删除。
+
+delete(intMap, 1)
+map 的删除原理
+可以直接看源码。
+
+func mapdelete(t *maptype, h *hmap, key unsafe.Pointer) {
+	for ; b != nil; b = b.overflow(t) {
+		for i := uintptr(0); i < bucketCnt; i++ {
+			b.tophash[i] = empty
+			h.count--
+		}
+	}
+}
+
+外层的循环就是在遍历整个 map，删除的核心就在那个empty。它修改了当前 key 的标记，而不是直接删除了内存里面的数据。
+
+empty          = 0 // cell is empty
+如何清空整个 map
+看了我上面的分析，那么这段代码可以清空 map 么？
+
+for k, _ := range m {
+	delete(m, k)
+}
+map 被清空。执行完之后调用len函数，结果肯定是0；
+内存没有释放。清空只是修改了一个标记，底层内存还是被占用了；
+循环遍历了len(m)次。上面的代码每一次遍历都会删除一个元素，而遍历的次数并不会因为之前每次删一个元素导致减少。
+如何真正释放内存？
+map = nil
+这之后坐等垃圾回收器回收就好了。
+
+如果你用 map 做缓存，而每次更新只是部分更新，更新的 key 如果偏差比较大，有可能会有内存逐渐增长而不释放的问题。要注意。
+
+验证
+下面来验证一下上面说的原理。我们申请一个全局map来保证内存被分配到堆上面。初始化这个map，分配比较大的空间，方便对比。每完成一次操作，进行一个垃圾回收，并且打印当前内存堆的情况。
+
+var intMap map[int]int
+var cnt = 8192
+
+func main() {
+	printMemStats()
+
+	initMap()
+	runtime.GC()
+	printMemStats()
+
+	log.Println(len(intMap))
+	for i := 0; i < cnt; i++ {
+		delete(intMap, i)
+	}
+	log.Println(len(intMap))
+
+	runtime.GC()
+	printMemStats()
+
+	intMap = nil
+	runtime.GC()
+	printMemStats()
+}
+
+func initMap() {
+	intMap = make(map[int]int, cnt)
+
+	for i := 0; i < cnt; i++ {
+		intMap[i] = i
+	}
+}
+
+func printMemStats() {
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	log.Printf("Alloc = %v TotalAlloc = %v Sys = %v NumGC = %v\n", m.Alloc/1024, m.TotalAlloc/1024, m.Sys/1024, m.NumGC)
+}
+结果如下：
+
+2018/05/31 10:54:25 Alloc = 100 TotalAlloc = 100 Sys = 1700 NumGC = 0
+2018/05/31 10:54:25 Alloc = 422 TotalAlloc = 426 Sys = 3076 NumGC = 1
+2018/05/31 10:54:25 8192
+2018/05/31 10:54:25 0
+2018/05/31 10:54:25 Alloc = 424 TotalAlloc = 429 Sys = 3140 NumGC = 2
+2018/05/31 10:54:25 Alloc = 112 TotalAlloc = 431 Sys = 3140 NumGC = 3
+结论很明显：
+
+NumGC 是垃圾回收次数；Alloc 是对对象大小，单位是 KB；Sys 是从 OS 获取的内存大小，单位是 KB；
+第一行，没有进行过 GC，默认真用了 100 KB 的内存；
+map初始化完成之后进行一次 GC，此时内存占了 422 KB；
+接下来就是执行delete操作，可以看到map已经被清空了，也执行了一次 GC，但是内存没有被释放；
+最后把map置为空，内存才被释放。
+我使用的版本go version go1.10.1 darwin/amd64。
+为什么这么设计？
+这么设计看起来不是那么完美，为什么要这么做呢？
+
+query := map[string]string{}
+
+query["test0"] = "0"
+query["test1"] = "1"
+query["test2"] = "2"
+
+i := 0
+for k, v := range query {
+	delete(query, "test2")
+	fmt.Println(query, k, v)
+	i++
+}
+我们可以在遍历map的时候删除里面的元素，而且可以删除没有遍历到的元素，为了保证删除了之后遍历不发生异常，才这么设计的吧。
+
+这样是内存泄漏么？
+我觉得这样不算是内存泄漏。如果继续给这个map写入值，如果这个值命中了之前被删除的bucket，那么会覆盖之前的empty数据。
+
+内置 map 类型是必须的。首先，该类型使用频率很高；其次，可借助 runtime 实现深层次优化（比如说字符串转换，以及 GC 扫描等）。可尽管如此，也不意味着万事大吉，依旧有很多需特别注意的地方。
+
+1、预设容量
+map 会按需扩张，但须付出数据拷贝和重新哈希成本。如有可能，应尽可能预设足够容量空间，避免此类行为发生。
+
+2、直接存储
+对于小对象，直接将数据交由 map 保存，远比用指针高效。这不但减少了堆内存分配，关键还在于垃圾回收器不会扫描非指针类型 key/value 对象。
+
+3、空间收缩
+很遗憾，map 不会收缩 “不再使用” 的空间。就算把所有键值删除，它依然保留内存空间以待后用。
+
+
+就算清空了所有数据，空间依旧没有释放。解决方法是取消 23 行注释，或者替换为一个新的 map 对象。
+
+提示：如长期使用 map 对象（比如用作 cache 容器），偶尔换成 “新的” 或许会更好。还有，int key 要比 string key 更快。
+
+其实这取决于这个map是什么样的map，以及你的go的版本，在go 1.4版本存在map gc的bug。具体细节可以参考我的这篇文章。
+对于你的问题，在四种情况gc时间情况：
+
+map[int32]*int32 即value为指针：
+
+With map[int32]*int32, GC took 1.66876088s
+map[int32]int32 即value为对象引用：
+
+With map[int32]int32, GC took 14.169445ms
+将map分为多个小map(高性能map常用做法)
+
+With map shards ([]map[int32]int32), GC took 3.93556ms
+而使用slice代替map处理的话，即[]t
+
+With a plain slice ([]main.t), GC took 71.614µs
+如果将GOMAXPROCS设置为4则结果如下：
+runtime.GOMAXPROCS(4)
+
+map[int32]*int32 即value为指针：
+
+With map[int32]*int32, GC took 1.5085196s
+map[int32]int32 即value为对象引用：
+
+With map[int32]int32, GC took 15.583222ms
+将map分为多个小map(高性能map常用做法)
+
+With map shards ([]map[int32]int32), GC took 4.013019ms
+而使用slice代替map处理的话，即[]t
+
+With a plain slice ([]main.t), GC took 119.643µs
+上述结果均在我的个人电脑(MacBook Pro (Retina, 13-inch, Early 2015))测试得出。
+
+可以得出结论，gc时间受到map存储的类型和CPU核心数目影响，当然也和硬件机器的性能有关。就上面的数据而言，slice的gc时间是远远快于map的，而map存储指针则是最慢的，不推荐。

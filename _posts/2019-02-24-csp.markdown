@@ -1,0 +1,63 @@
+---
+title: CSP(Communicating Sequential Processes)模型
+layout: post
+category: golang
+author: 夏泽民
+---
+CSP 描述这样一种并发模型：多个Process 使用一个 Channel 进行通信,  这个 Channel 连结的 Process 通常是匿名的，消息传递通常是同步的（有别于 Actor Model）。
+CSP 最早是由 Tony Hoare 在 1977 年提出，据说老爷子至今仍在更新这个理论模型
+Golang，其实只用到了 CSP 的很小一部分，即理论中的 Process/Channel（对应到语言中的 goroutine/channel）：这两个并发原语之间没有从属关系， Process 可以订阅任意个 Channel，Channel 也并不关心是哪个 Process 在利用它进行通信；Process 围绕 Channel 进行读写，形成一套有序阻塞和可预测的并发模型。
+<!-- more -->
+Golang Scheduler
+调度器由三方面实体构成：
+
+M：物理线程，类似于 POSIX 的标准线程；
+G：goroutine，它拥有自己的栈、指令指针和维护其他调度相关的信息；
+P：代表调度上下文，可将其视为一个局部调度器，使Golang代码跑在一个线程上
+P 的数量可由 runtime.GOMAXPROCS() 进行设置，它代表了真正的并发能力，即可有多少个 goroutine 同时运行。
+
+调度器为什么要维护多个上下文P 呢？因为当一个物理线程 M 被阻塞时，P 可以转而投奔另一个OS线程 M（即 P 带着 G 连茎拔起，去另一个 M 节点下运行）。这是 Golang调度器厉害的地方，也是高并发能力的保障。
+
+channel 是 goroutine 之间通信（读写）的通道。因为它的存在，显得 Golang（或者说CSP）与传统的共享内存型的并发模型截然不同，用 Effective Go 里的话来说就是：
+
+Do not communicate by sharing memory; instead, share memory by communicating.
+
+在 Golang 的并发模型中，我们并不关心是哪个 goroutine（匿名性）在用 channel，只关心 channel 的性质：
+
+是只读还是只写？
+传递的数据类型？
+是否有缓冲区?
+比如我希望在程序里并发的计算并传递一个整型值，我就会定义一个 int 型的 channel：
+value := make(chan int)
+由于 make 这个 channel 并未提供第二个参数capacity，因此这个 channel 是不带缓冲区的，即同步阻塞的channel
+
+Goroutine 是实际并发执行的实体，它底层是使用协程(coroutine)实现并发，coroutine是一种运行在用户态的用户线程，类似于 greenthread，go底层选择使用coroutine的出发点是因为，它具有以下特点：
+
+用户空间 避免了内核态和用户态的切换导致的成本
+可以由语言和框架层进行调度
+更小的栈空间允许创建大量的实例
+
+可以看到第二条 用户空间线程的调度不是由操作系统来完成的，像在java 1.3中使用的greenthread的是由JVM统一调度的(后java已经改为内核线程)，还有在ruby中的fiber(半协程) 是需要在重新中自己进行调度的，而goroutine是在golang层面提供了调度器，并且对网络IO库进行了封装，屏蔽了复杂的细节，对外提供统一的语法关键字支持，简化了并发程序编写的成本。
+
+M：是内核线程
+P :  是调度协调，用于协调M和G的执行，内核线程只有拿到了 P才能对goroutine继续调度执行，一般都是通过限定P的个数来控制golang的并发度
+G : 是待执行的goroutine，包含这个goroutine的栈空间
+Gn : 灰色背景的Gn 是已经挂起的goroutine，它们被添加到了执行队列中，然后需要等待网络IO的goroutine，当P通过 epoll查询到特定的fd的时候，会重新调度起对应的，正在挂起的goroutine。
+
+Golang为了调度的公平性，在调度器加入了steal working 算法 ，在一个P自己的执行队列，处理完之后，它会先到全局的执行队列中偷G进行处理，如果没有的话，再会到其他P的执行队列中抢G来进行处理。
+
+P对象(processor) 代表上下文（或者可以认为是cpu），M(work thread)代表工作线程，G对象（goroutine）
+正常情况下一个cpu对象启一个工作线程对象，线程去检查并执行goroutine对象。碰到goroutine对象阻塞的时候，会启动一个新的工作线程，以充分利用cpu资源。
+
+在单核情况下，所有goroutine运行在同一个线程（M0）中，每一个线程维护一个上下文（P），任何时刻，一个上下文中只有一个goroutine，其他goroutine在runqueue中等待。一个goroutine运行完自己的时间片后，让出上下文，自己回到runqueue中
+
+当正在运行的G0阻塞的时候（可以需要IO），会再创建一个线程（M1），把除了G0外的runqueue P转到新的线程中去运行
+
+无论语言层面何种并发模型，到了操作系统层面，一定是以线程的形态存在的。而操作系统根据资源访问权限的不同，体系架构可分为用户空间和内核空间；内核空间主要操作访问CPU资源、I/O资源、内存资源等硬件资源，为上层应用程序提供最基本的基础资源，用户空间呢就是上层应用程序的固定活动空间，用户空间不可以直接访问资源，必须通过“系统调用”、“库函数”或“Shell脚本”来调用内核空间提供的资源。
+多个用户态的线程对应着一个内核线程，程序线程的创建、终止、切换或者同步等线程工作必须自身来完成。这种模型直接调用操作系统的内核线程，所有线程的创建、终止、切换、同步等操作，都由内核来完成
+
+一个M会对应一个内核线程，一个M也会连接一个上下文P，一个上下文P相当于一个“处理器”，一个上下文连接一个或者多个Goroutine。P(Processor)的数量是在启动时被设置为环境变量GOMAXPROCS的值，或者通过运行时调用函数runtime.GOMAXPROCS()进行设置。Processor数量固定意味着任意时刻只有固定数量的线程在运行go代码。
+
+为什么一定需要一个上下文，我们能不能直接除去上下文，让Goroutine的runqueues挂到M上呢？答案是不行，需要上下文的目的，是让我们可以直接放开其他线程，当遇到内核线程阻塞的时候。
+
+一个很简单的例子就是系统调用sysall，一个线程肯定不能同时执行代码和系统调用被阻塞，这个时候，此线程M需要放弃当前的上下文环境P，以便可以让其他的Goroutine被调度执行。

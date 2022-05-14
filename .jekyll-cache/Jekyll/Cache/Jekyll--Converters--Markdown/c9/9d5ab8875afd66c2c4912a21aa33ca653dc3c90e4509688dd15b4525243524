@@ -1,0 +1,49 @@
+I"�<p>https://github.com/jianqingdu/kedis</p>
+
+<p>Redis的开源代码包含三种运行模式</p>
+
+<p>Standalone：用户的请求直接访问内存数据并返回。
+Sentinel：作为redis的监控身份运行，监控多个redis实现raft协议完成故障恢复。这个模式下采用了hiredis访问redis。
+Cluster：redis开启了两个端口，一个用于用户访问，一个用于交换gossip协议。Redis之间通过二进制流交换信息。</p>
+
+<p>redis cluster的网络拓扑模型，client直连redis，并实现cluster协议(处理moved ask)。遗憾的是大部分redis客户端没有实现cluster协议。</p>
+
+<p>kedis是一个优雅的redis cluster proxy解决方案，它在代码层级上和db/sentinel/cluster并列，并在事件循环中挂钩。kedis接收client的请求并维护request队列，写入到后端redis的backend并维护callback队列，redis的返回会触发相应的client调用。
+<!-- more -->
+第一版kedis我用hiredis作为redis异步客户端。然而深入到hiredis发现这个库为了实现通用性和接口的清晰放弃了性能的最优。举例来说，在read()调用时hiredis会首先把数据读到栈空间，然后feed到read buffer。再比如，每一次调用回调函数时会要求数据被拷贝走，hiredis默认释放掉reply的内存。这个版本没做性能测试。</p>
+
+<p>memcoy()优化：
+先观察一下使用hiredis的kedis内存拷贝次数</p>
+
+<p>request：tcp协议栈 –&gt; read buffer -&gt; redis object -&gt; hiredis的format函数调用栈转为redis协议字符串 –&gt; write buffer -&gt; tcp协议栈
+reply： tcp协议栈 -&gt; 函数调用栈buffer –&gt; feed到read buffer -&gt; reply object –&gt; 回调函数需拷贝reply内容 -&gt; client write buffer -&gt; tcp协议栈
+这种模式下转发一次请求需要拷贝数据5次，转发一次响应需要拷贝数据7次。</p>
+
+<p>优化之后的kedis将redis协议栈代码拿了出来。对其内存管理大做文章，其内存转移模型变为：</p>
+
+<p>request：tcp协议栈-&gt; read buffer-&gt; redis object-&gt;write buffer-&gt;tcp协议栈
+reply: tcp协议栈-&gt; read buffer-&gt; redis object/raw string-&gt;write buffer-&gt;tcp协议栈
+优化之后请求和转发都只需要拷贝4次数据。这一次进行性能测试kedis的单核性能已经达到了12w qps，和redis cluster单实例的性能基本一致。</p>
+
+<p>malloc()调用次数优化
+对于mget这样的多个请求key的命令，proxy要做拆分并转发，最后拼接返回给客户端。但是对于hgetll，set这样只有一个key的命令，proxy完全可以做到不感知返回内容，直接转发给客户端。</p>
+
+<p>做完这个优化，在lrange_300的测试环境下，redis一次返回300个元素，kedis吞吐量提升了5倍。</p>
+
+<p>client回写优化
+这部分完全复用了redis的代码。核心思想为以下三点：</p>
+
+<p>减少write()调用，每次事件循环将数据写入writer buffer，在调用epoll前调用write()
+不使用calloc()，writer buffer采用链式结构。
+少量优先，每次事件循环每个客户端最多写16k数据，避免饿死请求量少的client。
+一个新产品面世当然要和老产品作比较，鉴于codis没有对hgetall, lrange这样的多元素返回的命令做优化，我们就拿codis最擅长的get，set命令对比。在下面这个测试报告的基础上可以得出结论：</p>
+
+<p>kedis对CPU做到了更有效的利用，其单核性能比codis 20核qps高与此同时延时更低。</p>
+
+<p>测试报告
+kedis: CPU占用100%, qps: 125078</p>
+
+<p>补充一下：kedis是redis的延续，是单线程。</p>
+
+<p>redis-benchmark -h 100.69.89.31 -p 36379 -n 1000000 -d 20 -r 200000 -e -l -c 200 -t get,set</p>
+:ET

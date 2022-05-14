@@ -1,0 +1,92 @@
+---
+title: netns mac
+layout: post
+category: linux
+author: 夏泽民
+---
+ https://github.com/vishvananda/netns
+ I have successfully installed and configured tuntap (http://tuntaposx.sourceforge.net/) and it works great. By editing  
+
+/Library/Preferences/SystemConfiguration/preferences.plist
+ I have a virtual interface. Here it is, with two IP addresses assigned ("aliased") to it:
+ 
+CloudrasLLCsMBP:puppet l.abruce$ sudo ip a show tap0
+tap0: flags=8843 mtu 1500
+ ether e2:97:6b:e1:81:35
+ inet 10.10.10.1/8 brd 10.10.10.255 tap0
+ inet6 fe80::4c:d456:2a90:5de3/64 secured scopeid 0xd
+ inet 192.168.98.100/24 brd 192.168.98.255 tap0
+
+ 
+
+
+
+ 
+But that's not what I want.
+
+
+ 
+
+
+
+ 
+What I want is a true 
+
+veth pair
+ as described by http://linux-blog.anracom.com/2016/02/02/fun-with-veth-devices-linux-virtual-bri dges-kvm-vmware-attach-the-host-and-connect-bridges-via-veth/. Here's an example that creates the virtual interfaces, a network namespace, a new bridge, etc::
+ 
+ 
+NNS=WhateverYouWantToCallTheNewNetworkNameSpace
+ip netns add $NNS
+ 
+ 
+ip link add veth-a$NNS type veth peer name veth-b$NNS
+ 
+ 
+ip link set veth-a$NNS up
+ 
+ 
+ip tuntap add tap$NNS mode tap user root
+ 
+ 
+ip link set tap$NNS up
+ 
+ 
+ip link add br$NNS type bridge
+ 
+ 
+ip link set tap$NNS master br$NNS
+ 
+ 
+ip link set veth-a$NNS master br$NNS
+ 
+ 
+ip addr add 10.0.0.1/24 dev br$NNS
+ 
+ 
+ip link set br$NNS up
+ 
+ 
+ip link set veth-b$NNS netns $NNS
+ 
+ 
+ip netns exec $NNS ip addr add 10.0.0.2/24 dev veth-b$NNS
+ 
+ 
+ip netns exec $NNS ip link set veth-b$NNS up
+ 
+ 
+ip netns exec $NNS ip link set dev lo up
+<!-- more -->
+https://discussions.apple.com/thread/7787814
+
+https://discuss.kubernetes.io/t/how-can-i-connect-my-macos-to-docker-network-minikube/17813
+
+$ docker network ls
+NETWORK ID     NAME       DRIVER    SCOPE
+906776761e62   bridge     bridge    local
+89afa32d0810   host       host      local
+b7cc12043647   minikube   bridge    local
+4f7dca22f5b6   none       null      local
+
+https://discuss.kubernetes.io/t/how-can-i-connect-my-macos-to-docker-network-minikube/17813/4

@@ -1,0 +1,73 @@
+I"�<p>使用 Sidecar 模式部署服务网格时，无需在节点上运行代理，但是集群中将运行多个相同的 Sidecar 副本。在 Kubernetes 的 Pod 中，在原有的应用容器旁边运行一个 Sidecar 容器，可以理解为两个容器共享存储、网络等资源，可以广义的将这个注入了 Sidecar 容器的 Pod 理解为一台主机，两个容器共享主机资源。</p>
+
+<p>注入 Sidecar的时候会在生成pod的时候附加上两个容器：istio-init、istio-proxy。istio-init这个容器从名字上看也可以知道它属于k8s中的Init Containers，主要用于设置iptables规则，让出入流量都转由 Sidecar 进行处理。istio-proxy是基于Envoy实现的一个网络代理容器，是真正的Sidecar，应用的流量会被重定向进入或流出Sidecar。</p>
+
+<p>我们在使用Sidecar自动注入的时候只需要给对应的应用部署的命名空间打个istio-injection=enabled标签，这个命名空间中新建的任何 Pod 都会被 Istio 注入 Sidecar。
+<!-- more -->
+Sidecar 注入原理
+Sidecar 注入主要是依托k8s的准入控制器Admission Controller来实现的。</p>
+
+<p>准入控制器会拦截 Kubernetes API Server 收到的请求，拦截发生在认证和鉴权完成之后，对象进行持久化之前。可以定义两种类型的 Admission webhook：Validating 和 Mutating。Validating 类型的 Webhook 可以根据自定义的准入策略决定是否拒绝请求；Mutating 类型的 Webhook 可以根据自定义配置来对请求进行编辑。</p>
+
+<p>通常Sidecar注入由以下步骤完成：</p>
+
+<p>解析Webhook REST请求，将AdmissionReview原始数据反序列化；
+解析pod，将AdmissionReview中的AdmissionRequest反序列化；
+利用Pod及网格配置渲染Sidecar配置模板；
+利用Pod及渲染后的模板创建Json Patch；
+构造AdmissionResponse；
+构造AdmissionReview，将其发给apiserver；</p>
+
+<p>https://www.luozhiyun.com/archives/397
+https://www.cnblogs.com/woki/p/14253886.html</p>
+
+<p>Sidecar 注入说明</p>
+
+<p>手动注入需要修改控制器的配置文件，如 deployment。通过修改 deployment 文件中的 pod 模板规范可实现该deployment 下创建的所有 pod 都注入 sidecar。添加/更新/删除 sidecar 需要修改整个 deployment。</p>
+
+<p>自动注入会在 pod 创建的时候注入 sidecar，无需更改控制器资源。Sidecar 可通过以下方式更新：</p>
+
+<p>选择性地手动删除 pod</p>
+
+<p>系统得进行 deployment 滚动更新</p>
+
+<p>手动或者自动注入都使用同样的模板配置。自动注入会从 istio-system 命名空间下获取 istio-inject 的 ConfigMap。手动注入可以通过本地文件或者 Configmap 。</p>
+
+<p>https://cloud.tencent.com/developer/news/168058
+Istio 服务网格目前所需的容器有：</p>
+
+<p>istio-init 用于设置 iptables 规则，以便将入站/出站流量通过 Sidecar 代理。</p>
+
+<p>初始化容器与应用程序容器在以下方面有所不同：</p>
+
+<p>它在启动应用容器之前运行，并一直运行直至完成。
+如果有多个初始化容器，则每个容器都应在启动下一个容器之前成功完成。
+因此，您可以看到，对于不需要成为实际应用容器一部分的设置或初始化作业来说，这种容器是多么的完美。在这种情况下，istio-init 就是这样做并设置了 iptables 规则。</p>
+
+<p>istio-proxy 这个容器是真正的 Sidecar 代理（基于 Envoy）。</p>
+
+<p>下面的内容描述了向 pod 中注入 Istio Sidecar 的两种方法：</p>
+
+<p>使用 istioctl手动注入
+启用 pod 所属命名空间的 Istio Sidecar 注入器自动注入。
+手动注入直接修改配置，如 deployment，并将代理配置注入其中。</p>
+
+<p>当 pod 所属namespace启用自动注入后，自动注入器会使用准入控制器在创建 Pod 时自动注入代理配置。</p>
+
+<p>通过应用 istio-sidecar-injector ConfigMap 中定义的模版进行注入。</p>
+
+<p>自动注入
+当你在一个namespace中设置了 istio-injection=enabled 标签，且 injection webhook 被启用后，任何新的 pod 都有将在创建时自动添加 Sidecar. 请注意，区别于手动注入，自动注入发生在 pod 层面。你将看不到 deployment 本身有任何更改</p>
+
+<p>https://www.cnblogs.com/haoyunlaile/p/12960441.html</p>
+
+<p>Init 容器
+Init 容器是一种专用容器，它在应用程序容器启动之前运行，用来包含一些应用镜像中不存在的实用工具或安装脚本。</p>
+
+<p>一个 Pod 中可以指定多个 Init 容器，如果指定了多个，那么 Init 容器将会按顺序依次运行。只有当前面的 Init 容器必须运行成功后，才可以运行下一个 Init 容器。当所有的 Init 容器运行完成后，Kubernetes 才初始化 Pod 和运行应用容器。</p>
+
+<p>Init 容器使用 Linux Namespace，所以相对应用程序容器来说具有不同的文件系统视图。因此，它们能够具有访问 Secret 的权限，而应用程序容器则不能。</p>
+
+<p>https://zhuanlan.zhihu.com/p/44252615</p>
+
+:ET

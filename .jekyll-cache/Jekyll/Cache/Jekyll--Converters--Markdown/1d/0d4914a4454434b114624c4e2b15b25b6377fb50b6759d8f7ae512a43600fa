@@ -1,0 +1,58 @@
+I"�<p>传统的Linux加载bootfs时会先将rootfs设为read-only，然后在系统自检之后将 rootfs从read-only改为read-write，然后我们就可以在rootfs上进行写和读的操作了。但docker的镜像却不是这样，它在 bootfs自检完毕之后并不会把rootfs的read-only改为read-write。而是利用union mount（UnionFS的一种挂载机制）将一个或多个read-only的rootfs加载到之前的read-only的rootfs层之上。在加载 了这么多层的rootfs之后，仍然让它看起来只像是一个文件系统，在docker的体系里把union mount的这些read-only的rootfs叫做Docker的镜像。但是，此时的每一层rootfs都是read-only的，我们此时还不能对 其进行操作。当我们创建一个容器，也就是将Docker镜像进行实例化，系统会在一层或是多层read-only的rootfs之上分配一层空的 read-write的rootfs。
+0328091.png
+docker镜像这种层次化的组织方式带来了很多好处，首先是节约了镜像在物理机上占用的空间，其次是创建一个新的空的rootfs很容易，这就意味着容器相比其它虚拟化技术可以更加快速启动。</p>
+
+<p>Docker的image是由一组layers组合起来得到的，每一层layer对应的是Dockerfile中的一条指令。这些layers中，一层layer为R/W layer，即 container layer，其他layers均为read-only layer</p>
+
+<p>Dockerfile中只允许最后一个CMD或ENTRYPOINT生效，也与之对应，Dockerfile中其他命令生成的layer为Read-only的，CMD或ENTRYPOINT生成的layer是R/W的。
+<!-- more -->
+Union File System
+Docker的存储驱动的实现是基于Union File System，简称UnionFS，他是一种为Linux 、FreeBSD 和NetBSD 操作系统设计的，把其他文件系统联合到一个联合挂载点的文件系统服务。它用到了一个重要的资源管理技术,叫写时复制。写时复制（copy-on-write），也叫隐式共享，是一种对可修改资源实现高效复制的资源管理技术。对于一个重复资源，若不修改，则无需立刻创建一个新的资源，该资源可以被共享使用。当发生修改的时候，才会创建新资源。这会大大减少对于未修改资源复制的消耗。Docker正式基于此去创建images和containers。</p>
+
+<p>AUFS
+AUFS，全称Advanced Multi-Layered Unification Filesystem。AUFS重写了早期的UnionFS 1.x，提升了其可靠性和性能，是早期Docker版本的默认的存储驱动。（Docker-CE目前默认使用OverlayFS）。</p>
+
+<p>上的Docker-CE可以通过配置DOCKER_OPTS=”-s=aufs”进行修改，同时内核中需要加载AUFS module，image的增删变动都会发生在/var/lib/docker/aufs目录下。</p>
+
+<p>AUFS下文件读操作
+1、文件存在于container-layer：直接从container-layer进行读取； 
+2、文件不存在于container-layer：自container-layer下一层开始，逐层向下搜索，找到该文件，并从找到文件的那一层layer中读取文件； 
+3、当文件同时存在于container-layer和image-layer，读取container-layer中的文件。 
+简而言之，从container-layer开始，逐层向下搜索，找到该文件即读取，停止搜索。</p>
+
+<p>AUFS下修改文件或目录
+写操作 
+1、对container-layer中已存在的文件进行写操作：直接在该文件中进行操作（新文件直接在container-layer创建&amp;修改）； 
+2、对image-layers中已存在的文件进行写操作：将该文件完整复制到container-layer，然后在container-layer对这份copy进行写操作； 
+删除 
+1、删除container-layer中的文件/目录：直接删除； 
+2、删除image-layers中的文件：在container-layer中创建whiteoutfile，image-layer中的文件不会被删除，但是会因为whiteout而变得对container而言不可见； 
+3、删除image-layers中的目录：在container-layer中创建opaquefile，作用同whiteout； 
+重命名 
+1、container-layer文件/目录重命名：直接操作； 
+2、image-layer文件重命名： 
+3、image-layer目录重命名：在docker的AUFS中没有支持，会触发EXDEV。</p>
+
+<p>AUFS优点
+1、可以在多个运行的container中高效的共享image，可以实现容器的快速启动，并减少磁盘占用量； 
+2、共享image-layers的方式，可以高效的是使用page cache</p>
+
+<p>AUFS缺点
+1、性能上不如overlay2； 
+2、当文件进行写操作的时候，如果文件过大，或者文件位于底层的image中，则可能会引入高延迟。</p>
+
+<p>OverlayFS
+OverlayFS也是采用UFS模式，但相对于AUFS，其性能更高。在Docker中主要有overlay和overlay2两种实现。Docker-CE默认采用overlay2。</p>
+
+<p>root@xftony:/var/lib/docker# docker info
+    Containers: 0
+     Running: 0
+     Paused: 0
+     Stopped: 0
+    Images: 0
+    Server Version: 18.03.0-ce
+    Storage Driver: overlay2
+    ……
+OverlayFS中使用了两个目录，把一个目录置放于另一个之上，并且对外提供单个统一的视角。下层的目录叫做lowerdir，上层的叫做upperdir。对外展示的统一视图称作merged。创建一个容器，overlay驱动联合镜像层和一个新目录给容器。镜像顶层是overlay中的只读 lowerdir，容器的新目录是 可读写 的upperdir。它们默认存储于/var/lib/docker/overlay2/目录下。</p>
+
+:ET

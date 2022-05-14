@@ -1,0 +1,269 @@
+I"-*<p>$ gdb golint_exe 
+GNU gdb (GDB) 7.12.1
+Copyright (C) 2017 Free Software Foundation, Inc.
+License GPLv3+: GNU GPL version 3 or later <a href="http://gnu.org/licenses/gpl.html">http://gnu.org/licenses/gpl.html</a>
+This is free software: you are free to change and redistribute it.
+There is NO WARRANTY, to the extent permitted by law.  Type “show copying”
+and “show warranty” for details.
+This GDB was configured as “x86_64-apple-darwin15.6.0”.
+Type “show configuration” for configuration details.
+For bug reporting instructions, please see:
+<a href="http://www.gnu.org/software/gdb/bugs/">http://www.gnu.org/software/gdb/bugs/</a>.
+—Type <return> to continue, or q <return> to quit---
+Find the GDB manual and other documentation resources online at:
+&lt;http://www.gnu.org/software/gdb/documentation/&gt;.
+For help, type "help".
+Type "apropos word" to search for commands related to "word"...
+Reading symbols from golint_exe...(no debugging symbols found)...done.
+Loading Go Runtime support.</return></return></p>
+
+<p>原因
+ go 1.11 DWARF 调试信息默认被压缩了，需要改环境变量
+ 解法：
+ 1， export GOFLAGS=”-ldflags=-compressdwarf=false”
+ 2，  go build -o golint_exe -gcflags ‘-N -l’ golint/golint.go golint/import.go
+ 3， gdb golint_exe</p>
+
+<p>$ gdb golint_exe 
+GNU gdb (GDB) 7.12.1
+Copyright (C) 2017 Free Software Foundation, Inc.
+License GPLv3+: GNU GPL version 3 or later <a href="http://gnu.org/licenses/gpl.html">http://gnu.org/licenses/gpl.html</a>
+This is free software: you are free to change and redistribute it.
+There is NO WARRANTY, to the extent permitted by law.  Type “show copying”
+and “show warranty” for details.
+This GDB was configured as “x86_64-apple-darwin15.6.0”.
+Type “show configuration” for configuration details.
+For bug reporting instructions, please see:
+<a href="http://www.gnu.org/software/gdb/bugs/">http://www.gnu.org/software/gdb/bugs/</a>.
+—Type <return> to continue, or q <return> to quit---
+Find the GDB manual and other documentation resources online at:
+&lt;http://www.gnu.org/software/gdb/documentation/&gt;.
+For help, type "help".
+Type "apropos word" to search for commands related to "word"...
+Reading symbols from golint_exe...done.
+Loading Go Runtime support.</return></return></p>
+
+<!-- more -->
+<p>想用gdb对程序进行调试，之前的时候就想用gdb的，结果发现加了-g也还是不行，显示如下：
+GNU gdb 6.8
+Copyright (C) 2008 Free Software Foundation, Inc.
+License GPLv3+: GNU GPL version 3 or later <a href="http://gnu.org/licenses/gpl.html">http://gnu.org/licenses/gpl.html</a>
+This is free software: you are free to change and redistribute it.
+There is NO WARRANTY, to the extent permitted by law.  Type “show copying”
+and “show warranty” for details.
+This GDB was configured as “arm-hisiv100nptl-linux”…
+(no debugging symbols found)
+因为当时时间紧迫，就没来得及去找原因，今天找了下原因
+一般来说，如果加了-g仍然找不到符号，要么是只是在.o文件生成可执行文件的时候加的-g，而在.c生成.o文件时忘记加了，要么是把可执行文件strip了，可是我查找我的Makefile，这两种可能都不是。写了小的测试程序，发现是可以gdb的，怀疑还是我Makefile的flag写的不对，查找，发现有个-s的选项，查资料发现，原来是它把我的符号给去掉了，去掉-s，ok，done</p>
+
+<p>问题出现的原因：</p>
+
+<p>编译时未加调试选项（(g)cc/g++  -g … ）</p>
+
+<p>GDB（GNU Debugger）是UNIX及UNIX-like下的强大调试工具，可以调试ada, c, c++, asm, minimal, d, fortran, objective-c, go, java,pascal等语言。本文以C程序为例，介绍GDB启动调试的多种方式。</p>
+
+<p>哪类程序可被调试
+对于C程序来说，需要在编译时加上-g参数，保留调试信息，否则不能使用GDB进行调试。
+但如果不是自己编译的程序，并不知道是否带有-g参数，如何判断一个文件是否带有调试信息呢？</p>
+
+<p>gdb 文件
+例如：</p>
+
+<p>$ gdb helloworld
+Reading symbols from helloWorld…(no debugging symbols found)…done.
+如果没有调试信息，会提示no debugging symbols found。
+如果是下面的提示：</p>
+
+<p>Reading symbols from helloWorld…done.
+则可以进行调试。</p>
+
+<p>readelf查看段信息
+例如：</p>
+
+<p>$ readelf -S helloWorld|grep debug
+  [28] .debug_aranges    PROGBITS         0000000000000000  0000106d
+  [29] .debug_info       PROGBITS         0000000000000000  0000109d
+  [30] .debug_abbrev     PROGBITS         0000000000000000  0000115b
+  [31] .debug_line       PROGBITS         0000000000000000  000011b9
+  [32] .debug_str        PROGBITS         0000000000000000  000011fc
+helloWorld为文件名，如果没有任何debug信息，则不能被调试。</p>
+
+<p>file查看strip状况
+下面的情况也是不可调试的：</p>
+
+<p>file helloWorld
+helloWorld: (省略前面内容) stripped
+如果最后是stripped，则说明该文件的符号表信息和调试信息已被去除，不能使用gdb调试。但是not stripped的情况并不能说明能够被调试。</p>
+
+<p>调试方式运行程序
+程序还未启动时，可有多种方式启动调试。</p>
+
+<p>调试启动无参程序
+例如：</p>
+
+<p>$ gdb helloWorld
+(gdb)
+输入run命令，即可运行程序</p>
+
+<p>调试启动带参程序
+假设有以下程序，启动时需要带参数：</p>
+
+<p>#include<stdio.h>
+int main(int argc,char *argv[])
+{
+    if(1 &gt;= argc)
+    {
+        printf("usage:hello name\n");
+        return 0;
+    }
+    printf("Hello World %s!\n",argv[1]);
+    return 0 ;
+}
+编译：</stdio.h></p>
+
+<p>gcc -g -o hello hello.c
+这种情况如何启动调试呢？需要设置参数：</p>
+
+<p>$ gdb hello
+(gdb)run 编程珠玑
+Starting program: /home/shouwang/workspaces/c/hello 编程珠玑
+Hello World 编程珠玑!
+[Inferior 1 (process 20084) exited normally]
+(gdb)
+只需要run的时候带上参数即可。
+或者使用set args，然后在用run启动：</p>
+
+<p>gdb hello
+(gdb) set args 编程珠玑
+(gdb) run
+Starting program: /home/hyb/workspaces/c/hello 编程珠玑
+Hello World 编程珠玑!
+[Inferior 1 (process 20201) exited normally]
+(gdb)
+调试core文件
+当程序core dump时，可能会产生core文件，它能够很大程序帮助我们定位问题。但前提是系统没有限制core文件的产生。可以使用命令limit -c查看：</p>
+
+<p>$ ulimit -c
+0
+如果结果是0，那么恭喜你，即便程序core dump了也不会有core文件留下。我们需要让core文件能够产生：</p>
+
+<p>ulimit -c unlimied  #表示不限制core文件大小
+ulimit -c 10        #设置最大大小，单位为块，一块默认为512字节
+上面两种方式可选其一。第一种无限制，第二种指定最大产生的大小。
+调试core文件也很简单：</p>
+
+<p>gdb 程序文件名 core文件名
+具体可参看《linux常用命令-开发调试篇》gdb部分。</p>
+
+<p>调试已运行程序
+如果程序已经运行了怎么办呢？
+首先使用ps命令找到进程id：</p>
+
+<p>ps -ef|grep 进程名
+attach方式
+假设获取到进程id为20829，则可用下面的方式调试进程：</p>
+
+<p>$ gdb
+(gdb) attach 20829
+接下来就可以继续你的调试啦。</p>
+
+<p>可能会有下面的错误提示：</p>
+
+<p>Could not attach to process.  If your uid matches the uid of the target
+process, check the setting of /proc/sys/kernel/yama/ptrace_scope, or try
+again as the root user.  For more details, see /etc/sysctl.d/10-ptrace.conf
+ptrace: Operation not permitted.
+解决方法，切换到root用户：
+将/etc/sysctl.d/10-ptrace.conf中的</p>
+
+<p>kernel.yama.ptrace_scope = 1
+修改为</p>
+
+<p>kernel.yama.ptrace_scope = 0
+直接调试相关id进程
+还可以是用这样的方式gdb program pid，例如:</p>
+
+<p>gdb hello 20829
+或者：</p>
+
+<p>gdb hello –pid 20829
+已运行程序没有调试信息
+为了节省磁盘空间，已经运行的程序通常没有调试信息。但如果又不能停止当前程序重新启动调试，那怎么办呢？还有办法，那就是同样的代码，再编译出一个带调试信息的版本。然后使用和前面提到的方式操作。对于attach方式，在attach之前，使用file命令即可：</p>
+
+<p>$ gdb
+(gdb) file hello
+Reading symbols from hello…done.
+(gdb)attach 20829
+总结
+本文主要介绍了两种类型的GDB启动调试方式，分别是调试未运行的程序和已经运行的程序。对于什么样的程序能够进行调试也进行了简单说明。</p>
+
+<p>https://stackoverflow.com/questions/52534287/debug-go-program-with-gdb-on-macos</p>
+
+<p>A simple Go program, say main.go:</p>
+
+<p>package main</p>
+
+<p>func main() {
+    println(“hello, world!”)
+}
+Then build with</p>
+
+<p>go build -gcflags “-N -l” -o main main.go
+Using GDB:</p>
+
+<p>$ gdb main
+GNU gdb (GDB) 8.2
+(…)
+Reading symbols from main…(no debugging symbols found)…done.
+Loading Go Runtime support.
+(gdb) source /usr/local/Cellar/go/1.11/libexec/src/runtime/runtime-gdb.py
+Loading Go Runtime support.
+(gdb) info files
+Symbols from “/Users/changkun/Desktop/demo/main”.
+Local exec file:
+        `/Users/changkun/Desktop/demo/main’, file type mach-o-x86-64.
+        Entry point: 0x1049e20
+        0x0000000001001000 - 0x000000000104dfcf is .text
+        0x000000000104dfe0 - 0x0000000001077344 is __TEXT.__rodata
+        (…)
+(gdb) b *0x1049e20
+Breakpoint 1 at 0x1049e20
+(gdb)
+There is no at in the GDB outputs, the version of Go is go version go1.11 darwin/amd64 and:</p>
+
+<p>$ ls -al /usr/local/bin | grep go
+lrwxr-xr-x    1 changkun  admin        24 Aug 25 16:37 go -&gt; ../Cellar/go/1.11/bin/go
+======</p>
+
+<p>Same process in linux environment:</p>
+
+<p>docker run -itd –name golang golang:1.11
+docker exec -it golang bash
+then entering container install gdb</p>
+
+<p>root@1326d3f1a957:/# gdb main
+GNU gdb (Debian 7.12-6) 7.12.0.20161007-git
+(…)
+(gdb) info files
+Symbols from “/main”.
+Local exec file:
+        `/main’, file type elf64-x86-64.
+        Entry point: 0x44a2e0
+        0x0000000000401000 - 0x000000000044ea8f is .text
+        (…)
+(gdb) b *0x44a2e0
+Breakpoint 1 at 0x44a2e0: file /usr/local/go/src/runtime/rt0_linux_amd64.s, line 8.
+(gdb)
+Linux is able to show (gdb) b *0x44a2e0
+    Breakpoint 1 at 0x44a2e0: file /usr/local/go/src/runtime/rt0_linux_amd64.s, line 8.</p>
+
+<p>What did I miss in macOS? How can I debug and trace the program on macOS?</p>
+
+<p>In Go 1.11, the debug information is compressed for purpose of reduce binary size, and gdb on the Mac does not understand compressed DWARF.</p>
+
+<p>The workaround is to also specify -ldflags=-compressdwarf=false which does exactly what it claims.</p>
+
+<p>To do this generally:</p>
+
+<p>export GOFLAGS=”-ldflags=-compressdwarf=false”</p>
+:ET

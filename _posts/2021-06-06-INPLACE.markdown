@@ -1,0 +1,78 @@
+---
+title: mysql ALGORITHM  INPLACE in-place 修改字段的大小
+layout: post
+category: storage
+author: 夏泽民
+---
+https://dev.mysql.com/doc/refman/8.0/en/innodb-online-ddl-operations.html
+
+对于add Index的处理方式是不同的，主要有三种：
+
+（1）Copy Table方式
+这是InnoDB最早支持的创建索引的方式。顾名思义，创建索引是通过临时表拷贝的方式实现的。
+
+新建一个带有新索引的临时表，将原表数据全部拷贝到临时表，然后Rename，完成创建索引的操作。
+
+这个方式创建索引，创建过程中，原表是可读的。但是会消耗一倍的存储空间。
+
+（2）Inplace方式
+这是原生MySQL 5.5，以及innodb_plugin中提供的创建索引的方式。所谓Inplace，也就是索引创建在原表上直接进行，不会拷贝临时表。相对于Copy Table方式，这是一个进步。
+
+Inplace方式创建索引，创建过程中，原表同样可读的，但是不可写。
+
+（3）Online方式
+这是MySQL 5.6.7中提供的创建索引的方式。无论是Copy Table方式，还是Inplace方式，创建索引的过程中，原表只能允许读取，不可写。对应用有较大的限制，因此MySQL最新版本中，InnoDB支持了所谓的Online方式创建索引。
+
+InnoDB的Online Add Index，首先是Inplace方式创建索引，无需使用临时表。在遍历聚簇索引，收集记录并插入到新索引的过程中，原表记录可修改。而修改的记录保存在Row Log中。当聚簇索引遍历完毕，并全部插入到新索引之后，重放Row Log中的记录修改，使得新索引与聚簇索引记录达到一致状态。
+
+<!-- more -->
+https://www.it1352.com/1873048.html
+https://www.jb51.net/article/75217.htm
+https://blog.csdn.net/weixin_33898233/article/details/92531361
+
+
+mysql 5.7 新特性中在线in-place 修改字段的大小
+VARCHAR 字段的大小能够通过 ALTER TABLE,命令，以in-place 的方式修改
+只要修改字段后字段varchar所占字节数和原先的相同就能实现，例如对于 VARCHAR 值在 0到 255,只需要一个bytes. 对于 VARCHAR 的值是 256 bytes 或者大于256 需要两个字节.这样的话,通过 in-place ALTER TABLE 只支持0到255 之间的修改，或者说256 以及大于256之间修改.in-place alter table 不支持小于256的varchar值变更为大于256的值。因为在这种情况下存储的字节会从1个字节变为两个字节。只能通algorithm=copy的方式修改，例如将varchar (255)的值修改到256 in-place alter would 会返回一个错误
+ALTER TABLE t1 ALGORITHM=INPLACE, CHANGE COLUMN c1 c1 VARCHAR(256);
+ERROR 0A000: ALGORITHM=INPLACE is not supported. Reason: Cannot change
+column type INPLACE. Try ALGORITHM=COPY.
+https://blog.csdn.net/clep17285/article/details/100253649
+
+MySQL会创建临时表的几种情况
+1、UNION查询；
+
+2、用到TEMPTABLE算法或者是UNION查询中的视图；
+
+3、ORDER BY和GROUP BY的子句不一样时；
+
+4、表连接中，ORDER BY的列不是驱动表中的；(指定了联接条件时，满足查询条件的记录行数少的表为[驱动表]，未指定联接条件时，行数少的表为[驱动表]，多表联合查询时)
+
+5、DISTINCT查询并且加上ORDER BY时；
+
+6、SQL中用到SQL_SMALL_RESULT选项时；
+
+7、FROM中的子查询；
+
+8、子查询或者semi-join时创建的表；
+
+EXPLAIN 查看执行计划结果的 Extra 列中，如果包含 Using Temporary 就表示会用到临时表。
+
+当然了，如果临时表中需要存储的数据量超过了上限( tmp-table-size 或 max-heap-table-size 中取其大者)，这时候就需要生成基于磁盘的临时表了。
+
+在以下几种情况下，会创建磁盘临时表：
+
+1、数据表中包含BLOB/TEXT列；
+
+2、在 GROUP BY 或者 DSTINCT 的列中有超过 512字符 的字符类型列(或者超过 512字节的 二进制类型列，在5.6.15之前只管是否超过512字节)；
+
+3、在SELECT、UNION、UNION ALL查询中，存在最大长度超过512的列(对于字符串类型是512个字符，对于二进制类型则是512字节)；
+
+4、执行SHOW COLUMNS/FIELDS、DESCRIBE等SQL命令，因为它们的执行结果用到了BLOB列类型。
+
+https://blog.csdn.net/weixin_33502070/article/details/113159652
+
+https://www.cnblogs.com/hxphp/p/7651365.html
+
+
+

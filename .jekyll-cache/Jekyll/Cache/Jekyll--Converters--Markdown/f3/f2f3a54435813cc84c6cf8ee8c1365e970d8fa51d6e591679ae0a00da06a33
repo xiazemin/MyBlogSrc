@@ -1,0 +1,46 @@
+I"b<p>因为TCP的三只握手等等原因，建立一个连接是一件成本比较高的行为。所以在一个需要多次与特定实体交互的程序中，就需要维持一个连接池，里面有可以复用的连接可供重复使用。
+而维持一个连接池，最基本的要求就是要做到：thread safe（线程安全），尤其是在Golang这种特性是goroutine的语言中。
+实现简单的连接池
+type Pool struct {
+	m sync.Mutex // 保证多个goroutine访问时候，closed的线程安全
+	res chan io.Closer //连接存储的chan
+	factory func() (io.Closer,error) //新建连接的工厂方法
+	closed bool //连接池关闭标志
+}
+https://juejin.im/post/5e58e3b7f265da57537eb7ed
+<!-- more -->
+这个简单的连接池，我们利用chan来存储池里的连接。而新建结构体的方法也比较简单：
+func New(fn func() (io.Closer, error), size uint) (*Pool, error) {
+	if size &lt;= 0 {
+		return nil, errors.New(“size的值太小了。”)
+	}
+	return &amp;Pool{
+		factory: fn,
+		res:     make(chan io.Closer, size),
+	}, nil
+}
+复制代码只需要提供对应的工厂函数和连接池的大小就可以了。
+获取连接
+那么我们要怎么从中获取资源呢？因为我们内部存储连接的结构是chan，所以只需要简单的select就可以保证线程安全：
+//从资源池里获取一个资源
+func (p *Pool) Acquire() (io.Closer,error) {
+	select {
+	case r,ok := &lt;-p.res:
+		log.Println(“Acquire:共享资源”)
+		if !ok {
+			return nil,ErrPoolClosed
+		}
+		return r,nil
+	default:
+		log.Println(“Acquire:新生成资源”)
+		return p.factory()
+	}
+}
+复制代码我们先从连接池的res这个chan里面获取，如果没有的话我们就利用我们早已经准备好的工厂函数进行构造连接。同时我们在从res获取连接的时候利用ok先确定了这个连接池是否已经关闭。如果已经关闭的话我们就返回早已经准备好的连接已关闭错误。
+关闭连接池
+那么既然提到关闭连接池，我们是怎么样关闭连接池的呢？
+//关闭资源池，释放资源
+func (p *Pool) Close() {
+	p.m.Lock()
+	defer p.m.Unlock()</p>
+:ET

@@ -1,0 +1,326 @@
+I"z5<!-- more -->
+<p>redis命令发送格式：
+*<参数数量> CRLF 
+$&lt;参数 1 的字节数量&gt; CRLF
+&lt;参数 1 的数据&gt; CRLF 
+... 
+$<参数 N="" 的字节数量=""> CRLF</参数></参数数量></p>
+<参数 N="" 的数据=""> CRLF 
+其中CRLF表示 rn
+
+举个例子：set name wuzhc
+
+格式化输出：
+
+*3 
+$3 
+set 
+$4 
+name 
+$5 
+wuzhc
+
+说明：
+
+*开头，表示有多少个参数，例如*3表示有3个参数（set, name, wuzhc）
+$开头，表示参数的字节长度，例如$3表示set有3个字节，$4表示name有4个字节
+每行rn结尾
+通信协议为：
+
+*3\r\n$3\r\nset\r\n$4\r\nname\r\n$5\r\nwuzhc\r\n
+Redis 回复
+状态回复（status reply）的第一个字节是 "+"，例如+OK\r\n
+错误回复（error reply）的第一个字节是 "-"，例如-No such key\r\n
+整数回复（integer reply）的第一个字节是 ":"，例如:1\r\n
+批量回复（bulk reply）的第一个字节是 "$"，例如 $5\r\nwuzhc\r\n
+多条批量回复（multi bulk reply）的第一个字节是 "*"，例如*2\r\n$5\r\nwuzhc\r\n$3r\nage\r\n
+PHP 实现Redis客户端
+
+<figure class="highlight"><pre><code class="language-php" data-lang="php"><table class="rouge-table"><tbody><tr><td class="gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29
+30
+31
+32
+33
+34
+35
+36
+37
+38
+39
+40
+41
+42
+43
+44
+45
+46
+47
+48
+49
+50
+51
+52
+53
+54
+55
+56
+57
+58
+59
+60
+61
+62
+63
+64
+65
+66
+67
+68
+69
+70
+71
+72
+73
+74
+75
+76
+77
+78
+79
+80
+81
+82
+83
+84
+85
+86
+87
+88
+89
+90
+91
+92
+93
+94
+95
+96
+97
+98
+99
+100
+101
+102
+103
+104
+105
+106
+107
+108
+</pre></td><td class="code"><pre><span class="cp">&lt;?php</span>
+<span class="cd">/**
+ * Created by PhpStorm.
+ * User: wuzhc2016@163.com
+ * Date: 2017年09月12日
+ * Time: 9:08
+ */</span>
+<span class="kd">class</span> <span class="nc">Client</span>
+<span class="p">{</span>
+    <span class="k">private</span> <span class="nv">$_socket</span> <span class="o">=</span> <span class="kc">null</span><span class="p">;</span>
+    <span class="k">public</span> <span class="k">function</span> <span class="n">__construct</span><span class="p">(</span><span class="nv">$ip</span><span class="p">,</span> <span class="nv">$port</span><span class="p">)</span> 
+    <span class="p">{</span>
+        <span class="nv">$this</span><span class="o">-&gt;</span><span class="n">_socket</span> <span class="o">=</span> <span class="nb">stream_socket_client</span><span class="p">(</span>
+            <span class="s2">"tcp://</span><span class="si">{</span><span class="nv">$ip</span><span class="si">}</span><span class="s2">:</span><span class="si">{</span><span class="nv">$port</span><span class="si">}</span><span class="s2">"</span><span class="p">,</span>
+            <span class="nv">$errno</span><span class="p">,</span>
+            <span class="nv">$errstr</span><span class="p">,</span>
+            <span class="mi">1</span><span class="p">,</span>
+            <span class="no">STREAM_CLIENT_CONNECT</span>
+        <span class="p">);</span>
+        <span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="nv">$this</span><span class="o">-&gt;</span><span class="n">_socket</span><span class="p">)</span> <span class="p">{</span>
+            <span class="k">exit</span><span class="p">(</span><span class="nv">$errstr</span><span class="p">);</span>
+        <span class="p">}</span>
+    <span class="p">}</span>
+    <span class="cd">/**
+     * 执行redis命令
+     * @param $command
+     * @return array|bool|string
+     */</span>
+    <span class="k">public</span> <span class="k">function</span> <span class="n">exec</span><span class="p">(</span><span class="nv">$command</span><span class="p">)</span>
+    <span class="p">{</span>      
+        <span class="c1">// 拼装发送命令格式</span>
+        <span class="nv">$command</span> <span class="o">=</span> <span class="nv">$this</span><span class="o">-&gt;</span><span class="nf">_execCommand</span><span class="p">(</span><span class="nv">$command</span><span class="p">);</span>
+
+        <span class="c1">// 发送命令到redis</span>
+        <span class="nb">fwrite</span><span class="p">(</span><span class="nv">$this</span><span class="o">-&gt;</span><span class="n">_socket</span><span class="p">,</span> <span class="nv">$command</span><span class="p">);</span>
+
+        <span class="c1">// 解析redis响应内容</span>
+        <span class="k">return</span> <span class="nv">$this</span><span class="o">-&gt;</span><span class="nf">_parseResponse</span><span class="p">();</span>
+    <span class="p">}</span>
+    <span class="cd">/**
+     * 将字符改为redis通讯协议格式
+     * 例如mget name age 格式化为 *3\r\n$4\r\nmget\r\n$4\r\nname\r\n$3\r\nage\r\n
+     * @param $command
+     * @return bool|string
+     */</span>
+    <span class="k">private</span> <span class="k">function</span> <span class="n">_execCommand</span><span class="p">(</span><span class="nv">$command</span><span class="p">)</span>
+    <span class="p">{</span>
+        <span class="nv">$line</span> <span class="o">=</span> <span class="s1">''</span><span class="p">;</span>
+        <span class="nv">$crlf</span> <span class="o">=</span> <span class="s2">"</span><span class="se">\r\n</span><span class="s2">"</span><span class="p">;</span>
+        <span class="nv">$params</span> <span class="o">=</span> <span class="nb">explode</span><span class="p">(</span><span class="s1">' '</span><span class="p">,</span> <span class="nv">$command</span><span class="p">);</span>
+        <span class="k">if</span> <span class="p">(</span><span class="nb">empty</span><span class="p">(</span><span class="nv">$params</span><span class="p">))</span> <span class="p">{</span>
+            <span class="k">return</span> <span class="nv">$line</span><span class="p">;</span>
+        <span class="p">}</span>
+
+        <span class="c1">// 参数个数</span>
+        <span class="nv">$line</span> <span class="mf">.</span><span class="o">=</span> <span class="s1">'*'</span> <span class="mf">.</span> <span class="nb">count</span><span class="p">(</span><span class="nv">$params</span><span class="p">)</span> <span class="mf">.</span> <span class="nv">$crlf</span><span class="p">;</span>
+
+        <span class="c1">// 各个参数拼装</span>
+        <span class="k">foreach</span> <span class="p">((</span><span class="k">array</span><span class="p">)</span><span class="nv">$params</span> <span class="k">as</span> <span class="nv">$param</span><span class="p">)</span> <span class="p">{</span>
+            <span class="nv">$line</span> <span class="mf">.</span><span class="o">=</span> <span class="s1">'$'</span> <span class="mf">.</span> <span class="nb">mb_strlen</span><span class="p">(</span><span class="nv">$param</span><span class="p">,</span> <span class="s1">'8bit'</span><span class="p">)</span> <span class="mf">.</span> <span class="nv">$crlf</span><span class="p">;</span>
+            <span class="nv">$line</span> <span class="mf">.</span><span class="o">=</span> <span class="nv">$param</span> <span class="mf">.</span> <span class="nv">$crlf</span><span class="p">;</span>
+        <span class="p">}</span>
+
+        <span class="k">return</span> <span class="nv">$line</span><span class="p">;</span>
+    <span class="p">}</span>
+    <span class="cd">/**
+     * 解析redis回复
+     * @return array|bool|string
+     */</span>
+    <span class="k">private</span> <span class="k">function</span> <span class="n">_parseResponse</span><span class="p">()</span>
+    <span class="p">{</span>
+        <span class="nv">$line</span> <span class="o">=</span> <span class="nb">fgets</span><span class="p">(</span><span class="nv">$this</span><span class="o">-&gt;</span><span class="n">_socket</span><span class="p">);</span> 
+        <span class="nv">$type</span> <span class="o">=</span> <span class="nv">$line</span><span class="p">[</span><span class="mi">0</span><span class="p">];</span> 
+        <span class="nv">$msg</span> <span class="o">=</span> <span class="nb">mb_substr</span><span class="p">(</span><span class="nv">$line</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="o">-</span><span class="mi">2</span><span class="p">,</span> <span class="s1">'8bit'</span><span class="p">);</span> 
+
+        <span class="k">switch</span> <span class="p">(</span><span class="nv">$type</span><span class="p">)</span> <span class="p">{</span>
+            <span class="c1">// 状态回复</span>
+            <span class="k">case</span> <span class="s1">'+'</span><span class="o">:</span>
+                <span class="k">if</span> <span class="p">(</span><span class="nv">$msg</span> <span class="o">==</span> <span class="s1">'OK'</span> <span class="o">||</span> <span class="nv">$msg</span> <span class="o">==</span> <span class="s1">'PONG'</span><span class="p">)</span> <span class="p">{</span>
+                    <span class="k">return</span> <span class="kc">true</span><span class="p">;</span>
+                <span class="p">}</span> <span class="k">else</span> <span class="p">{</span>
+                    <span class="k">return</span> <span class="nv">$msg</span><span class="p">;</span>
+                <span class="p">}</span>
+            <span class="c1">// 错误回复</span>
+            <span class="k">case</span> <span class="s1">'-'</span><span class="o">:</span>
+                <span class="k">exit</span><span class="p">(</span><span class="nv">$msg</span><span class="p">);</span>
+            <span class="c1">// 整数回复</span>
+            <span class="k">case</span> <span class="s1">':'</span><span class="o">:</span>
+                <span class="k">return</span> <span class="nv">$msg</span><span class="p">;</span>
+            <span class="c1">// 批量回复</span>
+            <span class="k">case</span> <span class="s1">'$'</span><span class="o">:</span> <span class="c1">// $后面跟数据字节数(长度)</span>
+                <span class="nv">$line</span> <span class="o">=</span> <span class="nb">fread</span><span class="p">(</span><span class="nv">$this</span><span class="o">-&gt;</span><span class="n">_socket</span><span class="p">,</span> <span class="p">(</span><span class="n">int</span><span class="p">)</span><span class="nv">$msg</span> <span class="o">+</span> <span class="mi">2</span><span class="p">);</span> <span class="c1">// 数据字节数 + (\r\n)两个字节</span>
+                <span class="k">return</span> <span class="nb">mb_substr</span><span class="p">(</span><span class="nv">$line</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="o">-</span><span class="mi">2</span><span class="p">,</span> <span class="s1">'8bit'</span><span class="p">);</span> <span class="c1">// 去除最后两个字节</span>
+            <span class="c1">// 多条批量回复</span>
+            <span class="k">case</span> <span class="s1">'*'</span><span class="o">:</span> <span class="c1">// *表示后面有多少个参数</span>
+                <span class="nv">$data</span> <span class="o">=</span> <span class="p">[];</span>
+                <span class="k">for</span> <span class="p">(</span><span class="nv">$i</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span> <span class="nv">$i</span> <span class="o">&lt;</span> <span class="nv">$msg</span><span class="p">;</span> <span class="nv">$i</span><span class="o">++</span><span class="p">)</span> <span class="p">{</span>
+                    <span class="nv">$data</span><span class="p">[]</span> <span class="o">=</span> <span class="nv">$this</span><span class="o">-&gt;</span><span class="nf">_parseResponse</span><span class="p">();</span>
+                <span class="p">}</span>
+                <span class="k">return</span> <span class="nv">$data</span><span class="p">;</span>
+        <span class="p">}</span>
+    <span class="p">}</span>
+<span class="p">}</span>
+<span class="c1">// demo</span>
+<span class="nv">$client</span> <span class="o">=</span> <span class="k">new</span> <span class="nc">Client</span><span class="p">(</span><span class="s1">'127.0.0.1'</span><span class="p">,</span> <span class="mi">6379</span><span class="p">);</span>
+<span class="nv">$client</span><span class="o">-&gt;</span><span class="nb">exec</span><span class="p">(</span><span class="s1">'set name wuzhc'</span><span class="p">);</span>
+<span class="nv">$res</span> <span class="o">=</span> <span class="nv">$client</span><span class="o">-&gt;</span><span class="nb">exec</span><span class="p">(</span><span class="s1">'get name'</span><span class="p">);</span>
+<span class="nb">var_dump</span><span class="p">(</span><span class="nv">$res</span><span class="p">);</span>
+</pre></td></tr></tbody></table></code></pre></figure>
+
+SET
+C:
+SET HENRY  HENRYFAN
+以上命令是设置HENRY 的值为HENRYFAN.在Redis的通讯协议上会以空格把命令拆分成三行;得到最终的命令如下：
+*3\r\n
+$3\r\n
+SET\r\n
+$5\r\n
+HENRY\r\n
+$8\r\n
+HENRYFAN\r\n
+S:
+服务端操作成功
++OK\r\n
+如果出现错误服务端会返回
+-错误信息\r\n
+GET
+C:
+GET HENRY
+产生的通讯指令是：
+*2\r\n
+$3\r\n
+GET\r\n
+$5\r\n
+HENRY\r\n
+S:
+ 如果存在这个Key则返回
+$8\r\n
+HENRYFAN\r\n
+不存在返回
+$-1\r\n
+HKEYS
+C:
+HKEYS HENRY
+以上命令是获取对应HENRY有多少个field成员
+*2\r\n
+$5\r\n
+HKEYS\r\n
+$5\r\n
+HENRY\r\n
+S:
+如果不存在任何字段信息
+*0\r\n
+如果存在QQ字段信息
+*1\r\n
+$2\r\n
+QQ\r\n
+HMGET
+C:
+HMGET HENRY QQ
+以上命令是获取HENRY的QQ信息。
+*3\r\n
+$5\r\n
+HMGET\r\n
+$5\r\n
+HENRY\r\n
+$2\r\n
+QQ\r\n
+S:
+如果不存在字段值
+
+*1\r\n
+$-1\r\n
+存在字段值
+
+*1\r\n
+$8\r\n
+28304340\r\n
+</参数>
+:ET

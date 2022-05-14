@@ -1,0 +1,40 @@
+---
+title: pipework  为docker容器配置独立IP
+layout: post
+category: docker
+author: 夏泽民
+---
+<!-- more -->
+环境:安装docker        关闭selinux     开启路由转发（net.ipv4.ip_forward =  1）
+一、将 Docker 容器配置到本地网络环境中
+为了使本地网络中的机器和 Docker 容器更方便的通信，我们经常会有将 Docker 容器配置到和主机同一网段的需求。这个需求其实很容易实现，我们只要将 Docker 容器和主机的网卡桥接起来，再给 Docker 容器配上 IP 就可以了。
+下面我们来操作一下，我主机 A 地址为 192.168.157.128/24,网关为 192.168.157.2,需要给 Docker容器的地址配置为 192.168.157.150/24。在主机 A 上做如下操作：
+安装 pipework
+下载地址：wget https://github.com/jpetazzo/pipework.git
+unzippipework-master.zip
+cp -p /root/pipework-master/pipework/usr/local/bin/
+启动 Docker 容器。
+docker run -itd--name test1 镜像 /bin/bash
+配置容器网络，并连到网桥 br0 上。网关在 IP 地址后面加@指定。
+pipework br0 test1192.168.157.150/24@192.168.157.2
+将主机 eno16777736 桥接到 br0 上，并把 eno16777736 的 IP 配置在 br0 上。
+p addradd 192.168.157.128/24 dev br0
+ip addrdel 192.168. 157.128/24 dev eno16777736
+brctladdif br0 eno16777736
+ip routedel default
+ip routeadd default via 192.168.157.2 dev br0
+注：如果是远程操作，中间网络会断掉，所以放在一条命令中执行。
+ip addradd 192.168.157.128/24 dev br0；ip addr del 192.168. 157.128/24 deveno16777736；brctl addif br0 eno16777736；ip route del default；ip route add default via 192.168.157.2dev br0
+完成上述步骤后，我们发现 Docker 容器已经可以使用新的 IP 和主机网络里的机器相互通信了
+
+pipework 工作原理分析
+那么容器到底发生了哪些变化呢？我们 docker attach 到 test1 上，发现容器中多了一块 eth1的网卡，并且配置了 192.168.157.150/24 的 IP，而且默认路由也改为了 192.168.157.2。这些都是pipework 帮我们配置的。
+首先 pipework 检查是否存在 br0 网桥，若不存在，就自己创建。
+创建 veth pair 设备，用于为容器提供网卡并连接到 br0 网桥。
+使用 docker inspect 找到容器在主机中的 PID，然后通过 PID 将容器的网络命名空间链接到var/run/netns/目录下。这么做的目的是，方便在主机上使用 ip netns 命令配置容器的网络。因为，在 Docker 容器中，我们没有权限配置网络环境。
+将之前创建的 veth pair 设备分别加入容器和网桥中。在容器中的名称默认为 eth1，可以通过 pipework 的-i 参数修改该名称。
+然后就是配置新网卡的 IP。若在 IP 地址的后面加上网关地址，那么 pipework 会重新配置默认路由。这样容器通往外网的流量会经由新配置的 eth1 出去，而不是通过 eth0 和 docker0。(若想完全抛弃自带的网络设置，在启动容器的时候可以指定--net=none)
+
+以上就是 pipework 配置 Docker 网络的过程，这和 Docker 的 bridge 模式有着相似的步骤。事实上，Docker 在实现上也采用了相同的底层机制。
+
+通过源代码，可以看出，pipework 通过封装 Linux 上的 ip、brctl 等命令，简化了在复杂场景下对容器连接的操作命令，为我们配置复杂的网络拓扑提供了一个强有力的工具。当然，如果想了解底层的操作，我们也可以直接使用这些 Linux 命令来完成工作，甚至可以根据自己的需求，添加额外的功能。

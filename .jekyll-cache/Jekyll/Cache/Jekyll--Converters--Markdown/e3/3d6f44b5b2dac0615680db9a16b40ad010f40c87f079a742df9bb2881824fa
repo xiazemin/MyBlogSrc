@@ -1,0 +1,56 @@
+I"W<p>https://dev.mysql.com/doc/refman/5.6/en/innodb-online-ddl-operations.html</p>
+
+<p>The table remains available for read and write operations while the index is being created. The CREATE INDEX statement only finishes after all transactions that are accessing the table are completed, so that the initial state of the index reflects the most recent contents of the table.</p>
+
+<p>Online DDL support for adding secondary indexes means that you can generally speed the overall process of creating and loading a table and associated indexes by creating the table without secondary indexes, then adding secondary indexes after the data is loaded.</p>
+
+<p>A newly created secondary index contains only the committed data in the table at the time the CREATE INDEX or ALTER TABLE statement finishes executing. It does not contain any uncommitted values, old versions of values, or values marked for deletion but not yet removed from the old index.</p>
+
+<p>If the server exits while creating a secondary index, upon recovery, MySQL drops any partially created indexes. You must re-run the ALTER TABLE or CREATE INDEX statement.
+<!-- more -->
+对于DDL的处理方式是不同的，主要有三种：</p>
+
+<p>Copy Table方式： 这是InnoDB最早支持的方式。顾名思义，通过临时表拷贝的方式实现的。新建一个带有新结构的临时表，将原表数据全部拷贝到临时表，然后Rename，完成创建操作。这个方式过程中，原表是可读的，不可写。但是会消耗一倍的存储空间。
+Inplace方式：这是原生MySQL 5.5，以及innodb_plugin中提供的方式。所谓Inplace，也就是在原表上直接进行，不会拷贝临时表。相对于Copy Table方式，这比较高效率。原表同样可读的，但是不可写。
+Online方式：这是MySQL 5.6以上版本中提供的方式，也是今天我们重点说明的方式。无论是Copy Table方式，还是Inplace方式，原表只能允许读取，不可写。对应用有较大的限制，因此MySQL最新版本中，InnoDB支持了所谓的Online方式DDL。与以上两种方式相比，online方式支持DDL时不仅可以读，还可以写，对于dba来说，这是一个非常棒的改进。</p>
+
+<p>https://www.cnblogs.com/mysql-dba/p/6192897.html</p>
+
+<p>online ddl实现</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>  online方式实质也包含了copy和inplace方式，对于不支持online的ddl操作采用copy方式，比如修改列类型，删除主键，修改字符集等，这些操作都会导致记录格式发生变化，无法通过简单的全量+增量的方式实现online；对于inplace方式，mysql内部以“是否修改记录格式”为基准也分为两类，一类需要重建表(重新组织记录)，比如optimize table、添加索引、添加/删除列、修改列NULL/NOT NULL属性等；另外一类是只需要修改表的元数据，比如删除索引、修改列名、修改列默认值、修改列自增值等。Mysql将这两类方式分别称为rebuild方式和no-rebuild方式。
+  
+  http://dev.mysql.com/doc/refman/5.6/en/innodb-create-index-overview.html。online ddl主要包括3个阶段，prepare阶段，ddl执行阶段，commit阶段，rebuild方式比no-rebuild方式实质多了一个ddl执行阶段，prepare阶段和commit阶段类似。下面将主要介绍ddl执行过程中三个阶段的流程。
+</code></pre></div></div>
+
+<p>Prepare阶段：</p>
+
+<p>创建新的临时frm文件
+持有EXCLUSIVE-MDL锁，禁止读写
+根据alter类型，确定执行方式(copy,online-rebuild,online-norebuild)
+更新数据字典的内存对象
+分配row_log对象记录增量
+生成新的临时ibd文件
+ddl执行阶段：</p>
+
+<p>降级EXCLUSIVE-MDL锁，允许读写
+扫描old_table的聚集索引每一条记录rec
+遍历新表的聚集索引和二级索引，逐一处理
+根据rec构造对应的索引项
+将构造索引项插入sort_buffer块
+将sort_buffer块插入新的索引
+处理ddl执行过程中产生的增量(仅rebuild类型需要)
+commit阶段</p>
+
+<p>升级到EXCLUSIVE-MDL锁，禁止读写
+重做最后row_log中最后一部分增量
+更新innodb的数据字典表
+提交事务(刷事务的redo日志)
+修改统计信息
+rename临时idb文件，frm文件
+变更完成</p>
+
+<p>https://www.cnblogs.com/cchust/p/4639397.html</p>
+
+<p>https://blog.csdn.net/hubo890224/article/details/50465818</p>
+:ET

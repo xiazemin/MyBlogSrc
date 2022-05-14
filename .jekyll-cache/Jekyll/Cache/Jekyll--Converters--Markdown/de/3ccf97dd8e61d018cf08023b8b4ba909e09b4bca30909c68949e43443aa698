@@ -1,0 +1,193 @@
+I"
+ <p>phpcbf -vvv src/xxx.php
+Segmentation fault
+ls /cores/
+空的
+mac 默认没有开启
+ulimit -c unlimited
+phpcbf -vvv src/xxx.php
+Segmentation fault: 11 (core dumped) 
+ls  /cores
+$ls /cores/
+core.62036	core.63911	core.83675</p>
+
+<p>gdb -c core.62036
+bt
+<!-- more -->
+1.什么是core文件？
+有问题的程序运行后，产生“段错误 (核心已转储)”时生成的具有堆栈信息和调试信息的文件。</p>
+
+<p>编译时需要加 -g 选项使程序生成调试信息: gcc -g core_test.c -o core_test</p>
+
+<p>2.怎样配置生成 core 文件
+(1)core文件开关
+    ①使用 ulimit -c 查看core开关，如果为0表示关闭，不会生成core文件；</p>
+
+<p>    ②使用 ulimit -c [filesize] 设置core文件大小，当最小设置为4之后才会生成core文件；</p>
+
+<p>    ③使用 ulimit -c unlimited 设置core文件大小为不限制，这是常用的做法；</p>
+
+<p>    ④如果需要开机就执行，则需要将这句命令写到 /etc/profile 等文件</p>
+
+<p>(2)core文件命名和保存路径
+    ①core文件有默认的名称和路径，但为了方便，我们通常会自己命名和指定保存路径；</p>
+
+<p>    ②可以通过 /proc/sys/kernel/core_pattern 设置 core 文件名和保存路径，方法如下：</p>
+
+<p>echo “/corefile/core-%e-%p-%t” &gt; /proc/sys/kernel/core_pattern</p>
+
+<p>命名的参数列表： </p>
+
+<p>    %p - insert pid into filename 添加pid 
+    %u - insert current uid into filename 添加当前uid 
+    %g - insert current gid into filename 添加当前gid 
+    %s - insert signal that caused the coredump into the filename 添加导致产生core的信号 
+    %t - insert UNIX time that the coredump occurred into filename 添加core文件生成时的unix时间 
+    %h - insert hostname where the coredump happened into filename 添加主机名 
+    %e - insert coredumping executable name into filename 添加命令名。</p>
+
+<p>3.调试core文件
+    （1）方法1: gdb [exec file] [core file] 然后执行bt看堆栈信息：</p>
+
+<p>(2)方法②:gdb -c [core file],然后 file [exec file],最后再使用 bt 查看错误位置</p>
+
+<p>https://blog.csdn.net/u013283985/article/details/80620237
+https://blog.csdn.net/u010889616/article/details/48815321</p>
+
+<p>mac下的gdb生成core
+lion下似乎没有/etc/sysctl.conf
+如果是linux下设置的
+kernel.core_pattern=/var/core/%t-%e-%p-%c.core
+kernel.core_uses_pid=0
+也没有用，</p>
+
+<p>sysctl -a查看所有
+比如看cpu信息就
+sysctl -a|grep cpu
+Java代码  收藏代码
+sh-3.2# sysctl -a|grep core<br />
+kern.corefile = /cores/core.%P<br />
+kern.coredump = 1<br />
+kern.sugid_coredump = 0<br />
+kern.corefile: /cores/core.%P<br />
+kern.coredump: 1<br />
+kern.sugid_coredump: 0<br />
+machdep.cpu.cores_per_package: 2<br />
+machdep.cpu.thermal.core_power_limits: 0<br />
+machdep.cpu.core_count: 2<br />
+sh-3.2#</p>
+
+<p>观察core文件存在了/cores/core.%P
+定义和linux不同，因为是bsd嘛</p>
+
+<p>su root
+ulimit -c
+如果是0
+则ulimit -c unlimited</p>
+
+<p>写错误程序测试
+C代码  收藏代码
+#include <stdio.h>  
+int main(void){  
+    int *a=NULL;      
+    *a=0x1;  
+    return 0;  
+}</stdio.h></p>
+
+<p>gcc -g test.c</p>
+
+<p>./a.out就在/cores下生成core文件了</p>
+
+<p>gdb -c /cores/core.1111 ./a.out
+查看错误在哪行</p>
+
+<p>首先 开启 ulimit -c unlimited.
+2:gcc -g 编译文件。
+3:运行程序。当段错误发生时，产生core文件。</p>
+
+<p>4:在/cores 目录前就可以找到core文件。
+5:运行 lldb -c core文件的名称。
+6:运行bt就可以看到程序崩溃时的堆栈信息了。
+7:从backtrace信息里面可以看出函数是在singlerightrotation里面崩掉的。</p>
+
+<p>记录php7 curl请求报Segmentation fault: 11的解决过程</p>
+
+<p>因为macbook pro送修，在新的mac电脑搭建了php7.1的环境，在跑脚本的时候报Segmentation fault: 11，脚本中请求了一些外部接口，没什么特殊的逻辑。查询无果之后。决定打开coredump 看下进程crash信息</p>
+
+<p>问题追溯
+首先打开coredump</p>
+
+<p>➜  ~  ulimit -c unlimited // 开启核心转储
+1
+然后重新执行脚本，不出意外 Segmentation fault: 11, 此时在/cores目录下会生成格式为core.{PID}的coredump文件</p>
+
+<p>➜  /cores ls
+core.8565
+1
+2
+然后我们看下进程崩溃时的栈信息, (mac下的调试工具时lldb,linux gdb)</p>
+
+<p>➜  /cores lldb -c core.8565
+(lldb) target create –core “core.8565”
+bt
+Core file ‘/cores/core.8565’ (x86_64) was loaded.
+(lldb) bt</p>
+<ul>
+  <li>thread #1, stop reason = signal SIGSTOP
+    <ul>
+      <li>frame #0: 0x0000000106adbfe0 libcurl.4.dylib<code class="language-plaintext highlighter-rouge">sh_delentry + 40
+frame #1: 0x0000000106adbfa9 libcurl.4.dylib</code>Curl_multi_closed + 122
+frame #2: 0x0000000106b35252 libcares.2.dylib<code class="language-plaintext highlighter-rouge">ares__close_sockets + 222
+frame #3: 0x0000000106b3d9fd libcares.2.dylib</code>end_query + 307
+frame #4: 0x0000000106b3e31c libcares.2.dylib<code class="language-plaintext highlighter-rouge">process_answer + 1374
+frame #5: 0x0000000106b3cef3 libcares.2.dylib</code>processfds + 1428
+frame #6: 0x0000000106af0963 libcurl.4.dylib<code class="language-plaintext highlighter-rouge">waitperform + 244
+frame #7: 0x0000000106af077c libcurl.4.dylib</code>Curl_resolver_is_resolved + 55
+frame #8: 0x0000000106adb4e5 libcurl.4.dylib<code class="language-plaintext highlighter-rouge">multi_runsingle + 2645
+frame #9: 0x0000000106ada995 libcurl.4.dylib</code>curl_multi_perform + 133
+frame #10: 0x0000000106ad449e libcurl.4.dylib<code class="language-plaintext highlighter-rouge">curl_easy_perform + 369
+frame #11: 0x000000010593d438 php</code>zif_curl_exec + 120
+frame #12: 0x0000000105c554b8 php<code class="language-plaintext highlighter-rouge">ZEND_DO_FCALL_BY_NAME_SPEC_RETVAL_UNUSED_HANDLER + 276
+frame #13: 0x0000000105c22571 php</code>execute_ex + 98
+frame #14: 0x0000000105bd86cd php<code class="language-plaintext highlighter-rouge">zend_call_function + 1510
+frame #15: 0x0000000105b00803 php</code>zif_call_user_func_array + 233
+frame #16: 0x0000000105c55890 php<code class="language-plaintext highlighter-rouge">ZEND_DO_FCALL_BY_NAME_SPEC_RETVAL_USED_HANDLER + 301
+frame #17: 0x0000000105c22571 php</code>execute_ex + 98
+frame #18: 0x0000000105c227c2 php<code class="language-plaintext highlighter-rouge">zend_execute + 531
+frame #19: 0x0000000105be6b72 php</code>zend_execute_scripts + 277
+frame #20: 0x0000000105b910d5 php<code class="language-plaintext highlighter-rouge">php_execute_script + 629
+frame #21: 0x0000000105c7fb81 php</code>do_cli + 3855
+frame #22: 0x0000000105c7eaff php<code class="language-plaintext highlighter-rouge">main + 1266
+frame #23: 0x00007fff7495e3d5 libdyld.dylib</code>start + 1
+(lldb)</li>
+    </ul>
+  </li>
+</ul>
+
+<p>可以看到程序崩溃位置在此处，可以判断是发起curl请求的时候 libcurl crash掉了, 原因是curl 7.65.1的一个问题，具体可查证
+https://bugs.php.net/bug.php?id=78145
+https://github.com/curl/curl/pull/3997</p>
+
+<p>frame #0: 0x0000000106adbfe0 libcurl.4.dylib`sh_delentry + 40</p>
+
+<p>解决方案
+1.mac下可 brew install php@7.x –build-from-source 执行此命令会从源码包重新make ，自动解决curl依赖的问题(已测试)
+2.升级os curl版本到curl 7.65.2或者之后</p>
+
+<p>https://blog.csdn.net/q00005/article/details/96478521</p>
+
+<p>https://www.it-swarm.dev/zh/macos/%E5%9C%A8mac%E4%B8%8A%E5%86%99%E7%9A%84%E6%A0%B8%E5%BF%83%E8%BD%AC%E5%82%A8%E5%9C%A8%E5%93%AA%E9%87%8C%EF%BC%9F/968307734/</p>
+
+<p>https://www.codenong.com/9412156/</p>
+
+<p>https://www.thinbug.com/q/2080918
+https://stackoverflow.com/questions/12958595/tracking-down-a-segmentation-fault-11-to-large-php-code-base
+https://stackoverflow.com/questions/53504107/symfony-4-error-11-segmentation-fault-when-starting-server</p>
+
+<p>https://stackoverflow.com/questions/13268942/phpunit-segmentation-fault-11
+https://stackoverflow.com/questions/56968890/segmentation-fault-11-curl</p>
+
+<p>https://github.com/Homebrew/homebrew-core/issues/40812
+https://github.com/phpDocumentor/phpDocumentor/issues/1182</p>
+
+:ET

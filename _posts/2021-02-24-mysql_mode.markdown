@@ -1,0 +1,269 @@
+---
+title: mysql_mode
+layout: post
+category: storage
+author: 夏泽民
+---
+https://dev.mysql.com/doc/refman/5.7/en/sql-mode.html
+
+有时候你从别人那(或者其它版本的mysql)dump下来的数据库，加上和别人（之前）同样的软件，可就是见鬼的不能运行。这其中的问题可能是你们的数据库版本不同，其中最主要的就是mysql_mode的不同。
+
+在不同版本中,mysql_mode的默认值是不同的。他影响了许多代码中书写不规范的sql语句。而且在不同版本mysql中mysql_mode的默认值可能会有很大的区别，一些mode被添加，一些mode被移除，或者是结合在一起，又甚至是移除添加移除禁用等等反反复复。
+
+一、用法
+1、启动时设置
+用--sql-mode="modes"选项启动mysqld来设置默认SQL模式。
+如果想要重设，该值还可以为空(--sql-mode ="")
+
+2、启动后设置
+用SET [SESSION|GLOBAL] sql_mode='modes'语句设置sql_mode变量来更改SQL模式。
+
+设置 GLOBAL变量时需要拥有SUPER权限，并且会影响从那时起连接的所有客户端的操作。
+设置SESSION变量只影响当前的客户端。任何客户端可以随时更改自己的会话 sql_mode值。
+
+3、通过配置文件设置
+在my.cnf（my.ini）添加如下配置:
+
+[mysqld]    
+sql_mode='ONLY_FULL_GROUP_BY,NO_AUTO_VALUE_ON_ZERO'
+<!-- more -->
+二、sql_mode常用值
+1、主要sql_mode:
+ANSI                ：宽松模式，对插入数据进行校验，如果不符合定义类型或长度，对数据类型调整或截断保存，报warning警告。
+TRADITIONAL         ：严格模式，当向mysql数据库插入数据时，进行数据的严格校验，保证错误数据不能插入，报error错误。用于事物时，会进行事物的回滚。
+STRICT_TRANS_TABLES ：严格模式，进行数据的严格校验，错误数据不能插入，报error错误。
+1
+2
+3
+2、常用sql_mode:
+ONLY_FULL_GROUP_BY      ：对于GROUP BY聚合操作，如果在SELECT中的列，没有在GROUP BY中出现，那么这个SQL是不合法的，因为列不在GROUP BY从句中
+
+NO_AUTO_VALUE_ON_ZERO   ：该值影响自增长列的插入。默认设置下，插入0或NULL代表生成下一个自增长值。如果用户 希望插入的值为0，而该列又是自增长的，那么这个选项就有用了。
+
+STRICT_TRANS_TABLES     ：在该模式下，如果一个值不能插入到一个事务表中，则中断当前的操作，对非事务表不做限制
+NO_ZERO_IN_DATE         ：在严格模式下，不允许日期和月份为零
+
+NO_ZERO_DATE            ：设置该值，mysql数据库不允许插入零日期，插入零日期会抛出错误而不是警告。
+
+ERROR_FOR_DIVISION_BY_ZERO：在INSERT或UPDATE过程中，如果数据被零除，则产生错误而非警告。如 果未给出该模式，那么数据被零除时MySQL返回NULL
+
+NO_AUTO_CREATE_USER     ：禁止GRANT创建密码为空的用户
+
+NO_ENGINE_SUBSTITUTION  ：如果需要的存储引擎被禁用或未编译，那么抛出错误。不设置此值时，用默认的存储引擎替代，并抛出一个异常
+
+PIPES_AS_CONCAT         ：将"||"视为字符串的连接操作符而非或运算符，这和Oracle数据库是一样的，也和字符串的拼接函数Concat相类似
+
+ANSI_QUOTES             ：启用ANSI_QUOTES后，不能用双引号来引用字符串，因为它被解释为识别符
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+3、特殊模式组合见下面第四节
+三、查询当前模式
+SELECT @@sql_mode
+1
+四、mysql5.1参考手册 5.3.2 SQL服务器模式 一节
+5.3.2. SQL服务器模式
+
+MySQL服务器可以以不同的SQL模式来操作，并且可以为不同客户端应用不同模式。这样每个应用程序可以根据自己的需求来定制服务器的操作模式。
+
+模式定义MySQL应支持哪些SQL语法，以及应执行哪种数据验证检查。这样可以更容易地在不同的环境中使用MySQL，并结合其它数据库服务器使用MySQL。
+
+你可以用–sql-mode=”modes”选项启动mysqld来设置默认SQL模式。如果你想要重设，该值还可以为空(–sql-mode =”“)。
+
+你还可以在启动后用SET [SESSION|GLOBAL] sql_mode=’modes’语句设置sql_mode变量来更改SQL模式。设置 GLOBAL变量时需要拥有SUPER权限，并且会影响从那时起连接的所有客户端的操作。设置SESSION变量只影响当前的客户端。任何客户端可以随时更改自己的会话 sql_mode值。
+
+Modesis是用逗号(‘，’)间隔开的一系列不同的模式。你可以用SELECT @@sql_mode语句查询当前的模式。默认值是空(没有设置任何模式)。
+
+主要重要sql_mode值为：
+
+· ANSI
+
+更改语法和行为，使其更符合标准SQL。
+
+· STRICT_TRANS_TABLES
+
+如果不能将给定的值插入到事务表中，则放弃该语句。对于非事务表，如果值出现在单行语句或多行语句的第1行，则放弃该语句。本节后面给出了更详细的描述。
+
+· TRADITIONAL
+
+Make MySQL的行为象“传统”SQL数据库系统。该模式的简单描述是当在列中插入不正确的值时“给出错误而不是警告”。注释：一旦发现错误立即放弃INSERT/UPDATE。如果你使用非事务存储引擎，这种方式不是你想要的，因为出现错误前进行的数据更改不会“滚动”，结果是更新“只进行了一部分”。
+
+本手册指“严格模式”，表示至少STRICT _TRANS_TABLES或STRICT _ALL_TABLES被启用的模式。
+
+下面描述了支持的所有模式：
+
+· ALLOW_INVALID_DATES
+
+在严格模式下不要检查全部日期。只检查1到12之间的月份和1到31之间的日。这在Web应用程序中，当你从三个不同的字段获取年、月、日，并且想要确切保存用户插入的内容(不进行日期验证)时很重要。该模式适用于DATE和DATETIME列。不适合TIMESTAMP列，TIMESTAMP列需要验证日期。
+
+启用严格模式后，服务器需要合法的月和日，不仅仅是分别在1到12和1到31范围内。例如，禁用严格模式时’2004-04-31’是合法的，但启用严格模式后是非法的。要想在严格模式允许遮掩固定日期，还应启用ALLOW_INVALID_DATES。
+
+· ANSI_QUOTES
+
+将‘”’视为识别符引号(‘’引号字符)，不要视为字符串的引号字符。在ANSI模式，你可以仍然使用‘’来引用识别符。启用ANSI_QUOTES后，你不能用双引号来引用字符串，因为它被解释为识别符。
+
+· ERROR_FOR_DIVISION_BY_ZERO
+
+在严格模式，在INSERT或UPDATE过程中，如果被零除(或MOD(X，0))，则产生错误(否则为警告)。如果未给出该模式，被零除时MySQL返回NULL。如果用到INSERT IGNORE或UPDATE IGNORE中，MySQL生成被零除警告，但操作结果为NULL。
+
+· HIGH_NOT_PRECEDENCE
+
+NOT操作符的优先顺序是表达式例如NOT a BETWEEN b AND c被解释为NOT (a BETWEEN b AND c)。在一些旧版本MySQL中， 表达式被解释为(NOT a) BETWEEN b AND c。启用HIGH_NOT_PRECEDENCESQL模式，可以获得以前的更高优先级的结果。
+
+mysqlSET sql_mode = ”;
+
+mysqlSELECT NOT 1 BETWEEN -5 AND 5;
+
+    -0
+1
+mysqlSET sql_mode = ‘broken_not’;
+
+mysqlSELECT NOT 1 BETWEEN -5 AND 5;
+
+    -1
+1
+· IGNORE_SPACE
+
+允许函数名和‘(’之间有空格。强制将所有函数名视为保存的字。结果是，如果你想要访问保存为字的数据库、表或列名，你必须引用它。例如，因为有USER()函数，mysql数据库中的user表名和该表内的User列被保存下来，因此你必须引用它们：
+
+SELECT “User” FROM mysql.”user”;
+
+· NO_AUTO_CREATE_USER
+
+防止GRANT自动创建新用户，除非还指定了密码。
+
+· NO_AUTO_VALUE_ON_ZERO
+
+NO_AUTO_VALUE_ON_ZERO影响AUTO_INCREMENT列的处理。一般情况，你可以向该列插入NULL或0生成下一个序列号。NO_AUTO_VALUE_ON_ZERO禁用0，因此只有NULL可以生成下一个序列号。
+
+如果将0保存到表的AUTO_INCREMENT列，该模式会很有用。(不推荐采用该惯例)。例如，如果你用mysqldump转储表并重载，MySQL遇到0值一般会生成新的序列号，生成的表的内容与转储的表不同。重载转储文件前启用NO_AUTO_VALUE_ON_ZERO可以解决该问题。mysqldump在输出中自动包括启用NO_AUTO_VALUE_ON_ZERO的语句。
+
+· NO_BACKSLASH_ESCAPES
+
+禁用反斜线字符(‘\’)做为字符串内的退出字符。启用该模式，反斜线则成为普通字符。
+
+· NO_DIR_IN_CREATE
+
+创建表时，忽视所有INDEX DIRECTORY和DATA DIRECTORY指令。该选项对从复制服务器有用。
+
+· NO_ENGINE_SUBSTITUTION
+
+如果需要的存储引擎被禁用或未编译，可以防止自动替换存储引擎。
+
+· NO_FIELD_OPTIONS
+
+不要在SHOW CREATE TABLE的输出中打印MySQL专用列选项。该模式在可移植模式（portability mode）下用于mysqldump。
+
+· NO_KEY_OPTIONS
+
+不要在SHOW CREATE TABLE的输出中打印MySQL专用索引选项。该模式在可移植模式（portability mode）下用于mysqldump。
+
+· NO_TABLE_OPTIONS
+
+不要在SHOW CREATE TABLE的输出中打印MySQL专用表选项（例如ENGINE）。该模式在可移植模式（portability mode）下用于mysqldump。
+
+· NO_UNSIGNED_SUBTRACTION
+
+在减运算中，如果某个操作数没有符号，不要将结果标记为UNSIGNED。请注意这样使UNSIGNED BIGINT不能100%用于上下文中。参见12.8节，“Cast函数和操作符”。
+
+· NO_ZERO_DATE
+
+在严格模式，不要将 ‘0000-00-00’做为合法日期。你仍然可以用IGNORE选项插入零日期。在非严格模式，可以接受该日期，但会生成警告。
+
+· NO_ZERO_IN_DATE
+
+在严格模式，不接受月或日部分为0的日期。如果使用IGNORE选项，我们为类似的日期插入’0000-00-00’。在非严格模式，可以接受该日期，但会生成警告。
+
+· ONLY_FULL_GROUP_BY
+
+不要让GROUP BY部分中的查询指向未选择的列。
+
+· PIPES_AS_CONCAT
+
+将||视为字符串连接操作符（＋）(同CONCAT())，而不视为OR。
+
+· REAL_AS_FLOAT
+
+将REAL视为FLOAT的同义词，而不是DOUBLE的同义词。
+
+· STRICT_TRANS_TABLES
+
+为所有存储引擎启用严格模式。非法数据值被拒绝。后面有详细说明。
+
+· STRICT_TRANS_TABLES
+
+为事务存储引擎启用严格模式，也可能为非事务存储引擎启用严格模式。后面有详细说明。
+
+严格模式控制MySQL如何处理非法或丢失的输入值。有几种原因可以使一个值为非法。例如，数据类型错误，不适合列，或超出范围。当新插入的行不包含某列的没有显示定义DEFAULT子句的值，则该值被丢失。
+
+对于事务表，当启用STRICT_ALL_TABLES或STRICT_TRANS_TABLES模式时，如果语句中有非法或丢失值，则会出现错误。语句被放弃并滚动。
+
+对于非事务表，如果插入或更新的第1行出现坏值，两种模式的行为相同。语句被放弃，表保持不变。如果语句插入或修改多行，并且坏值出现在第2或后面的行，结果取决于启用了哪个严格选项：
+
+· 对于STRICT_ALL_TABLES，MySQL返回错误并忽视剩余的行。但是，在这种情况下，前面的行已经被插入或更新。这说明你可以部分更新，这可能不是你想要的。要避免这点，最好使用单行语句，因为这样可以不更改表即可以放弃。
+
+· 对于STRICT_TRANS_TABLES，MySQL将非法值转换为最接近该列的合法值并插入调整后的值。如果值丢失，MySQL在列中插入隐式 默认值。在任何情况下，MySQL都会生成警告而不是给出错误并继续执行语句。13.1.5节，“CREATE TABLE语法”描述了隐式默认值。
+
+严格模式不允许非法日期，例如’2004-04-31’。它不允许禁止日期使用“零”部分，例如’2004-04-00’或“零”日期。要想禁止，应在严格模式基础上，启用NO_ZERO_IN_DATE和NO_ZERO_DATE SQL模式。
+
+如果你不使用严格模式(即不启用STRICT_TRANS_TABLES或STRICT_ALL_TABLES模式)，对于非法或丢失的值，MySQL将插入调整后的值并给出警告。在严格模式，你可以通过INSERT IGNORE或UPDATE IGNORE来实现。参见13.5.4.22节，“SHOW WARNINGS语法”。
+
+下面的特殊模式快速组合了前面所列的模式。
+
+其中包括大多数最新版本MySQL中的所有模式值。旧版本中，组合模式不包括新版本中没有的不适用的具体模式值。
+
+· ANSI
+
+等同REAL_AS_FLOAT、PIPES_AS_CONCAT、ANSI_QUOTES、IGNORE_SPACE。参见1.8.3节，“在ANSI模式下运行MySQL”。
+
+· DB2
+
+等同PIPES_AS_CONCAT、ANSI_QUOTES、IGNORE_SPACE、NO_KEY_OPTIONS、NO_TABLE_OPTIONS、NO_FIELD_OPTIONS。
+
+· MAXDB
+
+等同PIPES_AS_CONCAT、ANSI_QUOTES、IGNORE_SPACE、NO_KEY_OPTIONS、NO_TABLE_OPTIONS、NO_FIELD_OPTIONS、 NO_AUTO_CREATE_USER。
+
+· MSSQL
+
+等同PIPES_AS_CONCAT、ANSI_QUOTES、IGNORE_SPACE、NO_KEY_OPTIONS、NO_TABLE_OPTIONS、 NO_FIELD_OPTIONS。
+
+· MYSQL323
+
+等同NO_FIELD_OPTIONS、HIGH_NOT_PRECEDENCE。
+
+· MYSQL40
+
+等同NO_FIELD_OPTIONS、HIGH_NOT_PRECEDENCE。
+
+· ORACLE
+
+等同PIPES_AS_CONCAT、ANSI_QUOTES、IGNORE_SPACE、NO_KEY_OPTIONS、NO_TABLE_OPTIONS、NO_FIELD_OPTIONS、NO_AUTO_CREATE_USER。
+
+· POSTGRESQL
+
+等同PIPES_AS_CONCAT、ANSI_QUOTES、IGNORE_SPACE、NO_KEY_OPTIONS、NO_TABLE_OPTIONS、NO_FIELD_OPTIONS。
+
+· TRADITIONAL
+
+等同STRICT_TRANS_TABLES、STRICT_ALL_TABLES、NO_ZERO_IN_DATE、NO_ZERO_DATE、ERROR_FOR_DIVISION_BY_ZERO、NO_AUTO_CREATE_USER
+
+https://www.cnblogs.com/jalen-123/p/13193263.html
+
+https://www.cnblogs.com/jinzhenshui/p/12509605.html
+https://www.jb51.net/article/51900.htm

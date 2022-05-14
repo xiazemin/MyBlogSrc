@@ -1,0 +1,330 @@
+---
+title: runtime debug
+layout: post
+category: golang
+author: 夏泽民
+---
+debug.ReadGCStats(&g.stats) 获取gc 信息
+程序包调试了包含程序在运行时进行调试功能,本节就针对api进行一一讲解
+
+1.强制进行垃圾回收
+2.设置垃圾回收的目标百分比
+3.设置被单个go协程调用栈可使用的内存最大值
+4.设置go程序可以使用的最大操作系统线程数
+5.设置程序请求运行是只触发panic,而不崩溃
+6.垃圾收集信息的写入stats中
+7.将内存分配堆和其中对象的描述写入文件中
+8.获取go协程调用栈踪迹
+9.将堆栈踪迹打印到标准错误
+1.强制进行垃圾回收
+func FreeOSMemory()
+
+FreeOSMemory强制进行一次垃圾收集，以释放尽量多的内存回操作系统。（即使没有调用，运行时环境也会在后台任务里逐渐将内存释放给系统）
+
+
+package main
+
+import (
+  "runtime"
+  "fmt"
+    "time"
+)
+
+func main() {
+  var dic = new(map[string]string)
+  runtime.SetFinalizer(dic, func(dic *map[string]string) {
+    fmt.Println("内存回收")
+  })
+  time.Sleep(time.Second)
+}
+
+执行执行完毕,dic对象没有被执行回收操作,下面我们调用这个方法,runtime.SetFinalizer 对象内存释放触发这个方法
+
+
+package main
+
+import (
+  "runtime"
+  "fmt"
+    "time"
+  "runtime/debug"
+)
+
+func main() {
+  var dic = new(map[string]string)
+  runtime.SetFinalizer(dic, func(dic *map[string]string) {
+    fmt.Println("内存回收")
+  })
+  debug.FreeOSMemory()
+  time.Sleep(time.Second)
+}
+<!-- more -->
+2.将堆栈踪迹打印到标准错误
+func SetGCPercent(percent int) int
+
+SetGCPercent设定垃圾收集的目标百分比：当新申请的内存大小占前次垃圾收集剩余可用内存大小的比率达到设定值时，就会触发垃圾收集。SetGCPercent返回之前的设定。初始值设定为环境变量GOGC的值；如果没有设置该环境变量，初始值为100。percent参数如果是负数值，会关闭垃圾收集
+
+
+package main
+
+import (
+  "runtime"
+  "fmt"
+    "time"
+  "runtime/debug"
+)
+
+func main() {
+  fmt.Println(debug.SetGCPercent(1))
+
+  // 1
+  var dic = make([]byte,100,100)
+  runtime.SetFinalizer(&dic, func(dic *[]byte) {
+    fmt.Println("内存回收1")
+  })
+
+  // 立即回收
+  runtime.GC()
+
+  // 2
+  var s = make([]byte,100,100)
+  runtime.SetFinalizer(&s, func(dic *[]byte) {
+    fmt.Println("内存回收2")
+  })
+
+  // 3
+  d := make([]byte,300,300)
+  for index,_ := range d {
+    d[index] = 'a'
+  }
+  fmt.Println(d)
+
+  time.Sleep(time.Second)
+}
+
+解释一下
+1处我们创建了一块内存空间100字节，只有我们调用了runtime.GC()立即回收了内存，2处我们又创建了一块100字节的内存，等待回收，当我们执行到3处的时候，创建了一个300字节的内存,已大于垃圾回收剩余内存,所以系统继续立即回收内存。
+
+3.设置被单个go协程调用栈可使用的内存最大值
+func SetMaxStack(bytes int) int
+
+import (
+    "fmt"
+    "time"
+  )
+
+func main() {
+  for i:=0;i < 1000;i++{
+    go print()
+  }
+  time.Sleep(time.Second)
+}
+func print(){
+  fmt.Println("1")
+}
+我们在main函数中使用for循环启用了1000个go协程，下面是正常的输出
+
+
+接下来我们来限制一下栈的内存
+
+package main
+import (
+    "fmt"
+    "time"
+    "runtime/debug"
+)
+
+func main() {
+  debug.SetMaxStack(1)
+  for i:=0;i < 1000;i++{
+    go print()
+  }
+  time.Sleep(time.Second)
+}
+func print(){
+  fmt.Println("1")
+}
+image.png
+fmt.Println(debug.SetMaxStack(1)) 查看到默认系统为1000 000 000 字节
+
+系统报了一个栈溢出的错误,这个方法的主要作用是限制无限递归go成带来的灾难，默认的设置32位系统是250MB,64位为1GB
+
+4.设置go程序可以使用的最大操作系统线程数
+func SetMaxThreads(threads int) int
+
+import (
+    "fmt"
+    "time"
+    "runtime/debug"
+  )
+
+func main() {
+  debug.SetMaxThreads(1)
+  go print()
+  time.Sleep(time.Second)
+}
+
+func print(){
+  fmt.Println("1")
+}
+image.png
+我们把程序的组大可使用的线程（不是协程）数设置为1，如果程序试图超过这个限制,程序就会崩溃，初始设置为10000个线程
+什么时候会创建新的线程呢?
+现有的线程阻塞，cgo或者runtime.LockOSThread函数阻塞其他go协程
+
+5.设置程序请求运行是只触发panic,而不崩溃
+func SetPanicOnFault(enabled bool) bool
+
+SetPanicOnFault控制程序在不期望（非nil）的地址出错时的运行时行为。这些错误一般是因为运行时内存破坏的bug引起的，因此默认反应是使程序崩溃。使用内存映射的文件或进行内存的不安全操作的程序可能会在非nil的地址出现错误；SetPanicOnFault允许这些程序请求运行时只触发一个panic，而不是崩溃。SetPanicOnFault只用于当前的go程
+
+package main
+
+import (
+    "fmt"
+    "time"
+    "runtime/debug"
+)
+
+func main() {
+
+  go print()
+  time.Sleep(time.Second)
+
+  fmt.Println("ddd")
+}
+
+func print(){
+  defer func() {recover()}()
+  fmt.Println(debug.SetPanicOnFault(true))
+  var s *int = nil
+  *s = 34
+}
+image.png
+
+我们发现指针为nil 发生了panic 但是我们进行了恢复,程序继续执行
+
+6.垃圾收集信息的写入stats中
+func ReadGCStats(stats *GCStats)
+我们看一下CGStats的结构
+
+type GCStats struct {
+    LastGC         time.Time       // 最近一次垃圾收集的时间
+    NumGC          int64           // 垃圾收集的次数
+    PauseTotal     time.Duration   // 所有暂停收集垃圾消耗的总时间
+    Pause          []time.Duration // 每次暂停收集垃圾的消耗的时间
+    PauseQuantiles []time.Duration
+}
+我们写一个示例演示一下用法
+
+package main
+
+import (
+    "fmt"
+    "runtime/debug"
+    "runtime"
+)
+
+func main() {
+  data := make([]byte,1000,1000)
+  println(data)
+  runtime.GC()
+
+  var stats debug.GCStats
+  debug.ReadGCStats(&stats)
+  fmt.Println(stats.NumGC)
+  fmt.Println(stats.LastGC)
+  fmt.Println(stats.Pause)
+  fmt.Println(stats.PauseTotal)
+  fmt.Println(stats.PauseEnd)
+}
+image.png
+7.将内存分配堆和其中对象的描述写入文件中
+func WriteHeapDump(fd uintptr)
+WriteHeapDump将内存分配堆和其中对象的描述写入给定文件描述符fd指定的文件。
+堆转储格式参见http://golang.org/s/go13heapdump
+
+package main
+
+import (
+   "runtime/debug"
+   "runtime"
+   "os"
+)
+
+func main() {
+  fd,_ := os.OpenFile("/Users/xujie/go/src/awesomeProject/main/log.txt",os.O_RDWR|os.O_CREATE,0666)
+  debug.WriteHeapDump(fd.Fd())
+  data := make([]byte,10,10)
+  println(data)
+  runtime.GC()
+}
+8.获取go协程调用栈踪迹
+func Stack() []byte
+Stack 返回格式化的go程的调用栈踪迹。 对于每一个调用栈，它包括原文件的行信息和PC值；对go函数还会尝试获取调用该函数的函数或方法，及调用所在行的文本
+
+package main
+
+import (
+  "fmt"
+  "runtime/debug"
+  "time"
+)
+
+func main() {
+ go print()
+ time.Sleep(time.Second)
+}
+
+func print(){
+  fmt.Println(string(debug.Stack()))
+}
+我们可以使用runtime包中的方法查看更相信的内容
+
+package main
+
+import (
+   "time"
+  "runtime"
+  "fmt"
+)
+
+func main() {
+ go print()
+ time.Sleep(time.Second)
+}
+
+func print(){
+  callers := make([]uintptr,100)
+  n:=runtime.Callers(1,callers)
+  for _,pc:= range callers[:n]{
+    funcPc := runtime.FuncForPC(pc)
+    fmt.Println(funcPc.Name())
+    fmt.Println(funcPc.FileLine(pc))
+  }
+}
+image.png
+9.将Stack返回信息打印到标准错误输出
+func PrintStack()
+
+
+package main
+
+import (
+      "time"
+      "runtime/debug"
+)
+
+func main() {
+ go print()
+ time.Sleep(time.Second)
+}
+
+func print(){
+  debug.PrintStack()
+}
+
+https://www.php.cn/manual/view/35291.html
+https://studygolang.com/static/pkgdoc/pkg/runtime_debug.htm
+
+https://gowalker.org/runtime/debug
+http://www.verydoc.net/go/00003963.html

@@ -1,0 +1,38 @@
+---
+title: nf_conntrack
+layout: post
+category: linux
+author: 夏泽民
+---
+nf_conntrack(在老版本的 Linux 内核中叫 ip_conntrack)是一个内核模块,用于跟踪一个连接的状态的。连接状态跟踪可以供其他模块使用,最常见的两个使用场景是 iptables 的 nat 的 state 模块。 iptables 的 nat 通过规则来修改目的/源地址,但光修改地址不行,我们还需要能让回来的包能路由到最初的来源主机。这就需要借助 nf_conntrack 来找到原来那个连接的记录才行。而 state 模块则是直接使用 nf_conntrack 里记录的连接的状态来匹配用户定义的相关规则。例如下面这条 INPUT 规则用于放行 80 端口上的状态为 NEW 的连接上的包。
+
+iptables -A INPUT -p tcp -m state --state NEW -m tcp --dport 80 -j ACCEPT。
+
+
+<!-- more -->
+nf_conntrack模块常用命令
+查看nf_conntrack表当前连接数    
+cat /proc/sys/net/netfilter/nf_conntrack_count       
+
+查看nf_conntrack表最大连接数    
+cat /proc/sys/net/netfilter/nf_conntrack_max    
+
+通过dmesg可以查看nf_conntrack的状况：
+dmesg |grep nf_conntrack
+
+查看存储conntrack条目的哈希表大小,此为只读文件
+cat /proc/sys/net/netfilter/nf_conntrack_buckets
+
+查看nf_conntrack的TCP连接记录时间
+cat /proc/sys/net/netfilter/nf_conntrack_tcp_timeout_established
+
+通过内核参数查看命令，查看所有参数配置
+sysctl -a | grep nf_conntrack
+
+通过conntrack命令行工具查看conntrack的内容
+yum install -y conntrack  
+conntrack -L 
+
+https://www.cnblogs.com/gyliu/p/12052245.html
+https://blog.csdn.net/dog250/article/details/78372576
+

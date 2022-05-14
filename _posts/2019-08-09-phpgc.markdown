@@ -1,0 +1,1130 @@
+---
+title: phpgc
+layout: post
+category: php
+author: 夏泽民
+---
+以前的 php 用到的引用计数内存机制，无法处理循环的引用内存泄漏。然而 5.3.0 PHP 使用文章» 引用计数系统中的同步周期回收(Concurrent Cycle Collection in Reference Counted Systems)中的同步算法，来处理这个内存泄漏问题。
+
+对算法的完全说明有点超出这部分内容的范围，将只介绍其中基础部分。首先，我们先要建立一些基本规则，如果一个引用计数增加，它将继续被使用，当然就不再在垃圾中。如果引用计数减少到零，所在变量容器将被清除(free)。就是说，仅仅在引用计数减少到非零值时，才会产生垃圾周期(garbage cycle)。其次，在一个垃圾周期中，通过检查引用计数是否减1，并且检查哪些变量容器的引用次数是零，来发现哪部分是垃圾。
+<!-- more -->
+为避免不得不检查所有引用计数可能减少的垃圾周期，这个算法把所有可能根(possible roots 都是zval变量容器),放在根缓冲区(root buffer)中(用紫色来标记，称为疑似垃圾)，这样可以同时确保每个可能的垃圾根(possible garbage root)在缓冲区中只出现一次。仅仅在根缓冲区满了时，才对缓冲区内部所有不同的变量容器执行垃圾回收操作
+
+模拟删除每个紫色变量。模拟删除时可能将不是紫色的普通变量引用数减"1"，如果某个普通变量引用计数变成0了，就对这个普通变量再做一次模拟删除。每个变量只能被模拟删除一次，模拟删除后标记为灰（原文说确保不会对同一个变量容器减两次"1",不对的吧）。
+
+模拟恢复每个紫色变量。恢复是有条件的，当变量的引用计数大于0时才对其做模拟恢复。同样每个变量只能恢复一次，恢复后标记为黑，基本就是步骤 B 的逆运算。这样剩下的一堆没能恢复的就是该删除的蓝色节点了，在步骤 D 中遍历出来真的删除掉。
+
+算法中都是模拟删除、模拟恢复、真的删除，都使用简单的遍历即可（最典型的深搜遍历）。复杂度为执行模拟操作的节点数正相关，不只是紫色的那些疑似垃圾变量。
+
+现在，你已经对这个算法有了基本了解，我们回头来看这个如何与PHP集成。默认的，PHP的垃圾回收机制是打开的，然后有个 php.ini 设置允许你修改它：zend.enable_gc 。
+
+当垃圾回收机制打开时，每当根缓存区存满时，就会执行上面描述的循环查找算法。根缓存区有固定的大小，可存10,000个可能根,当然你可以通过修改PHP源码文件Zend/zend_gc.c中的常量GC_ROOT_BUFFER_MAX_ENTRIES，然后重新编译PHP，来修改这个10,000值。当垃圾回收机制关闭时，循环查找算法永不执行，然而，可能根将一直存在根缓冲区中，不管在配置中垃圾回收机制是否激活。
+
+当垃圾回收机制关闭时，如果根缓冲区存满了可能根，更多的可能根显然不会被记录。那些没被记录的可能根，将不会被这个算法来分析处理。如果他们是循环引用周期的一部分，将永不能被清除进而导致内存泄漏。
+
+即使在垃圾回收机制不可用时，可能根也被记录的原因是，相对于每次找到可能根后检查垃圾回收机制是否打开而言，记录可能根的操作更快。不过垃圾回收和分析机制本身要耗不少时间。
+
+除了修改配置zend.enable_gc ，也能通过分别调用gc_enable() 和 gc_disable()函数来打开和关闭垃圾回收机制。调用这些函数，与修改配置项来打开或关闭垃圾回收机制的效果是一样的。即使在可能根缓冲区还没满时，也能强制执行周期回收。你能调用gc_collect_cycles()函数达到这个目的。这个函数将返回使用这个算法回收的周期数。
+
+允许打开和关闭垃圾回收机制并且允许自主的初始化的原因，是由于你的应用程序的某部分可能是高时效性的。在这种情况下，你可能不想使用垃圾回收机制。当然，对你的应用程序的某部分关闭垃圾回收机制，是在冒着可能内存泄漏的风险，因为一些可能根也许存不进有限的根缓冲区。因此，就在你调用gc_disable()函数释放内存之前，先调用gc_collect_cycles()函数可能比较明智。因为这将清除已存放在根缓冲区中的所有可能根，然后在垃圾回收机制被关闭时，可留下空缓冲区以有更多空间存储可能根。
+
+  在5.2及更早版本的PHP中，没有专门的垃圾回收器GC（Garbage Collection），引擎在判断一个变量空间是否能够被释放的时候是依据这个变量的zval的refcount的值，如果refcount为0，那么变量的空间可以被释放，否则就不释放，这是一种非常简单的GC实现。然而在这种简单的GC实现方案中，出现了意想不到的变量内存泄漏情况（Bug:http://bugs.php.net/bug.php?id=33595），引擎将无法回收这些内存，于是在PHP5.3中出现了新的GC，新的GC有专门的机制负责清理垃圾数据，防止内存泄漏。本文将详细的阐述PHP5.3中新的GC运行机制。
+
+    目前很少有详细的资料介绍新的GC，本文将是目前国内最为详细的从源码角度介绍PHP5.3中GC原理的文章。其中关于垃圾产生以及算法简介部分由笔者根据手册翻译而来，当然其中融入了本人的一些看法。手册中相关内容：Garbage Collection
+
+    在介绍这个新的GC之前，读者必须先了解PHP中变量的内部存储相关知识，请先阅读 变量的内部存储：引用和计数 
+
+ 
+
+什么算垃圾
+
+    首先我们需要定义一下“垃圾”的概念，新的GC负责清理的垃圾是指变量的容器zval还存在，但是又没有任何变量名指向此zval。因此GC判断是否为垃圾的一个重要标准是有没有变量名指向变量容器zval。
+
+    假设我们有一段PHP代码，使用了一个临时变量$tmp存储了一个字符串，在处理完字符串之后，就不需要这个$tmp变量了，$tmp变量对于我们来说可以算是一个“垃圾”了，但是对于GC来说，$tmp其实并不是一个垃圾，$tmp变量对我们没有意义，但是这个变量实际还存在，$tmp符号依然指向它所对应的zval，GC会认为PHP代码中可能还会使用到此变量，所以不会将其定义为垃圾。
+
+    那么如果我们在PHP代码中使用完$tmp后，调用unset删除这个变量，那么$tmp是不是就成为一个垃圾了呢。很可惜，GC仍然不认为$tmp是一个垃圾，因为$tmp在unset之后，refcount减少1变成了0(这里假设没有别的变量和$tmp指向相同的zval),这个时候GC会直接将$tmp对应的zval的内存空间释放，$tmp和其对应的zval就根本不存在了。此时的$tmp也不是新的GC所要对付的那种“垃圾”。那么新的GC究竟要对付什么样的垃圾呢，下面我们将生产一个这样的垃圾。  
+
+ 
+
+顽固垃圾的产生过程
+
+    如果读者已经阅读了变量内部存储相关的内容，想必对refcount和isref这些变量内部的信息有了一定的了解。这里我们将结合手册中的一个例子来介绍垃圾的产生过程：
+
+ 
+
+<?php
+
+$a = "new string";
+
+?>
+
+在这么简单的一个代码中，$a变量内部存储信息为
+
+a: (refcount=1, is_ref=0)='new string'
+
+ 
+
+当把$a赋值给另外一个变量的时候，$a对应的zval的refcount会加1
+
+<?php
+
+$a = "new string";
+
+$b = $a;
+
+?>
+此时$a和$b变量对应的内部存储信息为
+
+a,b: (refcount=2, is_ref=0)='new string'
+
+当我们用unset删除$b变量的时候，$b对应的zval的refcount会减少1
+
+<?php
+
+$a = "new string"; //a: (refcount=1, is_ref=0)='new string'
+
+$b = $a;                 //a,b: (refcount=2, is_ref=0)='new string'
+
+unset($b);              //a: (refcount=1, is_ref=0)='new string'
+
+?>
+
+ 
+
+对于普通的变量来说，这一切似乎很正常，但是在复合类型变量（数组和对象）中，会发生比较有意思的事情：
+
+<?php
+
+$a = array('meaning' => 'life', 'number' => 42);
+
+?>
+
+a的内部存储信息为:
+
+a: (refcount=1, is_ref=0)=array (
+   'meaning' => (refcount=1, is_ref=0)='life',
+   'number' => (refcount=1, is_ref=0)=42
+)
+
+数组变量本身($a)在引擎内部实际上是一个哈希表，这张表中有两个zval项 meaning和number，
+
+所以实际上那一行代码中一共生成了3个zval,这3个zval都遵循变量的引用和计数原则，
+下面在$a中添加一个元素，并将现有的一个元素的值赋给新的元素:
+
+<?php
+
+$a = array('meaning' => 'life', 'number' => 42);
+
+$a['life'] = $a['meaning'];
+
+?>
+
+那么$a的内部存储为:
+
+a: (refcount=1, is_ref=0)=array (
+   'meaning' => (refcount=2, is_ref=0)='life',
+   'number' => (refcount=1, is_ref=0)=42,
+   'life' => (refcount=2, is_ref=0)='life'
+)
+其中的meaning元素和life元素之指向同一个zval的：
+
+现在，如果我们试一下，将数组的引用赋值给数组中的一个元素，有意思的事情就发生了：
+
+<?php
+
+$a = array('one');
+
+$a[] = &$a;
+
+?>
+
+这样$a数组就有两个元素，一个索引为0，值为字符one,另外一个索引为1，为$a自身的引用，内部存储如下:
+
+a: (refcount=2, is_ref=1)=array (
+   0 => (refcount=1, is_ref=0)='one',
+   1 => (refcount=2, is_ref=1)=…
+)
+
+“…”表示1指向a自身，是一个环形引用：
+
+这个时候我们对$a进行unset,那么$a会从符号表中删除，同时$a指向的zval的refcount减少1
+
+<?php
+
+$a = array('one');
+
+$a[] = &$a;
+
+unset($a);
+
+?>
+
+那么问题也就产生了，$a已经不在符号表中了，用户无法再访问此变量，但是$a之前指向的zval的refcount变为1而不是0，因此不能被回收，这样产生了内存泄露
+
+这样，这么一个zval就成为了一个真是意义的垃圾了，新的GC要做的工作就是清理这种垃圾。
+
+ 
+
+为解决这种垃圾，产生了新的GC
+
+    在PHP5.3版本中，使用了专门GC机制清理垃圾，在之前的版本中是没有专门的GC，那么垃圾产生的时候，没有办法清理，内存就白白浪费掉了。在PHP5.3源代码中多了以下文件:{PHPSRC}/Zend/zend_gc.h {PHPSRC}/Zend/zend_gc.c, 这里就是新的GC的实现，我们先简单的介绍一下算法思路，然后再从源码的角度详细介绍引擎中如何实现这个算法的。
+
+ 
+
+新的GC算法
+
+    在较新的PHP手册中有简单的介绍新的GC使用的垃圾清理算法，这个算法名为 Concurrent Cycle Collection in Reference Counted Systems ， 这里不详细介绍此算法，根据手册中的内容来先简单的介绍一下思路：
+
+首先我们有几个基本的准则：
+
+1：如果一个zval的refcount增加，那么此zval还在使用，不属于垃圾
+
+2：如果一个zval的refcount减少到0， 那么zval可以被释放掉，不属于垃圾
+
+3：如果一个zval的refcount减少之后大于0，那么此zval还不能被释放，此zval可能成为一个垃圾
+
+ 
+
+只有在准则3下，GC才会把zval收集起来，然后通过新的算法来判断此zval是否为垃圾。那么如何判断这么一个变量是否为真正的垃圾呢？
+
+简单的说，就是对此zval中的每个元素进行一次refcount减1操作，操作完成之后，如果zval的refcount=0，那么这个zval就是一个垃圾。这个原理咋看起来很简单，但是又不是那么容易理解，起初笔者也无法理解其含义，直到挖掘了源代码之后才算是了解。如果你现在不理解没有关系，后面会详细介绍，这里先把这算法的几个步骤描叙一下,首先引用手册中的一张图:
+
+ 
+
+ 
+
+ 
+
+ 
+
+A：为了避免每次变量的refcount减少的时候都调用GC的算法进行垃圾判断，此算法会先把所有前面准则3情况下的zval节点放入一个节点(root)缓冲区(root buffer)，并且将这些zval节点标记成紫色，同时算法必须确保每一个zval节点在缓冲区中之出现一次。当缓冲区被节点塞满的时候，GC才开始开始对缓冲区中的zval节点进行垃圾判断。
+
+B：当缓冲区满了之后，算法以深度优先对每一个节点所包含的zval进行减1操作，为了确保不会对同一个zval的refcount重复执行减1操作，一旦zval的refcount减1之后会将zval标记成灰色。需要强调的是，这个步骤中，起初节点zval本身不做减1操作，但是如果节点zval中包含的zval又指向了节点zval（环形引用），那么这个时候需要对节点zval进行减1操作。
+
+C：算法再次以深度优先判断每一个节点包含的zval的值，如果zval的refcount等于0，那么将其标记成白色(代表垃圾)，如果zval的refcount大于0，那么将对此zval以及其包含的zval进行refcount加1操作，这个是对非垃圾的还原操作，同时将这些zval的颜色变成黑色（zval的默认颜色属性）
+
+D：遍历zval节点，将C中标记成白色的节点zval释放掉。
+
+ 
+
+这ABCD四个过程是手册中对这个算法的介绍，这还不是那么容易理解其中的原理，这个算法到底是个什么意思呢？我自己的理解是这样的：
+
+比如还是前面那个变成垃圾的数组$a对应的zval,命名为zval_a,  如果没有执行unset， zval_a的refcount为2,分别由$a和$a中的索引1指向这个zval。  用算法对这个数组中的所有元素（索引0和索引1）的zval的refcount进行减1操作，由于索引1对应的就是zval_a，所以这个时候zval_a的refcount应该变成了1，这样zval_a就不是一个垃圾。如果执行了unset操作，zval_a的refcount就是1，由zval_a中的索引1指向zval_a,用算法对数组中的所有元素（索引0和索引1）的zval的refcount进行减1操作，这样zval_a的refcount就会变成0，于是就发现zval_a是一个垃圾了。 算法就这样发现了顽固的垃圾数据。
+
+举了这个例子，读者大概应该能够知道其中的端倪：
+
+对于一个包含环形引用的数组，对数组中包含的每个元素的zval进行减1操作，之后如果发现数组自身的zval的refcount变成了0，那么可以判断这个数组是一个垃圾。
+
+这个道理其实很简单，假设数组a的refcount等于m, a中有n个元素又指向a,如果m等于n,那么算法的结果是m减n，m-n=0，那么a就是垃圾，如果m>n,那么算法的结果m-n>0,所以a就不是垃圾了
+
+ 
+
+m=n代表什么？  代表a的refcount都来自数组a自身包含的zval元素,代表a之外没有任何变量指向它，代表用户代码空间中无法再访问到a所对应的zval，代表a是泄漏的内存，因此GC将a这个垃圾回收了。
+
+ 
+
+PHP中运用新的GC的算法
+
+    在PHP中，GC默认是开启的，你可以通过ini文件中的 zend.enable_gc 项来开启或则关闭GC。当GC开启的时候，垃圾分析算法将在节点缓冲区(roots buffer)满了之后启动。缓冲区默认可以放10,000个节点，当然你也可以通过修改Zend/zend_gc.c中的GC_ROOT_BUFFER_MAX_ENTRIES 来改变这个数值，需要重新编译链接PHP。当GC关闭的时候，垃圾分析算法就不会运行，但是相关节点还会被放入节点缓冲区，这个时候如果缓冲区节点已经放满，那么新的节点就不会被记录下来，这些没有被记录下来的节点就永远也不会被垃圾分析算法分析。如果这些节点中有循环引用，那么有可能产生内存泄漏。之所以在GC关闭的时候还要记录这些节点，是因为简单的记录这些节点比在每次产生节点的时候判断GC是否开启更快，另外GC是可以在脚本运行中开启的，所以记录下这些节点，在代码运行的某个时候如果又开启了GC，这些节点就能被分析算法分析。当然垃圾分析算法是一个比较耗时的操作。
+
+    在PHP代码中我们可以通过gc_enable()和gc_disable()函数来开启和关闭GC，也可以通过调用gc_collect_cycles()在节点缓冲区未满的情况下强制执行垃圾分析算法。这样用户就可以在程序的某些部分关闭或则开启GC，也可强制进行垃圾分析算法。 
+
+   
+
+新的GC算法的性能
+
+1.防止泄漏节省内存
+
+    新的GC算法的目的就是为了防止循环引用的变量引起的内存泄漏问题，在PHP中GC算法，当节点缓冲区满了之后，垃圾分析算法会启动，并且会释放掉发现的垃圾，从而回收内存，在PHP手册上给了一段代码和内存使用状况图：
+
+ 
+
+ 
+
+<?php
+class Foo
+{
+    public $var = '3.1415962654';
+}
+
+$baseMemory = memory_get_usage();
+
+for ( $i = 0; $i <= 100000; $i++ )
+{
+    $a = new Foo;
+    $a->self = $a;
+    if ( $i % 500 === 0 )
+    {
+        echo sprintf( '%8d: ', $i ), memory_get_usage() - $baseMemory, "/n";
+    }
+}
+?>
+
+这段代码的循环体中，新建了一个对象变量，并且用对象的一个成员指向了自己，这样就形成了一个循环引用，当进入下一次循环的时候，又一次给对象变量重新赋值，这样会导致之前的对象变量内存泄漏，在这个例子里面有两个变量泄漏了，一个是对象本身，另外一个是对象中的成员self，但是这两个变量只有对象会作为垃圾收集器的节点被放入缓冲区(因为重新赋值相当于对它进行了unset操作，满足前面的准则3)。在这里我们进行了100,000次循环，而GC在缓冲区中有10,000节点的时候会启动垃圾分析算法，所以这里一共会进行10次的垃圾分析算法。从图中可以清晰的看到，在5.3版本PHP中，每次GC的垃圾分析算法被触发后，内存会有一个明显的减少。而在5.2版本的PHP中，内存使用量会一直增加。
+
+ 
+
+ 
+
+2：运行效率影响
+
+    启用了新的GC后，垃圾分析算法将是一个比较耗时的操作，手册中给了一段测试代码：
+
+ 
+
+ 
+
+ 
+
+<?php
+class Foo
+{
+    public $var = '3.1415962654';
+}
+
+for ( $i = 0; $i <= 1000000; $i++ )
+{
+    $a = new Foo;
+    $a->self = $a;
+}
+
+echo memory_get_peak_usage(), "/n";
+?>
+
+然后分别在GC开启和关闭的情况下执行这段代码：
+
+time php -dzend.enable_gc=0 -dmemory_limit=-1 -n example2.php
+# and
+time php -dzend.enable_gc=1 -dmemory_limit=-1 -n example2.php
+
+最终在该机器上，第一次执行大概使用10.7秒，第二次执行大概使用11.4秒，性能大约降低7%,不过内存的使用量降低了98%,从931M降低到了10M。当然这并不是一个比较科学的测试方法，但是也能说明一定的问题。这种代码测试的是一种极端恶劣条件，实际代码中，特别是在WEB的应用中，很难出现大量循环引用，GC的分析算法的启动不会这么频繁，小规模的代码中甚至很少有机会启动GC分析算法。
+
+总结：
+
+当GC的垃圾分析算法执行的时候，PHP脚本的效率会受到一定的影响，但是小规模的代码一般不会有这个机会运行这个算法。如果一旦脚本中GC分析算法开始运行了，那么将花费少量的时间节省出来了大量的内存，是一件非常划算的事情。新的GC对一些长期运行的PHP脚本效果更好，比如PHP的DAEMON守护进程，或则PHP-GTK进程等等。
+
+ 
+
+ 
+
+ 
+
+ 
+
+引擎内部GC的实现
+
+   前面已经介绍了新的GC的基本原理以及性能相关的内容，其中一些都是在手册中有简单介绍了，那么这里我们将从源代码的角度来分析一下PHP如何实现新的GC。
+
+1.zval的变化
+
+    在文件Zend/zend_gc.h中，重新定义了分配一个zval结构的宏:
+
+ 
+
+ 
+
+[cpp] view plain copy
+
+#undef  ALLOC_ZVAL  
+
+#define ALLOC_ZVAL(z)                                   /  
+
+    do {                                                /  
+
+        (z) = (zval*)emalloc(sizeof(zval_gc_info));     /  
+
+        GC_ZVAL_INIT(z);                                /  
+
+    } while (0)  
+
+ALLOC_ZVAL的原始定义是在Zend/zend_alloc.h中，原始的定义只是分配一个zval结构的内存空间，然后在新的GC使用后，分配一个zval空间实际上是分配了一个zval_gc_info结构的空间，下面看看zval_gc_info结构定义:
+
+ 
+
+[cpp] view plain copy
+
+typedef struct _zval_gc_info {  
+
+    zval z;  
+
+    union {  
+
+        gc_root_buffer       *buffered;  
+
+        struct _zval_gc_info *next;  
+
+    } u;  
+
+} zval_gc_info;  
+
+zval_gc_info这个结构的第一个成员就是一个zval结构，第二个成员是一个联合体u，是一个指向gc_root_buffer的指针和一个指向_zval_gc_info的指针。  第一个成员为zval结构，这就保证了对zval_gc_info类型指针做类型转换后和zval等价。在ALLOC_ZVAL宏中，分配了一个zval_gc_info的空间后，是将空间的指针转换成了(zval *)。这样就相当于分配了一个zval的空间。然后GC_ZVAL_INIT宏会把zval_gc_info中的成员u的buffered字段设置成NULL:
+
+ 
+
+[cpp] view plain copy
+
+#define GC_ZVAL_INIT(z) /  
+
+    ((zval_gc_info*)(z))->u.buffered = NULL  
+
+这个u.buffered指针就是用来表示这个zval对应的节点信息指针。
+
+新的GC会为所有的zval分配一个空间存放节点信息指针，只有当zval被GC放入节点缓冲区的时候，节点信息指针才会被指向一个节点信息结构，否则节点信息指针一直是NULL。
+
+具体方式是通过分配一个zval_gc_info结构来实现，这个结构包含了zval和节点信息指针buffered。
+
+ 
+
+ 
+
+2.节点信息
+
+  zval的节点信息指针buffered指向一个gc_root_buffer类型，这个类型的定义如下:
+
+ 
+
+[cpp] view plain copy
+
+typedef struct _gc_root_buffer {  
+
+    struct _gc_root_buffer   *prev;     /* double-linked list               */  
+
+    struct _gc_root_buffer   *next;  
+
+    zend_object_handle        handle;   /* must be 0 for zval               */  
+
+    union {  
+
+        zval                 *pz;  
+
+        zend_object_handlers *handlers;  
+
+    } u;  
+
+} gc_root_buffer;  
+
+这是一个双链表的节点结构类型，prev和next用来指向前一个节点和后一个节点，handel是和对象相关的，对象类型的变量比较特殊，我们这里不讨论，u是一个联合体，u.pz用来指向这个节点所对应的zval结构。 这样每一个zval结构和zval对应的节点信息互相被关联在一起了:
+
+通过一个zval指针pz找到节点指针: pr = ((zval_gc_info *)pz)->u.buffered
+
+通过一个节点指针pr找到zval指针: pz = pr->u.pz
+
+ 
+
+3.为zval设置节点信息以及节点颜色信息
+
+    这里GC应用了一些小技巧，先看看下面相关的宏:
+
+ 
+
+[cpp] view plain copy
+
+#define GC_COLOR  0x03  
+
+  
+
+#define GC_BLACK  0x00  
+
+#define GC_WHITE  0x01  
+
+#define GC_GREY   0x02  
+
+#define GC_PURPLE 0x03  
+
+  
+
+#define GC_ADDRESS(v) /  
+
+    ((gc_root_buffer*)(((zend_uintptr_t)(v)) & ~GC_COLOR))  
+
+#define GC_SET_ADDRESS(v, a) /  
+
+    (v) = ((gc_root_buffer*)((((zend_uintptr_t)(v)) & GC_COLOR) | ((zend_uintptr_t)(a))))  
+
+#define GC_GET_COLOR(v) /  
+
+    (((zend_uintptr_t)(v)) & GC_COLOR)  
+
+#define GC_SET_COLOR(v, c) /  
+
+    (v) = ((gc_root_buffer*)((((zend_uintptr_t)(v)) & ~GC_COLOR) | (c)))  
+
+#define GC_SET_BLACK(v) /  
+
+    (v) = ((gc_root_buffer*)(((zend_uintptr_t)(v)) & ~GC_COLOR))  
+
+#define GC_SET_PURPLE(v) /  
+
+    (v) = ((gc_root_buffer*)(((zend_uintptr_t)(v)) | GC_PURPLE))  
+
+  
+
+#define GC_ZVAL_INIT(z) /  
+
+    ((zval_gc_info*)(z))->u.buffered = NULL  
+
+#define GC_ZVAL_ADDRESS(v) /  
+
+    GC_ADDRESS(((zval_gc_info*)(v))->u.buffered)  
+
+#define GC_ZVAL_SET_ADDRESS(v, a) /  
+
+    GC_SET_ADDRESS(((zval_gc_info*)(v))->u.buffered, (a))  
+
+#define GC_ZVAL_GET_COLOR(v) /  
+
+    GC_GET_COLOR(((zval_gc_info*)(v))->u.buffered)  
+
+#define GC_ZVAL_SET_COLOR(v, c) /  
+
+    GC_SET_COLOR(((zval_gc_info*)(v))->u.buffered, (c))  
+
+#define GC_ZVAL_SET_BLACK(v) /  
+
+    GC_SET_BLACK(((zval_gc_info*)(v))->u.buffered)  
+
+#define GC_ZVAL_SET_PURPLE(v) /  
+
+    GC_SET_PURPLE(((zval_gc_info*)(v))->u.buffered)  
+
+ 
+
+其中宏GC_ZVAL_SET_ADDRESS(v, a)是为v这个zval设置节点信息的指针a，这个宏先得到v中的节点信息指针字段u.buffered，然后调用GC_ADDRESS(v,a)宏，将u.buffered字段设置成指针a。
+
+GC_ADDRESS(v, a)宏的功能是将地址a赋给v，但是它的实现很奇怪:
+
+(v) = ((gc_root_buffer*)((((zend_uintptr_t)(v)) & GC_COLOR) | ((zend_uintptr_t)(a))))
+
+ 
+
+为什么需要这么一个复杂的过程，而且设置指针值为何还要牵扯到GC_COLOR颜色这个宏？
+
+这里就得先说说节点的颜色信息保存方式。
+
+在前面GC的算法简介中，提到了需要为节点上色，而实际在我们节点结构gc_root_buffer中并没有哪一个字段用来标识节点的颜色，这里GC运用了一个小的技巧：利用节点指针的低两位来标识颜色属性。可能读者会有疑问，用指针中的位来保存颜色属性，那么设置颜色后，指针不就变化了吗，那么还能查找到指针对应的结构吗？ 这个还真能查到！ 为什么？ 这个和malloc分配的内存地址属性有一定的关系，glib的malloc分配的内存地址都会有一定的对齐，这个对齐值为2 * SIZE_SZ,在不同位的机器上这个值是不一样的，但是可以确保的是分配出来的指针的最低两位肯定是0，然后看看颜色相关的宏，GC_COLOR为0x03, 3只需要两个二进制位就能够保存，所以拿指针的最低两位来保存颜色值是没有任何问题的，但是在使用指针的时候一定要先把指针最低的两位还原成0，否则指针指向的值是错误的。
+
+ 
+
+这样我们就能理解为什么GC_ADDRESS需要这么复杂了。因为v中的低2位保存了v的颜色信息，如果直接把a赋给v会覆盖掉颜色信息，通过((zend_uintptr_t)(v)) & GC_COLOR可以保留低两位的颜色信息，同时其它的位都变成了0，将这个结果同a进行"|"操作，就能将a的赋给v,同时保留了v的颜色信息。
+
+ 
+
+知道了颜色信息的存储方式，那么就应该很容易理解如何设置和获取颜色信息，这里就不多介绍了。
+
+ 
+
+4.节点缓冲区
+
+  GC会将收集到的节点存放到一个缓冲区中，缓冲区满的时候就开始进行垃圾分析算法。这个缓冲区实际上放在一个全局的结构中：
+
+ 
+
+ 
+
+[cpp] view plain copy
+
+typedef struct _zend_gc_globals {  
+
+    zend_bool         gc_enabled;  
+
+    zend_bool         gc_active;  
+
+  
+
+    gc_root_buffer   *buf;              /* preallocated arrays of buffers   */  
+
+    gc_root_buffer    roots;            /* list of possible roots of cycles */  
+
+    gc_root_buffer   *unused;           /* list of unused buffers           */  
+
+    gc_root_buffer   *first_unused;     /* pointer to first unused buffer   */  
+
+    gc_root_buffer   *last_unused;      /* pointer to last unused buffer    */  
+
+  
+
+    zval_gc_info     *zval_to_free;     /* temporaryt list of zvals to free */  
+
+    zval_gc_info     *free_list;  
+
+    zval_gc_info     *next_to_free;  
+
+  
+
+    zend_uint gc_runs;  
+
+    zend_uint collected;  
+
+  
+
+#if GC_BENCH  
+
+    zend_uint root_buf_length;  
+
+    zend_uint root_buf_peak;  
+
+    zend_uint zval_possible_root;  
+
+    zend_uint zobj_possible_root;  
+
+    zend_uint zval_buffered;  
+
+    zend_uint zobj_buffered;  
+
+    zend_uint zval_remove_from_buffer;  
+
+    zend_uint zobj_remove_from_buffer;  
+
+    zend_uint zval_marked_grey;  
+
+    zend_uint zobj_marked_grey;  
+
+#endif  
+
+  
+
+} zend_gc_globals;  
+
+ 
+
+ 
+
+ 
+
+ 
+
+ 
+
+用宏GC_G(v)可以访问结构中的v字段。 
+
+简单的介绍这个结构中几个重要的字段的含义:
+
+zend_bool  gc_enabled:
+
+    是否开启GC
+
+zend_bool  gc_active:
+
+    GC是否正在进行垃圾分析
+
+gc_root_buffer   *buf：
+
+     节点缓冲区指针，在GC初始化的时候，会分配10,000个gc_root_buffer结构的空间，buf为第1个节点的地址
+
+gc_root_buffer    roots;
+
+      GC每次开始垃圾分析算法的时候，都是从这个节点开始进行(注意不是直接在缓冲区中按顺序来分析节点，缓冲区值是存放节点信息内容，roots是分析的节点入口，是一个双链表的入口)
+
+   
+
+其他节点和垃圾分析过程中的一些临时数据有关，这里暂不介绍。
+
+ 
+
+ 
+
+ 5.GC的初始化
+
+ 
+
+[cpp] view plain copy
+
+ZEND_API void gc_init(TSRMLS_D)  
+
+{  
+
+    if (GC_G(buf) == NULL && GC_G(gc_enabled)) {  
+
+        GC_G(buf) = (gc_root_buffer*) malloc(sizeof(gc_root_buffer) * GC_ROOT_BUFFER_MAX_ENTRIES);  
+
+        GC_G(last_unused) = &GC_G(buf)[GC_ROOT_BUFFER_MAX_ENTRIES];  
+
+        gc_reset(TSRMLS_C);  
+
+    }  
+
+}  
+
+ 
+
+ 
+
+  首先在初始化之前会有一个全局变量
+
+  extern ZEND_API zend_gc_globals gc_globals;
+
+   在整个GC运行期间都依赖这个全局变量结构。
+
+ 
+
+  初始化是调用的gc_init函数，如果缓冲区指针字段为空并且GC开启，那么就分配缓冲区，然后调用gc_reset初始化全局结构gc_globals中的相关字段。
+
+ 
+
+6.节点放入缓冲区的时机
+
+  那么现在就是一个比较关键的一步了，GC何时为zval设置节点信息，并将节点信息设置放入缓冲区等待分析处理。从前面介绍的GC算法的原理中，准则3：“如果一个zval的refcount减少之后大于0，那么此zval还不能被释放，此zval可能成为一个垃圾”。我们大概可以知道当一个zval的refcount减少的时候，GC有可能为zval分配节点并放入缓冲区。那么在什么情况下zval的refcount会减少。 在我们调用unset的时候，会从当前符号的哈希表中删除变量名对应的项，并对该项调用一个析构函数，所以这个refcount减少的操作发生在这个析构函数中。通过建立变量符号哈希表的代码段可以知道这个析构函数是什么。这个析构函数最终的实现在Zend/zend_execute_API.c中：
+
+ 
+
+[cpp] view plain copy
+
+ZEND_API void _zval_ptr_dtor(zval **zval_ptr ZEND_FILE_LINE_DC) /* {\{\{ */  
+
+{  
+
+#if DEBUG_ZEND>=2  
+
+    printf("Reducing refcount for %x (%x): %d->%d/n", *zval_ptr, zval_ptr, Z_REFCOUNT_PP(zval_ptr), Z_REFCOUNT_PP(zval_ptr) – 1);  
+
+#endif  
+
+    Z_DELREF_PP(zval_ptr);  
+
+    if (Z_REFCOUNT_PP(zval_ptr) == 0) {  
+
+        TSRMLS_FETCH();  
+
+  
+
+        if (*zval_ptr != &EG(uninitialized_zval)) {  
+
+            GC_REMOVE_ZVAL_FROM_BUFFER(*zval_ptr);  
+
+            zval_dtor(*zval_ptr);  
+
+            efree_rel(*zval_ptr);  
+
+        }  
+
+    } else {  
+
+        TSRMLS_FETCH();  
+
+  
+
+        if (Z_REFCOUNT_PP(zval_ptr) == 1) {  
+
+            Z_UNSET_ISREF_PP(zval_ptr);  
+
+        }  
+
+  
+
+        GC_ZVAL_CHECK_POSSIBLE_ROOT(*zval_ptr);  
+
+    }  
+
+}  
+
+ 
+
+ 
+
+ 这个函数中：
+
+Z_DELREF_PP(zval_ptr) ：对zval的refcount减1，减1之后
+
+1.如果zval的refcount等于0,根据前面的准则2，这个变量的空间可以直接被释放掉，在释放之前需要注意，有可能这个变量在之前已经被放入了节点缓冲区，所以需要调用GC_REMOVE_ZVAL_FROM_BUFFER(*zval_ptr)从节点缓冲区中删除相关节点信息，然后调用zval_dtor和efree_rel释放掉变量zval中变量占用的空间和zval结构自身的空间。
+
+2.如果zval的refcount等于1,根据前面的准则3，这个变量有可能会成为一个垃圾，于是调用GC_ZVAL_CHECK_POSSIBLE_ROOT(*zval_ptr)为其设置节点信息并放入缓冲区
+
+ 
+
+因此，最终是通过GC_ZVAL_CHECK_POSSIBLE_ROOT宏来产生节点并放入缓冲等待处理，相关的宏和函数代码为：
+
+ 
+
+ 
+
+[cpp] view plain copy
+
+#define GC_ZVAL_CHECK_POSSIBLE_ROOT(z) /  
+
+    gc_zval_check_possible_root((z) TSRMLS_CC)  
+
+  
+
+static zend_always_inline void gc_zval_check_possible_root(zval *z TSRMLS_DC)  
+
+{  
+
+    if (z->type == IS_ARRAY || z->type == IS_OBJECT) {  
+
+        gc_zval_possible_root(z TSRMLS_CC);  
+
+    }  
+
+}  
+
+  
+
+ZEND_API void gc_zval_possible_root(zval *zv TSRMLS_DC)  
+
+{  
+
+    if (UNEXPECTED(GC_G(free_list) != NULL &&  
+
+                   GC_ZVAL_ADDRESS(zv) != NULL &&  
+
+                   GC_ZVAL_GET_COLOR(zv) == GC_BLACK) &&  
+
+                   (GC_ZVAL_ADDRESS(zv) < GC_G(buf) ||  
+
+                    GC_ZVAL_ADDRESS(zv) >= GC_G(last_unused))) {  
+
+        /* The given zval is a garbage that is going to be deleted by 
+
+         * currently running GC */  
+
+        return;  
+
+    }  
+
+  
+
+    if (zv->type == IS_OBJECT) {  
+
+        GC_ZOBJ_CHECK_POSSIBLE_ROOT(zv);  
+
+        return;  
+
+    }  
+
+  
+
+    GC_BENCH_INC(zval_possible_root);  
+
+  
+
+    if (GC_ZVAL_GET_COLOR(zv) != GC_PURPLE) {  
+
+        GC_ZVAL_SET_PURPLE(zv);  
+
+  
+
+        if (!GC_ZVAL_ADDRESS(zv)) {  
+
+            gc_root_buffer *newRoot = GC_G(unused);  
+
+  
+
+            if (newRoot) {  
+
+                GC_G(unused) = newRoot->prev;  
+
+            } else if (GC_G(first_unused) != GC_G(last_unused)) {  
+
+                newRoot = GC_G(first_unused);  
+
+                GC_G(first_unused)++;  
+
+            } else {  
+
+                if (!GC_G(gc_enabled)) {  
+
+                    GC_ZVAL_SET_BLACK(zv);  
+
+                    return;  
+
+                }  
+
+                zv->refcount__gc++;  
+
+                gc_collect_cycles(TSRMLS_C);  
+
+                zv->refcount__gc–;  
+
+                newRoot = GC_G(unused);  
+
+                if (!newRoot) {  
+
+                    return;  
+
+                }  
+
+                GC_ZVAL_SET_PURPLE(zv);  
+
+                GC_G(unused) = newRoot->prev;  
+
+            }  
+
+  
+
+            newRoot->next = GC_G(roots).next;  
+
+            newRoot->prev = &GC_G(roots);  
+
+            GC_G(roots).next->prev = newRoot;  
+
+            GC_G(roots).next = newRoot;  
+
+  
+
+            GC_ZVAL_SET_ADDRESS(zv, newRoot);  
+
+  
+
+            newRoot->handle = 0;  
+
+            newRoot->u.pz = zv;  
+
+  
+
+            GC_BENCH_INC(zval_buffered);  
+
+            GC_BENCH_INC(root_buf_length);  
+
+            GC_BENCH_PEAK(root_buf_peak, root_buf_length);  
+
+        }  
+
+    }  
+
+}  
+
+ 
+
+ 
+
+内联函数gc_zval_check_possible_root会先判断zval的类型，如果是数组或则对象类型才有可能给zval分配节点信息并放入缓冲区。只有这两种类型才可能产生环形引用。虽然GC直接处理对象是数组和对象类型，但是在这些数组和对象中包含的任何类型变量都在GC的职责范围之内，这个内联函数最终掉用的是gc_zval_possible_root函数，下面重点分析此函数中的主要流程：
+
+1：
+
+ if (UNEXPECTED(GC_G(free_list) != NULL &&
+                GC_ZVAL_ADDRESS(zv) != NULL &&
+             GC_ZVAL_GET_COLOR(zv) == GC_BLACK) &&
+             (GC_ZVAL_ADDRESS(zv) < GC_G(buf) ||
+              GC_ZVAL_ADDRESS(zv) >= GC_G(last_unused))) {
+  /* The given zval is a garbage that is going to be deleted by
+   * currently running GC */
+  return;
+ }
+
+首先检查zval节点信息是否已经放入到节点缓冲区，如果已经放入到节点缓冲区，则直接返回，这样保证节点缓冲区中的每个zval节点只出现一次。
+
+ 
+
+2：
+
+ if (zv->type == IS_OBJECT) {
+  GC_ZOBJ_CHECK_POSSIBLE_ROOT(zv);
+  return;
+ }
+
+如果zval是对象类型，则走对象类型相关的流程，本文只以数组类型为例讲解，所以这个流程不阐述，读者可以举一反三。
+
+ 
+
+3:
+
+ if (GC_ZVAL_GET_COLOR(zv) != GC_PURPLE) {
+  GC_ZVAL_SET_PURPLE(zv);
+
+  …
+
+ }
+
+如果zval没有被标记为紫色，就将其标记为紫色，表示zval被放入到节点缓冲，否则不做后面的操作。
+
+ 
+
+4:
+
+如果zval的节点信息指针为空，则需要为zval分配一个gc_root_buffer节点信息。这之后会有一些判断机制，如果发现节点缓冲区已经满了说明需要启动垃圾分析流程了，垃圾分析流程在函数gc_collect_cycles(TSRMLS_C);  如果缓冲区没有满，则不会进入垃圾分析流程，为zval分配的节点信息会被加入到GC_G(roots)为入口的双链表中。
+
+ 
+
+从这个函数我们发现了垃圾分析算法是当发现缓冲区满的时候就立即触发，垃圾分析跟代码执行流是同步过程，也就是只有垃圾分析结束之后，代码才会继续执行。所以在我们的PHP代码中，如果某个unset正好使GC的节点缓冲区满，触发了垃圾分析流程，那么这个unset耗费的时间将比一般的unset多很多。
+
+ 
+
+gc_collect_cycles函数是真正的垃圾分析流程，这个函数定义为:
+
+ 
+
+[cpp] view plain copy
+
+ZEND_API int gc_collect_cycles(TSRMLS_D)  
+
+{  
+
+    int count = 0;  
+
+  
+
+    if (GC_G(roots).next != &GC_G(roots)) {  
+
+        zval_gc_info *p, *q, *orig_free_list, *orig_next_to_free;  
+
+  
+
+        if (GC_G(gc_active)) {  
+
+            return 0;  
+
+        }  
+
+        GC_G(gc_runs)++;  
+
+        GC_G(zval_to_free) = FREE_LIST_END;  
+
+        GC_G(gc_active) = 1;  
+
+        gc_mark_roots(TSRMLS_C);  
+
+        gc_scan_roots(TSRMLS_C);  
+
+        gc_collect_roots(TSRMLS_C);  
+
+  
+
+        orig_free_list = GC_G(free_list);  
+
+        orig_next_to_free = GC_G(next_to_free);  
+
+        p = GC_G(free_list) = GC_G(zval_to_free);  
+
+        GC_G(zval_to_free) = NULL;  
+
+        GC_G(gc_active) = 0;  
+
+  
+
+        /* First call destructors */  
+
+        while (p != FREE_LIST_END) {  
+
+            if (Z_TYPE(p->z) == IS_OBJECT) {  
+
+                if (EG(objects_store).object_buckets &&  
+
+                    EG(objects_store).object_buckets[Z_OBJ_HANDLE(p->z)].valid &&  
+
+                    EG(objects_store).object_buckets[Z_OBJ_HANDLE(p->z)].bucket.obj.refcount <= 0 &&  
+
+                    EG(objects_store).object_buckets[Z_OBJ_HANDLE(p->z)].bucket.obj.dtor &&  
+
+                    !EG(objects_store).object_buckets[Z_OBJ_HANDLE(p->z)].destructor_called) {  
+
+  
+
+                    EG(objects_store).object_buckets[Z_OBJ_HANDLE(p->z)].destructor_called = 1;  
+
+                    EG(objects_store).object_buckets[Z_OBJ_HANDLE(p->z)].bucket.obj.refcount++;  
+
+                    EG(objects_store).object_buckets[Z_OBJ_HANDLE(p->z)].bucket.obj.dtor(EG(objects_store).object_buckets[Z_OBJ_HANDLE(p->z)].bucket.obj.object, Z_OBJ_HANDLE(p->z) TSRMLS_CC);  
+
+                    EG(objects_store).object_buckets[Z_OBJ_HANDLE(p->z)].bucket.obj.refcount–;  
+
+                }  
+
+            }  
+
+            count++;  
+
+            p = p->u.next;  
+
+        }  
+
+  
+
+        /* Destroy zvals */  
+
+        p = GC_G(free_list);  
+
+        while (p != FREE_LIST_END) {  
+
+            GC_G(next_to_free) = p->u.next;  
+
+            if (Z_TYPE(p->z) == IS_OBJECT) {  
+
+                if (EG(objects_store).object_buckets &&  
+
+                    EG(objects_store).object_buckets[Z_OBJ_HANDLE(p->z)].valid &&  
+
+                    EG(objects_store).object_buckets[Z_OBJ_HANDLE(p->z)].bucket.obj.refcount <= 0) {  
+
+                    EG(objects_store).object_buckets[Z_OBJ_HANDLE(p->z)].bucket.obj.refcount = 1;  
+
+                    Z_TYPE(p->z) = IS_NULL;  
+
+                    zend_objects_store_del_ref_by_handle_ex(Z_OBJ_HANDLE(p->z), Z_OBJ_HT(p->z) TSRMLS_CC);  
+
+                }  
+
+            } else if (Z_TYPE(p->z) == IS_ARRAY) {  
+
+                Z_TYPE(p->z) = IS_NULL;  
+
+                zend_hash_destroy(Z_ARRVAL(p->z));  
+
+                FREE_HASHTABLE(Z_ARRVAL(p->z));  
+
+            } else {  
+
+                zval_dtor(&p->z);  
+
+                Z_TYPE(p->z) = IS_NULL;  
+
+            }  
+
+            p = GC_G(next_to_free);  
+
+        }  
+
+  
+
+        /* Free zvals */  
+
+        p = GC_G(free_list);  
+
+        while (p != FREE_LIST_END) {  
+
+            q = p->u.next;  
+
+            FREE_ZVAL_EX(&p->z);  
+
+            p = q;  
+
+        }  
+
+        GC_G(collected) += count;  
+
+        GC_G(free_list) = orig_free_list;  
+
+        GC_G(next_to_free) = orig_next_to_free;  
+
+    }  
+
+  
+
+    return count;  
+
+}  
+
+ 
+
+这里只简单的介绍其中关键的流程:
+
+1.gc_mark_roots（）
+
+   这个函数对节点信息的链表进行一次深度优先遍历，将其中的zval的refcount减1，为了避免对同一个zval重复减操作，在操作之后将zval标记成灰色。（对节点自身的zval可以重复减操作，这个是此算法的基础）
+
+ 
+
+2.gc_scan_roots()
+
+  这个函数对节点信息的链表再次进行深度优先遍历，如果发现zval的refcount大于等于1，则对该zval和其包含的zval的refcount加1操作，这个是对非垃圾的一个信息还原，然后将这些zval颜色属性去掉(设置成black)。如果发现zval的refcount等于0，则就标记成白色，这些是后面将要清理掉的垃圾。
+
+ 
+
+3.gc_collect_roots()
+
+   遍历节点信息链表,将前面一个步骤中标记为白色的节点信息放到GC_G(zval_to_free)为入口的链表中，这个链表用来存放将要释放的垃圾。 然后释放掉全部的节点信息，缓冲区被清空。分析结束后将重新收集节点信息。
+
+ 
+
+4.释放步骤3中收集到垃圾数据
+
+

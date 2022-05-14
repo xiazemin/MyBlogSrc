@@ -1,0 +1,97 @@
+---
+title: strlen core 原因排查
+layout: post
+category: php
+author: 夏泽民
+---
+$composer update
+Segmentation fault: 11
+
+$ulimit -c unlimited
+
+$composer update
+Segmentation fault: 11 (core dumped)
+
+$lldb -c /cores/core.68122
+(lldb) target create --core "/cores/core.68122"
+warning: (x86_64) /cores/core.68122 load command 109 LC_SEGMENT_64 has a fileoff + filesize (0x28a07000) that extends beyond the end of the file (0x28a06000), the segment will be truncated to match
+warning: (x86_64) /cores/core.68122 load command 110 LC_SEGMENT_64 has a fileoff (0x28a07000) that extends beyond the end of the file (0x28a06000), ignoring this section
+error: slowLog.so(0x000000010d7e6000) debug map object file '/Users/didi/PhpstormProjects/c/php-src/ext/slowLog/.libs/slowLog.o' has changed (actual time is 0x5edb4f62, debug map time is 0x5edb4b7e) since this executable was linked, file will be ignored
+Core file '/cores/core.68122' (x86_64) was loaded.
+(lldb) bt
+* thread #1: tid = 0x0000, 0x00007fff9a84fd32 libsystem_c.dylib`strlen + 18, stop reason = signal SIGSTOP
+  * frame #0: 0x00007fff9a84fd32 libsystem_c.dylib`strlen + 18
+    frame #1: 0x000000010d7e7014 slowLog.so`record_function_runtime_info + 420
+    frame #2: 0x000000010d7e68c8 slowLog.so`slow_log_zend_execute_hook + 488
+    frame #3: 0x000000010ccaf632 php`ZEND_DO_FCALL_SPEC_RETVAL_UNUSED_HANDLER(execute_data=0x000000010d818030) + 642 at zend_vm_execute.h:949
+    frame #4: 0x000000010cc85964 php`execute_ex(ex=0x000000010d818030) + 100 at zend_vm_execute.h:432
+    frame #5: 0x000000010d7e687b slowLog.so`slow_log_zend_execute_hook + 411
+    frame #6: 0x000000010cc85b6a php`zend_execute(op_array=0x000000010d875400, return_value=0x0000000000000000) + 234 at zend_vm_execute.h:474
+    frame #7: 0x000000010cc1ef12 php`zend_execute_scripts(type=8, retval=0x0000000000000000, file_count=3) + 594 at zend.c:1447
+    frame #8: 0x000000010cb74721 php`php_execute_script(primary_file=0x00007fff534ca8a8) + 1201 at main.c:2533
+    frame #9: 0x000000010cd3a2b5 php`do_cli(argc=2, argv=0x00007fff534cafd0) + 3941 at php_cli.c:990
+    frame #10: 0x000000010cd3915a php`main(argc=2, argv=0x00007fff534cafd0) + 1898 at php_cli.c:1378
+    frame #11: 0x00007fff8ad7c5ad libdyld.dylib`start + 1
+    
+<!-- more -->
+问题代码
+	fwrite(ZSTR_VAL(result), strlen(ZSTR_VAL(result)) * sizeof(char), 1, fp);
+
+ZSTR_VAL(result) 返回的字符串没有以'\0'结束
+不能用strlen函数
+
+替换为 ZSTR_LEN(result) 
+		if (NULL!=result && ZSTR_VAL(result）!=NULL) {
+			fwrite(ZSTR_VAL(result), ZSTR_LEN(result) * sizeof(char), 1, fp);
+			｝
+
+解决办法：
+用ZSTR_LEN 替换strlen
+
+
+char＊转zend_string
+function=zend_string_init("internal-eval",13,0);
+
+
+
+lldb -c /cores/core.16558
+(lldb) target create --core "/cores/core.16558"
+warning: (x86_64) /cores/core.16558 load command 101 LC_SEGMENT_64 has a fileoff + filesize (0x28207000) that extends beyond the end of the file (0x28206000), the segment will be truncated to match
+warning: (x86_64) /cores/core.16558 load command 102 LC_SEGMENT_64 has a fileoff (0x28207000) that extends beyond the end of the file (0x28206000), ignoring this section
+Core file '/cores/core.16558' (x86_64) was loaded.
+(lldb) bt
+* thread #1: tid = 0x0000, 0x0000000109bf9cb1 slowLog.so`get_file_class_function_lineno(data=0x0000000109c16870) + 1041 at slowLog.c:136, stop reason = signal SIGSTOP
+  * frame #0: 0x0000000109bf9cb1 slowLog.so`get_file_class_function_lineno(data=0x0000000109c16870) + 1041 at slowLog.c:136
+    frame #1: 0x0000000109bf982f slowLog.so`slow_log_zend_execute_hook(execute_data=0x0000000109c168d0) + 479 at slowLog.c:261
+    frame #2: 0x00000001091207e3 php`zend_call_function(fci=0x00007fff56faaec0, fci_cache=0x00007fff56faae30) + 2803 at zend_execute_API.c:837
+    frame #3: 0x000000010916c145 php`zend_call_method(object=0x0000000000000000, obj_ce=0x0000000109c05290, fn_proxy=0x0000000109c82190, function_name="composerautoloaderinitcomposerphar1481058051::loadclassloader", function_name_len=61, retval_ptr=0x0000000000000000, param_count=1, arg1=0x0000000109c168c0, arg2=0x0000000000000000) + 1221 at zend_interfaces.c:102
+    frame #4: 0x0000000108f72fc1 php`zif_spl_autoload_call(execute_data=0x0000000109c16870, return_value=0x00007fff56fab2d8) + 417 at php_spl.c:408
+    frame #5: 0x00000001091208b2 php`zend_call_function(fci=0x00007fff56fab298, fci_cache=0x00007fff56fab270) + 3010 at zend_execute_API.c:850
+    frame #6: 0x000000010912127e php`zend_lookup_class_ex(name=0x0000000109cc2ea0, key=0x0000000109cd9090, use_autoload=1) + 1278 at zend_execute_API.c:1009
+    frame #7: 0x000000010912239f php`zend_fetch_class_by_name(class_name=0x0000000109cc2ea0, key=0x0000000109cd9090, fetch_type=512) + 79 at zend_execute_API.c:1442
+    frame #8: 0x00000001091cfb2e php`ZEND_NEW_SPEC_CONST_HANDLER(execute_data=0x0000000109c164c0) + 158 at zend_vm_execute.h:3156
+    frame #9: 0x00000001091a3964 php`execute_ex(ex=0x0000000109c164c0) + 100 at zend_vm_execute.h:432
+    frame #10: 0x0000000109bf97eb slowLog.so`slow_log_zend_execute_hook(execute_data=0x0000000109c164c0) + 411 at slowLog.c:256
+    frame #11: 0x00000001091cdd00 php`ZEND_DO_FCALL_SPEC_RETVAL_USED_HANDLER(execute_data=0x0000000109c16450) + 672 at zend_vm_execute.h:1076
+    frame #12: 0x00000001091a3964 php`execute_ex(ex=0x0000000109c16450) + 100 at zend_vm_execute.h:432
+    frame #13: 0x0000000109bf97cd slowLog.so`slow_log_zend_execute_hook(execute_data=0x0000000109c16450) + 381 at slowLog.c:251
+    frame #14: 0x00000001091d586f php`ZEND_INCLUDE_OR_EVAL_SPEC_CV_HANDLER(execute_data=0x0000000109c163c0) + 703 at zend_vm_execute.h:35202
+    frame #15: 0x00000001091a3964 php`execute_ex(ex=0x0000000109c163c0) + 100 at zend_vm_execute.h:432
+    frame #16: 0x0000000109bf97eb slowLog.so`slow_log_zend_execute_hook(execute_data=0x0000000109c163c0) + 411 at slowLog.c:256
+    frame #17: 0x00000001091cdd00 php`ZEND_DO_FCALL_SPEC_RETVAL_USED_HANDLER(execute_data=0x0000000109c16300) + 672 at zend_vm_execute.h:1076
+    frame #18: 0x00000001091a3964 php`execute_ex(ex=0x0000000109c16300) + 100 at zend_vm_execute.h:432
+    frame #19: 0x0000000109bf97cd slowLog.so`slow_log_zend_execute_hook(execute_data=0x0000000109c16300) + 381 at slowLog.c:251
+    frame #20: 0x00000001091d50a3 php`ZEND_INCLUDE_OR_EVAL_SPEC_CONST_HANDLER(execute_data=0x0000000109c16150) + 707 at zend_vm_execute.h:3432
+    frame #21: 0x00000001091a3964 php`execute_ex(ex=0x0000000109c16150) + 100 at zend_vm_execute.h:432
+    frame #22: 0x0000000109bf97cd slowLog.so`slow_log_zend_execute_hook(execute_data=0x0000000109c16150) + 381 at slowLog.c:251
+    frame #23: 0x00000001091d50a3 php`ZEND_INCLUDE_OR_EVAL_SPEC_CONST_HANDLER(execute_data=0x0000000109c16030) + 707 at zend_vm_execute.h:3432
+    frame #24: 0x00000001091a3964 php`execute_ex(ex=0x0000000109c16030) + 100 at zend_vm_execute.h:432
+    frame #25: 0x0000000109bf97eb slowLog.so`slow_log_zend_execute_hook(execute_data=0x0000000109c16030) + 411 at slowLog.c:256
+    frame #26: 0x00000001091a3b6a php`zend_execute(op_array=0x0000000109c75500, return_value=0x0000000000000000) + 234 at zend_vm_execute.h:474
+    frame #27: 0x000000010913cf12 php`zend_execute_scripts(type=8, retval=0x0000000000000000, file_count=3) + 594 at zend.c:1447
+    frame #28: 0x0000000109092721 php`php_execute_script(primary_file=0x00007fff56fac848) + 1201 at main.c:2533
+    frame #29: 0x00000001092582b5 php`do_cli(argc=3, argv=0x00007fff56facf70) + 3941 at php_cli.c:990
+    frame #30: 0x000000010925715a php`main(argc=3, argv=0x00007fff56facf70) + 1898 at php_cli.c:1378
+    frame #31: 0x00007fff8e65b5ad libdyld.dylib`start + 1
+    
+    

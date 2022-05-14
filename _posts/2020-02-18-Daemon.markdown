@@ -1,0 +1,250 @@
+---
+title: linux 的nohup & 和daemon 总结
+layout: post
+category: linux
+author: 夏泽民
+---
+我们在linux终端中运行程序，有希望不因为终端的退出或异常断开导致运行的程序退出的需求。而之所以终端退出会异常断开程序退出的原因是因为其会向终端中运行的程序发送SIGHUP信号。
+
+SIGHUP
+    关于SIGHUP的介绍，如下为摘自百度百科
+
+unix中进程组织结构为 session 包含一个前台进程组及一个或多个后台进程组，一个进程组包含多个进程。
+
+一个session可能会有一个session首进程，而一个session首进程可能会有一个控制终端。
+
+一个进程组可能会有一个进程组首进程。进程组首进程的进程ID与该进程组ID相等。
+
+这儿是可能会有，在一定情况之下是没有的。
+
+与终端交互的进程是前台进程，否则便是后台进程
+
+SIGHUP会在以下3种情况下被发送给相应的进程：
+
+1、终端关闭时，该信号被发送到session首进程以及作为job提交的进程（即用 & 符号提交的进程）
+
+2、session首进程退出时，该信号被发送到该session中的前台进程组中的每一个进程
+
+3、若父进程退出导致进程组成为孤儿进程组，且该进程组中有进程处于停止状态（收到SIGSTOP或SIGTSTP信号），该信号会被发送到该进程组中的每一个进程。
+
+系统对SIGHUP信号的默认处理是终止收到该信号的进程。所以若程序中没有捕捉该信号，当收到该信号时，进程就会退出。
+
+  可以看下SIGHUP信号和控制终端，分析的挺不错的。
+<!-- more -->
+nohup
+参见链接：nohup命令的用法clear
+
+用途：不挂断地运行命令。
+
+语法：nohup Command [ Arg … ] [　& ]
+
+描述：nohup 命令运行由 Command 参数和任何相关的 Arg 参数指定的命令，忽略所有挂断（SIGHUP）信号。在注销后使用 nohup 命令运行后台中的程序。要运行后台中的 nohup 命令，添加 & （ 表示”and”的符号）到命令的尾部。
+
+无论是否将 nohup 命令的输出重定向到终端，输出都将附加到当前目录的 nohup.out 文件中。如果当前目录的 nohup.out 文件不可写，输出重定向到 $HOME/nohup.out 文件中。如果没有文件能创建或打开以用于追加，那么 Command 参数指定的命令不可调用。如果标准错误是一个终端，那么把指定的命令写给标准错误的所有输出作为标准输出重定向到相同的文件描述符。
+
+退出状态：该命令返回下列出口值：
+
+126 可以查找但不能调用 Command 参数指定的命令。
+
+127nohup 命令发生错误或不能查找由 Command参数指定的命令。
+
+否则，nohup 命令的退出状态是 Command 参数指定命令的退出状态。
+
+nohup命令及其输出文件
+
+nohup命令：如果你正在运行一个进程，而且你觉得在退出帐户时该进程还不会结束，那么可以使用nohup命令。该命令可以在你退出帐户/关闭终端之后继续运行相应的进程。nohup就是不挂起的意思( n ohang up)。
+
+该命令的一般形式为：nohup command &
+
+使用nohup命令提交作业
+
+如果使用nohup命令提交作业，那么在缺省情况下该作业的所有输出都被重定向到一个名为nohup.out的文件中，除非另外指定了输出文件：
+
+nohupcommand > myout.file 2>&1 &
+
+在上面的例子中，输出被重定向到myout.file文件中。
+
+可以通过Nohup的源码分析，看出nohup 的本质是通过忽略SIGHUP信号，从而不会在终端关闭会退出时由于SIGHUP信号导致程序退出。nohup附加的特性为无论是否将 nohup 命令的输出重定向到终端，输出都将附加到当前目录的 nohup.out 文件中。如果当前目录的 nohup.out 文件不可写，输出重定向到 $HOME/nohup.out 文件中。
+
+ 
+
+Nohup本身不会将程序放入后台运行，但是通过NOHUP方式启动的程序，由于其忽略了SIGHUP信号，其接收到SIGHUP信号也不会退出。
+
+&后台运行
+就是将程序放在后台运行。对于shell来说，通过& 可以把一个程序放在后台运行。其就是作为一个job来运行的。此时如果终端断开，程序还是会被SIGHUP信号导致退出的。即上面SIGHUP信号的第一种场景。
+
+但是如果此时在终端中执行exit命令，就会使得当前主进程退出。从而使得后台执行的程序成为孤儿进程，从而被init进程接管。此时终端再断开就 不会受到SIGHUP信号了。即即使终端断开，程序也会运行。这也是为什么我们再一个shell脚本中通过&执行一个程序后，shell脚本执行 完，即使终端断开，shell脚本启动的后台程序也不会退出。因为shell执行完后，其启动的程序就已经成为了孤儿进程，从而被init接管了。
+
+Daemon
+Daemon进程也就是守护进程，linux大多数的服务进程都是通过守护进程实现的。比如0号进程(调度进程) ，1号进程(init进程)。从其名字守护看出其一般就是机器启动就运行，关机才停止。所以其应该不会受到终端的影响。同时其实在后台运行的。
+
+ 
+
+在当前的linux下已经提供了一个api可以直接调用一下就可以将自己的进程变为守护进程了：该函数说明如下：可以参见http://man7.org/linux/man-pages/man3/daemon.3.html
+
+ 
+
+int daemon ( int __nochdir, int __noclose);
+
+如果__nochdir的值为0，则将切换工作目录为根目录；
+
+如果__noclose为0，则将标准输入，输出和标准错误都重定向到/dev /null。
+
+使用非常简单：一个简单示例如下：
+
+#include <unistd.h>
+
+#include <stdio.h>
+
+ 
+
+int do_sth()
+
+{
+
+    //Addwhat u want
+
+   return 0;
+
+}
+
+int main()
+
+{
+
+   daemon(0,0);
+
+   while ( 1 )
+
+    {
+
+       do_sth();
+
+       sleep(1);
+
+    }
+
+}
+
+编译并运行
+
+[leconte@localhostdaemon]$ gcc -o test test.c
+
+[leconte@localhostdaemon]$ ./test
+
+ 
+
+ 
+
+而之前大部分都是需要自己实现，关于守护进程编程的要点网上很多，总结如下：主要参见Linux守护进程的编程方法
+
+ 
+
+1.        屏蔽一些有关控制终端操作的信号。这是为了防止在守护进程没有正常运转起来时，控制终端受到干扰退出或挂起。示例如下：
+
+signal(SIGTTOU,SIG_IGN);
+
+signal(SIGTTIN,SIG_IGN);
+
+signal(SIGTSTP,SIG_IGN);
+
+signal(SIGHUP,SIG_IGN);
+
+                  
+
+　所有的信号都有自己的名字。这些名字都以“SIG”开头，只是后面有所不同。开发人员可以通过这些名字了解到系统中发生了什么事。当信号出现时，开发人员可以要求系统进行以下三种操作：
+
+　忽略信号。大多数信号都是采取这种方式进行处理的，这里就采用了这种用法。但值得注意的是对SIGKILL和SIGSTOP信号不能做忽略处理。
+
+　捕捉信号。最常见的情况就是，如果捕捉到SIGCHID信号，则表示子进程已经终止。然后可在此信号的捕捉函数中调用waitpid()函数取得 该子进程的进程ID和它的终止状态。另外，如果进程创建了临时文件，那么就要为进程终止信号SIGTERM编写一个信号捕捉函数来清除这些临时文件。
+
+　执行系统的默认动作。对绝大多数信号而言，系统的默认动作都是终止该进程。对这些有关终端的信号，一般采用忽略处理，从而保障了终端免受干扰。
+　这类信号分别是，SIGTTOU（表示后台进程写控制终端）、SIGTTIN（表示后台进程读控制终端）、SIGTSTP（表示终端挂起）和SIGHUP（进程组长退出时向所有会议成员发出的）。
+
+2.        后台运行：为了避免其会挂起(或者说占用)终端，应该将其放在后台运行，实现的方式就是fork，然后将进程退出。
+
+3.        脱离控制终端、登录会话和进程组：进程属于进程组，进程组号就是进程组长的进程号。登录的会话可以包含多个进程组。这些进程组 共享一个控制终端。这个控制终端是创建进程的登录终端。控制终端、登录会话和进程组都是在fork的时候从父进程继承下来的。我们需要摆脱他们，使之不受 他们的影响，方式就是在1的基础上，调用setsid()使进程成为会话组长。
+
+setsid();
+
+说明：当进程是会话组长时setsid()调用失败。但第一点已经保证进程不是会话组长。 setsid()调用成功后，进程成为新的会话组长和新的进程组长，并与原来的登录会话和进程组脱离。由于会话过程对控制终端的独占性，进程同时与控制终端脱离。
+
+4.        禁止进程重新打开控制终端：(注：这一步是网上对于daemon的差异，有些认为不需要，有些认为需要) 现在的进程已经是无终端的会话组长，但是会话组长是可以重新申请打开一个控制终端的。而我们可以通过使进程不再成为会话组长来禁止进程重新打开控制终端。方式就是再次fork()再将父进程退出。使用其子进程(该子进程的父进程才是会话组长，它自己肯定不是会话组长了)
+
+5.        关闭打开的文件描述符：由于fork的时候会继承父进程打开的文件描述符，如果不关闭，则会浪费系统资源，造成进程所在的文件系统无法卸下以及引起其他无法预料的错误，所以要关闭他们：
+
+ 
+
+6.        改变当前工作目录：进程活动室，其工作目录所在的文件系统不能卸载，一般需要将工作目录改变到跟目录，而对于需要转储核心，写运行日志的进程则将工作目录改变到特定目录，比如/tmp。chdir("/tmp") 
+
+ 
+
+7.        重设文件掩码：重设文件创建掩模 进程从创建它的父进程那里继承了文件创建掩模。它可能修改守护进程所创建的文件的存取位。为防止这一点，将文件创建掩模清除：umask(0);
+
+8.        处理SIGCHLD信号：处理SIGCHLD信号 
+处理SIGCHLD信号并不是必须的。但对于某些进程，特别是服务器进程往往在请求到来时生成子进程处理请求。如果父进程不等待子进程结束，子进程将成为 僵尸进程（zombie）从而占用系统资源。如果父进程等待子进程结束，将增加父进程的负担，影响服务器进程的并发性能。在Linux下可以简单地将 SIGCHLD信号的操作设为SIG_IGN。
+
+signal(SIGCHLD,SIG_IGN); 
+
+这样，内核在子进程结束时不会产生僵尸进程。这一点与BSD4不同，BSD4下必须显式等待子进程结束才能释放僵尸进程。
+
+ 
+
+守护进程与用&结尾的后台运行程序有什么区别呢？
+
+最大的区别有几点：
+1)守护进程已经完全脱离终端控制台了，而后台程序并未完全脱离终端，在终端未关闭前还是会往终端输出结果
+2)守护进程在关闭终端控制台时不会受影响，而后台程序会随用户退出而停止，需要在以nohup xxx & 格式运行才能避免影响
+3)守护进程的会话组和当前目录，文件描述符都是独立的。后台运行只是终端进行了一次fork，让程序在后台执行，这些都没改变。
+
+只要是忽略了SIGHUP就可以达到我们需要的终端退出后继续执行的目的。那么就是退出ssh后，在我们exit执行的shell时候，会不会向我们后台的jobs发送SIGHUP信号呢？ 如果发送了SIGHUP信号，那么所有该shell下运行的进程都会被终止，也就是所希望的后台执行没有实现。在shell的options中，有huponexit这个选项，意思就是退出shell时候，是否发送这个SIGHUP信号？
+
+$ shopt  
+cdable_vars     off 
+cdspell         off 
+checkhash       off 
+checkwinsize    off 
+cmdhist         on 
+dotglob         off 
+execfail        off 
+expand_aliases on 
+extdebug        off 
+extglob         off 
+extquote        on 
+failglob        off 
+force_fignore   on 
+gnu_errfmt      off 
+histappend      off 
+histreedit      off 
+histverify      off 
+hostcomplete    on 
+huponexit       off 
+interactive_comments    on 
+lithist         off 
+login_shell     on 
+mailwarn        off 
+no_empty_cmd_completion off 
+nocaseglob      off 
+nocasematch     off 
+nullglob        off 
+progcomp        on 
+promptvars      on 
+restricted_shell        off 
+shift_verbose   off 
+sourcepath      on 
+xpg_echo        off
+
+
+    上面的默认选项中，huponexit       off，这个情况时候，当你退出shell时候，后台的程序还会继续运行，
+
+
+http://blog.csdn.net/hepeng597/article/details/9816751
+
+http://blog.163.com/sparkle_tiangz/blog/static/1175902032011101011818771/
+
+http://www.cnblogs.com/xiaouisme/archive/2012/08/07/2627456.html
+
+http://my.oschina.net/beiyou/blog/76226
+
+http://www.cnblogs.com/SuperXJ/archive/2011/10/31/2230314.html
+https://www.cnblogs.com/ajianbeyourself/p/3885367.html

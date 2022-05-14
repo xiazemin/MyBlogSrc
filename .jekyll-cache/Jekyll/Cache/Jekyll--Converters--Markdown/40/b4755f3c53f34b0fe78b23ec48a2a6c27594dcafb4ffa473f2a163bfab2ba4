@@ -1,0 +1,358 @@
+I"�D<p>官网创建Flink项目有两种方式：</p>
+
+<p>https://ci.apache.org/projects/flink/flink-docs-release-1.6/quickstart/java_api_quickstart.html</p>
+
+<p>方式一：</p>
+
+<p>mvn archetype:generate \</p>
+
+<p>-DarchetypeGroupId=org.apache.flink \</p>
+
+<p>-DarchetypeArtifactId=flink-quickstart-java\</p>
+
+<p>-DarchetypeVersion=1.6.2</p>
+
+<p>方式二</p>
+
+<table>
+  <tbody>
+    <tr>
+      <td>$ curlhttps://flink.apache.org/q/quickstart.sh</td>
+      <td>bash -s 1.6.2</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>这里我们仍然使用第一种方式创建Flink项目。</p>
+
+<p>打开终端，切换到对应的目录，通过maven创建flink项目
+<!-- more -->
+https://www.jianshu.com/p/fc2006e8e5f9</p>
+
+<p>https://cwiki.apache.org/confluence/display/MAVEN/DependencyResolutionException</p>
+
+<p>mvn clean package</p>
+
+<p>[ERROR] Failed to execute goal on project ArrayKeysToString: Could not resolve dependencies for project org.flink:ArrayKeysToString:jar:1.0-SNAPSHOT: The following artifacts could not be resolved: org.apache.flink:flink-table_2.11:jar:1.4.2-1700, org.apache.flink:flink-streaming-java_2.11:jar:1.4.2-1700, org.apache.hive:hive-exec:jar:1.2.1-213: Could not find artifact org.apache.flink:flink-table_2.11:jar:1.4.2-1700 in alimaven (http://maven.aliyun.com/nexus/content/groups/public/) -&gt; [Help 1]</p>
+
+<p>具体操作是找到这个<mirrors>的标签,把下面这个代码加到里面就行了,同样注意不要加在注解里面去了</mirrors></p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code> &lt;mirrors&gt;
+&lt;mirror&gt;
+  &lt;id&gt;alimaven&lt;/id&gt;
+  &lt;name&gt;aliyun maven&lt;/name&gt;
+  &lt;url&gt;http://maven.aliyun.com/nexus/content/groups/public/&lt;/url&gt;
+  &lt;mirrorOf&gt;central&lt;/mirrorOf&gt;        
+&lt;/mirror&gt;
+</code></pre></div></div>
+<p>&lt;/mirrors&gt;</p>
+
+<p>这个是阿里巴巴提供的镜像地址,也可以自己在网上找别的镜像地址</p>
+
+<p>https://www.cnblogs.com/hardingworking-miner/p/10155080.html</p>
+
+<p>http://maven.apache.org/guides/mini/guide-mirror-settings.html</p>
+
+<p>https://blog.csdn.net/xl890727/article/details/53942452</p>
+
+<p>Maven错误：was cached in the local repository, resolution will not be reattempted until the update</p>
+
+<p>解决办法：命令中增加个参数U，如下： mvn -U clean install -Dmaven.test.skip=true</p>
+
+<p>use -U parameter to force a check for the updated releases and snapshots on remote repositories, and resolve this issue.</p>
+
+<p>https://flink.apache.org/downloads.html
+https://www.cnblogs.com/dan-baishucaizi/p/12757367.html</p>
+<mirror>
+        <id>mapr-public</id>
+        <mirrorOf>mapr-releases</mirrorOf>
+        <name>mapr-releases</name>
+        <url>https://maven.aliyun.com/repository/mapr-public</url>
+    </mirror>
+<p>快速编译指令
+mvn clean package -DskipTests -Dfast</p>
+
+<p>改为内网repo问题解决了</p>
+
+<p>把jar包资源上传
+然后
+– 创建 UDF
+ADD JAR ‘hdfs://yarn-hdfs-test/aa-1.0-SNAPSHOT.jar’;
+CREATE FUNCTION ‘addUdf’ AS ‘com.xx.streamsql.udf.AddUDF’;</p>
+
+<p>在streamsql里面就可以使用addUdf函数了</p>
+
+<p>本文会主要讲三种udf：</p>
+
+<p>ScalarFunction</p>
+
+<p>TableFunction</p>
+
+<p>AggregateFunction</p>
+
+<p>    用户自定义函数是非常重要的一个特征，因为他极大地扩展了查询的表达能力。本文除了介绍这三种udf之外，最后会介绍一个redis作为交互数据源的udf案例。</p>
+
+<p>注册用户自定义函数</p>
+
+<p>   在大多数场景下，用户自定义函数在使用之前是必须要注册的。对于Scala的Table API，udf是不需要注册的。</p>
+
+<p>   调用TableEnvironment的registerFunction()方法来实现注册。Udf注册成功之后，会被插入TableEnvironment的function catalog，这样table API和sql就能解析他了。</p>
+
+<p>1.Scalar Functions 标量函数
+   标量函数，是指返回一个值的函数。标量函数是实现将0，1，或者多个标量值转化为一个新值。</p>
+
+<p>   实现一个标量函数需要继承ScalarFunction，并且实现一个或者多个evaluation方法。标量函数的行为就是通过evaluation方法来实现的。evaluation方法必须定义为public，命名为eval。evaluation方法的输入参数类型和返回值类型决定着标量函数的输入参数类型和返回值类型。evaluation方法也可以被重载实现多个eval。同时evaluation方法支持变参数，例如：eval(String… strs)。</p>
+
+<p>下面给出一个标量函数的例子。例子实现的是一个hashcode方法。</p>
+
+<p>public class HashCode extends ScalarFunction {
+private int factor = 12;
+public HashCode(int factor) {
+    this.factor = factor;
+}
+public int eval(String s) {
+   return s.hashCode() * factor;
+}
+}
+BatchTableEnvironment tableEnv = TableEnvironment.getTableEnvironment(env);
+// register the function
+tableEnv.registerFunction(“hashCode”, new HashCode(10));
+// use the function in Java Table API
+myTable.select(“string, string.hashCode(), hashCode(string)”);
+// use the function in SQL API</p>
+
+<p>tableEnv.sqlQuery(“SELECT string, HASHCODE(string) FROM MyTable”);
+   默认情况下evaluation方法的返回值类型是由flink类型抽取工具决定。对于基础类型及简单的POJOS是足够的，但是更复杂的类型，自定义类型，组合类型，会报错。这种情况下，返回值类型的TypeInformation，需要手动指定，方法是重载ScalarFunction#getResultType()。</p>
+
+<p>   下面给一个例子，通过复写ScalarFunction#getResultType()，将long型的返回值在代码生成的时候翻译成Types.TIMESTAMP。</p>
+
+<p>public static class TimestampModifier extends ScalarFunction {
+public long eval(long t) {
+  return t % 1000;
+}
+public TypeInformation&lt;?&gt; getResultType(signature: Class&lt;?&gt;[]) {
+  return Types.TIMESTAMP;
+}
+}
+2.Table Functions 表函数
+   与标量函数相似之处是输入可以0，1，或者多个参数，但是不同之处可以输出任意数目的行数。返回的行也可以包含一个或者多个列。</p>
+
+<p>   为了自定义表函数，需要继承TableFunction，实现一个或者多个evaluation方法。表函数的行为定义在这些evaluation方法内部，函数名为eval并且必须是public。TableFunction可以重载多个eval方法。Evaluation方法的输入参数类型，决定着表函数的输入类型。Evaluation方法也支持变参，例如：eval(String… strs)。返回表的类型取决于TableFunction的基本类型。Evaluation方法使用collect(T)发射输出rows。</p>
+
+<p>   在Table API中，表函数在scala语言中使用方法如下：.join(Expression) 或者 .leftOuterJoin(Expression)，在java语言中使用方法如下：.join(String) 或者.leftOuterJoin(String)。</p>
+
+<p>Join操作算子会使用表函数(操作算子右边的表)产生的所有行进行(cross) join 外部表(操作算子左边的表)的每一行。
+leftOuterJoin操作算子会使用表函数(操作算子右边的表)产生的所有行进行(cross) join 外部表(操作算子左边的表)的每一行，并且在表函数返回一个空表的情况下会保留所有的outer rows。
+在sql语法中稍微有点区别：</p>
+
+<p>cross join用法是LATERAL TABLE(<TableFunction>)。
+LEFT JOIN用法是在join条件中加入ON TRUE。
+下面的例子讲的是如何使用表值函数。</TableFunction></p>
+
+<p>// The generic type “Tuple2&lt;String, Integer&gt;” determines the schema of the returned table as (String, Integer).</p>
+
+<p>public class Split extends TableFunction&lt;Tuple2&lt;String, Integer» {</p>
+
+<p>private String separator = “ “;
+  public Split(String separator) {
+      this.separator = separator;
+  }
+  public void eval(String str) {
+      for (String s : str.split(separator)) {
+          // use collect(…) to emit a row
+          collect(new Tuple2&lt;String, Integer&gt;(s, s.length()));
+      }
+  }
+}
+BatchTableEnvironment tableEnv = TableEnvironment.getTableEnvironment(env);
+Table myTable = …         // table schema: [a: String]
+// Register the function.
+tableEnv.registerFunction(“split”, new Split(“#”));
+// Use the table function in the Java Table API. “as” specifies the field names of the table.
+myTable.join(“split(a) as (word, length)”).select(“a, word, length”);</p>
+
+<p>myTable.leftOuterJoin(“split(a) as (word, length)”).select(“a, word, length”);</p>
+
+<p>// Use the table function in SQL with LATERAL and TABLE keywords.
+// CROSS JOIN a table function (equivalent to “join” in Table API).
+tableEnv.sqlQuery(“SELECT a, word, length FROM MyTable, LATERAL TABLE(split(a)) as T(word, length)”);
+// LEFT JOIN a table function (equivalent to “leftOuterJoin” in Table API).
+tableEnv.sqlQuery(“SELECT a, word, length FROM MyTable LEFT JOIN LATERAL TABLE(split(a)) as T(word, length) ON TRUE”);
+   需要注意的是PROJO类型不需要一个确定的字段顺序。意味着你不能使用as修改表函数返回的pojo的字段的名字。</p>
+
+<p>   默认情况下TableFunction返回值类型是由flink类型抽取工具决定。对于基础类型及简单的POJOS是足够的，但是更复杂的类型，自定义类型，组合类型，会报错。这种情况下，返回值类型的TypeInformation，需要手动指定，方法是重载TableFunction#getResultType()。</p>
+
+<p>下面的例子，我们通过复写TableFunction#getResultType()方法使得表返回类型是RowTypeInfo(String, Integer)。</p>
+
+<p>public class CustomTypeSplit extends TableFunction<Row> {
+  public void eval(String str) {
+      for (String s : str.split(" ")) {
+          Row row = new Row(2);
+          row.setField(0, s);
+          row.setField(1, s.length);
+          collect(row);
+      }
+  }
+  @Override
+  public TypeInformation<Row> getResultType() {
+      return Types.ROW(Types.STRING(), Types.INT());
+  }
+}
+3.Aggregation Functions 聚合函数
+   用户自定义聚合函数聚合一张表(一行或者多行，一行有一个或者多个属性)为一个标量的值。
+[图片上传失败...(image-f5e972-1542542047386)]
+上图中是讲的一张饮料的表这个表有是那个字段五行数据，现在要做的是求出所有饮料的最高价。</Row></Row></p>
+
+<p>   聚合函数需要继承AggregateFunction。聚合函数工作方式如下：</p>
+
+<p>首先，需要一个accumulator，这个是保存聚合中间结果的数据结构。调用AggregateFunction函数的createAccumulator()方法来创建一个空accumulator.</p>
+
+<p>随后，每个输入行都会调用accumulate()方法来更新accumulator。一旦所有的行被处理了，getValue()方法就会被调用，计算和返回最终的结果。</p>
+
+<p>对于每个AggregateFunction，下面三个方法都是比不可少的：</p>
+
+<p>createAccumulator()</p>
+
+<p>accumulate()</p>
+
+<p>getValue()
+   flink的类型抽取机制不能识别复杂的数据类型，比如，数据类型不是基础类型或者简单的pojos类型。所以，类似于ScalarFunction 和TableFunction，AggregateFunction提供了方法去指定返回结果类型的TypeInformation，用的是AggregateFunction#getResultType()。Accumulator类型用的是AggregateFunction#getAccumulatorType()。</p>
+
+<p>   除了上面的方法，还有一些可选的方法。有些方法是让系统更加高效的执行查询，另外的一些在特定的场景下是必须的。例如，merge()方法在会话组窗口（session group window）上下文中是必须的。当一行数据是被视为跟两个回话窗口相关的时候，两个会话窗口的accumulators需要被join。</p>
+
+<p>AggregateFunction的下面几个方法，根据使用场景的不同需要被实现：</p>
+
+<p>retract()：在bounded OVER窗口的聚合方法中是需要实现的。
+merge()：在很多batch 聚合和会话窗口聚合是必须的。
+resetAccumulator(): 在大多数batch聚合是必须的。
+AggregateFunction的所有方法都是需要被声明为public，而不是static。定义聚合函数需要实现org.apache.flink.table.functions.AggregateFunction同时需要实现一个或者多个accumulate方法。该方法可以被重载为不同的数据类型，并且支持变参。</p>
+
+<p>   为了计算加权平均值，累加器需要存储已累积的所有数据的加权和及计数。在栗子中定义一个WeightedAvgAccum类作为accumulator。尽管，retract(), merge(), 和resetAccumulator()方法在很多聚合类型是不需要的，这里也给出了栗子。</p>
+
+<p>/**</p>
+<ul>
+  <li>Accumulator for WeightedAvg.
+*/
+public static class WeightedAvgAccum {
+public long sum = 0;
+public int count = 0;
+}
+/**</li>
+  <li>Weighted Average user-defined aggregate function.
+*/
+public static class WeightedAvg extends AggregateFunction&lt;Long, WeightedAvgAccum&gt; {
+@Override
+public WeightedAvgAccum createAccumulator() {
+  return new WeightedAvgAccum();
+}
+@Override
+public Long getValue(WeightedAvgAccum acc) {
+    if (acc.count == 0) {
+        return null;
+    } else {
+        return acc.sum / acc.count;
+    }
+}
+public void accumulate(WeightedAvgAccum acc, long iValue, int iWeight) {
+    acc.sum += iValue * iWeight;
+    acc.count += iWeight;
+}
+public void retract(WeightedAvgAccum acc, long iValue, int iWeight) {
+    acc.sum -= iValue * iWeight;
+    acc.count -= iWeight;
+}
+public void merge(WeightedAvgAccum acc, Iterable<WeightedAvgAccum> it) {
+    Iterator<WeightedAvgAccum> iter = it.iterator();
+    while (iter.hasNext()) {
+        WeightedAvgAccum a = iter.next();
+        acc.count += a.count;
+        acc.sum += a.sum;
+    }
+}
+public void resetAccumulator(WeightedAvgAccum acc) {
+    acc.count = 0;
+    acc.sum = 0L;
+}
+}
+// register function
+StreamTableEnvironment tEnv = ...
+tEnv.registerFunction("wAvg", new WeightedAvg());
+// use function</WeightedAvgAccum></WeightedAvgAccum></li>
+</ul>
+
+<p>tEnv.sqlQuery(“SELECT user, wAvg(points, level) AS avgPoints FROM userScores GROUP BY user”);
+4.udf的最佳实践经验
+4.1 Table API和SQL
+   代码生成器内部会尽可能多的尝试使用原生值。用户定义的函数可能通过对象创建、强制转换(casting)和拆装箱((un)boxing)引入大量开销。因此，强烈推荐参数和返回值的类型定义为原生类型而不是他们包装类型(boxing class)。Types.DATE 和Types.TIME可以用int代替。Types.TIMESTAMP可以用long代替。</p>
+
+<p>   建议用户自定义函数使用java编写而不是scala编写，因为scala的类型可能会有不被flink类型抽取器兼容。</p>
+
+<p>4.2 用Runtime集成UDFs
+   有时候udf需要获取全局runtime信息或者在进行实际工作之前做一些设置和清除工作，比如，打开数据库链接和关闭数据库链接。Udf提供了open()和close()方法，可以被复写，功能类似Dataset和DataStream API的RichFunction方法。</p>
+
+<p>   Open()方法是在evaluation方法调用前调用一次。Close()是在evaluation方法最后一次调用后调用。Open()方法提共一个FunctionContext，FunctionContext包含了udf执行环境的上下文，比如，metric group，分布式缓存文件，全局的job参数。</p>
+
+<p>   通过调用FunctionContext的相关方法，可以获取到相关的信息：</p>
+
+<p>getMetricGroup()并行子任务的指标组;
+getCachedFile(name)分布式缓存文件的本地副本;
+getJobParameter(name, defaultValue)给定key全局job参数;
+   给出的例子就是通过FunctionContext在一个标量函数中获取全局job的参数。主要是实现获取redis的配置，然后简历redis链接，实现redis的交互的过程。</p>
+
+<p>import org.apache.flink.table.functions.FunctionContext;
+import org.apache.flink.table.functions.ScalarFunction;
+import redis.clients.jedis.Jedis;
+public class HashCode extends ScalarFunction {
+  private int factor = 12;
+  Jedis jedis = null;
+  public HashCode() {
+      super();
+  }
+  @Override
+  public void open(FunctionContext context) throws Exception {
+      super.open(context);
+      String redisHost = context.getJobParameter(“redis.host”,”localhost”);
+      int redisPort = Integer.valueOf(context.getJobParameter(“redis.port”,”6379”));
+      jedis = new Jedis(redisHost,redisPort);
+  }</p>
+
+<p>@Override
+  public void close() throws Exception {
+      super.close();
+      jedis.close();
+  }</p>
+
+<p>public HashCode(int factor) {
+      this.factor = factor;
+  }</p>
+
+<p>public int eval(int s) {
+      s = s % 3;
+      if(s == 2)
+          return Integer.valueOf(jedis.get(String.valueOf(s)));
+      else
+          return 0;
+  }
+}</p>
+
+<p>ExecutionEnvironment env = ExecutionEnvironment.getExecutionEnvironment();
+BatchTableEnvironment tableEnv = TableEnvironment.getTableEnvironment(env);
+// set job parameter
+Map&lt;String,String&gt; hashmap = new HashMap&lt;&gt;();
+       hashmap.put(“redis.host”,”localhost”);
+       hashmap.put(“redis.port”,”6379”);
+       ParameterTool parameter = ParameterTool.fromMap(hashmap);
+       exeEnv.getConfig().setGlobalJobParameters(parameter);
+// register the function
+tableEnv.registerFunction(“hashCode”, new HashCode());
+// use the function in Java Table API
+myTable.select(“string, string.hashCode(), hashCode(string)”);
+// use the function in SQL
+tableEnv.sqlQuery(“SELECT string, HASHCODE(string) FROM MyTable”);</p>
+
+<p>https://www.jianshu.com/p/5dc2cab91c78</p>
+
+<p>定义 UDF 类，继承 ScalarFunction
+实现 eval() 方法，参数和返回值根据 SQL 中的实际需要决定，VARCHAR 类型对应 JAVA 中的 String，BIGINT 对应 long 等。</p>
+
+:ET

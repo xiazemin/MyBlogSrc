@@ -1,0 +1,940 @@
+---
+title: pprof
+layout: post
+category: golang
+author: 夏泽民
+---
+https://software.intel.com/en-us/blogs/2014/05/10/debugging-performance-issues-in-go-programs
+
+https://lrita.github.io/2017/05/26/golang-memory-pprof/
+<!-- more -->
+Debugging performance issues in Go programs
+By Dmitry Vyukov, published on May 10, 2014
+Let's assume you have a Go program and want to improve its performance. There are several tools available that can help with this task. These tools can help you to identify various types of hotspots (CPU, IO, memory), hotspots are the places that you need to concentrate on in order to significantly improve performance. However, another outcome is possible -- the tools can help you identify obvious performance defects in the program. For example, you prepare an SQL statement before each query while you could prepare it once at program startup. Another example is if an O(N^2) algorithm somehow slipped into where an obvious O(N) exists and is expected. In order to identify such cases you need to sanity check what you see in profiles. For example for the first case significant time spent in SQL statement preparation would be the red flag.
+
+It's also important to understand various bounding factors for performance. For example, if the program communicates via 100 Mbps network link and it is already utilizes >90Mbps, there is not much you can do with the program to improve its performance. There are similar bounding factors for disk IO, memory consumption and computational tasks.
+
+With that in mind we can look at the available tools.
+
+Note: The tools can interfere with each other. For example, precise memory profiling skews CPU profiles, goroutine blocking profiling affects scheduler trace, etc. Use tools in isolation to get more precise info.
+
+Note: the formats described here are based on Go1.3 release.
+
+ 
+CPU Profiler
+ 
+
+Go runtime contains built-in CPU profiler, which shows what functions consume what percent of CPU time. There are 3 ways you can get access to it:
+
+ 
+
+1. The simplest one is -cpuprofile flag of 'go test' command. For example, the following command:
+
+$ go test -run=none -bench=ClientServerParallel4 -cpuprofile=cprof net/http
+
+will profile the given benchmark and write CPU profile into 'cprof' file.
+
+Then:
+
+$ go tool pprof --text http.test cprof
+
+will print a list of the hottest functions.
+
+There are several output types available, the most useful ones are: --text, --web and --list. Run 'go tool pprof' to get the complete list.
+
+The obvious drawback of this option is that it works only for tests.
+
+ 
+
+2. net/http/pprof package. This is the ideal solution for network servers. You merely need to import net/http/pprof, and collect profiles with:
+
+$ go tool pprof --text mybin http://myserver:6060:/debug/pprof/profile
+
+ 
+
+3. Manual profile collection. You need to import runtime/pprof and add the following code to main function:
+
+1
+if *flagCpuprofile != "" {
+2
+    f, err := os.Create(*flagCpuprofile)
+3
+    if err != nil {
+4
+        log.Fatal(err)
+5
+    }
+6
+    pprof.StartCPUProfile(f)
+7
+    defer pprof.StopCPUProfile()
+8
+}
+The profile will be written to the specified file, visualize it the same way as in the first option.
+
+ 
+
+Here is an example of a profile visualized with --web option:
+
+ 
+
+cpu profile
+
+ 
+
+You can investigate a single function with --list=funcname option. For example, the following profile shows that the time was spent in the append function:
+
+01
+.      .   93: func (bp *buffer) WriteRune(r rune) error {
+02
+.      .   94:     if r < utf8.RuneSelf {
+03
+5      5   95:         *bp = append(*bp, byte(r))
+04
+.      .   96:         return nil
+05
+.      .   97:     }
+06
+.      .   98:
+07
+.      .   99:     b := *bp
+08
+.      .  100:     n := len(b)
+09
+.      .  101:     for n+utf8.UTFMax > cap(b) {
+10
+.      .  102:         b = append(b, 0)
+11
+.      .  103:     }
+12
+.      .  104:     w := utf8.EncodeRune(b[n:n+utf8.UTFMax], r)
+13
+.      .  105:     *bp = b[:n+w]
+14
+.      .  106:     return nil
+15
+.      .  107: }
+You can find detailed info on pprof tool and description of the numbers in the graph here.
+
+ 
+
+There are also 3 special entries that the profiler uses when it can't unwind stack: GC, System and ExternalCode. GC means time spent during garbage collection, see Memory Profiler and Garbage Collector Trace sections below for optimization suggestions. System means time spent in goroutine scheduler, stack management code and other auxiliary runtime code. ExternalCode means time spent in native dynamic libraries.
+
+ 
+
+Here are some hints with respect to how to interpret what you see in the profile.
+
+If you see lots of time spent in runtime.mallocgc function, the program potentially makes excessive amount of small memory allocations. The profile will tell you where the allocations are coming from. See the memory profiler section for suggestions on how to optimize this case.
+
+If lots of time is spent in channel operations, sync.Mutex code and other synchronization primitives or System component, the program probably suffers from contention. Consider to restructure program to eliminate frequently accessed shared resources. Common techniques for this include sharding/partitioning, local buffering/batching and copy-on-write technique.
+
+If lots of time is spent in syscall.Read/Write, the program potentially makes excessive amount of small reads and writes. Bufio wrappers around os.File or net.Conn can help in this case.
+
+If lots of time is spent in GC component, the program either allocates too many transient objects or heap size is very small so garbage collections happen too frequently. See Garbage Collector Tracer and Memory Profiler sections for optimization suggestions.
+
+ 
+
+Note: CPU profiler currently does not work on darwin.
+
+Note: On windows you need to install Cygwin, Perl and Graphviz to generate svg/web profiles.
+
+Note: On linux you can also try perf system profiler. It can't unwind Go stacks, but it can profile and unwind cgo/SWIG code and kernel. So it can be useful to get insights into native/kernel performance bottlenecks.
+
+ 
+Memory Profiler
+ 
+
+Memory profiler shows what functions allocate heap memory. You can collect it in similar ways as CPU profile: with 'go test --memprofile', with net/http/pprof via http://myserver:6060:/debug/pprof/heap or by calling runtime/pprof.WriteHeapProfile.
+
+ 
+
+You can visualize only allocations live at the time of profile collection (--inuse_space flag to pprof, default), or all allocations happened since program start (--alloc_space flag to pprof). The former is useful for profiles collected with net/http/pprof on live applications, the latter is useful for profiles collected at program end (otherwise you will see almost empty profile).
+
+ 
+
+Note: the memory profiler is sampling, that is, it collects information only about some subset of memory allocations. Probability of sampling an object is proportional to its size. You can change the sampling rate with go test --memprofilerate flag, or by setting runtime.MemProfileRate variable at program startup. The rate of 1 will lead to collection of information about all allocations, but it can slow down execution. The default sampling rate is 1 sample per 512KB of allocated memory.
+
+ 
+
+You can also visualize number of bytes allocated or number of objects allocated (--inuse/alloc_space and --inuse/alloc_objects flags, respectively). The profiler tends to sample larger objects during profiling  more. But it's important to understand that large objects affect memory consumption and GC time, while large number of tiny allocations affects execution speed (and GC time to some degree as well). So it may be useful to look at both.
+
+Objects can be persistent or transient. If you have several large persistent objects allocated at program start, they will be most likely sampled by the profiler (because they are large). Such objects do affect memory consumption and GC time, but they do not affect normal execution speed (no memory management operations happen on them). On the other hand if you have large number of objects with very short life durations, they can be barely represented in the profile (if you use the default --inuse_space mode). But they do significantly affect execution speed, because they are constantly allocated and freed. So, once again, it may be useful to look at both types of objects.
+
+So, generally, if you want to reduce memory consumption, you need to look at --inuse_space profile collected during normal program operation. If you want to improve execution speed, look at --alloc_objects profile collected after significant running time or at program end.
+
+There are several flags that control reporting granularity. --functions makes pprof report on function level (default). --lines makes pprof report on source line level, which is useful if hot functions allocate on different lines. And there are also --addresses and --files for exact instruction address and file level, respectively.
+
+ 
+
+There is a useful option for the memory profile -- you can look at it right in the browser (provided that you imported net/http/pprof). If you open  http://myserver:6060/debug/pprof/heap?debug=1 you must see the heap profile along the lines of:
+
+01
+heap profile: 4: 266528 [123: 11284472] @ heap/1048576
+02
+1: 262144 [4: 376832] @ 0x28d9f 0x2a201 0x2a28a 0x2624d 0x26188 0x94ca3 0x94a0b 0x17add6 0x17ae9f 0x1069d3 0xfe911 0xf0a3e 0xf0d22 0x21a70
+03
+#    0x2a201    cnew+0xc1    runtime/malloc.goc:718
+04
+#    0x2a28a    runtime.cnewarray+0x3a            runtime/malloc.goc:731
+05
+#    0x2624d    makeslice1+0x4d                runtime/slice.c:57
+06
+#    0x26188    runtime.makeslice+0x98            runtime/slice.c:38
+07
+#    0x94ca3    bytes.makeSlice+0x63            bytes/buffer.go:191
+08
+#    0x94a0b    bytes.(*Buffer).ReadFrom+0xcb        bytes/buffer.go:163
+09
+#    0x17add6    io/ioutil.readAll+0x156            io/ioutil/ioutil.go:32
+10
+#    0x17ae9f    io/ioutil.ReadAll+0x3f            io/ioutil/ioutil.go:41
+11
+#    0x1069d3    godoc/vfs.ReadFile+0x133            godoc/vfs/vfs.go:44
+12
+#    0xfe911    godoc.func·023+0x471            godoc/meta.go:80
+13
+#    0xf0a3e    godoc.(*Corpus).updateMetadata+0x9e        godoc/meta.go:101
+14
+#    0xf0d22    godoc.(*Corpus).refreshMetadataLoop+0x42    godoc/meta.go:141
+15
+ 
+16
+2: 4096 [2: 4096] @ 0x28d9f 0x29059 0x1d252 0x1d450 0x106993 0xf1225 0xe1489 0xfbcad 0x21a70
+17
+#    0x1d252    newdefer+0x112                runtime/panic.c:49
+18
+#    0x1d450    runtime.deferproc+0x10            runtime/panic.c:132
+19
+#    0x106993    godoc/vfs.ReadFile+0xf3            godoc/vfs/vfs.go:43
+20
+#    0xf1225    godoc.(*Corpus).parseFile+0x75        godoc/parser.go:20
+21
+#    0xe1489    godoc.(*treeBuilder).newDirTree+0x8e9    godoc/dirtrees.go:108
+22
+#    0xfbcad    godoc.func·002+0x15d            godoc/dirtrees.go:100
+The numbers in the beginning of each entry ("1: 262144 [4: 376832]") represent number of currently live objects, amount of memory occupied by live objects, total number of allocations and amount of memory occupied by all allocations, respectively.
+
+ 
+
+Optimizations are usually application-specific, but here are some common suggestions.
+
+1. Combine objects into larger objects. For example, replace *bytes.Buffer struct member with bytes.Buffer (you can preallocate buffer for writing by calling bytes.Buffer.Grow later). This will reduce number of memory allocations (faster) and also reduce pressure on garbage collector (faster garbage collections).
+
+ 
+
+2. Local variables that escape from their declaration scope get promoted into heap allocations. Compiler generally can't prove that several variables have the same life time, so it allocates each such variable separately. So you can use the above advise for local variables as well. For example, replace:
+
+1
+for k, v := range m {
+2
+   k, v := k, v   // copy for capturing by the goroutine
+3
+   go func() {
+4
+       // use k and v
+5
+   }()
+6
+}
+with:
+
+1
+for k, v := range m {
+2
+   x := struct{ k, v string }{k, v}   // copy for capturing by the goroutine
+3
+   go func() {
+4
+       // use x.k and x.v
+5
+   }()
+6
+}
+This replaces two memory allocations with a single allocation. However, this optimization usually negatively affects code readability, so use it reasonably.
+
+3. A special case of allocation combining is slice array preallocation. If you know a typical size of the slice, you can preallocate a backing array for it as follows:
+
+01
+type X struct {
+02
+    buf      []byte
+03
+    bufArray [16]byte // Buf usually does not grow beyond 16 bytes.
+04
+}
+05
+ 
+06
+func MakeX() *X {
+07
+    x := &X{}
+08
+    // Preinitialize buf with the backing array.
+09
+    x.buf = x.bufArray[:0]
+10
+    return x
+11
+}
+4. If possible use smaller data types. For example, use int8 instead of int.
+
+ 
+
+5. Objects that do not contain any pointers (note that strings, slices, maps and chans contain implicit pointers), are not scanned by garbage collector. For example, a 1GB byte slice virtually does not affect garbage collection time. So if you remove pointers from actively used objects, it can positively impact garbage collection time. Some possibilities are: replace pointers with indices, split object into two parts one of which does not contain pointers.
+
+ 
+
+6. Use freelists to reuse transient objects and reduce number of allocations. Standard library contains sync.Pool type that allows to reuse the same object several times in between garbage collections. However, be aware that, as any manual memory management scheme, incorrect use of sync.Pool can lead to use-after-free bugs.
+
+ 
+
+You can also use the Garbage Collector Trace (see below) to get some insights into memory issues.
+
+Blocking Profiler
+ 
+
+The blocking profiler shows where goroutine block waiting on synchronization primitives (including timer channels). You can collect it in similar ways as CPU profile: with 'go test --blockprofile', with net/http/pprof via http://myserver:6060:/debug/pprof/block or by calling runtime/pprof.Lookup("block").WriteTo.
+
+But there is significant caveat -- the blocking profiler is not enabled by default. 'go test --blockprofile' will enable it for you automatically. However, if you use net/http/pprof or runtime/pprof, you need to enable it manually (otherwise the profile will be empty). To enable the blocking profiler call runtime.SetBlockProfileRate. SetBlockProfileRate controls the fraction of goroutine blocking events that are reported in the blocking profile. The profiler aims to sample an average of one blocking event per the specified amount of nanoseconds spent blocked. To include every blocking event in the profile, set the rate to 1.
+
+ 
+
+If a function contains several blocking operations and it's not obvious which one leads to blocking, use --lines flag to pprof.
+
+ 
+
+Note that not all blocking is bad. When a goroutine blocks, the underlying worker thread simply switches to another goroutine. So blocking in the cooperative Go environment is very different from blocking on a mutex in a non-cooperative systems (e.g. typical C++ or Java threading libraries, where blocking leads to thread idling and expensive thread context switches). To give you some feeling, let's consider some examples.
+
+ 
+
+Blocking on a time.Ticker is usually OK. If a goroutine blocks on a Ticker for 10 seconds, you will see 10 seconds of blocking in the profile, which is perfectly fine. Blocking on sync.WaitGroup is frequently OK. For example, is a task takes 10 seconds, the goroutine waiting on a WaitGroup for completion will account for 10 seconds of blocking in the profile. Blocking on sync.Cond may or may not be OK, depending on the situation. Consumer blocking on a channel suggests slow producers or lack of work. Producer blocking on a channel suggests that consumers are slower, but this is frequently OK. Blocking on a channel-based semaphore shows how much goroutines are gated on the semaphore. Blocking on a sync.Mutex or sync.RWMutex is usually bad. You can use --ignore flag to pprof to exclude known uninteresting blocking from a profile during visualization.
+
+ 
+
+Blocking of goroutines can lead to two negative consequences:
+
+1. Program does not scale with processors due to lack of work. Scheduler Trace can help to identify this case.
+
+2. Excessive goroutine blocking/unblocking consumes CPU time. CPU Profiler can help to identify this case (look at the System component).
+
+ 
+
+Here are some common suggestions that can help to reduce goroutine blocking:
+
+ 
+
+1. Use sufficiently buffered channels in producer-consumer scenarios. Unbuffered channels substantially limit available parallelism in the program.
+
+ 
+
+2. Use sync.RWMutex instead of sync.Mutex for read-mostly workloads. Readers never block other readers in sync.RWMutex, even on implementation level.
+
+ 
+
+3. In some cases it's possible to remove mutexes entirely by using copy-on-write technique. If the protected data structure is modified infrequently and it's feasible to make copies of it, then it can be updated as follows:
+
+01
+type Config struct {
+02
+    Routes   map[string]net.Addr
+03
+    Backends []net.Addr
+04
+}
+05
+ 
+06
+var config unsafe.Pointer  // actual type is *Config
+07
+ 
+08
+// Worker goroutines use this function to obtain the current config.
+09
+func CurrentConfig() *Config {
+10
+    return (*Config)(atomic.LoadPointer(&config))
+11
+}
+12
+ 
+13
+// Background goroutine periodically creates a new Config object
+14
+// as sets it as current using this function.
+15
+func UpdateConfig(cfg *Config) {
+16
+    atomic.StorePointer(&config, unsafe.Pointer(cfg))
+17
+}
+This pattern prevents the writer from blocking readers during update.
+
+ 
+
+4. Partitioning is another general technique for reducing contention/blocking on shared mutable data structures. Below is an example of how to partition a hashmap:
+
+01
+type Partition struct {
+02
+    sync.RWMutex
+03
+    m map[string]string
+04
+}
+05
+ 
+06
+const partCount = 64
+07
+var m [partCount]Partition
+08
+ 
+09
+func Find(k string) string {
+10
+    idx := hash(k) % partCount
+11
+    part := &m[idx]
+12
+    part.RLock()
+13
+    v := part.m[k]
+14
+    part.RUnlock()
+15
+    return v
+16
+}
+ 
+
+5. Local caching and batching of updates can help to reduce contention on un-partitionable data structures. Below you can see how to batch sends to a channel:
+
+01
+const CacheSize = 16
+02
+ 
+03
+type Cache struct {
+04
+    buf [CacheSize]int
+05
+    pos int
+06
+}
+07
+ 
+08
+func Send(c chan [CacheSize]int, cache *Cache, value int) {
+09
+    cache.buf[cache.pos] = value
+10
+    cache.pos++
+11
+    if cache.pos == CacheSize {
+12
+        c <- cache.buf
+13
+        cache.pos = 0
+14
+    }
+15
+}
+This technique is not limited to channels. It can be used to batch updates to a map, batch allocations, etc.
+
+ 
+
+6. Use sync.Pool for freelists instead of chan-based or mutex-protected freelists. sync.Pool uses smart techniques internally to reduce blocking.
+
+Goroutine Profiler
+ 
+
+The goroutine profiler simply gives you current stacks of all live goroutines in the process. It can be handy to debug load balancing issues (see Scheduler Trace section below), or to debug deadlocks.
+
+The profile makes sense only for a running app, so go test does not expose it. You can collect the profile with net/http/pprof via http://myserver:6060:/debug/pprof/goroutine, and visualize it to svg/pdf or by calling runtime/pprof.Lookup("goroutine").WriteTo. But the most useful way is to type  http://myserver:6060:/debug/pprof/goroutine?debug=2 in your browser, which will give you symbolized stacks similar to what you see when a program crashes.
+
+Note that goroutines in "syscall" state consume an OS thread, other goroutines do not (except for goroutines that called runtime.LockOSThread, which is, unfortunately, not visible in the profile). Note that goroutines in "IO wait" state also do not consume threads, they are parked on non-blocking network poller (which uses epoll/kqueue/GetQueuedCompletionStatus to unpark goroutines later).
+
+ 
+
+Garbage Collector Trace
+ 
+
+Aside from the profiling tools, there is another kind of tools available -- tracers. They allow to trace garbage collections, memory allocator and goroutine scheduler state. To enable the garbage collector (GC) trace, run the program with GODEBUG=gctrace=1 environment variable:
+
+$ GODEBUG=gctrace=1 ./myserver
+
+Then the program will print output similar to the following during execution:
+
+1
+gc9(2): 12+1+744+8 us, 2 -> 10 MB, 108615 (593983-485368) objects, 4825/3620/0 sweeps, 0(0) handoff, 6(91) steal, 16/1/0 yields
+2
+gc10(2): 12+6769+767+3 us, 1 -> 1 MB, 4222 (593983-589761) objects, 4825/0/1898 sweeps, 0(0) handoff, 6(93) steal, 16/10/2 yields
+3
+gc11(2): 799+3+2050+3 us, 1 -> 69 MB, 831819 (1484009-652190) objects, 4825/691/0 sweeps, 0(0) handoff, 5(105) steal, 16/1/0 yields
+Let's consider the meaning of these numbers. One line per GC is printed. The first number ("gc9") is the number of GC (this is the 9-th GC since program start). The number in parens ("(2)") is the number of worker threads participated in the GC. The next 4 numbers ("12+1+744+8 us") mean stop-the-world, sweeping, marking and waiting for worker threads to finish, in microseconds, respectively. The next 2 numbers ("2 -> 10 MB") mean size of live heap after the previous GC and full heap size (including garbage) before the current GC. The next 3 numbers ("108615 (593983-485368) objects") are total number of objects in heap (including garbage) and total number of memory allocation and free operations. The next 3 numbers ("4825/3620/0 sweeps") characterize sweep phase (of the previous GC): there were total 4825 memory spans, 3620 were swept on demand or in background, 0 were swept during stop-the-world phase (the rest were unused spans). The next 4 numbers ("0(0) handoff, 6(91) steal") characterize load balancing during parallel mark phase: there were 0 object handoff operations (0 objects were handoff), and 6 steal operations (91 objects were stolen). The last 3 numbers ("16/1/0 yields") characterize effectiveness of parallel mark phase: there were total of 17 yield operations during waiting for another thread.
+
+ 
+
+The GC is mark-and-sweep type. Total GC can be expressed as:
+
+ 
+
+Tgc = Tseq + Tmark + Tsweep
+
+ 
+
+where Tseq is time to stop user goroutines and some preparation activities (usually small); Tmark is heap marking time, marking happens when all user goroutines are stopped, and thus can significantly affect latency of processing; Tsweep is heap sweeping time, sweeping generally happens concurrently with normal program execution, and so is not so critical for latency.
+
+ 
+
+Marking time can be approximately expressed as:
+
+ 
+
+Tmark = C1*Nlive + C2*MEMlive_ptr + C3*Nlive_ptr
+
+ 
+
+where Nlive is the number of live objects in the heap during GC, MEMlive_ptr is the amount of memory occupied by live objects with pointers, Nlive_ptr is the number of pointers in live objects.
+
+ 
+
+Sweeping time can be approximately expressed as:
+
+ 
+
+Tsweep = C4*MEMtotal + C5*MEMgarbage
+
+ 
+
+where MEMtotal is the total amount of heap memory, MEMgarbage is the amount of garbage in the heap.
+
+ 
+
+Next GC happens after the program has allocated an extra amount of memory proportional to the amount already in use. The proportion is controlled by GOGC environment variable (100 by default). If GOGC=100 and the program is using 4M of heap memory, runtime will trigger GC again when the program gets to 8M. This keeps the GC cost in linear proportion to the allocation cost. Adjusting GOGC changes the linear constant and also the amount of extra memory used.
+
+ 
+
+Only sweeping depends on total size of the heap, and sweeping happens concurrently with normal program execution. So it can make sense to set GOGC to a higher value (200, 300, 500, etc) if you can afford extra memory consumption. For example, GOGC=300 can reduce garbage collection overhead by up to 2 times while keeping latencies the same (at the cost of 2 times larger heap).
+
+ 
+
+GC is parallel and generally scales well with hardware parallelism. So it can make sense to set GOMAXPROCS to higher value even for sequential programs just to speed up garbage collections. However, note that number of garbage collector threads is currently bounded by 8.
+
+ 
+
+Memory Allocator Trace
+ 
+
+Memory allocator traces simply dumps all memory allocation and free operations onto console. It's enabled with GODEBUG=allocfreetrace=1 environment variable. The output looks along the lines of:
+
+01
+tracealloc(0xc208062500, 0x100, array of parse.Node)
+02
+goroutine 16 [running]:
+03
+runtime.mallocgc(0x100, 0x3eb7c1, 0x0)
+04
+    runtime/malloc.goc:190 +0x145 fp=0xc2080b39f8
+05
+runtime.growslice(0x31f840, 0xc208060700, 0x8, 0x8, 0x1, 0x0, 0x0, 0x0)
+06
+    runtime/slice.goc:76 +0xbb fp=0xc2080b3a90
+07
+text/template/parse.(*Tree).parse(0xc2080820e0, 0xc208023620, 0x0, 0x0)
+08
+    text/template/parse/parse.go:289 +0x549 fp=0xc2080b3c50
+09
+...
+10
+ 
+11
+tracefree(0xc208002d80, 0x120)
+12
+goroutine 16 [running]:
+13
+runtime.MSpan_Sweep(0x73b080)
+14
+       runtime/mgc0.c:1880 +0x514 fp=0xc20804b8f0
+15
+runtime.MCentral_CacheSpan(0x69c858)
+16
+       runtime/mcentral.c:48 +0x2b5 fp=0xc20804b920
+17
+runtime.MCache_Refill(0x737000, 0xc200000012)
+18
+       runtime/mcache.c:78 +0x119 fp=0xc20804b950
+19
+...
+The trace contains address of the memory block, size, type, goroutine id and the stack trace.
+
+It's probably more useful for debugging, but can give very fine-grained info for allocation optimizations as well.
+
+ 
+
+Scheduler Trace
+ 
+
+Scheduler trace can provide insights into dynamic behavior of the goroutine scheduler and allow to debug load balancing and scalability issues. To enable the scheduler trace trace, run the program with GODEBUG=schedtrace=1000 environment variable (the value means period of output, in ms, in this case it's once per second):
+
+$ GODEBUG=schedtrace=1000 ./myserver
+
+Then the program will print output similar to the following during execution:
+
+1
+SCHED 1004ms: gomaxprocs=4 idleprocs=0 threads=11 idlethreads=4 runqueue=8 [0 1 0 3]
+2
+SCHED 2005ms: gomaxprocs=4 idleprocs=0 threads=11 idlethreads=5 runqueue=6 [1 5 4 0]
+3
+SCHED 3008ms: gomaxprocs=4 idleprocs=0 threads=11 idlethreads=4 runqueue=10 [2 2 2 1]
+The first number ("1004ms") is time since program start. Gomaxprocs is the current value of GOMAXPROCS. Idleprocs is the number of idling processors (the rest are executing Go code). Threads is the total number of worker threads created by the scheduler (threads can be in 3 states: execute Go code (gomaxprocs-idleprocs), execute syscalls/cgocalls or idle). Idlethreads is the number of idling worker threads. Runqueue is the length of global queue with runnable goroutines. The numbers in square brackets ("[0 1 0 3]") are lengths of per-processor queues with runnable goroutines. Sum of lengths of global and local queues represents the total number of goroutines available for execution.
+
+Note: You can combine any of the tracers as GODEBUG=gctrace=1,allocfreetrace=1,schedtrace=1000.
+
+Note: There is also detailed scheduler trace, which you can enable with GODEBUG=schedtrace=1000,scheddetail=1. It prints detailed info about every goroutine, worker thread and processor. We won't describe its format here as it's mainly useful for scheduler developers; but you can find details in src/pkg/runtime/proc.c.
+
+ 
+
+The scheduler trace is useful when a program does not scale linearly with GOMAXPROCS and/or does not consume 100% of CPU time. The ideal situation is when all processors are busy executing Go code, number of threads is reasonable, there is plenty of work in all queues and the work is reasonably evenly distributed:
+
+ 
+
+gomaxprocs=8 idleprocs=0 threads=40 idlethreads=5 runqueue=10 [20 20 20 20 20 20 20 20]
+
+A bad situation is when something of the above does not hold. For example the following sample demonstrates shortage of work to keep all processors busy:
+
+ 
+
+gomaxprocs=8 idleprocs=6 threads=40 idlethreads=30 runqueue=0 [0 2 0 0 0 1 0 0]
+
+ 
+
+Note: use OS-provided means to measure actual CPU utilization as the ultimate characteristic. On Unix family of operating system it is top command; on Windows it is Task Manager.
+
+ 
+
+You can use the goroutine profiler to understand where goroutines block in the case of work shortage. Note that load imbalance is not ultimately bad as long as all processors are busy, it will just cause some moderate load balancing overheads.
+
+ 
+
+Memory Statistics
+ 
+
+Go runtime exposes coarse-grained memory statistics via runtime.ReadMemStats function. The statistics are also exposed via net/http/pprof at the bottom of  http://myserver:6060/debug/pprof/heap?debug=1. The statistics are described here.
+
+Some of the interesting fields are:
+
+1. HeapAlloc - current heap size.
+
+2. HeapSys - total heap size.
+
+3. HeapObjects - total number of objects in the heap.
+
+4. HeapReleased - amount of memory released to the OS; runtime releases to the OS memory unused for 5 minutes, you can force this process with runtime/debug.FreeOSMemory.
+
+5. Sys - total amount of memory allocated from OS.
+
+6. Sys-HeapReleased - effective memory consumption of the program.
+
+7. StackSys - memory consumed for goroutine stacks (note that some stacks are allocated from heap and are not accounted here, unfortunately there is no way to get total size of stacks (https://code.google.com/p/go/issues/detail?id=7468)).
+
+8. MSpanSys/MCacheSys/BuckHashSys/GCSys/OtherSys - amount of memory allocated by runtime for various auxiliary purposes; they are generally not interesting, unless they are too high.
+
+9. PauseNs - durations of last garbage collections.
+
+ 
+
+Heap Dumper
+ 
+
+The last available tool is heap dumper, it can write state of the whole heap into a file for future exploration. It can be useful for identifying memory leaks and getting insights into program memory consumption.
+
+ 
+
+First, you need to write the dump using runtime/debug.WriteHeapDump function:
+
+1
+f, err := os.Create("heapdump")
+2
+if err != nil { ... }
+3
+debug.WriteHeapDump(f.Fd())
+Then you can either render it to a dot file with graphical representation of the heap or convert it to hprof format. To render it to a dot file:
+
+$ go get github.com/randall77/hprof/dumptodot
+
+$ dumptodot heapdump mybinary > heap.dot
+
+and open heap.dot with Graphviz.
+
+ 
+
+To convert it to hprof format:
+
+$ go get github.com/randall77/hprof/dumptohprof
+
+$ dumptohprof heapdump heap.hprof
+
+$ jhat heap.hprof
+
+and navigate your browser to http://localhost:7000.
+
+ 
+
+Concluding Remarks
+ 
+
+Optimization is an open problem, there are simple recipes that you can use to improve performance. Sometimes optimization requires complete re-architecture of the program. But we hope that the tools will be a valuable addition to your toolbox, that you can use to at least analyze and understand what happens.
+
+Profiling Go Programs is a good tutorial on usage of CPU and memory profilers to optimize a simple program.
+
+当你的golang程序在运行过程中消耗了超出你理解的内存时，你就需要搞明白，到底是 程序中哪些代码导致了这些内存消耗。此时golang编译好的程序对你来说是个黑盒，该 如何搞清其中的内存使用呢？幸好golang已经内置了一些机制来帮助我们进行分析和追 踪。
+
+此时，通常我们可以采用golang的pprof来帮助我们分析golang进程的内存使用。
+
+pprof 实例
+通常我们采用http api来将pprof信息暴露出来以供分析，我们可以采用net/http/pprof 这个package。下面是一个简单的示例：
+
+// pprof 的init函数会将pprof里的一些handler注册到http.DefaultServeMux上
+// 当不使用http.DefaultServeMux来提供http api时，可以查阅其init函数，自己注册handler
+import _ "net/http/pprof"
+
+go func() {
+    http.ListenAndServe("0.0.0.0:8080", nil)
+}()
+此时我们可以启动进程，然后访问http://localhost:8080/debug/pprof/可以看到一个简单的 页面，页面上显示: 注意: 以下的全部数据，包括go tool pprof 采集到的数据都依赖进程中的pprof采样率，默认512kb进行 一次采样，当我们认为数据不够细致时，可以调节采样率runtime.MemProfileRate，但是采样率越低，进 程运行速度越慢。
+
+/debug/pprof/
+
+profiles:
+0         block
+136840    goroutine
+902       heap
+0         mutex
+40        threadcreate
+
+full goroutine stack dump
+上面简单暴露出了几个内置的Profile统计项。例如有136840个goroutine在运行，点击相关链接 可以看到详细信息。
+
+当我们分析内存相关的问题时，可以点击heap项，进入http://127.0.0.1:8080/debug/pprof/heap?debug=1 可以查看具体的显示：
+
+heap profile: 3190: 77516056 [54762: 612664248] @ heap/1048576
+1: 29081600 [1: 29081600] @ 0x89368e 0x894cd9 0x8a5a9d 0x8a9b7c 0x8af578 0x8b4441 0x8b4c6d 0x8b8504 0x8b2bc3 0x45b1c1
+#    0x89368d    github.com/syndtr/goleveldb/leveldb/memdb.(*DB).Put+0x59d
+#    0x894cd8    xxxxx/storage/internal/memtable.(*MemTable).Set+0x88
+#    0x8a5a9c    xxxxx/storage.(*snapshotter).AppendCommitLog+0x1cc
+#    0x8a9b7b    xxxxx/storage.(*store).Update+0x26b
+#    0x8af577    xxxxx/config.(*config).Update+0xa7
+#    0x8b4440    xxxxx/naming.(*naming).update+0x120
+#    0x8b4c6c    xxxxx/naming.(*naming).instanceTimeout+0x27c
+#    0x8b8503    xxxxx/naming.(*naming).(xxxxx/naming.instanceTimeout)-fm+0x63
+
+......
+
+# runtime.MemStats
+# Alloc = 2463648064
+# TotalAlloc = 31707239480
+# Sys = 4831318840
+# Lookups = 2690464
+# Mallocs = 274619648
+# Frees = 262711312
+# HeapAlloc = 2463648064
+# HeapSys = 3877830656
+# HeapIdle = 854990848
+# HeapInuse = 3022839808
+# HeapReleased = 0
+# HeapObjects = 11908336
+# Stack = 655949824 / 655949824
+# MSpan = 63329432 / 72040448
+# MCache = 38400 / 49152
+# BuckHashSys = 1706593
+# GCSys = 170819584
+# OtherSys = 52922583
+# NextGC = 3570699312
+# PauseNs = [1052815 217503 208124 233034 1146462 456882 1098525 530706 551702 419372 768322 596273 387826 455807 563621 587849 416204 599143 572823 488681 701731 656358 2476770 12141392 5827253 3508261 1715582 1295487 908563 788435 718700 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0]
+# NumGC = 31
+# DebugGC = false
+其中显示的内容会比较多，但是主体分为2个部分: 第一个部分打印为通过runtime.MemProfile()获取的runtime.MemProfileRecord记录。 其含义为：
+
+heap profile: 3190(inused objects): 77516056(inused bytes) [54762(alloc objects): 612664248(alloc bytes)] @ heap/1048576(2*MemProfileRate)
+1: 29081600 [1: 29081600] (前面4个数跟第一行的一样，此行以后是每次记录的，后面的地址是记录中的栈指针)@ 0x89368e 0x894cd9 0x8a5a9d 0x8a9b7c 0x8af578 0x8b4441 0x8b4c6d 0x8b8504 0x8b2bc3 0x45b1c1
+#    0x89368d    github.com/syndtr/goleveldb/leveldb/memdb.(*DB).Put+0x59d 栈信息
+第二部分就比较好理解，打印的是通过runtime.ReadMemStats()读取的runtime.MemStats信息。 我们可以重点关注一下
+
+Sys 进程从系统获得的内存空间，虚拟地址空间。
+HeapAlloc 进程堆内存分配使用的空间，通常是用户new出来的堆对象，包含未被gc掉的。
+HeapSys 进程从系统获得的堆内存，因为golang底层使用TCmalloc机制，会缓存一部分堆内存，虚拟地址空间。
+PauseNs 记录每次gc暂停的时间(纳秒)，最多记录256个最新记录。
+NumGC 记录gc发生的次数。
+相信，对pprof不了解的用户看了以上内容，很难获得更多的有用信息。因此我们需要引用更多工具来帮助 我们更加简单的解读pprof内容。
+
+go tool
+我们可以采用go tool pprof -inuse_space http://127.0.0.1:8080/debug/pprof/heap命令连接到进程中 查看正在使用的一些内存相关信息，此时我们得到一个可以交互的命令行。
+
+我们可以看数据top10来查看正在使用的对象较多的10个函数入口。通常用来检测有没有不符合预期的内存 对象引用。
+
+(pprof) top10
+1355.47MB of 1436.26MB total (94.38%)
+Dropped 371 nodes (cum <= 7.18MB)
+Showing top 10 nodes out of 61 (cum >= 23.50MB)
+      flat  flat%   sum%        cum   cum%
+  512.96MB 35.71% 35.71%   512.96MB 35.71%  net/http.newBufioWriterSize
+  503.93MB 35.09% 70.80%   503.93MB 35.09%  net/http.newBufioReader
+  113.04MB  7.87% 78.67%   113.04MB  7.87%  runtime.rawstringtmp
+   55.02MB  3.83% 82.50%    55.02MB  3.83%  runtime.malg
+   45.01MB  3.13% 85.64%    45.01MB  3.13%  xxxxx/storage.(*Node).clone
+   26.50MB  1.85% 87.48%    52.50MB  3.66%  context.WithCancel
+   25.50MB  1.78% 89.26%    83.58MB  5.82%  runtime.systemstack
+   25.01MB  1.74% 91.00%    58.51MB  4.07%  net/http.readRequest
+      25MB  1.74% 92.74%    29.03MB  2.02%  runtime.mapassign
+   23.50MB  1.64% 94.38%    23.50MB  1.64%  net/http.(*Server).newConn
+然后我们在用go tool pprof -alloc_space http://127.0.0.1:8080/debug/pprof/heap命令链接程序来查看 内存对象分配的相关情况。然后输入top来查看累积分配内存较多的一些函数调用:
+
+(pprof) top
+523.38GB of 650.90GB total (80.41%)
+Dropped 342 nodes (cum <= 3.25GB)
+Showing top 10 nodes out of 106 (cum >= 28.02GB)
+      flat  flat%   sum%        cum   cum%
+  147.59GB 22.68% 22.68%   147.59GB 22.68%  runtime.rawstringtmp
+  129.23GB 19.85% 42.53%   129.24GB 19.86%  runtime.mapassign
+   48.23GB  7.41% 49.94%    48.23GB  7.41%  bytes.makeSlice
+   46.25GB  7.11% 57.05%    71.06GB 10.92%  encoding/json.Unmarshal
+   31.41GB  4.83% 61.87%   113.86GB 17.49%  net/http.readRequest
+   30.55GB  4.69% 66.57%   171.20GB 26.30%  net/http.(*conn).readRequest
+   22.95GB  3.53% 70.09%    22.95GB  3.53%  net/url.parse
+   22.70GB  3.49% 73.58%    22.70GB  3.49%  runtime.stringtoslicebyte
+   22.70GB  3.49% 77.07%    22.70GB  3.49%  runtime.makemap
+   21.75GB  3.34% 80.41%    28.02GB  4.31%  context.WithCancel
+可以看出string-[]byte相互转换、分配map、bytes.makeSlice、encoding/json.Unmarshal等调用累积分配的内存较多。 此时我们就可以review代码，如何减少这些相关的调用，或者优化相关代码逻辑。
+
+当我们不明确这些调用时是被哪些函数引起的时，我们可以输入top -cum来查找，-cum的意思就是，将函数调用关系 中的数据进行累积，比如A函数调用的B函数，则B函数中的内存分配量也会累积到A上面，这样就可以很容易的找出调用链。
+
+(pprof) top20 -cum
+322890.40MB of 666518.53MB total (48.44%)
+Dropped 342 nodes (cum <= 3332.59MB)
+Showing top 20 nodes out of 106 (cum >= 122316.23MB)
+      flat  flat%   sum%        cum   cum%
+         0     0%     0% 643525.16MB 96.55%  runtime.goexit
+ 2184.63MB  0.33%  0.33% 620745.26MB 93.13%  net/http.(*conn).serve
+         0     0%  0.33% 435300.50MB 65.31%  xxxxx/api/server.(*HTTPServer).ServeHTTP
+ 5865.22MB  0.88%  1.21% 435300.50MB 65.31%  xxxxx/api/server/router.(*httpRouter).ServeHTTP
+         0     0%  1.21% 433121.39MB 64.98%  net/http.serverHandler.ServeHTTP
+         0     0%  1.21% 430456.29MB 64.58%  xxxxx/api/server/filter.(*chain).Next
+   43.50MB 0.0065%  1.21% 429469.71MB 64.43%  xxxxx/api/server/filter.TransURLTov1
+         0     0%  1.21% 346440.39MB 51.98%  xxxxx/api/server/filter.Role30x
+31283.56MB  4.69%  5.91% 175309.48MB 26.30%  net/http.(*conn).readRequest
+         0     0%  5.91% 153589.85MB 23.04%  github.com/julienschmidt/httprouter.(*Router).ServeHTTP
+         0     0%  5.91% 153589.85MB 23.04%  github.com/julienschmidt/httprouter.(*Router).ServeHTTP-fm
+         0     0%  5.91% 153540.85MB 23.04%  xxxxx/api/server/router.(*httpRouter).Register.func1
+       2MB 0.0003%  5.91% 153117.78MB 22.97%  xxxxx/api/server/filter.Validate
+151134.52MB 22.68% 28.58% 151135.02MB 22.68%  runtime.rawstringtmp
+         0     0% 28.58% 150714.90MB 22.61%  xxxxx/api/server/router/naming/v1.(*serviceRouter).(git.intra.weibo.com/platform/vintage/api/server/router/naming/v1.service)-fm
+         0     0% 28.58% 150714.90MB 22.61%  xxxxx/api/server/router/naming/v1.(*serviceRouter).service
+         0     0% 28.58% 141200.76MB 21.18%  net/http.Redirect
+132334.96MB 19.85% 48.44% 132342.95MB 19.86%  runtime.mapassign
+      42MB 0.0063% 48.44% 125834.16MB 18.88%  xxxxx/api/server/router/naming/v1.heartbeat
+         0     0% 48.44% 122316.23MB 18.35%  xxxxxx/config.(*config).Lookup
+如上所示，我们就很容易的查找到这些函数是被哪些函数调用的。
+
+根据代码的调用关系，filter.TransURLTov1会调用filter.Role30x，但是他们之间的cum%差值有12.45%，因此 我们可以得知filter.TransURLTov1内部自己直接分配的内存量达到了整个进程分配内存总量的12.45%，这可是一个 值得大大优化的地方。
+
+然后我们可以输入命令web，其会给我们的浏览器弹出一个.svg图片，其会把这些累积关系画成一个拓扑图，提供给 我们。或者直接执行go tool pprof -alloc_space -cum -svg http://127.0.0.1:8080/debug/pprof/heap > heap.svg来生 成heap.svg图片。
+
+下面我们取一个图片中的一个片段进行分析:
+
+golang-memory-pprof.png
+
+每一个方块为pprof记录的一个函数调用栈，指向方块的箭头上的数字是记录的该栈累积分配的内存向，从方块指出的 箭头上的数字为该函数调用的其他函数累积分配的内存。他们之间的差值可以简单理解为本函数除调用其他函数外，自 身分配的。方块内部的数字也体现了这一点，其数字为:(自身分配的内存 of 该函数累积分配的内存)。
+
+--inuse/alloc_space --inuse/alloc_objects区别
+通常情况下：
+
+用--inuse_space来分析程序常驻内存的占用情况;
+用--alloc_objects来分析内存的临时分配情况，可以提高程序的运行速度。
+go-torch
+除了直接使用go tool pprof外，我们还可以使用更加直观了火焰图 。因此我们可以直接使用go-torch来生成golang程序的火焰图，该工具也直接 依赖pprof/go tool pprof等。该工具的相关安装请看该项目的介绍。该软件的a4daa2b 以后版本才支持内存的profiling。
+
+我们可以使用
+
+go-torch -alloc_space http://127.0.0.1:8080/debug/pprof/heap --colors=mem
+go-torch -inuse_space http://127.0.0.1:8080/debug/pprof/heap --colors=mem
+注意:-alloc_space/-inuse_space参数与-u/-b等参数有冲突，使用了-alloc_space/-inuse_space后请将pprof的 资源直接追加在参数后面，而不要使用-u/-b参数去指定，这与go-torch的参数解析问题有关，看过其源码后既能明白。 同时还要注意，分析内存的URL一定是heap结尾的，因为默认路径是profile的，其用来分析cpu相关问题。
+
+通过上面2个命令，我们就可以得到alloc_space/inuse_space含义的2个火焰图，例如 alloc_space.svg/inuse_space.svg。 我们可以使用浏览器观察这2张图，这张图，就像一个山脉的截面图，从下而上是每个函数的调用栈，因此山的高度跟函数 调用的深度正相关，而山的宽度跟使用/分配内存的数量成正比。我们只需要留意那些宽而平的山顶，这些部分通常是我们 需要优化的地方。
+
+testing
+当我们需要对go test中某些test/benchmark进行profiling时，我们可以使用类似的方法。例如我们可以先使用go test 内置的参数生成pprof数据，然后借助go tool pprof/go-torch来分析。
+
+生成cpu、mem的pprof文件
+go test -bench=BenchmarkStorageXXX -cpuprofile cpu.out -memprofile mem.out
+此时会生成一个二进制文件和2个pprof数据文件，例如
+storage.test cpu.out mem.out
+然后使用go-torch来分析，二进制文件放前面
+#分析cpu
+go-torch storage.test cpu.out
+#分析内存
+go-torch --colors=mem -alloc_space storage.test mem.out
+go-torch --colors=mem -inuse_space storage.test mem.out
+优化建议
+Debugging performance issues in Go programs 提供了一些常用的优化建议:
+
+1 将多个小对象合并成一个大的对象
+2 减少不必要的指针间接引用，多使用copy引用
+例如使用bytes.Buffer代替*bytes.Buffer，因为使用指针时，会分配2个对象来完成引用。
+
+3 局部变量逃逸时，将其聚合起来
+这一点理论跟1相同，核心在于减少object的分配，减少gc的压力。 例如，以下代码
+
+for k, v := range m {
+	k, v := k, v   // copy for capturing by the goroutine
+	go func() {
+		// use k and v
+	}()
+}
+可以修改为:
+
+for k, v := range m {
+	x := struct{ k, v string }{k, v}   // copy for capturing by the goroutine
+	go func() {
+		// use x.k and x.v
+	}()
+}
+修改后，逃逸的对象变为了x，将k，v2个对象减少为1个对象。
+
+4 []byte的预分配
+当我们比较清楚的知道[]byte会到底使用多少字节，我们就可以采用一个数组来预分配这段内存。 例如:
+
+type X struct {
+    buf      []byte
+    bufArray [16]byte // Buf usually does not grow beyond 16 bytes.
+}
+
+func MakeX() *X {
+    x := &X{}
+    // Preinitialize buf with the backing array.
+    x.buf = x.bufArray[:0]
+    return x
+}
+5 尽可能使用字节数少的类型
+当我们的一些const或者计数字段不需要太大的字节数时，我们通常可以将其声明为int8类型。
+
+6 减少不必要的指针引用
+当一个对象不包含任何指针（注意：strings，slices，maps 和chans包含隐含的指针），时，对gc的扫描影响很小。 比如，1GB byte 的slice事实上只包含有限的几个object，不会影响垃圾收集时间。 因此，我们可以尽可能的减少指针的引用。
+
+7 使用sync.Pool来缓存常用的对象
+注意
+go1.9、go1.9.2之间的版本go tool pprof引入了一个BUG，会导致上面的内存分析命令失败。 下面给出一种修复办法：
+
+cd $GOROOT/src/cmd/vendor/github.com/google
+rm pprof
+git clone https://github.com/google/pprof.git #确保在版本`e82ee9addc1b6c8e1d667ed6de0194241e1e03b5`之后
+rm $GOROOT/pkg/darwin_amd64/cmd/vendor/github.com/google/pprof
+cd $GOROOT/src/cmd/pprof
+go build
+mv pprof $GOROOT/pkg/tool/darwin_amd64/pprof
+参考
+profiling-go-programs
+Optimising Go allocations using pprof
+Debugging performance issues in Go programs
+Debugging performance issues in Go programs 翻译(貌似是机器翻译的，语义不是很通顺)
+Golang Slices And The Case Of The Missing Memory

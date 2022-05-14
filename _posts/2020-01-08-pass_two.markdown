@@ -1,0 +1,148 @@
+---
+title: pass_two
+layout: post
+category: lang
+author: 夏泽民
+---
+<!-- more -->
+全部视频：https://segmentfault.com/a/11...
+
+原视频地址：http://replay.xesv5.com/ll/24...
+
+流程回顾
+上节课我们把$a=1这个过程编译梳理了一遍，我们了解到op1,op2,result,opcode的生成过程，下面我们把整个过程来回顾一下。
+
+static zend_op_array *zend_compile(int type)
+{
+    zend_op_array *op_array = NULL;
+    zend_bool original_in_compilation = CG(in_compilation);
+
+    CG(in_compilation) = 1;
+    CG(ast) = NULL;
+    CG(ast_arena) = zend_arena_create(1024 * 32); //首先会分配内存
+
+    if (!zendparse()) {  //zendparse（就是yyparse）(zend_language_parse.y) ==> 通过parser调用lexer，生成抽象语法树ast_list，存到CG(ast)；yyparse是通过bison编译zend_language_parser.y生成
+        int last_lineno = CG(zend_lineno);
+        zend_file_context original_file_context;
+        zend_oparray_context original_oparray_context;
+        zend_op_array *original_active_op_array = CG(active_op_array);
+
+        op_array = emalloc(sizeof(zend_op_array));
+        init_op_array(op_array, type, INITIAL_OP_ARRAY_SIZE); //初始化oparray
+        CG(active_op_array) = op_array;
+
+        if (zend_ast_process) {
+            zend_ast_process(CG(ast));
+        }
+
+        zend_file_context_begin(&original_file_context);  
+        zend_oparray_context_begin(&original_oparray_context);
+        zend_compile_top_stmt(CG(ast));  //编译ast生成oparray
+        CG(zend_lineno) = last_lineno;
+        zend_emit_final_return(type == ZEND_USER_FUNCTION); //PHP中会加return 1，在此进行处理
+        op_array->line_start = 1;
+        op_array->line_end = last_lineno;
+        pass_two(op_array);  //对于handler的处理
+        zend_oparray_context_end(&original_oparray_context);
+        zend_file_context_end(&original_file_context);
+
+        CG(active_op_array) = original_active_op_array;
+    }
+
+    zend_ast_destroy(CG(ast));
+    zend_arena_destroy(CG(ast_arena));
+
+    CG(in_compilation) = original_in_compilation;
+
+    return op_array;
+}
+大体流程为：词法分析->语法分析->编译ast生成op_array->处理return 1->对于handler做处理
+以上处理return 1 环节之前的文章中我们都已经提到过，如果有不太理解的请翻阅之前的文章。接下来我们gdb程序到环节return 1。代码：
+
+<?php
+$a = 2;
+$b = 3;
+我们来看一看到编译ast生成op_array处的结果：
+
+clipboard.png
+
+我们来看这个结果，vars是存我们的变量的，在这存的是a和b，并且last_Var=2只有两个；T是temporary，T=2说明有两个临时变量。然后literals是存我们的字面量，再这里存的是2，3,last_literal=2表示现在有两个字面量，接下来我们打印一下看是否和我们所解释的一致。
+
+clipboard.png
+
+结果和我们设想的一致。另外，对于opcode的值又是如何呢？
+
+clipboard.png
+
+我们发现，$a=2 op1是80，$b=3 op1为96，这是为什么呢？这之前我们说过这个问题，因为在栈中我们是分配一个大小为16的内存，所以需要增加16.第二个，我们知道result.constant的0和1代表字面量偏移量分别为0和1.
+到这里都是之前学习过的内容，接下来继续学习。
+
+return 1的做了什么？
+继续执行代码：
+
+clipboard.png
+
+我们发现在执行完zend_emit_final_return这句之后我们的op_array发生了变化。那么为什么会发生这样的变化呢？我们在文章开头有些到这个函数的作用是增加return 1结尾，那么具体其中是怎么来操作呢？我们来看代码：
+
+void zend_emit_final_return(int return_one) /* \{\{\{ */
+{
+    znode zn;
+    zend_op *ret;
+    zend_bool returns_reference = (CG(active_op_array)->fn_flags & ZEND_ACC_RETURN_REFERENCE) != 0;
+
+    if (CG(active_op_array)->fn_flags & ZEND_ACC_HAS_RETURN_TYPE
+            && !(CG(active_op_array)->fn_flags & ZEND_ACC_GENERATOR)) {
+        zend_emit_return_type_check(NULL, CG(active_op_array)->arg_info - 1, 1);
+    }
+
+    zn.op_type = IS_CONST;
+    if (return_one) {
+        ZVAL_LONG(&zn.u.constant, 1); //在gdb过程中会走到这一步，把1赋值给zn.u.constant
+    } else {
+        ZVAL_NULL(&zn.u.constant);
+    }
+
+    ret = zend_emit_op(NULL, returns_reference ? ZEND_RETURN_BY_REF : ZEND_RETURN, &zn, NULL);//在此会像字面量中添加一个新的元素1
+    ret->extended_value = -1;
+}
+static zend_op *zend_emit_op(znode *result, zend_uchar opcode, znode *op1, znode *op2) /* \{\{\{ */
+{
+    zend_op *opline = get_next_op(CG(active_op_array));
+    opline->opcode = opcode;
+
+    if (op1 == NULL) {
+        SET_UNUSED(opline->op1);
+    } else {
+        SET_NODE(opline->op1, op1);
+    }
+
+    if (op2 == NULL) {
+        SET_UNUSED(opline->op2);
+    } else {
+        SET_NODE(opline->op2, op2);
+    }
+
+    zend_check_live_ranges(opline);
+
+    if (result) {
+        zend_make_var_result(result, opline);
+    }
+    return opline;
+}
+#define SET_NODE(target, src) do { \
+        target ## _type = (src)->op_type; \
+        if ((src)->op_type == IS_CONST) { \
+            target.constant = zend_add_literal(CG(active_op_array), &(src)->u.constant); \ //增加元素
+        } else { \
+            target = (src)->u.op; \
+        } \
+    } while (0)
+我们发现，gdb过程在这个函数中像literals里边又新增1个元素，我们打印opcodes：
+
+clipboard.png
+
+我们发现，新增了一条指令，在代码中就是return 1。
+好的，到此，我们发现，有三条指令，两个变量，三个字面量。$a和$b的位置已经有了，字面量也有了，我们发现handler还是个空指针，接下来我们看handler的生成。
+
+pass_two设置handler
+我们接着走，会走到pass_two这个函数，这个函数中，对opline指令集做了进一步的加工，最主要的工作是设置指令的handler,

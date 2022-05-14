@@ -1,0 +1,119 @@
+---
+title: go mysql driver
+layout: post
+category: golang
+author: 夏泽民
+---
+go-mysql-server是一个golang 的mysql server 协议实现包，使用此工具我们可以用来做好多方便的东西
+
+基于mysql 协议暴露自己的本地文件为sql 查询
+基于mysql 协议灵活的暴露rest 服务的接口查询为sql
+基于mysql 协议方便对于一些数据的查询分析
+基于mysql 协议暴露k8s 资源为sql 查询（类似fuse 文件系统？）
+基于mysql 协议查询git仓库代码
+。。。
+一个简单的demo
+一个golang 版的简单mysql server
+
+项目初始化（go mod ）
+go mod init github.com/rongfengliang/my-mysqlserver
+main.go
+package main
+
+import (
+ "time"
+
+ "gopkg.in/src-d/go-mysql-server.v0"
+ "gopkg.in/src-d/go-mysql-server.v0/auth"
+ "gopkg.in/src-d/go-mysql-server.v0/mem"
+ "gopkg.in/src-d/go-mysql-server.v0/server"
+ "gopkg.in/src-d/go-mysql-server.v0/sql"
+)
+
+// Example of how to implement a MySQL server based on a Engine:
+//
+// ```
+// > mysql --host=127.0.0.1 --port=5123 -u user -ppass db -e "SELECT * FROM mytable"
+// +----------+-------------------+-------------------------------+---------------------+
+// | name | email | phone_numbers | created_at |
+// +----------+-------------------+-------------------------------+---------------------+
+// | John Doe | john@doe.com | ["555-555-555"] | 2018-04-18 09:41:13 |
+// | John Doe | johnalt@doe.com | [] | 2018-04-18 09:41:13 |
+// | Jane Doe | jane@doe.com | [] | 2018-04-18 09:41:13 |
+// | Evil Bob | evilbob@gmail.com | ["555-666-555","666-666-666"] | 2018-04-18 09:41:13 |
+// +----------+-------------------+-------------------------------+---------------------+
+// ```
+func main() {
+ engine := sqle.NewDefault()
+ engine.AddDatabase(createTestDatabase())
+ engine.AddDatabase(sql.NewInformationSchemaDatabase(engine.Catalog))
+
+ config := server.Config{
+  Protocol: "tcp",
+  Address: "localhost:3306",
+  Auth: auth.NewNativeSingle("root", "", auth.AllPermissions),
+ }
+
+ s, err := server.NewDefaultServer(config, engine)
+ if err != nil {
+  panic(err)
+ }
+
+ s.Start()
+}
+
+func createTestDatabase() *mem.Database {
+ const (
+  dbName = "mydb"
+  tableName = "mytable"
+ )
+
+ db := mem.NewDatabase(dbName)
+ table := mem.NewTable(tableName, sql.Schema{
+  {Name: "name", Type: sql.Text, Nullable: false, Source: tableName},
+  {Name: "email", Type: sql.Text, Nullable: false, Source: tableName},
+  {Name: "phone_numbers", Type: sql.JSON, Nullable: false, Source: tableName},
+  {Name: "created_at", Type: sql.Timestamp, Nullable: false, Source: tableName},
+ })
+
+ db.AddTable(tableName, table)
+ ctx := sql.NewEmptyContext()
+ table.Insert(ctx, sql.NewRow("John Doe", "john@doe.com", []string{"555-555-555"}, time.Now()))
+ table.Insert(ctx, sql.NewRow("John Doe", "johnalt@doe.com", []string{}, time.Now()))
+ table.Insert(ctx, sql.NewRow("Jane Doe", "jane@doe.com", []string{}, time.Now()))
+ table.Insert(ctx, sql.NewRow("Evil Bob", "evilbob@gmail.com", []string{"555-666-555", "666-666-666"}, time.Now()))
+ return db
+}
+添加依赖
+go mod tidy
+构建
+go build my-server
+运行
+./my-server
+连接查询
+mysql -uroot -h127.0.0.1
+效果
+
+select * from mytable;
++----------+-------------------+-------------------------------+---------------------+
+| name | email | phone_numbers | created_at |
++----------+-------------------+-------------------------------+---------------------+
+| John Doe | john@doe.com | ["555-555-555"] | 2019-05-18 10:56:31 |
+| John Doe | johnalt@doe.com | [] | 2019-05-18 10:56:31 |
+| Jane Doe | jane@doe.com | [] | 2019-05-18 10:56:31 |
+| Evil Bob | evilbob@gmail.com | ["555-666-555","666-666-666"] | 2019-05-18 10:56:31 |
+说明
+go-mysql-server 已经包好了好多内置的sql 函，同时我们也可以自己搞一些扩展开发，一个很强大的工具
+
+参考资料
+https://github.com/src-d/go-mysql-server
+
+https://www.cnblogs.com/rongfengliang/p/10886794.html
+<!-- more -->
+https://github.com/melbahja/got
+
+https://github.com/src-d/go-mysql-server
+
+https://www.dolthub.com/blog/2020-02-14-implementing-indexed-joins/
+
+https://www.dolthub.com/blog/2020-08-05-implementing-subqueries/

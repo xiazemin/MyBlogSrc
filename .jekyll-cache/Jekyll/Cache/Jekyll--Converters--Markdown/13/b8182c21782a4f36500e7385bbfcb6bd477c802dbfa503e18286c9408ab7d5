@@ -1,0 +1,210 @@
+I"�-<p>Replication Controller（RC）
+应用托管在K8S后，K8S需要保证应用能够持续运行，这是RC的工作内容。</p>
+
+<p>主要功能
+确保pod数量：RC用来管理正常运行Pod数量，一个RC可以由一个或多个Pod组成，在RC被创建后，系统会根据定义好的副本数来创建Pod数量。在运行过程中，如果Pod数量小于定义的，就会重启停止的或重新分配Pod，反之则杀死多余的。</p>
+
+<p>确保pod健康：当pod不健康，运行出错或者无法提供服务时，RC也会杀死不健康的pod，重新创建新的。</p>
+
+<p>弹性伸缩 ：在业务高峰或者低峰期的时候，可以通过RC动态的调整pod的数量来提高资源的利用率。同时，配置相应的监控功能（Hroizontal Pod Autoscaler），会定时自动从监控平台获取RC关联pod的整体资源使用情况，做到自动伸缩。</p>
+
+<p>滚动升级：滚动升级为一种平滑的升级方式，通过逐步替换的策略，保证整体系统的稳定，在初始化升级的时候就可以及时发现和解决问题，避免问题不断扩大。</p>
+
+<p>弹性伸缩
+弹性伸缩是指适应负载变化，以弹性可伸缩的方式提供资源。反映到K8S中，指的是可根据负载的高低动态调整Pod的副本数量。调整Pod的副本数是通过修改RC中Pod的副本是来实现的，示例命令如下：</p>
+
+<p>扩容Pod的副本数目到10 kubectl scale relicationcontroller lykops –replicas=10</p>
+
+<p>缩容Pod的副本数目到1 kubectl scale relicationcontroller lykops –replicas=1</p>
+
+<p>滚动升级
+滚动升级是一种平滑过渡的升级方式，通过逐步替换的策略，保证整体系统的稳定，在初始升级的时候就可以及时发现、调整问题，以保证问题影响度不会扩大。</p>
+
+<p>升级方式
+使用配置文件升级
+kubecl rolling-update lykops-rc-v1 -f lykops-rc.yaml –update-period=10s
+直接使用images
+kubectl rolling-update lykops-rc –image=webapache:v3
+升级过程
+升级开始后，首先依据提供的定义文件创建v2版本的RC，然后每隔10s（–update-period=10s）逐步的增加v2版本的Pod副本数，逐步减少v1版本Pod的副本数。升级完成之后，删除v1版本的RC，保留v2版本的RC，及实现滚动升级。</p>
+
+<p>升级回滚
+升级过程中，发生了错误中途退出时，可以选择继续升级。K8S能够智能的判断升级中断之前的状态，然后紧接着继续执行升级。当然，也可以进行回退，命令如下：</p>
+
+<p>kubectl rolling-update lykops-v1 -f lykops-v2-rc.yaml –update-period=10s -–rollback
+<!-- more -->
+yaml文件例子
+升级之前的yaml文件为</p>
+
+<p>apiVersion: v1
+kind: ReplicationController
+metadata:
+ name: lykops-rc
+ labels:
+   app: apache
+   version: v1
+spec:
+ replicas: 5
+ selector:
+   app: apache
+   version: v1
+ template:
+   metadata:
+     labels:
+       app: apache
+       version: v1
+   spec:
+     containers:
+     - name: apache-rc
+       image: web:apache
+       command: [ “sh”, “/etc/run.sh” ]
+       ports:
+       - containerPort: 80
+         name: http
+         protocol: TCP
+升级用的yaml文件内容为</p>
+
+<p>apiVersion: v1
+kind: ReplicationController
+metadata:
+ name: test-rc-v2
+ labels:
+   app: apache
+   version: v1
+spec:
+ replicas: 5
+ selector:
+   app: apache
+   version: v2
+ template:
+   metadata:
+     labels:
+       app: apache
+        version: v2
+   spec:
+     containers:
+     - name: apache-rc-v2
+       image: web:apache
+       command: [ “sh”, “/etc/run.sh” ]
+       ports:
+       - containerPort: 80
+         name: http
+         protocol: TCP 
+注意事项
+要求新的RC需要使用旧的RC的Namespace。</p>
+
+<p>RC的名字（name）不能与旧的RC的名字相同；</p>
+
+<p>在selector中应至少有一个Label与旧的RC的Label不同，以标识其为新的RC。</p>
+
+<p>metadata与之前相同，否则升级后service无法对应上。</p>
+
+<p>replica set（RS）
+被认为 是“升级版”的RC。RS也是用于保证与label selector匹配的pod数量维持在期望状态。</p>
+
+<p>区别在于，</p>
+
+<p>1、RC只支持基于等式的selector（env=dev或environment!=qa），但RS还支持新的，基于集合的selector（version in (v1.0, v2.0)或env notin (dev, qa)），这对复杂的运维管理很方便。</p>
+
+<p>2、升级方式
+    RS不能使用kubectlrolling-update进行升级
+    kubectl rolling-update专用于rc
+    RS升级使用deployment或者kubectl replace命令
+社区引入这一API的初衷是用于取代vl中的RC，也就是说当v1版本被废弃时，RC就完成了它的历史使命，而由RS来接管其工作。</p>
+
+<p>yaml文件例子</p>
+
+<p>apiVersion: extensions/v1beta1
+kind: ReplicaSet
+metadata:
+  name: lykops-rs
+  labels:
+    software: apache
+    project: lykops
+    app: lykops-rs
+    version: v1
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      name: lykops-rs
+      software: apache
+      project: lykops
+      app: lykops-rs
+      version: v1
+  template:
+    metadata:
+      labels:
+        name: lykops-rs
+        software: apache
+        project: lykops
+        app: lykops-rs
+        version: v1
+    spec:
+      containers:
+      - name: lykops-rs
+        image: web:apache
+        command: [ “sh”, “/etc/run.sh” ]
+        ports:
+        - containerPort: 80
+          name: http
+          proto</p>
+
+<p>我们来想想一下我们可能会遇到的一些场景：</p>
+
+<p>某次运营活动非常成功，网站访问量突然暴增
+运行当前Pod的节点发生故障了，Pod不能正常提供服务了
+第一种情况，可能比较好应对，一般活动之前我们会大概计算下会有多大的访问量，提前多启动几个Pod，活动结束后再把多余的Pod杀掉，虽然有点麻烦，但是应该还是能够应对这种情况的。</p>
+
+<p>第二种情况，可能某天夜里收到大量报警说服务挂了，然后起来打开电脑在另外的节点上重新启动一个新的Pod，问题也很好的解决了。</p>
+
+<p>如果我们都人工的去解决遇到的这些问题，似乎又回到了以前刀耕火种的时代了是吧，如果有一种工具能够来帮助我们管理Pod就好了，Pod不够了自动帮我新增一个，Pod挂了自动帮我在合适的节点上重新启动一个Pod，这样是不是遇到上面的问题我们都不需要手动去解决了。</p>
+
+<p>幸运的是，Kubernetes就为我们提供了这样的资源对象：</p>
+
+<p>Replication Controller：用来部署、升级Pod
+Replica Set：下一代的Replication Controller
+Deployment：可以更加方便的管理Pod和Replica Set
+Replication Controller（RC）
+Replication Controller简称RC，RC是Kubernetes系统中的核心概念之一，简单来说，RC可以保证在任意时间运行Pod的副本数量，能够保证Pod总是可用的。如果实际Pod数量比指定的多那就结束掉多余的，如果实际数量比指定的少就新启动一些Pod，当Pod失败、被删除或者挂掉后，RC都会去自动创建新的Pod来保证副本数量，所以即使只有一个Pod，我们也应该使用RC来管理我们的Pod。</p>
+
+<p>我们想想如果现在我们遇到上面的问题的话，可能除了第一个不能做到完全自动化，其余的我们是不是都不用担心了，运行Pod的节点挂了，RC检测到Pod失败了，就会去合适的节点重新启动一个Pod就行，不需要我们手动去新建一个Pod了。如果是第一种情况的话在活动开始之前我们给Pod指定10个副本，结束后将副本数量改成2，这样是不是也远比我们手动去启动、手动去关闭要好得多，而且我们后面还会给大家介绍另外一种资源对象HPA可以根据资源的使用情况来进行自动扩缩容</p>
+
+<p>Replication Set（RS）
+Replication Set简称RS，随着Kubernetes的高速发展，官方已经推荐我们使用RS和Deployment来代替RC了，实际上RS和RC的功能基本一致，目前唯一的一个区别就是RC只支持基于等式的selector（env=dev或app=nginx），但RS还支持基于集合的selector（version in (v1, v2)），这对复杂的运维管理就非常方便了。</p>
+
+<p>kubectl命令行工具中关于RC的大部分命令同样适用于我们的RS资源对象。不过我们也很少会去单独使用RS，它主要被Deployment这个更加高层的资源对象使用，除非用户需要自定义升级功能或根本不需要升级Pod，在一般情况下，我们推荐使用Deployment而不直接使用Replica Set。</p>
+
+<p>最后我们总结下关于RC/RS的一些特性和作用吧：</p>
+
+<p>大部分情况下，我们可以通过定义一个RC实现的Pod的创建和副本数量的控制
+RC中包含一个完整的Pod定义模块（不包含apiversion和kind）
+RC是通过label selector机制来实现对Pod副本的控制的
+通过改变RC里面的Pod副本数量，可以实现Pod的扩缩容功能
+通过改变RC里面的Pod模板中镜像版本，可以实现Pod的滚动升级功能（但是不支持一键回滚，需要用相同的方法去修改镜像地址）</p>
+
+<p>k8s是一个高速发展的项目，在新的版本中官方推荐使用Replica Set和Deployment来代替RC。那么它们优势在哪里，我们来看一看：</p>
+
+<p>RC只支持基于等式的selector（env=dev或environment!=qa）但Replica Set还支持新的基于集合的selector（version in (v1.0, v2.0)或env notin (dev, qa)），这对复杂的运维管理带来很大方便</p>
+
+<p>使用Deployment升级Pod只需要定义Pod的最终状态，k8s会为你执行必要的操作，虽然能够使用命令kubectl rolling-update完成升级，但它是在客户端与服务端多次交互控制RC完成的，所以REST API中并没有rolling-update的接口，这为定制自己的管理系统带来了一些麻烦。</p>
+
+<p>Deployment拥有更加灵活强大的升级、回滚功能</p>
+
+<p>Replica Set目前与RC的区别只是支持的selector不同，后续肯定会加入更多功能。Deployment使用了Replica Set，是更高一层的概念。除非需要自定义升级功能或根本不需要升级Pod，所以推荐使用Deployment而不直接使用Replica Set。
+下面我们继续来看Deployment的定义文件，与RC的定义文件基本相同（注意apiVersion还是beta版），所以不再详细解释各字段意思
+与创建RC相同，使用命令kubectl create -f deployment.yaml –record创建Deployment，注意–record参数，使用此参数将记录后续对创建的对象的操作，方便管理与问题追溯</p>
+
+<p>使用kubectl edit deployment hello-deployment修改spec.replicas/spec.template.spec.container.image字段来完成扩容缩容与滚动升级（比kubectl rolling-update速度快很多）
+修改image字段为新版本镜像后查看Pod，在STATUS列看到正在执行升级的Pod：</p>
+
+<p>使用kubectl rollout history命令查看Deployment的历史信息</p>
+
+<p>上面提到过kubectl rolling-update升级成功后不能直接回滚，不是很方便，那使用Deployment可以吗，答案是肯定的。
+首先在上面的命令加上–revision参数，查看改动详细信息如下：
+然后使用kubctl rollout undo deployment hello-deployment回滚至前一版本（使用–to-revision参数指定版本）即可。</p>
+
+<p>命令kubectl describe deployment hello-deployment查看详细信息，在Message一列看到回滚如下，详细的信息记录对于问题发生后的原因查找有很大帮助：</p>
+
+<p>通过对比RC、Replica Set与Deployment，可以看出新的Replica Set与Deployment比RC要强大易用很多，但因为现在还是beta版本所以不建议在生产环境使用，不过相信不久的将来我们就能使用上。</p>
+:ET

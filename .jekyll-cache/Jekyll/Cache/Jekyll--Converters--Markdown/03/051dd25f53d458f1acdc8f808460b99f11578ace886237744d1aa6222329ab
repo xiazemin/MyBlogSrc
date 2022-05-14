@@ -1,0 +1,459 @@
+I"B<p>https://github.com/kyleconroy/sqlc</p>
+
+<p>database/sql标准库提供的都是比较底层的接口。我们需要编写大量重复的代码。大量的模板代码不仅写起来烦，而且还容易出错。有时候字段类型修改了一下，可能就需要改动很多地方；添加了一个新字段，之前使用select *查询语句的地方都要修改。如果有些地方有遗漏，可能就会造成运行时panic。即使使用 ORM 库，这些问题也不能完全解决！这时候，sqlc来了！sqlc可以根据我们编写的 SQL 语句生成类型安全的、地道的 Go 接口代码，我们要做的只是调用这些方法。
+<!-- more --></p>
+
+<p>安装：</p>
+
+<p>$ go get github.com/kyleconroy/sqlc/cmd/sqlc
+当然还有对应的数据库驱动：</p>
+
+<p>$ go get github.com/lib/pq
+$ go get github.com/go-sql-driver/mysql
+sqlc是一个命令行工具，上面代码会将可执行程序sqlc放到$GOPATH/bin目录下。我习惯把$GOPATH/bin目录加入到系统PATH中。所以可以执行使用这个命令。</p>
+
+<p>因为sqlc用到了一个 linux 下的库，在 windows 上无法正常编译。在 windows 上我们可以使用 docker 镜像kjconroy/sqlc。docker 的安装就不介绍了，网上有很多教程。拉取kjconroy/sqlc镜像：</p>
+
+<p>$ docker pull kjconroy/sqlc
+然后，编写 SQL 语句。在schema.sql文件中编写建表语句：</p>
+
+<p>CREATE TABLE authors (
+  id   BIGSERIAL PRIMARY KEY,
+  name TEXT NOT NULL,
+  bio  TEXT
+);
+在query.sql文件中编写查询语句：</p>
+
+<p>– name: GetAuthor :one
+SELECT * FROM authors
+WHERE id = $1 LIMIT 1;</p>
+
+<p>– name: ListAuthors :many
+SELECT * FROM authors
+ORDER BY name;</p>
+
+<p>– name: CreateAuthor :exec
+INSERT INTO authors (
+  name, bio
+) VALUES (
+  $1, $2
+)
+RETURNING *;</p>
+
+<p>– name: DeleteAuthor :exec
+DELETE FROM authors
+WHERE id = $1;
+sqlc支持 PostgreSQL 和 MySQL，不过对 MySQL 的支持是实验性的。期待后续完善对 MySQL 的支持，增加对其它数据库的支持。本文我们使用的是 PostgreSQL。编写数据库程序时，上面两个 sql 文件是少不了的。sqlc额外只需要一个小小的配置文件sqlc.yaml：</p>
+
+<p>version: “1”
+packages:</p>
+<ul>
+  <li>name: “db”
+path: “./db”
+queries: “./query.sql”
+schema: “./schema.sql”
+version：版本；
+packages：</li>
+</ul>
+
+<p>name：生成的包名；
+path：生成文件的路径；
+queries：查询 SQL 文件；
+schema：建表 SQL 文件。
+在 windows 上执行下面的命令生成对应的 Go 代码：</p>
+
+<p>docker run –rm -v CONFIG_PATH:/src -w /src kjconroy/sqlc generate
+上面的CONFIG_PATH替换成配置所在目录，我的是D:\code\golang\src\github.com\darjun\go-daily-lib\sqlc\get-started。sqlc为我们在同级目录下生成了数据库操作代码，目录结构如下：</p>
+
+<p>db
+├── db.go
+├── models.go
+└── query.sql.go
+sqlc根据我们schema.sql和query.sql生成了模型对象结构：</p>
+
+<p>// models.go
+type Author struct {
+  ID   int64
+  Name string
+  Bio  sql.NullString
+}
+和操作接口：</p>
+
+<p>// query.sql.go
+func (q *Queries) CreateAuthor(ctx context.Context, arg CreateAuthorParams) (Author, error)
+func (q *Queries) DeleteAuthor(ctx context.Context, id int64) error
+func (q *Queries) GetAuthor(ctx context.Context, id int64) (Author, error)
+func (q *Queries) ListAuthors(ctx context.Context) ([]Author, error)
+其中Queries是sqlc封装的一个结构。</p>
+
+<p>说了这么多，来看看如何使用：</p>
+
+<p>package main</p>
+
+<p>import (
+  “database/sql”
+  “fmt”
+  “log”</p>
+
+<p>_ “github.com/lib/pq”
+  “golang.org/x/net/context”</p>
+
+<p>“github.com/darjun/go-daily-lib/sqlc/get-started/db”
+)</p>
+
+<p>func main() {
+  pq, err := sql.Open(“postgres”, “dbname=sqlc sslmode=disable”)
+  if err != nil {
+    log.Fatal(err)
+  }</p>
+
+<p>queries := db.New(pq)</p>
+
+<p>authors, err := queries.ListAuthors(context.Background())
+  if err != nil {
+    log.Fatal(“ListAuthors error:”, err)
+  }
+  fmt.Println(authors)</p>
+
+<p>insertedAuthor, err := queries.CreateAuthor(context.Background(), db.CreateAuthorParams{
+    Name: “Brian Kernighan”,
+    Bio:  sql.NullString{String: “Co-author of The C Programming Language and The Go Programming Language”, Valid: true},
+  })
+  if err != nil {
+    log.Fatal(“CreateAuthor error:”, err)
+  }
+  fmt.Println(insertedAuthor)</p>
+
+<p>fetchedAuthor, err := queries.GetAuthor(context.Background(), insertedAuthor.ID)
+  if err != nil {
+    log.Fatal(“GetAuthor error:”, err)
+  }
+  fmt.Println(fetchedAuthor)</p>
+
+<p>err = queries.DeleteAuthor(context.Background(), insertedAuthor.ID)
+  if err != nil {
+    log.Fatal(“DeleteAuthor error:”, err)
+  }
+}
+生成的代码在包db下（由packages.name选项指定），首先调用db.New()将sql.Open()的返回值sql.DB作为参数传入，得到Queries对象。我们对authors表的操作都需要通过该对象的方法。</p>
+
+<p>上面程序要运行，还需要启动 PostgreSQL，创建数据库和表：</p>
+
+<p>$ createdb sqlc
+$ psql -f schema.sql -d sqlc
+上面第一条命令创建一个名为sqlc的数据库，第二条命令在数据库sqlc中执行schema.sql文件中的语句，即创建表。</p>
+
+<p>最后运行程序（多文件程序不能用go run main.go）：</p>
+
+<p>$ go run .
+[]
+{1 Brian Kernighan {Co-author of The C Programming Language and The Go Programming Language true}}
+{1 Brian Kernighan {Co-author of The C Programming Language and The Go Programming Language true}}
+代码生成
+除了 SQL 语句本身，sqlc需要我们在编写 SQL 语句的时候通过注释的方式为生成的程序提供一些基本信息。语法为：</p>
+
+<p>– name: <name> <cmd>
+name为生成的方法名，如上面的CreateAuthor/ListAuthors/GetAuthor/DeleteAuthor等，cmd可以有以下取值：</cmd></name></p>
+
+<p>:one：表示 SQL 语句返回一个对象，生成的方法的返回值为(对象类型, error)，对象类型可以从表名得出；
+:many：表示 SQL 语句会返回多个对象，生成的方法的返回值为([]对象类型, error)；
+:exec：表示 SQL 语句不返回对象，只返回一个error；
+:execrows：表示 SQL 语句需要返回受影响的行数。
+:one
+– name: GetAuthor :one
+SELECT id, name, bio FROM authors
+WHERE id = $1 LIMIT 1
+注释中–name指示生成方法GetAuthor，从表名得出返回的基础类型为Author。:one又表示只返回一个对象。故最终的返回值为(Author, error)：</p>
+
+<p>// db/query.sql.go
+const getAuthor = <code class="language-plaintext highlighter-rouge">-- name: GetAuthor :one
+SELECT id, name, bio FROM authors
+WHERE id = $1 LIMIT 1
+</code></p>
+
+<p>func (q *Queries) GetAuthor(ctx context.Context, id int64) (Author, error) {
+  row := q.db.QueryRowContext(ctx, getAuthor, id)
+  var i Author
+  err := row.Scan(&amp;i.ID, &amp;i.Name, &amp;i.Bio)
+  return i, err
+}
+:many
+– name: ListAuthors :many
+SELECT * FROM authors
+ORDER BY name;
+注释中–name指示生成方法ListAuthors，从表名authors得到返回的基础类型为Author。:many表示返回一个对象的切片。故最终的返回值为([]Author, error)：</p>
+
+<p>// db/query.sql.go
+const listAuthors = <code class="language-plaintext highlighter-rouge">-- name: ListAuthors :many
+SELECT id, name, bio FROM authors
+ORDER BY name
+</code></p>
+
+<p>func (q *Queries) ListAuthors(ctx context.Context) ([]Author, error) {
+  rows, err := q.db.QueryContext(ctx, listAuthors)
+  if err != nil {
+    return nil, err
+  }
+  defer rows.Close()
+  var items []Author
+  for rows.Next() {
+    var i Author
+    if err := rows.Scan(&amp;i.ID, &amp;i.Name, &amp;i.Bio); err != nil {
+      return nil, err
+    }
+    items = append(items, i)
+  }
+  if err := rows.Close(); err != nil {
+    return nil, err
+  }
+  if err := rows.Err(); err != nil {
+    return nil, err
+  }
+  return items, nil
+}
+这里注意一个细节，即使我们使用了select *，生成的代码中 SQL 语句被也改写成了具体的字段：</p>
+
+<p>SELECT id, name, bio FROM authors
+ORDER BY name
+这样后续如果我们需要添加或删除字段，只要执行了sqlc命令，这个 SQL 语句和ListAuthors()方法就能保持一致！是不是很方便？</p>
+
+<p>:exec
+– name: DeleteAuthor :exec
+DELETE FROM authors
+WHERE id = $1
+注释中–name指示生成方法DeleteAuthor，从表名authors得到返回的基础类型为Author。:exec表示不返回对象。故最终的返回值为error：</p>
+
+<p>// db/query.sql.go
+const deleteAuthor = <code class="language-plaintext highlighter-rouge">-- name: DeleteAuthor :exec
+DELETE FROM authors
+WHERE id = $1
+</code></p>
+
+<p>func (q *Queries) DeleteAuthor(ctx context.Context, id int64) error {
+  _, err := q.db.ExecContext(ctx, deleteAuthor, id)
+  return err
+}
+:execrows
+– name: DeleteAuthorN :execrows
+DELETE FROM authors
+WHERE id = $1
+注释中–name指示生成方法DeleteAuthorN，从表名authors得到返回的基础类型为Author。:exec表示返回受影响的行数（即删除了多少行）。故最终的返回值为(int64, error)：</p>
+
+<p>// db/query.sql.go
+const deleteAuthorN = <code class="language-plaintext highlighter-rouge">-- name: DeleteAuthorN :execrows
+DELETE FROM authors
+WHERE id = $1
+</code></p>
+
+<p>func (q *Queries) DeleteAuthorN(ctx context.Context, id int64) (int64, error) {
+  result, err := q.db.ExecContext(ctx, deleteAuthorN, id)
+  if err != nil {
+    return 0, err
+  }
+  return result.RowsAffected()
+}
+不管编写的 SQL 多复杂，总是逃不过上面的规则。我们只需要在编写 SQL 语句时额外添加一行注释，sqlc就能为我们生成地道的 SQL 操作方法。生成的代码与我们自己手写的没什么不同，错误处理都很完善，而且了避免手写的麻烦与错误。</p>
+
+<p>模型对象
+sqlc为所有的建表语句生成对应的模型结构。结构名为表名的单数形式，且首字母大写。例如：</p>
+
+<p>CREATE TABLE authors (
+  id   SERIAL PRIMARY KEY,
+  name text   NOT NULL
+);
+生成对应的结构：</p>
+
+<p>type Author struct {
+  ID   int
+  Name string
+}
+而且sqlc可以解析ALTER TABLE语句，它会根据最终的表结构来生成模型对象的结构。例如：</p>
+
+<p>CREATE TABLE authors (
+  id          SERIAL PRIMARY KEY,
+  birth_year  int    NOT NULL
+);</p>
+
+<p>ALTER TABLE authors ADD COLUMN bio text NOT NULL;
+ALTER TABLE authors DROP COLUMN birth_year;
+ALTER TABLE authors RENAME TO writers;
+上面的 SQL 语句中，建表时有两列id和birth_year。第一条ALTER TABLE语句添加了一列bio，第二条删除了birth_year列，第三条将表名authors改为writers。sqlc依据最终的表名writers和表中的列id、bio生成代码：</p>
+
+<p>package db</p>
+
+<p>type Writer struct {
+  ID  int
+  Bio string
+}
+配置字段
+sqlc.yaml文件中还可以设置其他的配置字段。</p>
+
+<p>emit_json_tags
+默认为false，设置该字段为true可以为生成的模型对象结构添加 JSON 标签。例如：</p>
+
+<p>CREATE TABLE authors (
+  id         SERIAL    PRIMARY KEY,
+  created_at timestamp NOT NULL
+);
+生成：</p>
+
+<p>package db</p>
+
+<p>import (
+  “time”
+)</p>
+
+<p>type Author struct {
+  ID        int       <code class="language-plaintext highlighter-rouge">json:"id"</code>
+  CreatedAt time.Time <code class="language-plaintext highlighter-rouge">json:"created_at"</code>
+}
+emit_prepared_queries
+默认为false，设置该字段为true，会为 SQL 生成对应的prepared statement。例如，在快速开始的示例中设置这个选项，最终生成的结构Queries中会添加所有 SQL 对应的prepared statement对象：</p>
+
+<p>type Queries struct {
+  db                DBTX
+  tx                *sql.Tx
+  createAuthorStmt  *sql.Stmt
+  deleteAuthorStmt  *sql.Stmt
+  getAuthorStmt     *sql.Stmt
+  listAuthorsStmt   *sql.Stmt
+}
+和一个Prepare()方法：</p>
+
+<p>func Prepare(ctx context.Context, db DBTX) (*Queries, error) {
+  q := Queries{db: db}
+  var err error
+  if q.createAuthorStmt, err = db.PrepareContext(ctx, createAuthor); err != nil {
+    return nil, fmt.Errorf(“error preparing query CreateAuthor: %w”, err)
+  }
+  if q.deleteAuthorStmt, err = db.PrepareContext(ctx, deleteAuthor); err != nil {
+    return nil, fmt.Errorf(“error preparing query DeleteAuthor: %w”, err)
+  }
+  if q.getAuthorStmt, err = db.PrepareContext(ctx, getAuthor); err != nil {
+    return nil, fmt.Errorf(“error preparing query GetAuthor: %w”, err)
+  }
+  if q.listAuthorsStmt, err = db.PrepareContext(ctx, listAuthors); err != nil {
+    return nil, fmt.Errorf(“error preparing query ListAuthors: %w”, err)
+  }
+  return &amp;q, nil
+}
+生成的其它方法都使用了这些对象，而非直接使用 SQL 语句：</p>
+
+<p>func (q *Queries) CreateAuthor(ctx context.Context, arg CreateAuthorParams) (Author, error) {
+  row := q.queryRow(ctx, q.createAuthorStmt, createAuthor, arg.Name, arg.Bio)
+  var i Author
+  err := row.Scan(&amp;i.ID, &amp;i.Name, &amp;i.Bio)
+  return i, err
+}
+我们需要在程序初始化时调用这个Prepare()方法。</p>
+
+<p>emit_interface
+默认为false，设置该字段为true，会为查询结构生成一个接口。例如，在快速开始的示例中设置这个选项，最终生成的代码会多出一个文件querier.go：</p>
+
+<p>// db/querier.go
+type Querier interface {
+  CreateAuthor(ctx context.Context, arg CreateAuthorParams) (Author, error)
+  DeleteAuthor(ctx context.Context, id int64) error
+  DeleteAuthorN(ctx context.Context, id int64) (int64, error)
+  GetAuthor(ctx context.Context, id int64) (Author, error)
+  ListAuthors(ctx context.Context) ([]Author, error)
+}
+覆写类型
+sqlc在生成模型对象结构时会根据数据库表的字段类型推算出一个 Go 语言类型，例如text对应string。我们也可以在配置文件中指定这种类型映射。</p>
+
+<p>version: “1”
+packages:</p>
+<ul>
+  <li>name: “db”
+path: “./db”
+queries: “./query.sql”
+schema: “./schema.sql”
+overrides:</li>
+  <li>go_type: “github.com/uniplaces/carbon.Time”
+db_type: “pg_catalog.timestamp”
+在overrides下go_type表示使用的 Go 类型。如果是非标准类型，必须指定全限定类型（即包路径 + 类型名）。db_type设置为要映射的数据库类型。sqlc会自动导入对应的标准包或第三方包。生成代码如下：</li>
+</ul>
+
+<p>package db</p>
+
+<p>import (
+  “github.com/uniplaces/carbon”
+)</p>
+
+<p>type Author struct {
+  ID       int32
+  Name     string
+  CreateAt carbon.Time
+}
+需要注意的是db_type的表示，文档这里一笔带过，使用上还是有些晦涩。我也是看源码才找到如何覆写timestamp类型的，需要将db_type设置为pg_catalog.timestamp。同理timestamptz、timetz等类型也需要加上这个前缀。一般复杂类型都需要加上前缀，一般的基础类型可以加也可以不加。遇到不确定的情况，可以去看看源码gen.go#L634。</p>
+
+<p>也可以设定某个字段的类型，例如我们要将创建时间字段created_at设置为使用carbon.Time：</p>
+
+<p>version: “1”
+packages:</p>
+<ul>
+  <li>name: “db”
+path: “./db”
+queries: “./query.sql”
+schema: “./schema.sql”
+overrides:</li>
+  <li>column: “authors.create_at”
+go_type: “github.com/uniplaces/carbon.Time”
+生成代码如下：</li>
+</ul>
+
+<p>// db/models.go
+package db</p>
+
+<p>import (
+  “github.com/uniplaces/carbon”
+)</p>
+
+<p>type Author struct {
+  ID       int32
+  Name     string
+  CreateAt carbon.Time
+}
+最后我们还可以给生成的结构字段命名：</p>
+
+<p>version: “1”
+packages:</p>
+<ul>
+  <li>name: “db”
+path: “./db”
+queries: “./query.sql”
+schema: “./schema.sql”
+rename:
+id: “Id”
+name: “UserName”
+create_at: “CreateTime”
+上面配置为生成的结构设置字段名，生成代码：</li>
+</ul>
+
+<p>package db</p>
+
+<p>import (
+  “time”
+)</p>
+
+<p>type Author struct {
+  Id         int32
+  UserName   string
+  CreateTime time.Time
+}
+安装 PostgreSQL
+我之前使用 MySQL 较多。由于sqlc对 MySQL 的支持不太好，在体验这个库的时候还是选择支持较好的 PostgreSQL。不得不说，在 win10 上，PostgreSQL 的安装门槛实在是太高了！我摸索了很久最后只能在https://www.enterprisedb.com/download-postgresql-binaries下载可执行文件。我选择了 10.12 版本，下载、解压、将文件夹中的bin加入系统PATH。创建一个data目录，然后执行下面的命令初始化数据：</p>
+
+<p>$ initdb data
+注册 PostgreSQL 服务，这样每次系统重启后会自动启动：</p>
+
+<p>$ pg_ctl register -N “pgsql” -D D:\data
+这里的data目录就是上面创建的，并且一定要使用绝对路径！</p>
+
+<p>启动服务：</p>
+
+<p>$ sc start pgsql
+最后使用我们前面介绍的命令创建数据库和表即可</p>
+
+<p>需要注意的是sql 语法支持不全面，复杂的语法不支持，比如in关键字</p>
+:ET

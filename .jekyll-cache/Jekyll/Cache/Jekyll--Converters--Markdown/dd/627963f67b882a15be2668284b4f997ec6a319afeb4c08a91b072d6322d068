@@ -1,0 +1,83 @@
+I"�<p>1.2.1、邻接表
+  业界最常使用的方案恐怕就是“邻接表”了，简而言之，“邻接表”的每条数据都存储了“上级数据ID”。
+我们使用的Redis数据结构是 Hash，Redis的key为企业ID（depttree:企业ID），field 为 部门ID，field 对应的value是 该部门ID对应的上级部门ID。</p>
+
+<p>业务逻辑：</p>
+
+<p>查询所有父部门时，先从缓存中查询，缓存缺失时从DB查询并更新到Redis；
+部门关系变更时，则删除Redis缓存；
+部门删除时，则删除Redis缓存；
+Redis中的数据存储采用的是“邻接表”的方式；</p>
+
+<p>更新Redis时采用批量更新提升性能，HMSET key field value [field value …]；</p>
+
+<p>HMSET depttree:企业001 B1 A0 B2 A0 B3 A0 CB1-1 B1</p>
+
+<p>从hash的结构看，无法一次性查询指定部门的所有上级部门，所以我们需要使用到 Lua 脚本。
+<!-- more --></p>
+
+<p>local rediskey = KEYS[1];
+local currentDeptNo = KEYS[2];
+local utilDeptNo = KEYS[3];
+local maxGetTimes = tonumber(KEYS[4]);</p>
+
+<p>if(currentDeptNo == utilDeptNo) then
+  return currentDeptNo;
+ end</p>
+
+<p>if(maxGetTimes &gt; 100) then
+  maxGetTimes = 100;
+ end</p>
+
+<p>local time = 1;</p>
+
+<p>local result = currentDeptNo;
+ local tempDept = currentDeptNo;</p>
+
+<p>while(tempDept ~= utilDeptNo)
+ do
+  if(time &gt; maxGetTimes) then
+   return “error: the times of query exceeded the maxGetTimes!”;
+  end</p>
+
+<p>tempDept = redis.call(‘hget’,rediskey , tempDept);
+  – redis.debug(“tempDept: %q”,tempDept);</p>
+
+<p>if(tempDept == false or tempDept == “NULL”) then
+   return result;
+  end</p>
+
+<p>result = result .. “,” .. tempDept;
+  time = time + 1 ;
+ end</p>
+
+<p>return result;</p>
+
+<p>Redis Cluster 操作多key时，要求命令中的所有key都属于一个slot，否则会抛出异常“CROSSSLOT Keys in request don’t hash to the same slot”。</p>
+
+<p>通过查看jedis的 getSlot 源码，我们可以发现，如果 key 包含 {}，则会使用第一个 {} 中的字符串作为 hash key，所以集群模式下我们可以将 Redis key 的相同内容 使用 {} 包装起来。</p>
+
+<p>需要注意的是，{} 模式 虽然能将 不同的 key  hash 到相同 solt，但数据量过大时，极易造成 数据倾斜，从而影响系统的稳定性。所以使用前请充分分析评估数据，按需灵活处理。</p>
+
+<p>https://mp.weixin.qq.com/s/LPEmQYF0j6t1B3U1JxF3Lw
+https://mp.weixin.qq.com/s/PJexnM9OHryF2z2WDX09Sg</p>
+
+<p>解决
+因为Redis要求单个Lua脚本操作的key必须在同一个节点上，但是Cluster会将数据自动分布到不同的节点(虚拟的16384个slot，具体看官方文档)。</p>
+
+<p>Redis cluster对多key操作有限制，要求命令中所有的key都属于一个slot，才可以被执行。</p>
+
+<blockquote>
+  <p>CLUSTER KEYSLOT somekey
+11058
+CLUSTER KEYSLOT foo{hash_tag}
+(integer) 2515
+CLUSTER KEYSLOT bar{hash_tag}
+(integer) 2515
+keySlot算法中，如果key包含{}，就会使用第一个{}内部的字符串作为hash key，这样就可以保证拥有同样{}内部字符串的key就会拥有相同slot。</p>
+</blockquote>
+
+<p>https://blog.csdn.net/xixingzhe2/article/details/86167859</p>
+
+<p>https://github.com/zxiaofan/OpenSource_Study/blob/master/redis_scripts/lua_getAllSupDept.lua</p>
+:ET

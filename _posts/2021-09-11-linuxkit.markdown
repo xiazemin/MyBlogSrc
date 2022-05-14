@@ -1,0 +1,191 @@
+---
+title: linuxkit
+layout: post
+category: docker
+author: 夏泽民
+---
+https://github.com/linuxkit/linuxkit
+
+LinuxKit, a toolkit for building custom minimal, immutable Linux distributions.
+
+
+On MacOS there is a brew tap available. Detailed instructions are at linuxkit/homebrew-linuxkit, the short summary is
+
+brew tap linuxkit/linuxkit
+brew install --HEAD linuxkit
+
+linuxkit这个工具可以理解为是用多个docker镜像来组成一个最小化、定制化的操作系统，定制化后的系统只有几十M，配合openstack等云端用会很爽。
+<!-- more -->
+1. 安装moby
+2. 创建linuxkit文件
+这个文件里指定了要组合成什么样的系统，kernel、init、 onboot、 services、 files这个顺序是不能变的
+```
+# cat linuxkitone.yml
+
+kernel:
+
+  p_w_picpath: "mobylinux/kernel:4.9.x"                 # 内核镜像
+
+  cmdline: "console=ttyS0 console=tty0 page_poison=1" # 内核命令，可以不指定
+
+init:  # 初始进程，启动系统和一些后台容器、配置基础文件系统挂载等。
+
+  - linuxkit/init:42fe8cb1508b3afed39eb89821906e3cc7a70551
+
+  - mobylinux/runc:b0fb122e10dbb7e4e45115177a61a3f8d68c19a9
+
+  - linuxkit/containerd:60e2486a74c665ba4df57e561729aec20758daed
+
+  - mobylinux/ca-certificates:eabc5a6e59f05aa91529d80e9a595b85b046f935
+
+onboot:  # 系统服务
+
+  - name: sysctl
+
+    p_w_picpath: "mobylinux/sysctl:2cf2f9d5b4d314ba1bfc22b2fe931924af666d8c"
+
+    net: host
+
+    pid: host
+
+    ipc: host
+
+    capabilities:
+
+     - CAP_SYS_ADMIN
+
+    readonly: true
+
+  - name: binfmt
+
+    p_w_picpath: "linuxkit/binfmt:8881283ac627be1542811bd25c85e7782aebc692"
+
+    binds:
+
+     - /proc/sys/fs/binfmt_misc:/binfmt_misc
+
+    readonly: true
+
+  - name: dhcpcd
+
+    p_w_picpath: "linuxkit/dhcpcd:48e249ebef6a521eed886b3bce032db69fbb4afa"
+
+    binds:
+
+     - /var:/var
+
+     - /tmp/etc:/etc
+
+    capabilities:
+
+     - CAP_NET_ADMIN
+
+     - CAP_NET_BIND_SERVICE
+
+     - CAP_NET_RAW
+
+    net: host
+
+    command: ["/sbin/dhcpcd", "--nobackground", "-f", "/dhcpcd.conf", "-1"]
+```
+3. 制作系统
+将上面linuxkit内容放到/opt/linuxkitdemo/linuxkitone.yml里，然后执行下面的命令，
+
+cd /opt/linuxkitdemo/ &&  moby build linuxkitone.yml
+
+4. 使用镜像进入系统
+可以使用qemu工具，也可以将iso文件放到vmware或virtualbox里启动。
+https://blog.51cto.com/u_10546390/1918909
+
+LinuxKit 是一套工具包，用于为容器组装操作系统。为一工具套件，可用来打造基于容器的Linux子系统，该系统内的所有服务都是由容器组成，不管是系统元件或是应用程式，因此也方便置换及移除。目的是让Linux容器功能能够相容于所有的平台，从物联网装置(IoT)到主机等。
+
+LinuxKit 提供了一种基于容器的方法来为每种类型的容器构建一种定制的、精简的 Linux 子系统，这对于希望为专门的硬件或部件组装自己选择的 Linux 功能特性的系统组装商来说可能很有用。基于 containerd，每个 LinuxKit 子系统都会有各自的 Linux 内核，每个系统守护程序或系统服务都得到各自的容器
+
+LinuxKit是Docker最新发布的一个用于为容器构建安全、便携、可移植操作系统的工具包。它根据用户编写的yaml（指定kernel和基于docker image的一些列服务）自动构建一个常见虚拟化平台或云平台的虚拟机镜像，并自动运行起来。主要特性包括
+
+增强安全性
+系统安全，基于MirageOS unikernel
+紧跟最新kernel并精简不必要的模块
+Immutable，只读根文件系统，根文件系统只能在构建的时候生成
+社区合作，比如Kernel Self Protection Project (KSPP)、Wireguard、Landlock、Mirage、oKernel、Clear Containers等
+易用、可扩展
+所有服务均可定制，且用户服务和系统服务都是基于docker image
+构建过程基于docker
+基于Infrakit方便部署生成的镜像
+安装
+git clone https://github.com/linuxkit/linuxkit $GOPATH/src/github.com/linuxkit/linuxkit
+make && make install
+原理
+编写yaml
+LinuxKit需要编写一个yaml文件，来配置所需要的服务。可选的配置包括
+
+kernel：指定内核镜像，镜像里面需要包含bzImage和kernel.tar
+init：指定根系统的docker镜像（ base init process Docker images），比如init、runc、containerd等。在运行时，这些都是只读的
+onboot：启动过程中执行的系统服务，按顺序逐个运行
+services：基于docker镜像的系统服务，这些服务在build的时候会由docker将其转换为OCI格式，以便后续runc来启动
+files：指定额外的文件
+outputs：构建完成后的输出
+
+运行
+LinuxKit目前支持在gcp/hyperkit/qemu/vmware/packet/Hyper-V等多个平台上运行。比如用qemu的方式运行：
+
+
+https://www.cnblogs.com/allcloud/p/7095065.html
+ Docker 发布了一个新的操作系统：LinuxKit。这家容器巨头宣布的是一个灵活的、可扩展的操作系统，而为了可移植性，系统服务也是运行在容器之中。甚至，令人惊讶的是，就连 Docker 运行时环境也是运行在容器内
+ 
+ Alpine Linux 是（并不惊人）基于 BusyBox，这是一套著名的打包了 Linux 命令的集合，许多人不会意识到他们的宽带路由器、智能电视，当然还有他们家庭中的物联网设备就有它。
+
+LinuxKit 注定不会代替 Alpine，而是位于容器下层，并作为一个完整的操作系统出现，你可以高兴地启动你的运行时守护程序（在这种情况下，是生成你的容器的Docker 守护程序 ）。
+https://www.sohu.com/a/143713954_630789
+
+在linuxkit上运行docker
+因为linuxkit设置为只读，你不能在上面做任何编辑或者写文件的事情。下面将启动linuxkit，在其中运行docker
+
+https://blog.csdn.net/shenshouer/article/details/70251109
+
+https://www.cnblogs.com/rongfengliang/p/9354092.html
+
+https://www.docker.com/blog/introducing-linuxkit-container-os-toolkit/
+
+LinuxKit工程提供了工具来构建我们自己的操作系统。
+
+moby 通过yml文件的描述，构建自定义的操作系统。
+linuxkit 用来帮忙在不同平台启动镜像的工具。
+首先安装moby和linuxkit工具和下载linuxkit代码
+
+go get -u github.com/linuxkit/linuxkit/src/cmd/moby
+go get -u github.com/linuxkit/linuxkit/src/cmd/linuxkit
+git clone https://github.com/linuxkit/linuxkit
+然后开始编译定制化的linux操作系统，我们使用LinuxKit提供的linuxkit.yml来进行编译
+
+cd linuxkit
+moby build linuxkit.yml
+编译完成后，我们可以看到新出现的文件，这就是通过linuxkit.yml编译出来的内核和ramdisk
+
+	linuxkit-bzImage  编译出的kernel
+	linuxkit-cmdline  启动时候的grub需要带的参数。
+	linuxkit-efi.iso  EFI启动镜像
+	linuxkit-initrd.img 一个ramdisk
+	linuxkit.iso  BIOS启动镜像
+接下来可以通过linuxkit工具来启动这个系统。
+
+linuxkit run linuxkit
+linuxkit 会根据系统自动选择合适的hypervisor来启动镜像。 由于我在linux上，所以启动的时候使用了kvm来启动虚拟机。
+
+linuxkit使用场景
+从官方的描述来看，Linuxkit为每种容器提供了一个基于容器的方法，生成轻量级Linux子系统。当为特定硬件或者拥有特定功能定制系统时非常有用。每个LinuxKit子系统都有其自己的Linux核心，而每个系统守护进程或者系统服务都是一个容器。这些Linux子系统一旦被打包成ISO镜像，就可以用来启动物理机或者虚拟环境。Docker以提供的服务方式维护这些子系统。
+
+这里其实可以看到Linuxkit解决了docker一直以来的问题容器和host共享内核，以至于有些应用不能够很好的在docker上使用的问题。 linuxkit具有的特点：
+
+Linuxkit作为一个操作系统，本身可以在物理机或者虚拟机上启动。
+linuxkit是只读文件系统，并且相当轻量级只有60M左右，可以被应用在无盘启动系统中。
+linuxkit的理念同docker理念一脉相承。不同的镜像对应不同的应用，灵活，轻量，无状态。
+可以预见到，可以直接在裸机上通过pxe来启动对应的linuxkit镜像，或者使用虚拟机快速启动linuxkit镜像，用户已经无需再预先搭建docker平台来启动容器。可以说linuxkit给容器化带来了更广阔的前景。
+
+http://ssdxiao.github.io/linux/2017/04/25/Docker-LinuxKit.html
+
+https://www.huaweicloud.com/articles/6f7b29ca6f921db5d163a8dd0cdef2b8.html
+
+
+
+

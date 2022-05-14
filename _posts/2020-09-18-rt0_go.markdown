@@ -1,0 +1,79 @@
+---
+title: rt0_go
+layout: post
+category: golang
+author: 夏泽民
+---
+上文提到：一个 Go 程序启动的时候就会启动多个线程，而不是像一个C/C++程序那样只有一个线程用来执行 main 函数。
+
+启动线程的是谁呢？是 Go runtime。什么是 runtime 呢？任何一种高级语言都提供给用户写程序的形式。比如 C 和 Go 的”主程序“都是一个叫 main 的函数。那么是谁调用的用户写的 main 函数呢？—— 就是这种语言的 runtime。
+
+这 runtime 为啥有机会调用用户写的 main 函数呢？这是因为高级语言编译器在把用户写的程序翻译成可执行文件的过程中，把 runtime 代码塞进了可执行文件，而且在文件头中的 entrypoint field 的值设置成了 runtime 里的某个函数的起始地址。比如，GCC 在编译 C 程序的时候会把 libgcc.a 的内容塞进可执行文件里。这个 libgcc.a 也就是 GCC 编译器的 C runtime。它的功能很简单：（1）初始化全局变量，（2）调用用户写的 main 函数。
+
+Go 的 runtime 也需要初始化全局变量，还需要调用每个 module 里定义的 init 函数，还需要初始化 GC，以及初始化 Go scheduler，启动一个 goroutine，并且让这个 goroutine 执行用户定义的 main 函数 —— 是为 Go runtime 的初始化。
+
+当我们运行一个 Go 程序的时候，操作系统 load 可执行文件，并且开始读取文件头里的 entrypoint field 指向的 CPU 指令并且执行之 —— 是为 Go 程序的启动。
+
+用户启动 Go 程序；操作系统执行 runtime 里的入口函数；runtime 执行初始化过程，最后调用用户写的 main 函数 —— 这个过程，就是本文要分析的主要过程。
+
+我们的分析通过在 Linux 上反汇编一个 Go 程序，来回溯这个启动过程。如果你想复现本文中的操作过程，手边又没有 Linux 电脑，可以在 macOS 或者 Windows 上安装一个虚拟机软件，比如 VirtualBox，或者安装 Docker。后者在启动一个 Docker container 时会偷摸地启动一个 Linux 虚拟机。
+
+我们就用最常见的 Hello World 程序吧。
+
+package main
+import (
+	"fmt"
+)
+func main() {
+	fmt.Println("hello world")
+}
+首先我们编译这个程序 a.go 到可执行文件 a：
+
+go build -o a a.go
+我们在 Linux 下执行上述命令，得到的可执行文件 a 是 Linux 的 ELF 可执行文件格式。用 Linux 里的 readelf 命令，我们可以打印 ELF 的文件头，其中有执行这个文件时第一条指令所在的位置，也就是 a 的入口地址（entrypoint）。
+
+root@7f2187b3c225:/go# readelf -h /tmp/a | grep -i entry
+  Entry point address:               0x4645e0
+接下来，我们要看看这个入口地址 0x4645e0 指向的汇编程序。为此，我们用 objdump 命令反汇编 a，得到 a.S
+
+objdump -S a > a.S
+用文本编辑器打开 a.S，然后搜索入口地址”4645e0“，我们找到以下代码。
+
+00000000004645e0 <_rt0_amd64_linux>:
+// Copyright 2009 The Go Authors. All rights reserved.
+  4645e0:	e9 1b cb ff ff       	jmpq   461100 <_rt0_amd64>
+  4645e5:	cc                   	int3   
+可以看出来，这个入口是一个函数，叫做 _rt0_amd64_linux。根据下面的注释，可以看到这个入口函数是 Go 编译器生成的。它只有一行指令，跳转到一个叫 _rt0_amd64 的函数。这个函数定义位于 Go runtime 里，源码在 golang/go 。
+
+TEXT _rt0_amd64(SB),NOSPLIT,$-8
+	MOVQ	0(SP), DI	// argc
+	LEAQ	8(SP), SI	// argv
+	JMP	runtime·rt0_go(SB)
+因为我是在 AMD64 系统上用 Linux 做上述实验的，所以这个函数所在的文件名是 runtime/asm_amd64.s 。同一个目录下，有其他汇编源码文件，分别对应其他 CPU 体系结构，包括 ARM、PowerPC、MIPS 和 WASM（Web assembly）。
+
+上述函数很简单，只是调用了 Go runtime 里另一个函数 rt0_go。这个函数也在同一个汇编源码文件里。这个汇编函数定义略长，我们贴一个 GitHub permalink：
+
+golang/go
+​
+github.com
+图标
+从这个函数的源码，大家可以看到 Go 源码库里的汇编程序是用的 Plan 9 汇编器的语法写的。这个语法为了兼容各种 CPU 体系结构，有一定的抽象，所以并不一定每一条汇编指令都一一对应到 CPU 指令。不过这些不妨碍我们阅读代码，实际上简化了代码阅读。另外，虽然 Go 使用的汇编语法是 Plan 9 的，但是汇编器是自己实现的，并没有复用 Plan 9 的汇编器。更多关于 Go 的汇编语言的细节，可以看 https://golang.org/doc/asm 。不过目前我们并不需要追溯这些细节。只需要注意，一个汇编函数以 TEXT directive 开头，以 RET 指令（或者其他一条跳转指令）结束。
+
+这个 rt0_go 函数具体做了以下几件事情：
+
+调用 x_cgo_init 函数。
+调用 runtime.osinit 函数。
+调用 schedinit 函数。
+创建 run queue 和一个新的 G（goroutine)。
+调用 runtime·mstart 函数。
+在接下来的文章里，我们要深入分析 rt0_go 这个函数到底做了什么。不过，为了大家看 runtime 代码看的明白，我们先得说说代码的设计思想，尤其是 Go runtime 的主要内容 Go scheduler 的设计思想，否则至少上面 4. 里提到的 run queue 是啥 —— 读者就懵了。那我又是怎么知道这些设计思想的呢？我看了设计文档
+
+Scalable Go Scheduler Design Doc
+​
+docs.google.com
+大家自己看这个设计文档，恐怕比较晦涩。没关系，这正是这个系列文章的会帮助大家的地方。
+
+https://zhuanlan.zhihu.com/p/241308426
+https://docs.google.com/document/d/1TTj4T2JO42uD5ID9e89oa0sLKhJYD0Y_kqxDv3I3XMw/edit
+<!-- more -->
+https://zhuanlan.zhihu.com/p/244054940

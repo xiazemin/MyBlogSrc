@@ -1,0 +1,408 @@
+I"BA<p>1 k3s 简介–5 less than K8s
+k3s[1] 是 rancher®开源的一个 Kubernetes 发行版，从名字上就可以看出 k3s 相对 k8s 做了很多裁剪和优化，二进制程序不足 50MB，占用资源更少，只需要 512MB 内存即可运行。</p>
+
+<p>而之所以称为 k3s 是因为相对 k8s 裁剪了如下 5 个部分:</p>
+
+<p>过时的功能和非默认功能
+Alpha 功能
+内置的云提供商插件
+内置的存储驱动
+Docker
+官方称 k3s 是:</p>
+
+<p>★ k3s 是史上最轻量级 Kubernetes.”</p>
+
+<p>相对 k8s 最主要的优化如下：</p>
+
+<p>使用内嵌轻量级数据库 SQLite 作为默认数据存储替代 etcd，当然 etcd 仍然是支持的。
+内置了 local storage provider、service load balancer、helm controller、Traefik ingress controller，开箱即用。
+所有 Kubernetes 控制平面组件如 api-server、scheduler 等封装成为一个精简二进制程序，控制平面只需要一个进程即可运行。
+删除内置插件 (比如 cloudprovider 插件和存储插件)。
+减少外部依赖，操作系统只需要安装较新的内核以及支持 cgroup 即可，k3s 安装包已经包含了 containerd、Flannel、CoreDNS，非常方便地一键式安装，不需要额外安装 Docker、Flannel 等组件。
+k3s 的四大使用场景为：</p>
+
+<p>Edge
+IoT
+CI
+ARM
+当然如果想学习 k8s，而又不想折腾 k8s 的繁琐安装部署，完全可以使用 k3s 代替 k8s，k3s 包含了 k8s 的所有基础功能，而 k8s 附加功能其实大多数情况也用不到。
+<!-- more -->
+2 一键式安装 k3s
+k3s 安装确实非常简单，只需要一个命令即可完成:</p>
+
+<p>复制代码
+curl -sfL https://get.k3s.io | sh -
+通过如上只执行了一个命令即部署了一套 all in one k3s 单节点环境，相对 k8s 无需额外安装如下组件：</p>
+
+<p>kubelet
+kube-proxy
+Docker
+etcd
+ingress，如 ngnix
+当然可以使用 k3s agent 添加更多的 worker node，只需要添加K3S_URL和K3S_TOKEN参数即可，其中K3S_URL为 api-server URL，而k3S_TOKEN为 node 注册 token，保存在 master 节点的/var/lib/rancher/k3s/server/node-token路径。</p>
+
+<p>3 和使用 k8s 一样使用 k3s
+3.1 和使用 k8s 一样使用 k3s 命令工具
+k3s 内置了一个 kubectl 命令行工具，通过k3s kubectl调用，为了与 k8s 的 kubectl 命令一致，可以设置 alias 别名:</p>
+
+<p>复制代码</p>
+<h1 id="该步骤可以省略在-usrlocalbin-中已经添加了一个-kubectl-软链接到-k3s">该步骤可以省略，在 /usr/local/bin 中已经添加了一个 kubectl 软链接到 k3s</h1>
+<p>alias kubectl=’k3s kubectl`</p>
+
+<h1 id="配置-kubectl-命令补全">配置 kubectl 命令补全</h1>
+<p>source &lt;(kubectl completion bash)
+配置完后，我们就可以通过kubectl查看 kube-system 运行的 pod 列表如下：</p>
+
+<p>复制代码</p>
+
+<h1 id="kubectl--get-pod--n-kube-system">kubectl  get pod -n kube-system</h1>
+<p>NAME                                      READY   STATUS      RESTARTS   AGE
+metrics-server-6d684c7b5-4qppl            1/1     Running     0          70m
+local-path-provisioner-58fb86bdfd-8l4hn   1/1     Running     0          70m
+helm-install-traefik-pltbs                0/1     Completed   0          70m
+coredns-6c6bb68b64-b9qcl                  1/1     Running     0          70m
+svclb-traefik-2ttg2                       2/2     Running     0          70m
+traefik-7b8b884c8-xkm77                   1/1     Running     0          70m
+我们发现并没有运行 apiserver、controller-manager、scheduler、kube-proxy 以及 flannel 等组件，因为这些都内嵌到了 k3s 进程。另外 k3s 已经给我们默认部署运行了 traefik ingress、metrics-server 等，不需要再额外安装了。</p>
+
+<p>k3s 默认没有使用 Docker 作为容器运行环境，而是使用了内置的 contained，可以使用crictl子命令与 CRI 交互。</p>
+
+<p>当然如果习惯使用 docker 命令行可以设置如下别名:</p>
+
+<p>复制代码
+alias docker=’k3s crictl’</p>
+
+<h1 id="配置-docker-命令补全">配置 docker 命令补全</h1>
+<p>source &lt;(docker completion)
+complete -F _cli_bash_autocomplete docker
+通过docker ps查看运行的容器:</p>
+
+<p>复制代码</p>
+
+<h1 id="docker--ps">docker  ps</h1>
+<p>CONTAINER           IMAGE               CREATED             STATE               NAME                     ATTEMPT             POD ID
+deedde06105b5       8fafd8af70e9a       6 minutes ago       Running             kubernetes-bootcamp-v1   0                   b59bdf9ed7b2a
+5464873f8064a       8fafd8af70e9a       6 minutes ago       Running             kubernetes-bootcamp-v1   0                   51d2058a38262
+d8ae5df73ee95       aa764f7db3051       About an hour ago   Running             traefik                  0                   a7990965f71c3
+1ecdf0ce98ebf       897ce3c5fc8ff       About an hour ago   Running             lb-port-443              0                   4057796b8eddd
+021a4d7bcc391       897ce3c5fc8ff       About an hour ago   Running             lb-port-80               0                   4057796b8eddd
+089ee47dd3de0       c4d3d16fe508b       About an hour ago   Running             coredns                  0                   5e54975c3ae1e
+3c97b40b9beed       9d12f9848b99f       About an hour ago   Running             local-path-provisioner   0                   5a4e666f9c8f7
+ac020ab1621c0       9dd718864ce61       About an hour ago   Running             metrics-server           0                   f69f6812b7a66
+当然我们只是使用crictl模拟了docker命令，相对真正的docker我们发现多了ATTEMPT以及POD ID，这是 CRI 所特有的。</p>
+
+<p>3.2 和使用 k8s 一样创建 k3s 资源
+我们使用 k8s 最喜欢拿来入门的bootcamp作为例子，Deployment 声明如下:</p>
+
+<p>复制代码
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: kubernetes-bootcamp-v1
+  name: kubernetes-bootcamp-v1
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: kubernetes-bootcamp-v1
+  template:
+    metadata:
+      labels:
+        app: kubernetes-bootcamp-v1
+    spec:
+      containers:
+      - image: jocatalin/kubernetes-bootcamp:v1
+        name: kubernetes-bootcamp-v1
+使用kubectl apply创建 Deployment 资源:</p>
+
+<p>复制代码</p>
+<h1 id="kubectl--apply--f-kubernetes-bootcamp-v1yaml">kubectl  apply -f kubernetes-bootcamp-v1.yaml</h1>
+<p>deployment.apps/kubernetes-bootcamp-v1 created</p>
+<h1 id="kubectl--get-pod">kubectl  get pod</h1>
+<p>NAME                                     READY   STATUS        RESTARTS   AGE
+kubernetes-bootcamp-v1-c5ccf9784-m79vt   1/1     Running       0          3s
+kubernetes-bootcamp-v1-c5ccf9784-5blct   1/1     Running       0          3s
+创建 Service：</p>
+
+<p>复制代码</p>
+<h1 id="kubectl-apply--f--">kubectl apply -f -</h1>
+<p>apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: kubernetes-bootcamp-v1
+  name: kubernetes-bootcamp-v1
+spec:
+  ports:</p>
+<ul>
+  <li>port: 8080
+protocol: TCP
+targetPort: 8080
+  selector:
+app: kubernetes-bootcamp-v1
+  type: ClusterIP
+    <h1 id="kubectl--get-service">kubectl  get service</h1>
+    <p>NAME                     TYPE        CLUSTER-IP     EXTERNAL-IP   PORT(S)    AGE
+kubernetes               ClusterIP   10.43.0.1      <none>        443/TCP    29m
+kubernetes-bootcamp-v1   ClusterIP   10.43.132.97   <none>        8080/TCP   8m14s</none></none></p>
+    <h1 id="curl-1043132978080">curl 10.43.132.97:8080</h1>
+    <p>Hello Kubernetes bootcamp! | Running on: kubernetes-bootcamp-v1-c5ccf9784-5blct | v=1
+我们不需要再单独安装其他 ingress controller，因为 k3s 已经内置了 Traefik，直接创建 Ingress:</p>
+  </li>
+</ul>
+
+<p>复制代码</p>
+<h1 id="kubectl-apply--f---1">kubectl apply -f -</h1>
+<p>apiVersion: extensions/v1beta1
+kind: Ingress
+metadata:
+  name: “int32bit-test-ingress”
+  labels:
+    app: int32bit-test-ingress
+spec:
+  rules:
+    - host: test.int32bit.me
+      http:
+        paths:
+        - path: /v1
+          backend:
+            serviceName: “kubernetes-bootcamp-v1”
+            servicePort: 8080</p>
+<h1 id="kubectl--get-ingress-int32bit-test-ingress">kubectl  get ingress int32bit-test-ingress</h1>
+<p>NAME                    HOSTS              ADDRESS           PORTS   AGE
+int32bit-test-ingress   test.int32bit.me   192.168.193.197   80      5m54s
+其中192.168.193.197为 master 节点的 IP，由于我们没有 DNS 解析，因此可以通过配置/etc/hosts文件进行静态配置:</p>
+
+<p>复制代码
+192.168.193.197 test.int32bit.me
+此时我们就可以直接通过 ingress 地址 test.int32bit.me 访问我们的服务了，ingress 直接通过ClusterIP转发，不需要NodePort：</p>
+
+<p>复制代码</p>
+<h1 id="curl-httptestint32bitmev1">curl http://test.int32bit.me/v1</h1>
+<p>Hello Kubernetes bootcamp! | Running on: kubernetes-bootcamp-v1-c5ccf9784-5blct | v=1
+我们发现 k3s 和 k8s 的 Resource 声明完全兼容，没有任何区别。</p>
+
+<p>4 k3s 网络
+4.1 CNI 网络
+k3s 内置了 Flannel 网络插件，默认使用 VXLAN 后端，默认 IP 段为10.42.0.0/16。</p>
+
+<p>复制代码</p>
+<h1 id="ip--o--d-link-show-flannel1">ip -o -d link show flannel.1</h1>
+<p>14: flannel.1: &lt;BROADCAST,MULTICAST,UP,LOWER_UP&gt; mtu 8951 <br />
+    qdisc noqueue state UNKNOWN mode DEFAULT group default <br />
+    link/ether 46:61:15:1f:1e:3f brd ff:ff:ff:ff:ff:ff promiscuity 0 <br />
+    vxlan id 1 local 192.168.193.197 dev ens5 <br />
+    srcport 0 0 dstport 8472 nolearning ttl inherit ageing 300 <br />
+    udpcsum noudp6zerocsumtx noudp6zerocsumrx addrgenmode eui64 <br />
+    numtxqueues 1 numrxqueues 1 gso_max_size 65536 gso_max_segs 65535
+内置的 Flannel 除了 VXLAN 还支持 ipsec、host-gw 以及 wireguard。</p>
+
+<p>当然除了默认的 Flannel，k3s 还支持其他 CNI，如 Canal、Calico 等。</p>
+
+<p>4.2 其他网络组件
+k3s 除了内置 Flannel 网络插件以外，还内置了 CoreDNS、Traefik Ingress Controller、Service Load Balancer，如果不使用默认的组件，用户也可以自己部署其他组件，比如使用 MetalLB 替代内置的 load balancer。</p>
+
+<p>5 k3s 存储
+5.1 内置本地存储插件
+k3s 删除了 k8s 内置 cloud provider 以及 storage 插件（当然这不会影响使用通过手动安装的外部插件），内置了 Local Path Provider。</p>
+
+<p>比如我们创建一个 2G 的 PVC:</p>
+
+<p>复制代码</p>
+<h1 id="kubectl-apply--f---2">kubectl apply -f -</h1>
+<p>apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: local-path-pvc
+  namespace: default
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 2Gi
+创建一个 Pod 使用新创建的 PVC:</p>
+
+<p>复制代码</p>
+<h1 id="kubectl-apply--f---3">kubectl apply -f -</h1>
+<p>apiVersion: v1
+kind: Pod
+metadata:
+  name: volume-test
+spec:
+  containers:</p>
+<ul>
+  <li>name: volume-test
+image: jocatalin/kubernetes-bootcamp:v1
+volumeMounts:
+    <ul>
+      <li>name: volv
+mountPath: /data
+volumes:</li>
+    </ul>
+  </li>
+  <li>name: volv
+persistentVolumeClaim:
+  claimName: local-path-pvc
+查看创建的 Pod 以及 PVC:</li>
+</ul>
+
+<p>复制代码</p>
+<h1 id="kubectl-get-pod-volume-test">kubectl get pod volume-test</h1>
+<p>NAME          READY   STATUS    RESTARTS   AGE
+volume-test   1/1     Running   0          116s</p>
+<h1 id="kubectl-get-pvc">kubectl get pvc</h1>
+<p>NAME             STATUS   VOLUME                                     CAPACITY   ACCESS MODES   STORAGECLASS   AGE
+local-path-pvc   Bound    pvc-6bd15859-540f-4ade-94dc-821e29cacdba   2Gi        RWO            local-path     4m8s</p>
+<h1 id="kubectl-get-pv">kubectl get pv</h1>
+<p>NAME                                       CAPACITY   ACCESS MODES   RECLAIM POLICY   STATUS   CLAIM                    STORAGECLASS   REASON   AGE
+pvc-6bd15859-540f-4ade-94dc-821e29cacdba   2Gi        RWO            Delete           Bound    default/local-path-pvc   local-path              106s
+查看 PV：</p>
+
+<p>复制代码</p>
+<h1 id="kubectl-describe--pv">kubectl describe  pv</h1>
+<p>Name:              pvc-6bd15859-540f-4ade-94dc-821e29cacdba
+Labels:            <none>
+Annotations:       pv.kubernetes.io/provisioned-by: rancher.io/local-path
+Finalizers:        [kubernetes.io/pv-protection]
+StorageClass:      local-path
+Status:            Bound
+Claim:             default/local-path-pvc
+Reclaim Policy:    Delete
+Access Modes:      RWO
+VolumeMode:        Filesystem
+Capacity:          2Gi
+Node Affinity:
+  Required Terms:
+    Term 0:        kubernetes.io/hostname in [ip-192-168-193-197]
+Message:
+Source:
+    Type:          HostPath (bare host directory volume)
+    Path:          /var/lib/rancher/k3s/storage/pvc-6bd15859-540f-4ade-94dc-821e29cacdba
+    HostPathType:  DirectoryOrCreate
+Events:            <none>
+可见其实就类似 k8s 的 HostPath 存储卷类型。</none></none></p>
+
+<p>5.2 使用外部存储 Longhorn
+前面提到的内置 local path 存储，只能单机使用，不支持跨主机使用，也不支持存储的高可用。</p>
+
+<p>可以通过使用外部的存储插件解决 k3s 存储问题，比如 Longhorn[2]。</p>
+
+<p>Longhorn 是专门针对 Kubernetes 设计开发的云原生分布式块存储系统，可以直接使用kubectl apply或者helm安装:</p>
+
+<p>复制代码
+kubectl apply -f https://raw.githubusercontent.com/longhorn/longhorn/master/deploy/longhorn.yaml
+为了能够访问 Longhorn Dashboard，我创建如下 ingress:</p>
+
+<p>复制代码
+apiVersion: extensions/v1beta1
+kind: Ingress
+metadata:
+  name: “longhorn-ui”
+  namespace: longhorn-system
+  labels:
+    app: longhorn-ui
+spec:
+  rules:
+    - host: longhorn-frontend.int32bit.me
+      http:
+        paths:
+        - path: /
+          backend:
+            serviceName: “longhorn-frontend”
+            servicePort: 80
+    - host: longhorn-backend.int32bit.me
+      http:
+        paths:
+        - path: /
+          backend:
+            serviceName: “longhorn-backend”
+            servicePort: 9500
+通过http://longhorn-frontend.int32bit.me/dashboard即可访问 Dashboard:</p>
+
+<p>轻量级Kubernetes k3s初探</p>
+
+<p>longhorn
+安装 Longhorn storageclass:</p>
+
+<p>复制代码
+kubectl create -f <br />
+https://raw.githubusercontent.com/longhorn/longhorn/master/examples/storageclass.yaml
+创建 PVC:</p>
+
+<p>复制代码</p>
+<h1 id="kubectl-apply--f---4">kubectl apply -f -</h1>
+<p>apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: longhorn-volv-pvc
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: longhorn
+  resources:
+    requests:
+      storage: 2Gi
+创建 Pod 使用新创建的 PVC:</p>
+
+<p>复制代码</p>
+<h1 id="kubectl-apply--f---5">kubectl apply -f -</h1>
+<p>apiVersion: v1
+kind: Pod
+metadata:
+  name: test-volume-longhorn
+spec:
+  containers:</p>
+<ul>
+  <li>name: test-volume-longhorn
+image: jocatalin/kubernetes-bootcamp:v1
+volumeMounts:
+    <ul>
+      <li>name: volv
+mountPath: /data
+volumes:</li>
+    </ul>
+  </li>
+  <li>name: volv
+persistentVolumeClaim:
+  claimName: longhorn-volv-pvc
+通过 Longhorn Dashboard 查看 volume:</li>
+</ul>
+
+<p>轻量级Kubernetes k3s初探</p>
+
+<p>longhorn-pvc
+可见 PV 已经挂载到 Pod test-volume-longhorn中。</p>
+
+<p>6 加上 k9s，全了
+最后，附上 k9s，这样 k3s、k8s、k9s 全了 : )</p>
+
+<p>复制代码
+https://github.com/derailed/k9s/releases/download/v0.19.0/k9s_Linux_x86_64.tar.gz
+tar xvzf k9s_Linux_x86_64.tar.gz
+mv k9s /usr/local/bin/kubectl-k9s
+轻量级Kubernetes k3s初探</p>
+
+<p>k9s
+写在最后
+k3s 在去年的 2 月就已经推出并开源，现在不算是新东西，周末正好没啥事于是安装体验下，主要还是想使用下 mdnice[3] 体验下公众号文章排版效果。</p>
+
+<p>使用后一次后发现，mdnice 真的是特别适合技术类公众号文章编辑：</p>
+
+<p>Markdown 语法，支持在线编辑，写完后即排版成功，复制即可粘贴到微信公众号 ;
+支持零配置图床、脚注、代码、公式 ;
+内置 18 种风格主题，支持自定义 CSS 样式 ;
+内容在浏览器中实时保存 ;
+支持 chrome 插件，可直接在微信公众平台上编辑。
+尤其是代码块，代码高亮和滚屏是刚需。目前很多公众号编辑器支持得都不是很好，比如秀米就对代码块的支持效果非常不好。而 midnice 直接使用 Markdown 语法嵌入代码块，并且支持 Atom、Monokai、github、vs2015、xcode 等多种代码风格。</p>
+
+<p>参考资料
+[1] k3s: https://rancher.com/docs/k3s/latest/en/</p>
+
+<p>[2] Longhorn: https://github.com/longhorn/longhorn</p>
+
+<p>[3] mdnice: https://docs.mdnice.com/#/
+https://www.infoq.cn/article/0c7viUfLrxOZeh7qlRBT</p>
+:ET

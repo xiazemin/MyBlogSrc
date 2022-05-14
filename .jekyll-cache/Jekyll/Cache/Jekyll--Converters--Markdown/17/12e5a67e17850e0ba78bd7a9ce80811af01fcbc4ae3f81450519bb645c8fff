@@ -1,0 +1,281 @@
+I"�4<p>CGI(Common Gateway Interface)是能让web服务器和CGI脚本共同处理客户的请求的协议。它的协议定义文档是http://www.ietf.org/rfc/rfc3875。</p>
+
+<p>其中Web服务器负责管理连接，数据传输，网络交互等。至于CGI脚本就负责管理具体的业务逻辑。</p>
+
+<p>Web服务器的功能是将客户端请求（HTTP Request）转换成CGI脚本请求，然后执行脚本，接着将CGI脚本回复转换为客户端的回复（HTTP Response）。</p>
+
+<p>CGI的脚本请求有两部分：请求元数据（request meta-variables）和相关的消息体（message-body）。</p>
+
+<p>请求元数据
+包含：</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>                           "AUTH_TYPE" | "CONTENT_LENGTH" |
+                       "CONTENT_TYPE" | "GATEWAY_INTERFACE" |
+                       "PATH_INFO" | "PATH_TRANSLATED" |
+                       "QUERY_STRING" | "REMOTE_ADDR" |
+                       "REMOTE_HOST" | "REMOTE_IDENT" |
+                       "REMOTE_USER" | "REQUEST_METHOD" |
+                       "SCRIPT_NAME" | "SERVER_NAME" |
+                       "SERVER_PORT" | "SERVER_PROTOCOL" |
+                       "SERVER_SOFTWARE" | scheme |
+                       protocol-var-name | extension-var-name
+</code></pre></div></div>
+
+<p>下面一个一个看：</p>
+
+<p>AUTH_TYPE是唯一标识了用户的认证方式，比如basic，Digest等
+CONTENT_LENGTH是请求消息体的长度
+CONTENT_TYPE是标识消息体的格式
+GATEWAY_INTERFACE标识使用的CGI的版本，比如CGI/1.1
+PATH_INFO说明了解释CGI脚本的地址
+PATH_TRANSLATED就是可以被访问的cgi的路径，它对应CGI脚本的路径，比如
+http://somehost.com/cgi-bin/somescript/this%2eis%2epath%3binfo
+对应的PATH_INFO就是/this.is.the.path;info
+QUERY_STRING 请求参数（GET的参数就是放在这个里面的）
+REMOTE_ADDR标识客户端的ip地址
+REMOTE_HOST标识的是客户端的域名
+REMOTE_IDENT是发出请求的使用者标示，大多数服务端选择忽略这个属性
+REMOTE_USER是使用者的合法名称
+REQUEST_METHOD是请求方法，包括GET/POST/PUT/DELETE等
+SCRIPT_NAME是脚本程序的虚拟路径，比如是/test/test.php
+SERVER_NAME是WEB服务器的域名
+SERVER_PORT是WEB服务器端口名
+SERVER_PROTOCOL是WEB服务器与客户端的交互请求协议
+SERVER_SOFTWARE发送给客户端的response的Web服务器的标识，比如nginx/1.0.6</p>
+
+<p>请求消息体
+就是直接将客户端的请求消息体转发，将消息体放在stdin中传递给script的</p>
+
+<p>相关知识点
+参数传递
+下面的问题就是web服务器获取了http请求后，由于http请求是有分GET和POST等方法的。参数怎么传递给可执行程序呢？
+比如GET方法，CGI程序就会从环境变量QUERY_STRING中获取数据。
+POST呢？Web服务器会通过stdin（标准输入）想CGI中传送数据的。而传送的数据长度就是放在CONTENT_LENGTH中的。
+对应于HTTP请求，QUERY_STRING存放http的GET参数，stdin存放HTTP的BODY参数</p>
+
+<p>现在流行的nginx+php的方法就是使用nginx(web服务器)将请求变成cgi请求到php-cgi上，然后php-cgi进程执行php，将返回值变成cgi response返回给nginx。nginx再将它变成http回复返回给客户端。</p>
+
+<p>但是这里有个问题，cgi是单进程的，一个进程的生命期就只是请求进来，处理，返回回复这几个阶段。但是web服务器都是需要接受多个web请求的，这里就需要在后端开启多个cgi了。一般的cgi服务器都会设置允许开启多少个cgi的数量的。</p>
+
+<p>这里要明确一点，cgi是有分服务端和客户端的区别的，cgi客户端是放在web服务器一侧，像nginx，apache这样的web服务器就已经是实现了这个客户端。服务器端需要另外重启。像nginx+cgi+php这样的配合就需要启动php-cgi服务，当然你也可以想到这样的服务一定是以deamon的形式在后台运行，然后会fork出很多个cgi进程。</p>
+
+<p>复用
+当然有人会问，cgi进程不能复用是个问题，为什么不呢，fastcgi出现就是解决了这个问题。它的一个进程可以处理多个请求。这样速度当然就升上去了。然后还有一种cgi是scgi（simple cgi），scgi和fastcgi相似，只能说它定义的协议更简单（所以才叫做simple）。scgi的客户端是c写的，服务端是perl写的。</p>
+
+<p>就最常见的nginx+cgi+php来说，要明确一点php中$_SERVER中获取的信息实际都是从cgi中获取的，当然这个和nginx中获取的客户端信息是一致的。另外由于cgi是有客户端和服务端的区别的，因此很容易想到cgi客户端需要使用tcp与客户端连接，每个连接当然需要占用一个端口，因此还是会有端口限制的。所以从这个角度上说，并不是cgi开的越多越好（当然6w的端口限制是远远够的了）。</p>
+
+<p>安全
+关于开启的cgi安全问题，曾经鸟哥就爆出了一个bug：http://www.laruence.com/2010/05/20/1495.html
+有兴趣的读者可以看看。</p>
+
+<p>还有cgi服务器不是在监听端口吗？怎么防止外网的请求执行cgi呢？我们一般的办法就是直接绑定在127.0.0.1的ip地址上，保证只有本机才能访问
+<!-- more -->
+CGI包阅读
+cgi包的存在就告诉我们一件事情，cgi服务端和客户端完全可以使用Go来写</p>
+
+<p>这个包其实很简单，只有两个文件，其他都是测试程序</p>
+
+<p>child.go</p>
+
+<p>host.go</p>
+
+<p>host.go是可以直接宿主到go的web服务器上的代码，里面提供了对request和response的直接处理函数ServerHTTP, 当你是使用go的http包写了个http之后，就可以使用ServerHTTP对请求直接配置上cgi，有点像apache中自带了php-cgi</p>
+
+<p>child.go则是已经进入到脚本子进程中了，如果你的CGI脚本是go代码生成的可执行脚本，那么你就会有用到这个文件里面的函数了。这个文件内提供了将命令行环境（CGI请求）转换成Go的http包中的request的方法。</p>
+
+<p>host.go是cgi的启动父程序需要用到的包，child.go是子程序需要用到的包</p>
+
+<p>先看host.go
+首先是trailingPort，这个变量是cgi服务器监听的端口号，（比如在nginx中我们一般都监听9000）</p>
+
+<p>然后是osDefaultInheritEnv，这个map将各个平台的共享库默认路径列出来了。为什么设置这个变量呢？这样说，由于cgi服务器执行命令的时候命令查找设置参数有的是去环境变量中获取的，因此对每个命令执行需要设置一下环境变量。而在不同的平台，动态库的路径是不一样的，所以有了这么个Map。</p>
+
+<p>Handler是在子程序中执行cgi脚本的。里面要注意的结构是两个Env和InheritEnv两个，一个是特别设定的环境变量，另外一个是继承的环境变量。</p>
+
+<p>还有Handler中的Path，就是执行文件的路径，比如/test.php</p>
+
+<p>下面就是最重要的ServeHTTP了，这个是用来回调处理HTTP请求的，它会将HTTP请求转化为CGI请求，并且执行这个cgi脚本。</p>
+
+<p>在这个函数中，能看到CGI的RFC标准参数赋值，然后可以看到拼出了env之后将env作为exec.Cmd的Env来调用cgi脚本（path）。同时也看到了当body内有content的时候，会将Body作为stdin输入，然后从stdout出来的东西逐行读取，然后读取到header和body中去。</p>
+
+<p>看了host.go的实现就很好理解child.go的实现了。</p>
+
+<p>从Serve（handler）来看，先是使用将nginx提供的cgi请求转换成为net包中的http request和response，如果你有设置handler，就用request和response来进行处理。</p>
+
+<p>后续的几个操作Write，Flush都已经是简单的buffer处理了。</p>
+
+<p>CGI包使用
+然后自然想到的一个问题，能不能实现</p>
+
+<p>go-web服务器 + go-cgi + cgi-script</p>
+
+<p>这个是可以做的，而且也不复杂：</p>
+
+<p>代码如下：</p>
+
+<p>package main</p>
+
+<p>import(
+  “net/http/cgi”
+  “log”
+  “net/http”
+)</p>
+
+<p>func main() {
+  http.HandleFunc(“/”, func(w http.ResponseWriter, r *http.Request){
+    handler := new(cgi.Handler)
+    handler.Path = “/usr/local/go/gopath/src/cgi-script/” + r.URL.Path
+    log.Println(handler.Path)
+    handler.Dir = “/usr/local/go/gopath/src/cgi-script/”</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>handler.ServeHTTP(w, r)   })
+</code></pre></div></div>
+
+<p>log.Fatal(http.ListenAndServe(“:8989”,nil))
+}
+如果你在cgi-script中有个可运行的cgi脚本，比如test.perl</p>
+
+<p>那么我们就可以在浏览器中调用http://10.16.15.64:8989/test.perl</p>
+
+<p>来进行脚本调用</p>
+
+<p>然后进一步想，能不能把go代码当作是php这样的动态脚本来运行呢，这样就可以一边修改go源码，一边就可以在页面中立刻显示修改结果了。即</p>
+
+<p>go-web + go-cgi + go-cgi-script?
+答案同样也是可以，但是这个时候由于xx.go并非是可执行文件，只能使用go run 来进行调用。</p>
+
+<p>代码：
+package main</p>
+
+<p>import(
+  “net/http/cgi”
+  “log”
+  “net/http”
+)</p>
+
+<p>func main() {
+  http.HandleFunc(“/”, func(w http.ResponseWriter, r *http.Request){
+    handler := new(cgi.Handler)
+    handler.Path = “/usr/local/bin/go”
+    script := “/usr/local/go/gopath/src/cgi-script/” + r.URL.Path
+    log.Println(handler.Path)
+    handler.Dir = “/usr/local/go/gopath/src/cgi-script/”
+    args := []string{“run”, script}
+    handler.Args = append(handler.Args, args…)
+    handler.Env = append(handler.Env, “GOPATH=/usr/local/go/gopath”)
+    handler.Env = append(handler.Env, “GOROOT=/usr/local/go/go”)
+    log.Println(handler.Args)</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>handler.ServeHTTP(w, r)   })
+</code></pre></div></div>
+
+<p>log.Fatal(http.ListenAndServe(“:8989”,nil))
+}</p>
+
+<p>然后在cgi-script文件夹中建立test.go
+package main</p>
+
+<p>import(
+  “fmt”
+)</p>
+
+<p>func init() {
+  fmt.Print(“Content-Type: text/plain;charset=utf-8\n\n”);
+}</p>
+
+<p>func main() {
+  fmt.Println(“This is go test!!!!”)
+}
+这里的init()是必须打印出来的</p>
+
+<p>http://127.0.0.1:8086/cgi/testcgi.go</p>
+
+<p>CGI error: fork/exec /Users/didi/goLang/src/github.com/xiazemin/cgi/gocgi/cgi: permission denied
+原因  需要将 path设置成go安装目录
+  handler.Path = “/usr/local/go/bin/go”</p>
+
+<p>我们聚焦在 go run 的输出结果上，发现它是一个临时文件的地址，这是为什么呢？</p>
+
+<p>在go help run中，我们可以看到</p>
+
+<p>Run compiles and runs the main package comprising the named Go source files.
+ A Go source file is defined to be a file ending in a literal “.go” suffix.
+ 也就是 go run 执行时会将文件放到 /tmp/go-build… 目录下，编译并运行</p>
+
+<p>因此go run main.go出现/tmp/go-build962610262/b001/exe结果也不奇怪了，因为它已经跑到临时目录下去执行可执行文件了</p>
+
+<p>解决办法：//export TMPDIR=/run/shm</p>
+
+<p>type Handler struct{
+       Path string // 执行程序 
+       Root string // 处理 url 的根，为空的时候“/”
+       Dir string         // 目录 
+       Env        []string    // 环境变量 
+       InheritEnv []string    // 集成环境变量 
+       Logger     *log.Logger// 日志 
+       Args       []string    // 参数 
+       PathLocationHandlerhttp.Handler //http 包的 handler 宿主 
+    }</p>
+
+<p>child.go 主要是生成cgi处理程序用，使用范例
+https://ilmanzo.github.io/programming/2015/10/29/cgi-apps-in-go</p>
+
+<p>//save this as todoapp.go
+package main</p>
+
+<p>import (
+    “fmt”
+    “html/template”
+    “io/ioutil”
+    “log”
+    “net/http”
+    “net/http/cgi”
+    “strings”
+)</p>
+
+<p>const datafile = “/tmp/todos.txt”
+const templatefile = “/data/templates/page.gtpl”
+const htmlheader = “text/html; charset=utf-8”</p>
+
+<p>func CGIHandler(rw http.ResponseWriter, req *http.Request) {</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>type ViewData struct {
+    Todos []string
+    DisplayTodos bool
+}
+
+viewdata := ViewData{}
+check(req.ParseForm(),"parsing form")
+
+// load data from file to array string
+content, err := ioutil.ReadFile(datafile)
+check(err,"reading data file:")
+viewdata.Todos = strings.Split(string(content), "\n")
+viewdata.DisplayTodos = (len(viewdata.Todos) &gt; 0)
+if len(req.Form["entry"]) &gt; 0 {
+    // request coming from submit: append to the stored list
+    viewdata.Todos = append(viewdata.Todos, req.Form["entry"][0])
+    data := strings.Join(viewdata.Todos, "\n")
+    // save current array string to disk. TODO: locking!!
+    err := ioutil.WriteFile(datafile, []byte(data), 0644)
+    check(err,"writing data file")
+}
+header := rw.Header()
+header.Set("Content-Type", htmlheader)
+t, err := template.ParseFiles(templatefile)
+check(err,"parsing template")
+err = t.Execute(rw, viewdata)
+check(err,"executing template") }
+</code></pre></div></div>
+
+<p>func check(err error, msg string) {
+    if err != nil {
+        log.Fatal(msg,err)
+    }
+}</p>
+
+<p>func main() {
+    err := cgi.Serve(http.HandlerFunc(CGIHandler))
+    check(err,”cannot serve request”)
+}</p>
+:ET

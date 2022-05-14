@@ -1,0 +1,94 @@
+I"�<p>https://www.cnblogs.com/zhangboyu/p/7452725.html</p>
+
+<p>服务发现包含两个组件一个是服务端的register，一个是客户端的resolver；
+下面主要看下resolver</p>
+
+<p>% cd ~/go/pkg/mod/google.golang.org/grpc@v1.37.0/internal/resolver</p>
+
+<p>% tree
+.
+|<strong>__passthrough
+| |</strong><strong>passthrough.go
+|</strong><strong>config_selector.go
+|</strong><strong>unix
+| |</strong><strong>unix.go
+|</strong><strong>dns
+| |</strong><strong>dns_resolver.go
+| |</strong><strong>go113.go
+| |</strong><strong>dns_resolver_test.go
+|</strong>__config_selector_test.go</p>
+
+<p>grpc 默认实现了三个
+passthrough、unix、dns</p>
+
+<p>常见的reslover除了dns外也可以基于etcd、consul或者zookeeper</p>
+
+<p>gRPC 的 RPC 协议是基于 HTTP/2 标准实现的，HTTP/2 的一大特性就是不需要像 HTTP/1.1 一样，每次发出请求都要重新建立一个新连接，而是会复用原有的连接。
+所以这将导致 kube-proxy 只有在连接建立时才会做负载均衡，而在这之后的每一次 RPC 请求都会利用原本的连接，那么实际上后续的每一次的 RPC 请求都跑到了同一个地方。
+<!-- more -->
+gRPC client LB 配合 Headless Service
+创立 Headless Service 后，k8s 会生成 DNS 记录，拜访 Service 会返回后端多个 pod IP 的 A 记录，这样利用就能够基于 DNS 自定义负载平衡。</p>
+
+<p>在 grpc-client 指定 headless service 地址为 dns:/// 协定，DNS resolver 会通过 DNS 查问后端多个 pod IP，而后通过 client LB 算法来实现负载平衡。这些 grpc-go 这个库都帮你做了。</p>
+
+<p>conn, err := grpc.DialContext(ctx, “dns:///”+headlessSvc,
+    grpc.WithInsecure(),
+    grpc.WithBalancerName(roundrobin.Name),
+    grpc.WithBlock(),
+)</p>
+
+<p>Proxy LB 或 ServiceMesh
+如果不想在 client 代码中来做 LB，能够应用 Envoy 或 Nginx 反向代理。</p>
+
+<p>https://lequ7.com/guan-yu-k8sk8s-fu-wu-fa-xian-yi-ji-grpc-zhang-lian-jie-fu-zai-jun-heng.html</p>
+
+<p>https://github.com/sercand/kuberesolver</p>
+
+<p>1）客户端lb + Name Resolver + Headless Service
+该解决方案实现的是客户端负载均衡。实现gRPC客户端负载平衡需要两个主要组件: name resolver 和 load balancing policy。</p>
+
+<p>当gRPC客户端想要与gRPC服务器进行交互时，它首先尝试通过向 resolver 发出名称解析请求来解析服务器名称，解析程序返回已解析IP地址的列表。</p>
+
+<p>第二部分是负载平衡策略。 比如gRPC-Go库中的两个内置策略是roundrobin和grpclb策略。grpclb策略通常与外部负载均衡器一起使用。还有一个base策略，通常用于构建更复杂的选择算法。 对于解析器返回的每个非负载均衡器地址，负载均衡策略都会创建一个到该地址的新子连接。然后，该策略返回一个选择器，该选择器为客户端提供一个接口，以检索用于进行RPC调用的子连接。</p>
+
+<p>默认gRPC 使用 dns 作为其 resolver。所以我们需要为我们的应用创建Headless Service 。</p>
+
+<p>创建 Headless Service 的服务，Kubernetes将在该服务的DNS条目中创建多个A记录，而每个A记录与之对应的是一个Pod IP。</p>
+
+<p>2）集中式Proxy
+通过集中式的代理来解决gRPC 负载均衡也是一种流行的解决方案。比如当我们的客户端处于公网，我们出于安全的考量，不可能将 server 配置为公网可访问，此时集中式LB就非常适合这种场景。</p>
+
+<p>而如果我们的服务是部署在 kubernetes 中，那么选择一个支持gRPC的Ingress Controller 就可以完美解决问题。</p>
+
+<p>目前基于 Envoy 实现的 Ingress Controller 均支持gRPC的负载均衡。比如 Contour，Ambassador， Gloo等。Envoy 是一个开源应用层（第 7 层）代理，提供许多高级特性。可以可以使用它来终止 SSL/TLS 连接并将 gRPC 流量路由到适当的 Kubernetes 服务。</p>
+
+<p>3）Service Mesh
+目前所有的Service Mesh 解决方案都支持gRPC服务。包括Istio等以Envoy作为数据面的 Mesh 解决方案和 Linkerd 等非Envoy作为数据面的Mesh。</p>
+
+<p>Mesh方案本质上依旧是Proxy。和集中式Proxy对比，只是将Proxy下沉到每个Client，以Sidecar的形式存在。</p>
+
+<p>4）无代理 xds 负载均衡
+xDS 本身是Envoy中的概念，现在已经发展为用于配置各种数据平面软件的标准。最新版本的gRPC已经支持 基于xDS的负载平衡，目前为止，gRPC团队增加了对C-core，Java和Go语言的支持。</p>
+
+<p>在xDS API流程中，客户端使用以下主要API：</p>
+
+<p>Listener Discovery Service (LDS): 返回监听器资源。基本上用作gRPC客户端配置的root。指向RouteConfiguration。
+Route Discovery Service (RDS): 返回RouteConfiguration资源。提供用于填充gRPC服务配置的数据。指向集群。
+Cluster Discovery Service (CDS): 返回集群资源。配置诸如负载平衡策略和负载报告之类的内容。指向ClusterLoadAssignment。
+Endpoint Discovery Service (EDS): 返回ClusterLoadAssignment资源。配置一组端点（后端服务器）以实现负载均衡，并可能告诉客户端丢弃请求。</p>
+
+<p>https://zhuanlan.zhihu.com/p/336676373</p>
+
+<p>http://morecrazy.github.io/2018/08/14/grpc-go%E5%9F%BA%E4%BA%8Eetcd%E5%AE%9E%E7%8E%B0%E6%9C%8D%E5%8A%A1%E5%8F%91%E7%8E%B0%E6%9C%BA%E5%88%B6/</p>
+
+<p>https://github.com/ilisin/grpc</p>
+
+<p>https://github.com/grpc/grpc-go/blob/master/resolver_conn_wrapper.go</p>
+
+<p>https://github.com/grpc/grpc-go/blob/master/resolver/resolver.go</p>
+
+<p>https://www.cnblogs.com/haima/p/12239543.html
+https://www.sohu.com/a/368368405_657921</p>
+
+<p>https://blog.csdn.net/weixin_39526564/article/details/111363726</p>
+:ET

@@ -1,0 +1,73 @@
+---
+title: cow
+layout: post
+category: php
+author: 夏泽民
+---
+https://www.researchgate.net/publication/220997065_Copy-on-write_in_the_PHP_language
+
+https://segmentfault.com/a/1190000014024336
+<!-- more -->
+<?php
+$foo = 1;
+$bar = $foo;
+echo $foo + $bar;
+变量 foo 赋值给变量foo赋值给变量bar，这两个变量具有相同的值，没有必要新申请内存空间，他们可以共享同一块内存。在很多场景下PHP 的 COW 对内存进行优化。比如：变量的多次赋值、函数参数传递，并在函数体内修改实参等。
+
+什么是“复制”
+这是一段摘自鸟哥博客的例子，说的比较清楚，就直接贴过来了。
+
+<?php
+   $var = "laruence";
+   $var_dup = $var;
+   $var = 1;
+?>
+很明显在这段代码执行以后，$var_dup 的值应该还是”laruence”, 那么这又是怎么实现的呢？这就是 PHP 的 copy on write 机制：
+
+PHP 在修改一个变量以前，会首先查看这个变量的 refcount，如果 refcount 大于1，PHP 就会执行一个分离的例程， 对于上面的代码，当执行到第三行的时候，PHP 发现 var 指向的 zval 的 refcount 大于1，那么 PHP 就会复制一个新的 zval 出来，将原 zval 的 refcount 减 1，并修改 symbol_table，使得var指向的zval的refcount大于1，那么PHP就会复制一个新的zval出来，将原zval的refcount减1，并修改symbol 
+t
+​	
+ able，使得var 和 $var_dup 分离(Separation)。这个机制就是所谓的 copy on write(写时复制)。
+
+写时复制应用场景
+写时复制（Copy on Write，也缩写为COW)的应用场景非常多， 比如Linux中对进程复制中内存使用的优化，在各种编程语言中，如C++的STL等等中均有类似的应用。 COW是常用的优化手段，可以归类于：资源延迟分配。只有在真正需要使用资源时才占用资源， 写时复制通常能减少资源的占用。
+
+一个证明 PHP COW 优化内存占用的例子：
+
+<?php
+$j = 1;
+var_dump(memory_get_usage());
+ 
+$tipi = array_fill(0, 100000, 'php-internal');
+var_dump(memory_get_usage());
+ 
+$tipi_copy = $tipi;
+var_dump(memory_get_usage());
+ 
+foreach ($tipi_copy as $i) {
+    $j += count($i);
+}
+var_dump(memory_get_usage());
+运行结果：
+
+$ php t . php
+int(630904)
+int(10479840)
+int(10479944)
+int(10480040)
+内存并没有显著提高。
+
+“写时复制”的原理
+多个相同值的变量共用同一块内存的确节省了内存空间，但变量的值是会发生变化的，如果在上面的例子中， 指向同一内存的值发生了变化（或者可能发生变化），就需要将变化的值“分离”出去，这个“分离”的操作， 就是“复制”。
+
+在PHP中，Zend引擎为了区别同一个zval地址是否被多个变量共享，引入了ref_count和is_ref两个变量进行标识：
+
+ref_count和is_ref是定义于zval结构体中
+
+is_ref标识是不是用户使用 & 的强制引用；
+
+ref_count是引用计数，用于标识此zval被多少个变量引用，即COW的自动引用，为0时会被销毁；
+
+注：由此可见， a=a=b; 与 a=&b; 在PHP对内存的使用上没有区别（值不变化时）；
+
+相信大家也可以了解到PHP中COW的实现原理： PHP 中的 COW 基于引用计数ref_count 和 is_ref 实现， 多一个变量指针，就将 ref_count 加 1， 反之减去 1，减到 0 就销毁； 同理，多一个强制引用 &,就将 is_ref 加 1，反之减去 1。

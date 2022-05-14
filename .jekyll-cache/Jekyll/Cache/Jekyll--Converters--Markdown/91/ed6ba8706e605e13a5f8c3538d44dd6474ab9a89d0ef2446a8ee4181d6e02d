@@ -1,0 +1,566 @@
+I"�=<p>https://github.com/mitchellh/cli
+功能
+该框架是个人开发的命令行程序框架，作者还成立了公司（HashiCorp），其公司的产品也采用这个CLI框架。</p>
+
+<p>解读
+框架的思路是：把命令和执行方法以map的形式记录在内部，然后根据用户输入的命令，决定执行哪个方法。实际上记录的是命令字符串和CommandFactory，由CommandFactory创建Command然后执行。</p>
+
+<p>框架默认支持version和help两个功能。
+<!-- more -->
+package main</p>
+
+<p>import (
+	“fmt”
+	“os”
+	“github.com/mitchellh/cli”
+)</p>
+
+<p>func main() {
+	c := cli.NewCLI(“app”, “1.0.0”)    //这里指定了APP名字和版本
+	c.Args = os.Args[1:]
+	c.Commands = map[string]cli.CommandFactory{
+		“foo”: fooCommandFactory,    //定义foo命令和工厂
+		“bar”: barCommandFactory,    //定义bar命令和工厂
+	}</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>exitStatus, err := c.Run()
+if err != nil {
+	fmt.Println(err)
+}
+
+os.Exit(exitStatus) }
+</code></pre></div></div>
+
+<p>//foo命令工厂
+func fooCommandFactory() (cli.Command, error) {
+	fmt.Println(“I am foo command”)
+	return new(FooCommand), nil
+}
+//bar命令工厂
+func barCommandFactory() (cli.Command, error) {
+	fmt.Println(“I am bar command”)
+	return new(BarCommand), nil
+}
+//foo命令实现
+type FooCommand struct{}</p>
+
+<p>// Help should return long-form help text that includes the command-line
+// usage, a brief few sentences explaining the function of the command,
+// and the complete list of flags the command accepts.
+func (f *FooCommand) Help() string {
+	return “help foo”
+}</p>
+
+<p>// Run should run the actual command with the given CLI instance and
+// command-line arguments. It should return the exit status when it is
+// finished.
+//
+// There are a handful of special exit codes this can return documented
+// above that change behavior.
+func (f *FooCommand) Run(args []string) int {
+	fmt.Println(“Foo Command is running”)
+	return 1
+}</p>
+
+<p>// Synopsis should return a one-line, short synopsis of the command.
+// This should be less than 50 characters ideally.
+func (f *FooCommand) Synopsis() string {
+	return “foo command Synopsis”
+}</p>
+
+<p>//bar命令实现
+type BarCommand struct{}</p>
+
+<p>// Help should return long-form help text that includes the command-line
+// usage, a brief few sentences explaining the function of the command,
+// and the complete list of flags the command accepts.
+func (b *BarCommand) Help() string {
+	return “help bar”
+}</p>
+
+<p>// Run should run the actual command with the given CLI instance and
+// command-line arguments. It should return the exit status when it is
+// finished.
+//
+// There are a handful of special exit codes this can return documented
+// above that change behavior.
+func (b *BarCommand) Run(args []string) int {
+	fmt.Println(“bar Command is running”)
+	return 1
+}</p>
+
+<p>// Synopsis should return a one-line, short synopsis of the command.
+// This should be less than 50 characters ideally.
+func (b *BarCommand) Synopsis() string {
+	return “bar command Synopsis”
+}
+运行go build编译，然后运行，就可以看到执行结果：</p>
+
+<p>name@mypc MINGW64 /d/go-repo/test
+$ go build cli1</p>
+
+<p>name@mypc MINGW64 /d/go-repo/test
+$ ll
+total 3924
+-rwxr-xr-x 1 name 197121 4017152 2月  21 09:47 cli1.exe*
+drwxr-xr-x 1 name 197121       0 2月  18 14:19 src/</p>
+
+<p>name@mypc MINGW64 /d/go-repo/test
+$ ./cli1
+I am bar command
+I am foo command
+I am bar command
+I am foo command
+Usage: app [–version] [–help] <command /> [<args>]</args></p>
+
+<p>Available commands are:
+    bar    bar command Synopsis
+    foo    foo command Synopsis</p>
+
+<p>name@mypc MINGW64 /d/go-repo/test
+$ ./cli1 foo
+I am bar command
+I am foo command
+I am foo command
+Foo Command is running</p>
+
+<p>github.com/spf13/cobra
+这个比较有名了， 好多框架都使用了这个
+以下是一个简单的使用</p>
+
+<p>代码
+package main
+​
+import (
+ “github.com/spf13/cobra”
+)
+​
+func main() {
+ cmd := newCommand()
+ cmd.AddCommand(newNestedCommand())
+​
+ rootCmd := &amp;cobra.Command{}
+ rootCmd.AddCommand(cmd)
+​
+ if err := rootCmd.Execute(); err != nil {
+  println(err.Error())
+ }
+}
+func newCommand() *cobra.Command {
+ cmd := &amp;cobra.Command{
+  Run: func(cmd *cobra.Command, args []string) {
+   println(<code class="language-plaintext highlighter-rouge">Foo</code>)
+  },
+  Use: <code class="language-plaintext highlighter-rouge">foo</code>,
+  Short: “Command foo”,
+  Long: “This is a command”,
+ }
+​
+ return cmd
+}
+​
+func newNestedCommand() *cobra.Command {
+ cmd := &amp;cobra.Command{
+  Run: func(cmd *cobra.Command, args []string) {
+   println(<code class="language-plaintext highlighter-rouge">Bar</code>)
+  },
+  Use: <code class="language-plaintext highlighter-rouge">bar</code>,
+  Short: “Command bar”,
+  Long: “This is a nested command”,
+ }
+​
+ return cmd
+}</p>
+
+<p>效果
+go run main.go
+Usage:
+   [command]
+​
+Available Commands:
+  foo Command foo
+  help Help about any command
+​
+Flags:
+  -h, –help help for this command
+​
+Use “ [command] –help” for more information about a command.</p>
+
+<p>github.com/urfave/cli
+这个也比较有名，好多框架也使用了这个</p>
+
+<p>代码
+package main
+​
+import (
+ “log”
+ “os”
+ “sort”
+​
+ “github.com/urfave/cli”
+)
+​
+func main() {
+ app := cli.NewApp()
+​
+ app.Flags = []cli.Flag{
+  cli.StringFlag{
+   Name: “lang, l”,
+   Value: “english”,
+   Usage: “Language for the greeting”,
+  },
+  cli.StringFlag{
+   Name: “config, c”,
+   Usage: “Load configuration from <code class="language-plaintext highlighter-rouge">FILE</code>”,
+  },
+ }
+​
+ app.Commands = []cli.Command{
+  {
+   Name: “complete”,
+   Aliases: []string{“c”},
+   Usage: “complete a task on the list”,
+   Action: func(c <em>cli.Context) error {
+    log.Print(“ddd”)
+    return nil
+   },
+  },
+  {
+   Name: “add”,
+   Aliases: []string{“a”},
+   Usage: “add a task to the list”,
+   Action: func(c *cli.Context) error {
+    return nil
+   },
+  },
+ }
+​
+ sort.Sort(cli.FlagsByName(app.Flags))
+ sort.Sort(cli.CommandsByName(app.Commands))
+​
+ err := app.Run(os.Args)
+ if err != nil {
+  log.Fatal(err)
+ }
+}
+运行效果
+go run cmd/cli/main.go 
+NAME:
+   main - A new cli application
+​
+USAGE:
+   main [global options] command [command options] [arguments…]
+​
+VERSION:
+   0.0.0
+​
+COMMANDS:
+   add, a add a task to the list
+   complete, c complete a task on the list
+   help, h Shows a list of commands or help for one command
+​
+GLOBAL OPTIONS:
+   –config FILE, -c FILE Load configuration from FILE
+   –lang value, -l value Language for the greeting (default: “english”)
+   –help, -h show help
+   –version, -v print the version 
+github.com/google/subcommands
+代码
+package main
+​
+import (
+   “context”
+   “flag”
+   “fmt”
+   “os”
+   “strings”
+​
+   “github.com/google/subcommands”
+)
+​
+type printCmd struct {
+   capitalize bool
+}
+​
+func (</em>printCmd) Name() string { return “print” }
+func (<em>printCmd) Synopsis() string { return “Print args to stdout.” }
+func (</em>printCmd) Usage() string {
+   return <code class="language-plaintext highlighter-rouge">print [-capitalize] &lt;some text&gt;:
+   Print args to stdout.
+  </code>
+}
+​
+func (p *printCmd) SetFlags(f *flag.FlagSet) {
+   f.BoolVar(&amp;p.capitalize, “capitalize”, false, “capitalize output”)
+}
+​
+func (p *printCmd) Execute(_ context.Context, f *flag.FlagSet, _ …interface{}) subcommands.ExitStatus {
+   for _, arg := range f.Args() {
+      if p.capitalize {
+         arg = strings.ToUpper(arg)
+      }
+      fmt.Printf(“%s “, arg)
+   }
+   fmt.Println()
+   return subcommands.ExitSuccess
+}
+func main() {
+   subcommands.Register(subcommands.HelpCommand(), “”)
+   subcommands.Register(subcommands.FlagsCommand(), “”)
+   subcommands.Register(subcommands.CommandsCommand(), “”)
+   subcommands.Register(&amp;printCmd{}, “”)
+​
+   flag.Parse()
+   ctx := context.Background()
+   os.Exit(int(subcommands.Execute(ctx)))
+}
+​</p>
+
+<p>效果
+go run cmd/subcommands/main.go     <br />
+Usage: main <flags> <subcommand> <subcommand args="">
+​
+Subcommands:
+        commands list all command names
+        flags describe all known top-level flags
+        help describe subcommands and their syntax
+        print Print args to stdout.
+​
+​
+Use "main flags" for a list of top-level flags
+exit status 2
+github.com/mitchellh/cli
+这个是hashicorp 好多产品使用的一个cli</subcommand></subcommand></flags></p>
+
+<p>代码
+package main
+​
+import (
+   “fmt”
+   “log”
+   “os”
+​
+   “github.com/mitchellh/cli”
+)
+​
+func fooCommandFactory() (cli.Command, error) {
+   return new(FooCommand), nil
+}
+​
+func barCommandFactory() (cli.Command, error) {
+   return new(BarCommand), nil
+}
+​
+// FooCommand fooCommand
+type FooCommand struct{}
+​
+// Help should return long-form help text that includes the command-line
+// usage, a brief few sentences explaining the function of the command,
+// and the complete list of flags the command accepts.
+func (f *FooCommand) Help() string {
+   return “help foo”
+}
+​
+// Run should run the actual command with the given CLI instance and
+// command-line arguments. It should return the exit status when it is
+// finished.
+//
+// There are a handful of special exit codes this can return documented
+// above that change behavior.
+func (f *FooCommand) Run(args []string) int {
+   fmt.Println(“Foo Command is running”)
+   return 1
+}
+​
+// Synopsis should return a one-line, short synopsis of the command.
+// This should be less than 50 characters ideally.
+func (f *FooCommand) Synopsis() string {
+   return “foo command Synopsis”
+}
+​
+// BarCommand barCommand
+type BarCommand struct{}
+​
+// Help should return long-form help text that includes the command-line
+// usage, a brief few sentences explaining the function of the command,
+// and the complete list of flags the command accepts.
+func (b *BarCommand) Help() string {
+   return “help bar”
+}
+​
+// Run should run the actual command with the given CLI instance and
+// command-line arguments. It should return the exit status when it is
+// finished.
+//
+// There are a handful of special exit codes this can return documented
+// above that change behavior.
+func (b *BarCommand) Run(args []string) int {
+   fmt.Println(“bar Command is running”)
+   return 1
+}
+​
+// Synopsis should return a one-line, short synopsis of the command.
+// This should be less than 50 characters ideally.
+func (b *BarCommand) Synopsis() string {
+   return “bar command Synopsis”
+}
+func main() {
+   c := cli.NewCLI(“app”, “1.0.0”)
+   c.Args = os.Args[1:]
+   c.Commands = map[string]cli.CommandFactory{
+      “foo”: fooCommandFactory,
+      “bar”: barCommandFactory,
+   }
+​
+   exitStatus, err := c.Run()
+   if err != nil {
+      log.Println(err)
+   }
+​
+   os.Exit(exitStatus)
+} 
+运行效果
+go run cmd/hashicorp-cli/main.go     <br />
+Usage: app [–version] [–help] <command /> [<args>]
+​
+Available commands are:
+    bar bar command Synopsis
+    foo foo command Synopsis
+github.com/alecthomas/kingpin
+这个cli pacakge 也是大家用的比较多的一个</args></p>
+
+<p>代码
+package main
+​
+import (
+   “fmt”
+   “os”
+​
+   “gopkg.in/alecthomas/kingpin.v2”
+)
+​
+func listHosts() []string {
+   // Provide a dynamic list of hosts from a hosts file or otherwise
+   // for bash completion. In this example we simply return static slice.
+​
+   // You could use this functionality to reach into a hosts file to provide
+   // completion for a list of known hosts.
+   return []string{“sshhost.example”, “webhost.example”, “ftphost.example”}
+}
+​
+type NetcatCommand struct {
+   hostName string
+   port int
+   format string
+}
+​
+func (n *NetcatCommand) run(c *kingpin.ParseContext) error {
+   fmt.Printf(“Would have run netcat to hostname %v, port %d, and output format %v\n”, n.hostName, n.port, n.format)
+   return nil
+}
+​
+func configureNetcatCommand(app *kingpin.Application) {
+   c := &amp;NetcatCommand{}
+   nc := app.Command(“nc”, “Connect to a Host”).Action(c.run)
+   nc.Flag(“nop-flag”, “Example of a flag with no options”).Bool()
+​
+   // You can provide hint options using a function to generate them
+   nc.Flag(“host”, “Provide a hostname to nc”).
+      Required().
+      HintAction(listHosts).
+      StringVar(&amp;c.hostName)
+​
+   // You can provide hint options statically
+   nc.Flag(“port”, “Provide a port to connect to”).
+      Required().
+      HintOptions(“80”, “443”, “8080”).
+      IntVar(&amp;c.port)
+​
+   // Enum/EnumVar options will be turned into completion options automatically
+   nc.Flag(“format”, “Define the output format”).
+      Default(“raw”).
+      EnumVar(&amp;c.format, “raw”, “json”)
+​
+   // You can combine HintOptions with HintAction too
+   nc.Flag(“host-with-multi”, “Define a hostname”).
+      HintAction(listHosts).
+      HintOptions(“myhost.com”).
+      String()
+​
+   // And combine with themselves
+   nc.Flag(“host-with-multi-options”, “Define a hostname”).
+      HintOptions(“myhost.com”).
+      HintOptions(“myhost2.com”).
+      String()
+​
+   // If you specify HintOptions/HintActions for Enum/EnumVar, the options
+   // provided for Enum/EnumVar will be overridden.
+   nc.Flag(“format-with-override-1”, “Define a format”).
+      HintAction(listHosts).
+      Enum(“option1”, “option2”)
+​
+   nc.Flag(“format-with-override-2”, “Define a format”).
+      HintOptions(“myhost.com”, “myhost2.com”).
+      Enum(“option1”, “option2”)
+}
+​
+func addSubCommand(app *kingpin.Application, name string, description string) {
+   c := app.Command(name, description).Action(func(c *kingpin.ParseContext) error {
+      fmt.Printf(“Would have run command %s.\n”, name)
+      return nil
+   })
+   c.Flag(“nop-flag”, “Example of a flag with no options”).Bool()
+}
+​
+func main() {
+   app := kingpin.New(“completion”, “My application with bash completion.”)
+   app.Flag(“flag-1”, “”).String()
+   app.Flag(“flag-2”, “”).HintOptions(“opt1”, “opt2”).String()
+​
+   configureNetcatCommand(app)
+​
+   // Add some additional top level commands
+   addSubCommand(app, “ls”, “Additional top level command to show command completion”)
+   addSubCommand(app, “ping”, “Additional top level command to show command completion”)
+   addSubCommand(app, “nmap”, “Additional top level command to show command completion”)
+​
+   kingpin.MustParse(app.Parse(os.Args[1:]))
+}
+运行效果
+go run cmd/kingpin/main.go 
+usage: completion [<flags>] <command /> [<args> ...]
+​
+My application with bash completion.
+​
+Flags:
+  --help Show context-sensitive help (also try --help-long and --help-man).
+  --flag-1=FLAG-1  
+  --flag-2=FLAG-2  
+​
+Commands:
+  help [<command />...]
+    Show help.
+​
+  nc --host=HOST --port=PORT [<flags>]
+    Connect to a Host
+​
+  ls [<flags>]
+    Additional top level command to show command completion
+​
+  ping [<flags>]
+    Additional top level command to show command completion
+​
+  nmap [<flags>]
+    Additional top level command to show command completion
+说明
+以上是几个整理的cli，后期会继续完善</flags></flags></flags></flags></args></flags></p>
+
+<p>参考资料
+https://github.com/google/subcommands
+https://github.com/urfave/cli
+https://github.com/mitchellh/cli
+https://github.com/alecthomas/kingpin
+http://github.com/spf13/cobra
+https://github.com/rongfengliang/cliapp</p>
+
+:ET

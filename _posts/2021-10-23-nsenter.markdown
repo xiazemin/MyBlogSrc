@@ -1,0 +1,64 @@
+---
+title: nsenter
+layout: post
+category: docker
+author: 夏泽民
+---
+https://github.com/jpetazzo/nsenter
+you can use Docker exec to enter a Docker container. Example:
+
+docker exec -it CONTAINER_NAME /bin/bash
+There are differences between nsenter and docker exec; namely, nsenter doesn't enter the cgroups, and therefore evades resource limitations. The potential benefit of this would be debugging and external audit, but for remote access, docker exec is the current recommended approach.
+
+It is a small tool allowing to enter into namespaces. Technically, it can enter existing namespaces, or spawn a process into a new set of namespaces. "What are those namespaces you're blabbering about?" We are talking about container namespaces.
+
+<!-- more -->
+一个最典型的用途就是进入容器的网络命令空间。相当多的容器为了轻量级，是不包含较为基础的命令的，比如说ip address，ping，telnet，ss，tcpdump等等命令，这就给调试容器网络带来相当大的困扰：只能通过docker inspect ContainerID命令获取到容器IP，以及无法测试和其他网络的连通性。这时就可以使用nsenter命令仅进入该容器的网络命名空间，使用宿主机的命令调试容器网络。
+
+此外，nsenter也可以进入mnt, uts, ipc, pid, user命令空间，以及指定根目录和工作目录。
+
+原理
+namespace
+namespace是Linux中一些进程的属性的作用域，使用命名空间，可以隔离不同的进程。
+
+Linux在不断的添加命名空间，目前有：
+
+mount：挂载命名空间，使进程有一个独立的挂载文件系统，始于Linux 2.4.19
+ipc：ipc命名空间，使进程有一个独立的ipc，包括消息队列，共享内存和信号量，始于Linux 2.6.19
+uts：uts命名空间，使进程有一个独立的hostname和domainname，始于Linux 2.6.19
+net：network命令空间，使进程有一个独立的网络栈，始于Linux 2.6.24
+pid：pid命名空间，使进程有一个独立的pid空间，始于Linux 2.6.24
+user：user命名空间，是进程有一个独立的user空间，始于Linux 2.6.23，结束于Linux 3.8
+cgroup：cgroup命名空间，使进程有一个独立的cgroup控制组，始于Linux 4.6
+Linux的每个进程都具有命名空间，可以在/proc/PID/ns目录中看到命名空间的文件描述符
+
+clone
+clone是Linux的系统调用函数，用于创建一个新的进程。
+
+clone和fork比较类似，但更为精细化，比如说使用clone创建出的子进程可以共享父进程的虚拟地址空间，文件描述符表，信号处理表等等。不过这里要强调的是，clone函数还能为新进程指定命名空间。
+
+setns
+clone用于创建新的命令空间，而setns则用来让当前线程（单线程即进程）加入一个命名空间。
+
+
+nsenter
+那么，最后就是nsenter了，nsenter相当于在setns的示例程序之上做了一层封装，使我们无需指定命名空间的文件描述符，而是指定进程号即可。
+
+指定进程号PID以及需要进入的命名空间后，nsenter会帮我们找到对应的命名空间文件描述符/proc/PID/ns/FD，然后使用该命名空间运行新的程序。
+
+https://staight.github.io/2019/09/23/nsenter%E5%91%BD%E4%BB%A4%E7%AE%80%E4%BB%8B/
+
+https://mozillazg.com/2020/04/nsenter-usage.html
+
+Nsenter 调取宿主机工具调试容器内程序
+
+nsenter 是一个可以用来进入到目标程序所在 Namespace 中运行命令的工具，一般常用于在宿主机上调试容器中运行的程序。
+
+nsenter 安装
+nsenter 位于 util-linux 包中，一般常用的 Linux 发行版都已经默认安装。如果你的系统没有安装，可以使用以下命令进行安装：
+
+$ yum install util-linux
+
+https://cloud.tencent.com/developer/article/1730699
+
+

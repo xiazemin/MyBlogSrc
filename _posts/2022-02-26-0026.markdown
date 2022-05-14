@@ -1,0 +1,92 @@
+---
+title:  json.Marshal 特殊 html 字符被转义
+layout: post
+category: golang
+author: 夏泽民
+---
+go 语言提供了 json 的编解码包，json 字符串作为参数值传输时发现，json.Marshal 生成 json 特殊字符 <、>、&会被转义。
+
+ype Test struct {
+	Content string
+}
+
+func main() {
+	t := new(Test)
+	t.Content = "http://www.baidu.com?id=123&test=1"
+	jsonByte, _ := json.Marshal(t)
+	fmt.Println(string(jsonByte))
+}
+
+{"Content":"http://www.baidu.com?id=123\u0026test=1"}
+Process finished with exit code 0
+
+GoDoc 描述
+String values encode as JSON strings coerced to valid UTF-8,
+replacing invalid bytes with the Unicode replacement rune.
+The angle brackets "<" and ">" are escaped to "\u003c" and "\u003e"
+to keep some browsers from misinterpreting JSON output as HTML.
+Ampersand "&" is also escaped to "\u0026" for the same reason.
+This escaping can be disabled using an Encoder that had SetEscapeHTML(false) alled on it.
+
+json.Marshal 默认 escapeHtml 为 true,会转义 <、>、&
+
+
+func Marshal(v interface{}) ([]byte, error) {
+	e := &encodeState{}
+	err := e.marshal(v, encOpts{escapeHTML: true})
+	if err != nil {
+		return nil, err
+	}
+	return e.Bytes(), nil
+}
+解决方案
+方法一：
+content = strings.Replace(content, "\\u003c", "<", -1)
+content = strings.Replace(content, "\\u003e", ">", -1)
+content = strings.Replace(content, "\\u0026", "&", -1)
+这种方式比较直接，硬性字符串替换。比较憨厚
+
+方法二：
+文档中写到This escaping can be disabled using an Encoder that had SetEscapeHTML(false) alled on it.
+
+我们先创建一个 buffer 用于存储 json
+创建一个 jsonencoder
+设置 html 编码为 false
+type Test struct {
+	Content string
+}
+
+func main() {
+	t := new(Test)
+	t.Content = "http://www.baidu.com?id=123&test=1"
+	bf := bytes.NewBuffer([]byte{})
+	jsonEncoder := json.NewEncoder(bf)
+	jsonEncoder.SetEscapeHTML(false)
+	jsonEncoder.Encode(t)
+	fmt.Println(bf.String())
+}
+
+{"Content":"http://www.baidu.com?id=123&test=1"}
+Process finished with exit code 0
+
+<!-- more -->
+https://ld246.com/article/1524558037151
+
+https://github.com/golang/go/issues/28453
+
+encoding/json: add Encoder.DisableHTMLEscaping This provides a way to disable the escaping of <, >, and & in JSON strings.
+
+The relevant function is
+
+func (*Encoder) SetEscapeHTML
+That should be applied to a Encoder.
+
+enc := json.NewEncoder(os.Stdout)
+enc.SetEscapeHTML(false)
+
+https://stackoverflow.com/questions/24656624/how-to-display-a-character-instead-of-ascii
+
+https://blog.csdn.net/lgh1700/article/details/104522878
+
+https://blog.csdn.net/lgh1700/article/details/104522878
+

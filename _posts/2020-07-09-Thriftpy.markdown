@@ -1,0 +1,295 @@
+---
+title: Thriftpy
+layout: post
+category: python
+author: 夏泽民
+---
+一、Thriftpy是什么
+Thriftpy是饿了么根据Apache Thrift协议标准，使用纯Python实现的用于构建内部SOA框架的基础组件，Thriftpy目前已开源，最新版本为0.3.9
+
+二、项目地址
+Thriftpy代码在github上托管，项目地址为https://github.com/eleme/thriftpy
+<!-- more -->
+{% raw %}
+三、一个简单的例子
+此为官方提供的例子，本文中可能会根据需要对代码进行少量修改（方便讲解）。官方代码位置https://github.com/eleme/thriftpy/tree/v0.3.9/examples/oneway
+
+本示例功能介绍：Server端实现Sleep服务，对外提供sleep方法。Client端调用Server端Sleep服务的sleep方法
+
+sleep.thrift文件（什么是thrift文件？），文件内容如下,该文件定义了一个Sleep服务，该服务提供一个sleep方法，sleep方法接受一个32位int类型的参数且没有返回值
+service Sleep {
+    // oneway表示该方法没有任何返回值,返回值类型必须为void
+    // 客户端调用后不等待服务器响应，直接返回
+    // 服务器端收到请求，执行相关业务逻辑后，不返回任何返回值
+    oneway void sleep(1: i32 seconds)
+}
+
+sleep_server.py文件，文件内容如下
+# -*- coding: utf-8 -*-
+import time
+import thriftpy
+from thriftpy.rpc import make_server
+
+# 根据sleep.thrift文件，在内存中动态构建一个名为"sleep_thriftpy"的module
+# 该module中包含了名为Sleep的一个object
+sleep_thrift = thriftpy.load("sleep.thrift", module_name="sleep_thrift")
+
+# 官方代码中该Class名称为Dispatcher
+# 修改为Sleep只是为了方便读者和sleep.thrift文件中的Sleep服务相对应
+class Sleep(object):
+    # 该方法对应sleep.thrift文件中的oneway void sleep(1: i32 seconds)
+    def sleep(self, seconds):
+        print("I'm going to sleep %d seconds" % seconds)
+        time.sleep(seconds)
+        print("Sleep over!")
+
+def main():
+    # 创建一个服务，在127.0.0.1的6000端口进行监听
+    # 将class Sleep和module sleep_thrift中名为Sleep的Object绑定
+    server = make_server(sleep_thrift.Sleep, Sleep(),
+                         '127.0.0.1', 6000)
+    print("serving...")
+    # 启动服务
+    server.serve()
+
+if __name__ == '__main__':
+    main()
+
+sleep_client.py文件，文件内容如下
+# -*- coding: utf-8 -*-
+import thriftpy
+from thriftpy.rpc import make_client
+
+# 根据sleep.thrift文件，动态生成一个名为"sleep_thriftpy"的module
+# 该module中包含了名为Sleep的一个object
+sleep_thrift = thriftpy.load("sleep.thrift", module_name="sleep_thrift")
+
+def main():
+    # 创建一个客户端，该客户端连接127.0.0.1的6000端口
+    # 并将该客户端和服务器端的Sleep服务进行绑定
+    client = make_client(sleep_thrift.Sleep, '127.0.0.1', 6000)
+    # 绑定完成后即可直接调用服务器端相应的方法
+    client.sleep(1)
+
+if __name__ == '__main__':
+    main()
+
+运行结果
+
+执行sleep_server.py，输出如下信息
+
+serving…
+
+执行sleep_client.py，server端输出如下
+
+I’m going to sleep 1 seconds
+Sleep over!
+
+四、小结
+thrift文件通过一种中立的方式描述了服务器和客户端之间通信的接口（Thriftpy创建服务器和客户端都需要对该文件进行解析），使得使用不同语言的客户端和服务器之间可以进行透明的通信
+
+开发人员使用Thriftpy编写服务器/客户端可以不用关心接口调用实现的细节，更加专注于业务功能的开发
+
+使用Thriftpy创建一个Thrift服务器只需要以下三步即可完成
+
+调用thriftpy.load方法对thrift文件进行解析,在内存中构建对应的module
+调用make_server将上一步构建的module和完成具体业务功能的class绑定,同时完成传输层和协议层的设置,生成thrift服务器端
+调用server.serve方法启动服务器
+使用Thriftpy创建一个thrift客户端接口只需要以下三步即可完成
+
+调用thriftpy.load方法对thrift文件进行解析,在内存中构建对应的module
+根据上一步的解析结果，调用make_client绑定上一步构建的module,同时完成传输层和协议层的设置,生成Thirft客户端
+根据上一步生成的客户端调用响应的接口
+
+https://blog.csdn.net/yzj225/article/details/76855991
+
+一、简述
+通过前面的分析，我们知道无论是创建一个客户端还是服务器，第一步要做的就是调用thriftpy.load对thrift文件进行解析，并在内存中构建相应的module，本文将对load方法进行一个简单的分析。
+
+二、load方法分析
+load方法关键代码如下，该方法调用了parser模块中的parse方法对thrift文件进行解析，返回Thrift对象，并将该对象添加到sys.modules中（如果指定了module_name）
+def load(path, module_name=None, include_dirs=None, include_dir=None):
+    real_module = bool(module_name)
+    thrift = parse(path, module_name, include_dirs=include_dirs,
+                   include_dir=include_dir)
+    if real_module:
+        sys.modules[module_name] = thrift
+    return thrift
+parser模块的parse函数主要完成以下工作
+
+初始化词法分析器 Lex和语法分析器 Yacc
+读取文件内容保存到data变量中
+创建一个空的module，并完成初始化
+thrift = types.ModuleType(module_name)
+setattr(thrift, '__thrift_file__', path)
+调用语法分析器Yacc的parse方法对文件内容进行分析
+parser.parse(data)
+语法分析说明
+
+Thriftpy使用ply模块中的Lex和Yacc对thrift文件进行分析，关于该模块的使用方法这边不做详细介
+
+thriftpy/parser/lexer.py文件中定义了词法分析规则
+thriftpy/parser/parser.py文件中定义了语法分析规则，如：当语法分析器发现service语法时，将会调用p_simple_service方法对service内容进行解析生成对应的object，并将该object添加到前面创建的module中
+三、其他加载方法
+其他加载方法与load方法主要差别在于文件的读取方式，关键的解析部分完全一致
+* load_fp方法
+* load_module方法
+
+四、小结
+Thriftpy通过ply库中的Lex和Yacc完成thrift文件解析,并根据thrift文件内容在内存中构建出相应的module
+https://blog.csdn.net/yzj225/article/details/76861757
+
+本文将根据创建一个服务器端的基本流程,从make_server和serve方法入手,对Thriftpy如何构建一个服务器进行一个简单的分析
+
+二、服务器端主要代码分析
+make_server方法
+从代码中我们可以看出该方法主要分为三部分
+TProcessor初始化
+服务器套接字初始化(TServerSocket/TSSLServerSocket)
+创建server对象实例(TThreadedServer)
+def make_server(service, handler,
+                host="localhost", port=9090, unix_socket=None,
+                proto_factory=TBinaryProtocolFactory(),
+                trans_factory=TBufferedTransportFactory(),
+                client_timeout=3000, certfile=None):
+    processor = TProcessor(service, handler)
+
+    if unix_socket:
+        server_socket = TServerSocket(unix_socket=unix_socket)
+        if certfile:
+            warnings.warn("SSL only works with host:port, not unix_socket.")
+    elif host and port:
+        if certfile:
+            server_socket = TSSLServerSocket(
+                host=host, port=port, client_timeout=client_timeout,
+                certfile=certfile)
+        else:
+            server_socket = TServerSocket(
+                host=host, port=port, client_timeout=client_timeout)
+    else:
+        raise ValueError("Either host/port or unix_socket must be provided.")
+
+    server = TThreadedServer(processor, server_socket,
+                             iprot_factory=proto_factory,
+                             itrans_factory=trans_factory)
+    return server
+
+TProcessor
+class TProcessor(object):
+    def __init__(self, service, handler):
+        self._service = service
+        self._handler = handler
+
+    def process_in(self, iprot):
+        # 该方法主要执行以下工作
+        # 1.读取客户端请求,分析得到客户端调用的方法
+        # 2.判断service是否支持客户端调用的方法,如果不支持则抛出"未知方法"异常
+        # 3.读取客户端调用参数并将参数和服务器端的方法绑定后返回(call方法)
+        ......
+
+    def send_exception(self, oprot, api, exc, seqid):
+        # 向客户端发送异常信息
+        ......
+    def send_result(self, oprot, api, result, seqid):
+        # 向客户端发送执行结果
+        ......
+    def handle_exception(self, e, result):
+        # 如果call方法执行异常则进行进一步的判断处理
+        ......
+    def process(self, iprot, oprot):
+        # 该方法主要执行以下工作
+        # 1.调用process_in方法,发生异常则将异常信息发送给客户端
+        # 2.执行process_in方法返回的call方法
+        # 3.如果方法为oneway方法则处理结束,否则发送执行结果给客户端
+        ......
+
+TServerSocket
+class TServerSocket(object):
+    """Socket implementation for server side."""
+
+    def __init__(self, host=None, port=None, unix_socket=None,
+                 socket_family=socket.AF_INET, client_timeout=3000,
+                 backlog=128):
+        # 保存套接字相关参数
+        ......        
+    def _init_sock(self):
+        # 根据__init__方法中指定的参数完成套接字初始化设置
+        ......
+    def listen(self):
+        # 调用_init_sock方法完成套接字初始化设置
+        # 将套接字绑定到指定地址并开始监听
+        ......
+    def accept(self):
+        # 调用套接字本身的accept方法,接受客户的连接
+        # 将每一个客户端连接封装成TSock对象
+        # 返回TSock对象
+        ......
+    def close(self):
+        # 关闭套接字
+        ......
+
+TThreadedServer
+class TThreadedServer(TServer):
+    """Threaded server that spawns a new thread per each connection."""
+
+    def __init__(self, *args, **kwargs):
+        # 初始化变量: 设置processor(TProcessor实例)/服务器套接字(TServerSocket实例)/传输层工厂类/协议层工厂类
+        ......
+
+    def serve(self):
+        # 调用服务器套接字的listen方法开始监听客户端请求
+        # 设置while循环持续处理客户端请求(直至close标志为True)
+        # while循环内部执行以下操作:
+        #   1.调用服务器套接字的accept方法获取客户端实例
+        #   2.创建一个线程,将该客户端实例交由handle方法处理
+        ......
+
+    def handle(self, client):
+        # 通过传输层工厂类和协议层工厂类将客户端实例进行封装
+        # 调用processor的process方法对该客户端实例(经过封装)进行处理
+        ......
+
+    def close(self):
+        # 设置close标记,以便serve方法及时退出
+        ......
+serve方法
+详见TThreadedServer serve方法
+三、小结
+通过以上分析,我们对创建服务器端的基本流程和服务器端框架有了一个大致的了解,如果在使用的过程中遇到问题,也能够很快的定位问题,找到关键
+https://blog.csdn.net/yzj225/article/details/76861799
+{% endraw %}
+
+https://www.kutu66.com//GitHub/article_111246
+ThriftPy 是 Apache Thrift 的 Python 语言移植版本。
+
+服务器端示例代码：
+
+import thriftpy
+from thriftpy.rpc import make_server
+
+pingpong = thriftpy.load("pingpong.thrift")
+
+class Dispatcher(object):
+    def ping(self):
+        return "pong"
+
+server = make_server(pingpong.PingPong, Dispatcher(), '127.0.0.1', 6000)
+server.serve()
+客户端：
+
+import thriftpy
+from thrift.rpc import make_client
+
+pingpong = thriftpy.load("pingpong.thrift")
+
+client = make_client(pingpong.PingPong, '127.0.0.1', 6000)
+client.ping()
+
+https://www.php.cn/python-tutorials-361727.html
+https://blog.csdn.net/iter_zc/article/details/39496439
+https://blog.csdn.net/mindfloating/article/details/39474123
+
+https://blog.csdn.net/weixin_34176694/article/details/89718710
+https://blog.csdn.net/xiaohei_xiaobai/article/details/105773321
+https://blog.csdn.net/sdoyuxuan/article/details/83933597
+https://zhuanlan.zhihu.com/p/55067725

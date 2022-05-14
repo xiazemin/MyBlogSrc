@@ -1,0 +1,192 @@
+I"�<p>流程分析
+借助TCP完成文件的传输，基本思路如下:</p>
+
+<p>发送方(客户端)向服务端发送文件名，服务端保存该文件名。
+接收方(服务端)向客户端返回一个消息ok，确认文件名保存成功。
+发送方(客户端)收到消息后，开始向服务端发送文件数据。
+接收方(服务端)读取文件内容，写入到之前保存好的文件中。
+由于文件传输需要稳定可靠的连接，所以采用TCP方式完成网络文件传输功能。
+<!-- more -->
+首先获取文件名。借助os包中的stat()函数来获取文件属性信息。在函数返回的文件属性中包含文件名和文件大小。Stat参数name传入的是文件访问的绝对路径。FileInfo中的Name()函数可以将文件名单独提取出来。</p>
+
+<p>func Stat(name string) (fi FileInfo, err error)
+Stat返回一个描述name指定的文件对象的FileInfo。如果指定的文件对象是一个符号链接，返回的FileInfo描述该符号链接指向的文件的信息，本函数会尝试跳转该链接。如果出错，返回的错误值为*PathError类型。</p>
+
+<p>我们通过源码可以得知FileInfo是一个接口，要实现这个接口就必须实现这个接口的如下所有方法</p>
+
+<p>实现网络文件传输实质上时借助了本地文件复制和TCP网络编程相关知识，可以先看看Go语言复制文件和Go网络编程了解相关内容。</p>
+
+<p>所以关于使用TCP实现文件传输大致步骤可以归结为如下步骤</p>
+
+<p>接收端:</p>
+
+<p>创建监听 listener，程序结束时关闭。
+阻塞等待客户端连接 conn，程序结束时关闭conn。
+读取客户端发送文件名。保存 fileName。
+回发“ok”。
+封装函数 RecvFile 接收客户端发送的文件内容。传参 fileName 和 conn
+按文件名 Create 文件，结束时 Close
+循环 Read 发送端网络文件内容，当读到 0 说明文件读取完毕。
+将读到的内容原封不动Write到创建的文件中
+接收端代码:</p>
+
+<p>package main</p>
+
+<p>import (
+    “fmt”
+    “io”
+    “net”
+    “os”
+)</p>
+
+<p>func recvFile(conn net.Conn, fileName string) {
+    //按照文件名创建新文件
+    file, err := os.Create(fileName)
+    if err != nil {
+        fmt.Printf(“os.Create()函数执行错误，错误为:%v\n”, err)
+        return
+    }
+    defer file.Close()</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>//从网络中读数据，写入本地文件
+for {
+    buf := make([]byte, 4096)
+    n, err := conn.Read(buf)
+
+    //写入本地文件，读多少，写多少
+    file.Write(buf[:n])
+    if err != nil {
+        if err == io.EOF {
+            fmt.Printf("接收文件完成。\n")
+        } else {
+            fmt.Printf("conn.Read()方法执行出错，错误为:%v\n", err)
+        }
+        return
+    }
+} }
+</code></pre></div></div>
+
+<p>func main() {</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>//1.创建监听socket
+listener, err := net.Listen("tcp", "127.0.0.1:8000")
+if err != nil {
+    fmt.Printf("net.Listen()函数执行错误，错误为:%v\n", err)
+    return
+}
+defer listener.Close()
+
+//阻塞监听
+conn, err := listener.Accept()
+if err != nil {
+    fmt.Printf("listener.Accept()方法执行错误，错误为:%v\n", err)
+    return
+}
+defer conn.Close()
+
+//文件名的长度不能超过1024个字节
+buf := make([]byte, 4096)
+n, err := conn.Read(buf)
+if err != nil {
+    fmt.Printf("conn.Read()方法执行错误，错误为:%v\n", err)
+    return
+}
+fileName := string(buf[:n])
+
+//回写ok给发送端
+conn.Write([]byte("ok"))
+
+//获取文件内容
+recvFile(conn, fileName) } 发送端:
+</code></pre></div></div>
+
+<p>提示用户使用命令行参数输入文件名。接收文件名 filepath（含访问路径）
+使用 os.Stat(）获取文件属性，得到纯文件名 fileName（去除访问路径）
+主动发起连接服务器请求，结束时关闭连接。
+发送文件名到接收端 conn.Write()
+读取接收端回发的确认数据 conn.Read()
+判断是否为“ok”。如果是，封装函数 SendFile() 发送文件内容。传参 filePath 和 conn
+只读 Open 文件, 结束时Close文件
+循环读本地文件，读到 EOF，读取完毕。
+将读到的内容原封不动 conn.Write 给接收端（服务器）
+发送端代码:</p>
+
+<p>package main</p>
+
+<p>import (
+    “fmt”
+    “io”
+    “net”
+    “os”
+)
+func sendFile(conn net.Conn, filePath string) {
+    //只读打开文件
+    file, err := os.Open(filePath)
+    if err != nil {
+        fmt.Printf(“os.Open()函数执行出错，错误为:%v\n”, err)
+        return
+    }
+    defer file.Close()</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>buf := make([]byte, 4096)
+for {
+    //从本地文件中读数据，写给网络接收端。读多少，写多少
+    n, err := file.Read(buf)
+    if err != nil {
+        if err == io.EOF {
+            fmt.Printf("发送文件完毕\n")
+        } else {
+            fmt.Printf("file.Read()方法执行错误,错误为:%v\n", err)
+        }
+        return
+    }
+    //写到网络socket中
+    _, err = conn.Write(buf[:n])
+} }
+</code></pre></div></div>
+
+<p>func main() {</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>//获取命令行参数
+list := os.Args
+
+if len(list) != 2 {
+    fmt.Printf("格式为:go run xxx.go 文件名\n")
+    return
+}
+
+//提取文件的绝对路径
+path := list[1]
+
+//获取文件属性
+fileInfo, err := os.Stat(path)
+if err != nil {
+    fmt.Printf("os.Stat()函数执行出错，错误为:%v\n", err)
+    return
+}
+
+//主动发起连接请求
+conn, err := net.Dial("tcp", "127.0.0.1:8000")
+if err != nil {
+    fmt.Printf("net.Dial()函数执行出错，错误为:%v\n", err)
+    return
+}
+defer conn.Close()
+
+//发送文件名给接收端
+_, err = conn.Write([]byte(fileInfo.Name()))
+
+//读取服务器回发数据
+buf := make([]byte, 4096)
+n, err := conn.Read(buf)
+if err != nil {
+    fmt.Printf("conn.Read(buf)方法执行出错，错误为:%v\n", err)
+    return
+}
+
+if string(buf[:n]) == "ok" {
+    //写文件内容给服务器 -- 借助conn
+    sendFile(conn, path)
+} }**
+</code></pre></div></div>
+:ET

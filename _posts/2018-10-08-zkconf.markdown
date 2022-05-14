@@ -1,0 +1,200 @@
+---
+title: zookeeper 实现配置同步 服务发现
+layout: post
+category: zookeeper
+author: 夏泽民
+---
+https://github.com/knightliao/disconf
+Distributed Configuration Management Platform(分布式配置管理平台)
+zookeeper 五个功能点
+1. master的管理，如amq 集群，kafka集群。
+2. 分布式锁（悲观、乐观）
+3. 分布式配置中心。
+4. 集群的监管。
+5. 发布与订阅（队列）。
+
+以上五点，都是zookeeper的特性决定的，我们知道zookeeper有两类节点：
+1. 临时节点。（可顺序）
+2. 永久节点。（可顺序）
+
+再加上zookeeper提供了，对节点的监听事件（删除，新增，修改–针对节点），使得我们可以通过节点的监听来做相对应的业务逻辑，以上五点均是这样。
+
+其他：zookeeper的leader 的选举是通过 ZAB 进行的，保证有序性是靠：zxid 。
+<!-- more -->
+1. 配置中心该有的清秀模样
+家大业大的系统,肯定是要有个配置中心,统一管理所有应用的配置,并发布到对应的客户端上。
+
+1. 推送:将更改实时、准实时地推送到所有客户端。
+
+2. 版本化与回滚:知道谁,什么时候,改了什么。最重要是,可以快速的回滚.....回滚,在运维三宝中,比重启更常用得多,分分钟都要命的时候,回滚的便捷性如此重要。
+
+3. 灰度发布:将更改推送到某些客户端上。同是运维三宝,先灰度一下非常有效的降低风险。另外也是AB Test的一种实现方式 -10%机器配置成开关打开调用A系统,90%机器开关关闭走B系统。
+
+4. 预案:先改好一些配置保存起来,但不下发。发生问题时,一键批量执行,降级整条选购线所有服务的非关键功能,好过在兵荒马乱中颤抖着去修改。
+
+5. 审批:咳,咳。Pair Check其实还是好的。
+
+6. 同时支持 Web界面 与 Restful API接口 。
+
+7. 同时支持 多语言 ,其中最头痛是支持php这种无状态的。
+
+2. 客户端这边要怎么配衬呢?
+1. 配合配置中心的实时/灰度推送,在参数变化时调用客户端自行实现的回调接口,不需要重启应用。
+
+2. 支持环境变量,JVM启动参数,配置文件,配置中心等多种来源按优先级互相覆盖,并有接口暴露最后的参数选择。
+
+3. 配置文件中支持多套profile,如开发,单元测试,集成测试,生产。
+
+3. 现在可以来谈实现了 3.1 Netflix Archaius
+被空想家们谈得最多的Netflix,其Archaius说白了只是个客户端,服务端是一点没有的。
+
+基于Apache Commons Configuration Library的扩展,多层,实时/准实时的数据源包括了环境变量,配置文件,数据库,ZK,etcd等。但没有Spring多profile的支持。
+
+3.2 Spring Cloud
+其Config Server的实现相当奇特,基于git,没错,就是基于git,暴露成Restful API,所以也算是支持了版本化,但也仅此而已了,其他界面什么的都需要自己另外做。
+
+在客户端倒是集成了Config Server的读取,Spring本身也有profile机制。
+
+最痛苦的是实时推送,还要拉上另一个Spring Cloud的Bus项目,自己基于RabbitMQ或Kafka来搭建一套推送体系。另外看文章,刷新时也不是通过回调接口,而是整个Bean重新构造,这对于有状态的Bean是不合适的。
+
+3.3 360的QCon
+360也开源了一个QCon,基于ZK,特色是基于Agent模式(见后)的多语言支持。但服务端也没有界面,也没有灰度、预案什么的,直接通过API操作ZK而已。
+
+3.4 基于ZK或etcd, DIY吧
+综上所述,最好的配置中心还是在各个互联网公司的基础架构部里,虽然改改改的过程可能很长,虽然现在都还不完美。
+
+一般都同时支持界面和API,用数据库来保存版本历史,预案,走流程(正儿八经的数据库表更方便查询,比如“你的待审批变更”),最后下发到ZK或etcd这种有推送能力的存储里。
+
+灰度发布麻烦些,其中一种实现是同时发布一个可接收的IP列表,客户端监听到配置节点变化时,对比一下自己是否属于该列表。
+
+PHP这种无状态的语言和其他ZK/etcd不支持的语言,只好自己在客户端的机器上起一个Agent来监听变化,再写到配置文件或Share Memory了。
+
+最后,到底是ZK 还是etcd? 有些岁数的配置中心都是ZK的,但如果新写的话,的确可以考虑下etcd。虽然我没玩过,但看着它基于GRPC而支持多种语言,以及可以动态修改集群,挺不错。
+
+淘系内部的diamond，阿里云中间件产品ACM，携程开源的Apollo配置中心项目，spring cloud配置中心等等
+
+zookeeper节点的设计
+
+            /conf
+              |
+              |-------appid
+              |         |
+              |         |------conf_name
+                                |
+                                |-----key1
+                                |
+                                |-----key2
+                                |
+                        |------version
+                                |
+                                |---history
+                                |
+                                |---current
+
+conf:    zookeeper的跟节点
+appid:  app的名称
+conf_name:  配置文件名称
+key:    配置文件中的key，对应存储的值为value
+version:  版本控制节点
+history:  历史版本
+current: 当前版本
+
+  zookeeper能够同步同步各节点的znode数据，client可以使用getChildren，getData,exists方法在znode tree路径上设置watch，当watch路径上发生节点create、delete、update的时候，会通知到client。client可以得到通知后，再获取数据，执行业务逻辑操作。
+
+  但是因为没有消息接收后的确认机制，这个通知机制是不可靠的，也就是说znode的修改者并不知道是否所有的client都被通知到了，或者说client也不知道自己是否错过了哪些通知消息。这种现象可能由网络原因引起，也可能是client刚触发了watch事件，还没有来得及重新设置watch，下个事件就发生了(zookeeper只提供了一次性watch)。
+
+  在笔者的使用场景中，这是有问题的。在我们分布式配置管理的场景中，有3份配置副本，管理节点本地数据库中有一份，zookeeper中保存了一份，使用配置的软件引擎进程中保存了一份。当下发配置时，是需要全部软件引擎都生效最新的配置，而如果有某个引擎错过了通知，那么就会漏掉某个配置，导致问题，而到底谁没有成功生效，这些节点都不知道，甚至错过通知的节点自身也不知道。
+
+  因此我提出一种设计，至少让错过通知的节点自身知道错过了消息，并采取主动同步配置的方式，来补救。这样能够保证，配置下发后，至少一段时间后所有软件引擎的都使用了最新的配置。
+
+  这利用了zookeeper自身的几个特性：
+
+  1）zookeeper维护一个全局的操作id，zxid，每一个create,delete,update操作都会使该id加1。
+
+  2）zookeeper为每个路径(znode)节点都保存了它的修改版本dataversion，和最新一次修改zxid——mzxid。
+
+  3）zookeeper保证每个client连接的session中，看到的通知顺序与这些事件发生的先后顺序是严格一致的。
+
+  我们来假设要在/group/policy下增加、删除、修改配置，每个配置有1个节点，配置数量可以很多、而且不固定。client要知道增加了什么配置，修改了什么，删除了什么配置，因此设定了watch。其中A复杂修改这些配置，N1,N2,...Nm这些节点监听通知，并更新软件引擎的变量，使其生效配置。
+
+  首先A在/group/policy下做create、delete、update操作后，都要set 一次 /group/policy节点。这会导致/group/policy的dataversion加1。并且可以知道有几次操作，dataversion就增加几。
+
+  伪代码如下：
+
+  doSomeOperion();
+
+  setData("/group/policy","")
+
+  Ni节点要对/group/policy下节点发生修改的事件进行watch，还要对/group/policy节点自身的修改进行watch。因此如果Ni没有错过通知的话，它将一次触发两个通知：1）配置变化通知；2)/group/policy数据更新通知。
+
+  Ni要在本地保存三个变量current_dataversion,current_zxid
+
+  在Ni client初始化时：
+
+  current_dataversion=/group/policy的dataversion；
+
+  current_zxid=/group/policy的mzxid；
+
+  然后在watch到配置发生变化的回调函数中：
+
+   doSometing(); //生效具体配置
+
+   current_dataversion += 1; //期待/group/policy的下一个dataversion增加1
+
+  在watch到/group/policy的数据发生变化后回调函数中：
+
+   if current_dataversion == /group/policy的dataversion: //意味着没有漏掉消息
+
+      current_zxid = /group/policy的mzxid
+
+   elif next_dataversion < /group/policy的dataversion： //一位置有配置变化的消息没有收到
+
+      遍历/group/policy子节点
+
+        if /group/policy/znodei的mzxid > current_zxid：
+
+          使用znodei中的配置。
+
+      删除已经不存在znode的配置项；
+
+     同步完成；
+
+     next_dataversion = /group/policy的dataversion
+
+     current_zxid = /group/policy的mzxid
+
+  这样就可以保证client能够发现自己错过了消息，并发现哪些znode的修改被自己错过了。那么至少在下一次发生修改配置后，client能够完全与当前配置一致。
+
+  我们可以写一个场景验证下：
+
+  初始时/group/policy下为空，/group/policy的stat为(mzxid=2,dataversion=0)
+
+ 
+
+    current_dataversion=0；
+    current_zxid=2
+ 1)create /group/policy/n1(mzxid=3,dataversion=0) 收到通知 current_dataversion+=1 (等于1)
+ 2)set /group/policy (mzxid=4,dataversion=1) 收到通知 curren_dataversion==/group/policy.dataversion，没有漏掉通知
+                                                      current_zxid=/group/policy.mzxid (等于4)
+ 情形一)                                                     
+ 3.1) create /group/policy/n2 (mzxid=5,dataversion=0) 没有收到通知 current_dataversion不变（等于1）
+ 4.1）set /group/policy (mzxid=6,dataversion=2) 收到通知 current_data < /group/policy.dataversion,得知漏掉了通知，并且知道漏掉1个
+                                                         同步mzxid大于current_zxid(值为4)的节点（即n2节点）配置；
+                                                         删除已经不存在znode的配置；
+                                                         current_data = /group/policy.dataversion （等于2）
+                                                         current_zxid = /group/policy.zxid (等于5)
+  情形二)
+  3.2)create /group/policy/n2(mzxid=5,dataversion=0) 收到通知 current_dataversion+=1 (等于2)
+  4.2）set /group/policy (mzxid=6,dataversion=2)  没有收到通知  current_zxid(=4)不变。漏掉该消息是没有关系的，再次收到该消息时，会更新current_zxid
+  情形三)
+  3.3)create /group/policy/n2(mzxid=5,dataversion=0) 没收到通知 current_dataversion不变（等于1）
+   4.3）set /group/policy (mzxid=6,dataversion=2)  没有收到通知   current_zxid(=4)不变。
+   5)create /group/policy/n3(mzxid=7,dataversion=0) 收到通知 current_dataversion+=1 (等于2)
+   6)set /group/policy (mzxid=8,dataversion=3)   收到通知    current_data < /group/policy.dataversion 得知漏掉了通知
+                                                              同步mzxid大于current_zxid(值为4)的节点（即n2，n3节点）配置；
+                                                              删除已经不存在znode的配置；
+                                                              current_data = /group/policy.dataversion （等于3）
+                                                              current_zxid = /group/policy.zxid (等于8)
+通过这种方式，可以让client端知道自己错过了通知，至少在下次收到/group/policy节点更新通知时，能够重新同步配置。因此可以保证client之间迟早会变得同步。
+
+更进一步，可以额外再增加时钟来触发对/group/policy节点的检查。这样就可以保证一个时钟间隔之后，client肯定是同步的

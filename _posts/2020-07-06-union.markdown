@@ -1,0 +1,258 @@
+---
+title: union
+layout: post
+category: golang
+author: 夏泽民
+---
+通常解决此问题的方法是定义一个容纳 yacc 将要处理 的对象的数据类型。这个数据类型是一个 C union 对象，在 yacc 文件的第一部分使用 %union 声明来定义。定义了记号以后，可以为 它们指定一个类型。例如，对于一个玩具级的编程语言来说，您可以像下面这样做：
+
+清单 4. 一个最简化的 %union 声明
+%union {
+    long    value;
+}
+%token <value>    NUMBER
+%type <value> expression
+这就表明，当解析器得到 lexer 返回的 NUMBER 记号时，它可以 认为全局变量 yylval 的名为 value 的 成员已经被赋与了有意义的值。当然，您的 lexer 必须要以某种方式来处理它：
+
+清单 5. 使一个 lexer 使用 yylval
+[0-9]+  {
+        yylval.value = strtol(yytext, 0, 10);
+        return NUMBER;
+    }
+yacc 允许您通过符号名引用表达式的组成部分。当解析非终结符时，进入解析器的组成部分被 命名为 $1 、 $2 ，依次类推；它将向 高层解析器返回的值名为 $$ 
+<!-- more -->
+https://www.ibm.com/developerworks/cn/linux/l-lexyac.html
+
+https://github.com/chai2010/go-ast-book/blob/master/appendix/a-goyacc/readme.md
+
+
+{% raw %}
+yacc是用于构造编译器的工具，而goyacc是Go语言版本的yacc，是从早期的C语言版本yacc移植到Go语言的。早期的goyacc是Go语言标准命令之一，也是构建Go自身编译器的必备工具链之一，后来被逐步移出了内置工具。但是goyacc依然是一个开发语法分析器的利器。本章简单展示如何用goyacc构建一个命令行计算器小程序。
+
+A.1 计算器的特性
+特性简介：
+
+支持整数四则运算
+支持小括弧提升优先级
+支持临时变量保存结果
+安装和使用(需要有GCC环境)：
+
+$ go get github.com/chai2010/calculator
+$ calculator
+1+2*3
+= 7
+x=3-(2-1)
+= 2
+x*2
+= 4
+A.2 词法符号
+先创建tok.h文件，包含词法符号：
+
+enum {
+	ILLEGAL = 10000,
+	EOL = 10001,
+
+	ID = 258,
+	NUMBER = 259,
+
+	ADD = 260, // +
+	SUB = 261, // -
+	MUL = 262, // *
+	DIV = 263, // /
+	ABS = 264, // |
+
+	LPAREN = 265, // (
+	RPAREN = 266, // )
+	ASSIGN = 267, // =
+};
+其中ILLEGAL表示不能识别的无效的符号，EOL表示行的结尾，其它的符号与字面含义相同。
+
+A.3 词法解析
+然后创建calc.l文件，定义每种词法的正则表达式：
+
+%option noyywrap
+
+%{
+#include "tok.h"
+%}
+
+%%
+
+[_a-zA-Z]+ { return ID; }
+[0-9]+     { return NUMBER; }
+
+"+"    { return ADD; }
+"-"    { return SUB; }
+"*"    { return MUL; }
+"/"    { return DIV; }
+"|"    { return ABS; }
+
+"("    { return LPAREN; }
+")"    { return RPAREN; }
+"="    { return ASSIGN; }
+
+\n     { return EOL; }
+[ \t]  { /* ignore whitespace */ }
+.      { return ILLEGAL; }
+
+%%
+最开始的noyywrap选项表示关闭yywrap特性，也就是去掉对flex库的依赖，生成可移植的词法分析器代码。然后在%{和%}中间是原生的C语言代码，通过包含tok.h引入了每种记号对应的枚举类型。在两组%%中间的部分是每种记号对应的正则表达式，先出现的优先匹配，如果匹配失败则继续尝试后面的规则。每个正则表达式后面跟着一组动作代码，也就是普通的C语言代码，这里都是返回记号的类型。
+
+然后通过flex工具生成C语言词法解析器文件：
+
+$ flex --prefix=yy --header-file=calc.lex.h -o calc.lex.c calc.l
+其中--prefix表示生成的代码中标识符都是以yy前缀。在一个项目有多个flex生成代码时，可通过前缀区分。--header-file表示生成头问题，这样方便在其它代码中引用生成的词法分析函数。-o指定输出源代码文件的名字。
+
+生成的词法分析器中，最重要的有以下几个：
+
+extern int yylineno;
+extern char *yytext;
+
+extern int yylex (void);
+其中yylineno表示当前的行号，yytext表示当前记号对应的字符串。而yylex函数每次从标准输入读取一个记号，返回记号类型的值（在tok.h文件定义），如果遇到文件结尾则返回0。
+
+如果需要从字符串解析，则需使用以下的导出函数：
+
+YY_BUFFER_STATE yy_scan_bytes (yyconst char *bytes,yy_size_t len  );
+通过yy_scan_bytes函数，可以设置字符串作为要解析的目标，然后每次调用yylex函数就会从字符串读取数据。这些函数都在calc.lex.h文件中声明。
+
+A.4 将C语言词法分析器包装为Go函数
+创建lex.go文件，内容如下：
+
+package main
+
+//#include "tok.h"
+//#include "calc.lex.h"
+import "C"
+
+type calcLex struct {}
+
+func newCalcLexer(data []byte) *calcLex {
+	p := new(calcLex)
+	C.yy_scan_bytes((*C.char)(C.CBytes(data)), C.yy_size_t(len(data)))
+	return p
+}
+
+func (p *calcLex) Lex(yylval *calcSymType) int {
+	var tok = C.yylex()
+	var yylineno = int(C.yylineno)
+	var yytext = C.GoString(C.yytext)
+
+	switch tok {
+	case C.ID:
+		// yylval.id = yytext
+		return ID
+
+	case C.NUMBER:
+		//yylval.value, _ = strconv.Atoi(yytext)
+		return NUMBER
+
+	case C.ADD:
+		return ADD
+	// ...
+
+	case C.EOL:
+		return EOL
+	}
+
+	if tok == C.ILLEGAL {
+		log.Printf("lex: ILLEGAL token, yytext = %q, yylineno = %d", yytext, yylineno)
+	}
+
+	return 0 // eof
+}
+新建的calcLex类型对应Go语言版本的词法分析器，底层工作通过CGO调用flex生成的C语言函数完成。首先newCalcLexer创建一个词法分析器，参数是要分析的数据，通过C.yy_scan_bytes函数调用表示从字符串解析记号。然后calcLex类型的Lex方法表示每次需要解析一个记号（暂时忽略方法的calcSymType参数），内部通过调用C.yylex()读取一个记号，同时记录行号和记号对应的字符串。最后将C语言的记号转为Go语言的记号值返回，比如C.ID对应Go语言的ID。
+
+对应ID类型，yytext表示变量的名字。对于NUMBER类型，yytext保护数字对应的字符串，可以从字符串解析出数值。但是，Go语言的词法分析器如何返回变量的名字或者是数字的值呢？答案是通过Lex的*calcSymType类型的参数可以记录记号额外的属性值。而calcSymType类型是由goyacc工具生成的代码，在下面我们将介绍yacc的内容。
+
+A.5 goyacc生成语法解析器
+goyacc是Go语言版本的yacc工具，是由Go语言官方团队维护的扩展包工具。
+
+创建calc.y文件：
+
+%{
+package main
+
+var idValueMap = map[string]int{}
+%}
+
+%union {
+	value int
+	id    string
+}
+
+%type  <value> exp factor term
+%token <value> NUMBER
+%token <id>    ID
+
+%token ADD SUB MUL DIV ABS
+%token LPAREN RPAREN ASSIGN
+%token EOL
+
+%%
+calclist
+	: // nothing
+	| calclist exp EOL {
+		idValueMap["_"] = $2
+		fmt.Printf("= %v\n", $2)
+	}
+	| calclist ID ASSIGN exp EOL {
+		idValueMap["_"] = $4
+		idValueMap[$2] = $4
+		fmt.Printf("= %v\n", $4)
+	}
+	;
+
+exp
+	: factor         { $$ = $1 }
+	| exp ADD factor { $$ = $1 + $3 }
+	| exp SUB factor { $$ = $1 - $3 }
+	;
+
+factor
+	: term            { $$ = $1 }
+	| factor MUL term { $$ = $1 * $3 }
+	| factor DIV term { $$ = $1 / $3 }
+	;
+
+term
+	: NUMBER            { $$ = $1 }
+	| ID                { $$ = idValueMap[$1] }
+	;
+
+%%
+和flex工具类型，首先在%{和%}中间是原生的Go语言代码。然后%union定义了属性值，用于记录语法解析中每个规则额外的属性值。通过%type定义BNF规则中非终结的名字，%token定义终结记号名字（和flex定义的记号类型是一致的）。而%type和%token就可以通过<value>或<id>的可选语法，将后面的名字绑定到属性。就是后续代码中$$对应的属性，比如%token <id> ID表示ID对应的属性为id，因此在后面的ID { $$ = idValueMap[$1] }表示数值id属性的值，其中idValueMap用于管理变量的值。
+
+然后通过goyacc工具生成代码：
+
+$ goyacc -o calc.y.go -p "calc" calc.y
+其中-o指定输出的文件名，-p指定标识符名字前缀（和flex的--prefix用法类似）。在生成的calc.y.go文件中将包含最重要的calcParse函数，该函数从指定的词法解析器中读取词法，然后进行语法分析。同时将包含calcSymType类型的定义，它是Lex词法函数的输出参数的类型。
+
+在绑定了属性之后，还需要继续完善Lex词法函数的代码：
+
+func (p *calcLex) Lex(yylval *calcSymType) int {
+	var tok = C.yylex()
+	var yylineno = int(C.yylineno)
+	var yytext = C.GoString(C.yytext)
+
+	switch tok {
+	case C.ID:
+		yylval.id = yytext
+		return ID
+
+	case C.NUMBER:
+		yylval.value, _ = strconv.Atoi(yytext)
+		return NUMBER
+
+	...
+}
+其中yylval.id = yytext表示词法将解析得到的变量名字填充到id属性中。而数字部分则是通过yylval.value属性保存。
+
+A.6 运行计算器
+创建main函数：
+
+func main() {
+	calcParse(newCalcLexer([]byte("1+2*3")))
+}
+newCalcLexer构造一个词法解析器，然后calcParse语法解析器将从词法解析器依次读取记号并解析语法，在解析语法的同时将进行表达式求值运算，同时更新idValueMap全局的变量
+{% endraw %}

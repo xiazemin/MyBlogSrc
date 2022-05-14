@@ -1,0 +1,80 @@
+I"%<p>https://juejin.im/post/5ec9111851882542ed670e03
+首先Go本身在交叉编译方法十分强大，这里就不再赘述了，有需要的同学可以参考《Golang交叉编译各个平台的二进制文件》。虽然自带的交叉编译已足够强大，并且能满足大部分的使用场景，但还是有一个坑人的地方就是当源代码中包含CGO代码时，默认交叉编译就会出错，具体可以参考《CGO_ENABLED环境变量对Go静态编译机制的影响》。实际上有一种可以一劳永逸地解决，并保证线下编译与线上部署环境一致的项目构建方法，那就是基于Docker的“交叉编译方案”。
+Docker是近年来十分流行的Linux容器化技术，相比传统的虚拟机技术，其占用的系统资源更小，体积小，启动速度也非常迅捷。同时Docker已经能在主流操作系统Windows, macOS和Linux上得到快速的构建，这一点对本文接下来要讲的交叉编译十分重要。有关容器的详细介绍具体可参考docker入门教程，其安装方法也非常简单。</p>
+
+<p>https://studygolang.com/articles/14376
+https://johng.cn/cgo-enabled-affect-go-static-compile/
+https://github.com/vektra/mockery
+https://changelog.com/gotime/130
+<!-- more -->
+方法
+准备一个基础镜像
+为了保证一次编译，到处运行的效果(有点类似JAVA虚拟机)，因此需要采用同一个Docker基础镜像分别用于代码编译和部署的工作，本文基于DockerHub官方发布的golang:1.14.3-stretch定制了一个镜像，该镜像更加方便对项目代码的编译导出，镜像体积大概在280MB左右，比较能令人接受。下面是镜像的Dockerfile:
+FROM golang:1.14.3-stretch
+MAINTAINER author <a href="mailto:email@xxx.com">email@xxx.com</a></p>
+
+<p>RUN apt-get update &amp;&amp; apt-get install -y –no-install-recommends <br />
+    ca-certificates <br />
+    wget <br />
+    vim <br />
+    htop <br />
+    curl <br />
+    sudo <br />
+    git <br />
+    net-tools <br />
+    tzdata <br />
+    &amp;&amp; ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime <br />
+    &amp;&amp; rm -rf /var/lib/apt/lists/*</p>
+
+<p>ENV GOBIN=$GOPATH/bin
+ENV GO111MODULE=on
+ENV GOPROXY=https://goproxy.io,direct
+ENV TZ=Asia/Shanghai</p>
+
+<p>WORKDIR $GOPATH/src/app</p>
+
+<p>ENTRYPOINT [“go”, “build”]
+复制代码
+p.s. 以上镜像的Golang环境默认开启GOMODULE模式，因此为保证能顺利编译，项目需要初始化go.mod
+如何使用
+有了上面的Dockerfile，然后我们就能迅速地构建镜像并实例化相应的容器，从而完成对项目源代码的编译和部署工作，具体步骤如下：</p>
+<ol>
+  <li>构建镜像
+ # 在Dockerfile所处当前目录下，执行
+ ~$ docker build -t gobuilder:1.14.3-stretch .
+复制代码</li>
+  <li>
+    <p>编译你的项目go源码
+ # 假设你的项目目录gosrc包含以下文件:
+ /abspath/gosrc
+            |—package
+            |      |—func1.go
+            |      |—func2.go
+            |—go.mod
+            |—config.yml
+            |—main.go</p>
+
+    <p># 运行以下容器编译你的go项目并导出可执行文件到当前目录下
+ ~$ docker run –rm -it -v /abspath/gosrc/:/go/src/app gobuilder
+复制代码</p>
+  </li>
+  <li>运行你的go项目
+在这里，直接运行go项目有两种方法:
+第一种是像刚才介绍的那样，先编译后执行导出的可执行文件就可运行你的应用。如果是线上部署，同样可以在镜像gobuilder可以专门给你的main可执行文件编写特定的Dockerfile用于应用镜像的构建和实例化，具体可以参考以下的构建方法:
+ FROM gobuilder:1.14.3-stretch
+ MAINTAINER author <a href="mailto:email@xxx.com">email@xxx.com</a>
+ WORKDIR /app
+ COPY . .
+ RUN chmod 777 main
+ # master process
+ ENTRYPOINT [”./main”]<br />
+复制代码
+第二种是采用go run的形式直接运行你的go文件，开启应用进程，同样是基于gobuilder镜像，启动时只要挂载项目并修改ENTRYPOINT和CMD参数即可，具体参考如下命令：
+    <h1 id="如果需要容器应用后台运行只需将-it改成-d即可">如果需要容器应用后台运行，只需将-it改成-d即可</h1>
+    <p>~$ docker run –name YourAppName -it -v /abspath/gosrc/:/go/src/app –entrypoint go gobuilder run main.go
+复制代码
+总结
+本文主要介绍了一种基于Docker编译并运行应用的方法，该方法可以在任何(Linux, macOS和Windows)安装有Docker环境的机器上做到一致性部署。能达到一次编译，到处运行的效果，这一点倒是很像JAVA的虚拟机，有异曲同工之妙</p>
+  </li>
+</ol>
+:ET

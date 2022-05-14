@@ -1,0 +1,158 @@
+I"y<p>https://github.com/golang/geo
+使用golang / geo / s2查找给定区域中是否存在latlng</p>
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>rect := s2.RectFromLatLng(s2.LatLng{0.0, 0.0})
+rect = rect.AddPoint(s2.LatLng{2.0, 2.0})
+isThere := rect.ContainsLatLng(s2.LatLng{1.0, 1.0})
+</code></pre></div></div>
+
+<p>https://ask.csdn.net/questions/1031715</p>
+
+<p>https://github.com/mmcloughlin/geohash</p>
+
+<p>https://github.com/twpayne/go-geom</p>
+
+<p>https://github.com/jonas-p/go-shp</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>package main
+
+import (
+    "fmt"
+    "github.com/jonas-p/go-shp"
+    "github.com/mmcloughlin/geohash"
+    "github.com/twpayne/go-geom"
+    "log"
+    "strconv"
+)
+
+func main() {
+    lat := 30.549608
+    lon := 114.376971
+    hash_base32 := geohash.EncodeWithPrecision(lat, lon, 8)
+    fmt.Println(hash_base32)
+
+    neighbors := geohash.Neighbors(hash_base32)
+    hashs := append(neighbors, hash_base32)
+
+    geomMap := make(map[string]*geom.Polygon, 9)
+    for _, hash := range hashs {
+        box := geohash.BoundingBox(hash)
+        polygon, _ := geom.NewPolygon(geom.XY).SetCoords([][]geom.Coord{
+            {
+                {box.MaxLng, box.MaxLat},
+                {box.MaxLng, box.MinLat},
+                {box.MinLng, box.MinLat},
+                {box.MinLng, box.MaxLat},
+                {box.MaxLng, box.MaxLat},
+            }})
+        geomMap[hash] = polygon
+    }
+    polygonMap := map[string]*shp.PolyLine{}
+    for key, multiPlygon := range geomMap {
+        coordsMultiPolygon := multiPlygon.Coords()
+        points := make([][]shp.Point, len(coordsMultiPolygon), len(coordsMultiPolygon))
+        for index, coordsPolygon := range coordsMultiPolygon {
+            points2 := make([]shp.Point, len(coordsPolygon), len(coordsPolygon))
+            for j, coord := range coordsPolygon {
+                x := coord.X()
+                y := coord.Y()
+                point := shp.Point{x, y}
+                points2[j] = point
+            }
+            points[index]=points2
+        }
+        polygonTemp := shp.NewPolyLine(points)
+        polygonMap[key] = polygonTemp
+    }
+
+    // points to write
+
+    fields := []shp.Field{
+        // String attribute field with length 25
+        shp.StringField("base_32", 25),
+        shp.StringField("binary", 50),
+    }
+    // create and open a shapefile for writing points
+    shape, err := shp.Create("F:/pop2pop/polygons.shp", shp.POLYGON)
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer shape.Close()
+
+    // setup fields for attributes
+    shape.SetFields(fields)
+
+    // write points and attributes
+    cursor := 0
+    for key, polygon := range polygonMap {
+        shape.Write(polygon)
+        // write attribute for object n for field 0 (NAME)
+        toInt, _ := geohash.ConvertStringToInt(key)
+        binary := fmt.Sprintf("%b", toInt)
+        shape.WriteAttribute(cursor, 0, key)
+        shape.WriteAttribute(cursor, 1, binary)
+        cursor++;
+    }
+
+
+    points2 := []shp.Point{
+        shp.Point{10.0, 10.0},
+        shp.Point{10.0, 15.0},
+        shp.Point{15.0, 15.0},
+        shp.Point{15.0, 10.0},
+    }
+
+    // fields to write
+    fields2 := []shp.Field{
+        // String attribute field with length 25
+        shp.StringField("NAME", 25),
+    }
+
+    // create and open a shapefile for writing points
+    shape2, err := shp.Create("F:/pop2pop/points.shp", shp.POINT)
+    if err != nil { log.Fatal(err) }
+    defer shape2.Close()
+
+    // setup fields for attributes
+    shape2.SetFields(fields2)
+
+    // write points and attributes
+    for n, point := range points2 {
+        shape2.Write(&amp;point)
+        // write attribute for object n for field 0 (NAME)
+        shape2.WriteAttribute(n, 0, "Point " + strconv.Itoa(n + 1))
+    }
+}
+</code></pre></div></div>
+<!-- more -->
+<p>redis 中关于 GEO 的方法
+geoadd：增加某个位置的坐标。
+geopos：获取某个位置的坐标。
+geohash：获取某个位置的geohash值。
+geodist：获取两个位置的距离。
+georadius：根据给定位置坐标获取指定范围内的位置集合。
+georadiusbymember：根据给定位置获取指定范围内的位置集合。</p>
+
+<p>https://studygolang.com/articles/27275?fr=sidebar</p>
+
+<p>OSM是一款由网络大众共同打造的免费开源、可编辑的地图服务。OpenStreetMap它是利用公众集体的力量和无偿的贡献来改善地图相关的地理数据。OSM是非营利性的，它将数据回馈给社区重新用于其它的产品与服务。而其他地图则是将大多数的地图数据出售给第三方。
+OSM的地图由用户根据手提GPS装置、航空摄影照片、其他自由内容甚至单靠地方智慧绘制。网站里的地图图像及向量数据皆以共享创意姓名标示-相同方式分享2.0授权。
+https://zhuanlan.zhihu.com/p/25889246</p>
+
+<p>https://www.openstreetmap.org/#map=16/40.1855/116.3031
+https://github.com/qedus/osmpbf
+https://github.com/go-spatial/tegola
+https://github.com/tidwall/buntdb
+buntdb是一个完全用 Go 语言编写的内存键值数据库。它支持 ACID、并发读、自定义索引和空间信息数据。buntdb只用一个源码文件就实现了这些功能，对于想要学习数据库底层知识的童鞋更是不容错过。
+https://segmentfault.com/a/1190000022102931</p>
+
+<p>https://github.com/lukeroth/gdal
+https://github.com/jonas-p/go-shp
+https://github.com/llgcode/draw2d</p>
+
+<p>https://blog.csdn.net/doupi2008/article/details/77647946?spm=1005.2026.3001.5635&amp;utm_medium=distribute.pc_relevant_ask_down.none-task-blog-2~default~OPENSEARCH~default-5.pc_feed_download_top3ask&amp;depth_1-utm_source=distribute.pc_relevant_ask_down.none-task-blog-2~default~OPENSEARCH~default-5.pc_feed_download_top3ask</p>
+
+<p>https://blog.csdn.net/weixin_37589896/article/details/78584062?spm=1005.2026.3001.5635&amp;utm_medium=distribute.pc_relevant_ask_down.none-task-blog-2~default~OPENSEARCH~default-6.pc_feed_download_top3ask&amp;depth_1-utm_source=distribute.pc_relevant_ask_down.none-task-blog-2~default~OPENSEARCH~default-6.pc_feed_download_top3ask</p>
+
+<p>https://blog.csdn.net/wudiazu/article/details/79565174?spm=1005.2026.3001.5635&amp;utm_medium=distribute.pc_relevant_ask_down.none-task-blog-2~default~OPENSEARCH~default-4.pc_feed_download_top3ask&amp;depth_1-utm_source=distribute.pc_relevant_ask_down.none-task-blog-2~default~OPENSEARCH~default-4.pc_feed_download_top3ask</p>
+
+:ET

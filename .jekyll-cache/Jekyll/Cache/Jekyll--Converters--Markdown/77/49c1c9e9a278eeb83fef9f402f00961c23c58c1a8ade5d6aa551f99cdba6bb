@@ -1,0 +1,230 @@
+I"�"<p>那些最原始的镜像又是怎么做出来的呢？比如我们拉了个 nginx 镜像，但是实际上只是某个人在 centos 镜像上搭建了个 nginx 放出来，那这个最原始的 centos 镜像是怎么做出来的？</p>
+
+<p>直接一个 tar 添加到空 image scratch 上，如 https://github.com/docker-library/busybox/blob/master/glibc/Dockerfile</p>
+
+<p>https://github.com/alpinelinux/docker-alpine/blob/847dd9a734df631555265ccf598ce635d3fe1453/x86_64//Dockerfile</p>
+
+<p>FROM scratch
+ADD alpine-minirootfs-3.9.2-x86_64.tar.gz /
+CMD [“/bin/sh”]</p>
+
+<p>https://github.com/alpinelinux/docker-alpine</p>
+
+<p>https://docs.docker.com/develop/develop-images/baseimages/</p>
+
+<p>FROM scratch
+ADD hello /
+CMD [“/hello”]</p>
+
+<p>$ docker build –tag hello .
+[+] Building 0.2s (4/4) FINISHED
+ =&gt; [internal] load build definition from Dockerfile                       0.0s
+ =&gt; =&gt; transferring dockerfile: 36B                                        0.0s
+ =&gt; [internal] load .dockerignore                                          0.0s
+ =&gt; =&gt; transferring context: 2B                                            0.0s
+ =&gt; [internal] load build context                                          0.0s
+ =&gt; =&gt; transferring context: 2B                                            0.0s
+ =&gt; ERROR [1/1] ADD hello /                                                0.0s
+——</p>
+<blockquote>
+  <h2 id="11-add-hello-">[1/1] ADD hello /:</h2>
+  <p>failed to compute cache key: “/hello” not found: not found</p>
+</blockquote>
+
+<p>touch hello</p>
+
+<p>$ docker build –tag hello .
+[+] Building 0.3s (5/5) FINISHED
+ =&gt; [internal] load build definition from Dockerfile                       0.0s
+ =&gt; =&gt; transferring dockerfile: 36B                                        0.0s
+ =&gt; [internal] load .dockerignore                                          0.0s
+ =&gt; =&gt; transferring context: 2B                                            0.0s
+ =&gt; [internal] load build context                                          0.0s
+ =&gt; =&gt; transferring context: 26B                                           0.0s
+ =&gt; [1/1] ADD hello /                                                      0.0s
+ =&gt; exporting to image                                                     0.0s
+ =&gt; =&gt; exporting layers                                                    0.0s
+ =&gt; =&gt; writing image sha256:b2ef40c4ab99dad13978397700d3b93bdb6f9438cb2f6  0.0s
+ =&gt; =&gt; naming to docker.io/library/hello</p>
+
+<p>$ docker images
+REPOSITORY                           TAG                                              IMAGE ID       CREATED          SIZE
+hello                                latest                                           b2ef40c4ab99   18 seconds ago   0B
+<!-- more -->
+https://docs.docker.com/develop/develop-images/baseimages/</p>
+
+<p>https://github.com/docker-library/busybox</p>
+
+<p>要从0开始做一个属于自己的基础 OS 镜像，可以去参考那些开源 OS 官方镜像是怎么做的，Github 都有完整代码。</p>
+
+<p>FROM scratch
+ADD centos-7-x86_64-docker.tar.xz /</p>
+
+<p>LABEL  <br />
+    org.label-schema.schema-version=”1.0”<br />
+    …..
+  CMD [” /bin/bash”]</p>
+
+<p>https://www.zhihu.com/question/436737502</p>
+
+<p>https://github.com/CentOS/sig-cloud-instance-images/tree/b2d195220e1c5b181427c3172829c23ab9cd27eb/docker</p>
+
+<p>https://github.com/debuerreotype/docker-debian-artifacts/blob/d5a5b49170b3f736cc7952787f074d7e24cf56fd/buster/Dockerfile</p>
+
+<p>https://raw.githubusercontent.com/docker/docker/master/contrib/mkimage-yum.sh</p>
+
+<p>#!/usr/bin/env bash
+#</p>
+<h1 id="create-a-base-centos-docker-image">Create a base CentOS Docker image.</h1>
+<p>#</p>
+<h1 id="this-script-is-useful-on-systems-with-yum-installed-eg-building">This script is useful on systems with yum installed (e.g., building</h1>
+<h1 id="a-centos-image-on-centos--see-contribmkimage-rinsesh-for-a-way">a CentOS image on CentOS).  See contrib/mkimage-rinse.sh for a way</h1>
+<h1 id="to-build-centos-images-on-other-systems">to build CentOS images on other systems.</h1>
+
+<p>set -e</p>
+
+<p>usage() {
+	cat « EOOPTS
+$(basename $0) [OPTIONS] <name>
+OPTIONS:
+  -p "<packages>"  The list of packages to install in the container.
+                   The default is blank. Can use multiple times.
+  -g "<groups>"    The groups of packages to install in the container.
+                   The default is "Core". Can use multiple times.
+  -y <yumconf>     The path to the yum config to install packages from. The
+                   default is /etc/yum.conf for Centos/RHEL and /etc/dnf/dnf.conf for Fedora
+  -t <tag>         Specify Tag information.
+                   default is reffered at /etc/{redhat,system}-release
+EOOPTS
+	exit 1
+}</tag></yumconf></groups></packages></name></p>
+
+<h1 id="option-defaults">option defaults</h1>
+<p>yum_config=/etc/yum.conf
+if [ -f /etc/dnf/dnf.conf ] &amp;&amp; command -v dnf &amp;&gt; /dev/null; then
+	yum_config=/etc/dnf/dnf.conf
+	alias yum=dnf
+fi</p>
+<h1 id="for-names-with-spaces-use-double-quotes--as-install_groupscore-compute-node">for names with spaces, use double quotes (“) as install_groups=(‘Core’ ‘“Compute Node”’)</h1>
+<p>install_groups=()
+install_packages=()
+version=
+while getopts “:y:p:g:t:h” opt; do
+	case $opt in
+		y)
+			yum_config=$OPTARG
+			;;
+		h)
+			usage
+			;;
+		p)
+			install_packages+=(“$OPTARG”)
+			;;
+		g)
+			install_groups+=(“$OPTARG”)
+			;;
+		t)
+			version=”$OPTARG”
+			;;
+		\?)
+			echo “Invalid option: -$OPTARG”
+			usage
+			;;
+	esac
+done
+shift $((OPTIND - 1))
+name=$1</p>
+
+<p>if [[ -z $name ]]; then
+	usage
+fi</p>
+
+<h1 id="default-to-core-group-if-not-specified-otherwise">default to Core group if not specified otherwise</h1>
+<p>if [ ${#install_groups[*]} -eq 0 ]; then
+	install_groups=(‘Core’)
+fi</p>
+
+<p>target=$(mktemp -d –tmpdir $(basename $0).XXXXXX)</p>
+
+<p>set -x</p>
+
+<p>mkdir -m 755 “$target”/dev
+mknod -m 600 “$target”/dev/console c 5 1
+mknod -m 600 “$target”/dev/initctl p
+mknod -m 666 “$target”/dev/full c 1 7
+mknod -m 666 “$target”/dev/null c 1 3
+mknod -m 666 “$target”/dev/ptmx c 5 2
+mknod -m 666 “$target”/dev/random c 1 8
+mknod -m 666 “$target”/dev/tty c 5 0
+mknod -m 666 “$target”/dev/tty0 c 4 0
+mknod -m 666 “$target”/dev/urandom c 1 9
+mknod -m 666 “$target”/dev/zero c 1 5</p>
+
+<h1 id="amazon-linux-yum-will-fail-without-vars-set">amazon linux yum will fail without vars set</h1>
+<p>if [ -d /etc/yum/vars ]; then
+	mkdir -p -m 755 “$target”/etc/yum
+	cp -a /etc/yum/vars “$target”/etc/yum/
+fi</p>
+
+<p>if [[ -n “$install_groups” ]]; then
+	yum -c “$yum_config” –installroot=”$target” –releasever=/ –setopt=tsflags=nodocs <br />
+		–setopt=group_package_types=mandatory -y groupinstall “${install_groups[@]}”
+fi</p>
+
+<p>if [[ -n “$install_packages” ]]; then
+	yum -c “$yum_config” –installroot=”$target” –releasever=/ –setopt=tsflags=nodocs <br />
+		–setopt=group_package_types=mandatory -y install “${install_packages[@]}”
+fi</p>
+
+<p>yum -c “$yum_config” –installroot=”$target” -y clean all</p>
+
+<p>cat &gt; “$target”/etc/sysconfig/network « EOF
+NETWORKING=yes
+HOSTNAME=localhost.localdomain
+EOF</p>
+
+<h1 id="effectively-febootstrap-minimize-keep-zoneinfo-keep-rpmdb-keep-services-target">effectively: febootstrap-minimize –keep-zoneinfo –keep-rpmdb –keep-services “$target”.</h1>
+<h1 id="locales">locales</h1>
+<p>rm -rf “$target”/usr/{{lib,share}/locale,{lib,lib64}/gconv,bin/localedef,sbin/build-locale-archive}</p>
+<h1 id="docs-and-man-pages">docs and man pages</h1>
+<p>rm -rf “$target”/usr/share/{man,doc,info,gnome/help}</p>
+<h1 id="cracklib">cracklib</h1>
+<p>rm -rf “$target”/usr/share/cracklib</p>
+<h1 id="i18n">i18n</h1>
+<p>rm -rf “$target”/usr/share/i18n</p>
+<h1 id="yum-cache">yum cache</h1>
+<p>rm -rf “$target”/var/cache/yum
+mkdir -p –mode=0755 “$target”/var/cache/yum</p>
+<h1 id="sln">sln</h1>
+<p>rm -rf “$target”/sbin/sln</p>
+<h1 id="ldconfig">ldconfig</h1>
+<p>rm -rf “$target”/etc/ld.so.cache “$target”/var/cache/ldconfig
+mkdir -p –mode=0755 “$target”/var/cache/ldconfig</p>
+
+<p>if [ -z “$version” ]; then
+	for file in “$target”/etc/{redhat,system}-release; do
+		if [ -r “$file” ]; then
+			version=”$(sed ‘s/^[^0-9]<em>([0-9.]+).</em>$/\1/’ “$file”)”
+			break
+		fi
+	done
+fi</p>
+
+<p>if [ -z “$version” ]; then
+	echo &gt;&amp;2 “warning: cannot autodetect OS version, using ‘$name’ as tag”
+	version=$name
+fi</p>
+
+<table>
+  <tbody>
+    <tr>
+      <td>tar –numeric-owner -c -C “$target” .</td>
+      <td>docker import - $name:$version</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>docker run -i -t –rm $name:$version /bin/bash -c ‘echo success’</p>
+
+<p>rm -rf “$target”</p>
+:ET

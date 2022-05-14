@@ -1,0 +1,65 @@
+---
+title: race
+layout: post
+category: golang
+author: 夏泽民
+---
+goroutine的使用增加了函数的危险系数论go语言中goroutine的使用。比如一个全局变量，如果没有加上锁，我们写一个比较庞大的项目下来，就根本不知道这个变量是不是会引起多个goroutine竞争。
+<!-- more -->
+package main
+
+import(
+    "time"
+    "fmt"
+)
+
+func main() {
+    a := 1
+    go func(){
+        a = 2
+    }()
+    a = 3
+    fmt.Println("a is ", a)
+
+    time.Sleep(2 * time.Second)
+}
+在上面的例子中，看代码，我们其实看的出来，这里的go func触发的goroutine会修改a。
+主goroutine 也会对a进行修改。但是我们如果只go run运行，我们可能往往不会发现什么太大的问题。
+
+runtime  go run race1.go
+a is  3
+可喜的是，golang在1.1之后引入了竞争检测的概念。我们可以使用go run -race 或者 go build -race 来进行竞争检测。
+golang语言内部大概的实现就是同时开启多个goroutine执行同一个命令，并且纪录每个变量的状态。
+
+如果用race来检测上面的程序，我们就会看到输出：
+
+runtime  go run -race race1.go
+a is  3
+==================
+WARNING: DATA RACE
+Write by goroutine 5:
+  main.func·001()
+      /Users/yejianfeng/Documents/workspace/go/src/runtime/race1.go:11 +0x3a
+      
+竞争检测器基于C/C++的ThreadSanitizer 运行时库，该库在Google内部代码基地和Chromium找到许多错误。这个技术在2012年九月集成到Go中，从那时开始，它已经在标准库中检测到42个竞争条件。现在，它已经是我们持续构建过程的一部分，当竞争条件出现时，它会继续捕捉到这些错误。
+
+工作原理
+竞争检测器集成在go工具链中。当使用了-race作为命令行参数后，编译器会插桩代码，使得所有代码在访问内存时，会记录访问时间和方法。同时运行时库会观察对共享变量的未同步访问。当这种竞争行为被检测到，就会输出一个警告信息。https://code.google.com/p/thread-sanitizer/wiki/Algorithm
+
+由于设计原因，竞争检测器只有在被运行的代码触发时，才能检测到竞争条件，因此在现实的负载条件下运行是非常重要的。但是由于代码插桩，程序会使用10倍的CPU和内存，所以总是运行插桩后的程序是不现实的。矛盾的解决方法之一就是使用插桩后的程序来运行测试。负载测试和集成测试是好的候选，因为它们倾向于检验代码的并发部分。另外的方法是将单个插桩后的程序布置到运行服务器组成的池中，并且给予生产环境的负载。
+
+使用方法:
+
+竞争检测器已经完全集成到Go工具链中，仅仅添加-race标志到命令行就使用了检测器。
+
+
+高并发的代码，运行几个小时后，出现
+panic: runtime error: invalid memory address or nil pointer dereference
+go build -race 
+
+加上这个参数后，就可以让golang自动帮你找出问题了，当运行时，自动发现race condition
+下面是它给我的代码的提示
+WARNING: DATA RACE
+Read by goroutine 13:
+
+

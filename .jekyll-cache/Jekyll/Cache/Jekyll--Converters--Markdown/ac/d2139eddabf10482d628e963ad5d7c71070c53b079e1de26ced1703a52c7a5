@@ -1,0 +1,524 @@
+I"�<p>Network Time Protocol （网络时间协议）是 GNU/Linux 系统通过互联网时间服务器同步系统软件时钟的最常见方法。设计时考虑到了各种网络延迟，通过公共网络同步时，误差可以降低到10毫秒以内；通过本地网络同步时，误差可以降低到 1 毫秒。
+配置
+主要的后台进程是 ntpd, 可以通过 /etc/ntp.conf 配置。详细信息可以参考手册 ntp.conf(5) 和相关的 man {ntpd|ntp_auth|ntp_mon|ntp_acc|ntp_clock|ntp_misc}.</p>
+
+<p>连接到 NTP 服务器
+NTP 服务器通过一个层级系统进行分类，不同的层级称为 strata: 独立的时间源为stratum 0; 直接连接到 stratum 0 的设备为 stratum 1;直接连接到 stratum 1 的源为 stratum 2，以此类推。</p>
+
+<p>服务器的 stratum 并不能完全等同于它的精度和可靠度。通常的时间同步都使用 stratum 2 服务器。通过pool.ntp.org 服务器或这个链接 可以选择比较近的服务器池。
+有网络连接的时候启动ntpd
+ntpd 可以由你的网络管理器启动, 所以ntp这个守护进程只有在计算机有网络连接的时候才会启动.
+NetworkManager
+通过网络管理器的 dispatcher 脚本，可以同网络连接一起启动/终止ntpd 守护进程。 安装networkmanager-dispatcher-ntpd 预配置包 ntpd service[broken link: invalid section] 来让网络连接同步ntp启动/终止.</p>
+
+<p>Wicd
+对 Wicd 来说, 要在 postconnect 目录创建一个启动脚本，在 predisconnect 目录创建一个终止脚本。 记住要把他们设为可执行的哦:</p>
+
+<p>/etc/wicd/scripts/postconnect/ntpd
+#!/bin/bash
+systemctl start ntpd &amp;
+/etc/wicd/scripts/predisconnect/ntpd
+#!/bin/bash
+systemctl stop ntpd &amp;
+Synopsis
+ntpd [ -aAbdgLmNPqx ] [ -c conffile ] [ -f driftfile ] [ -g ] [ -k keyfile ] [ -l logfile ] [ -N high ] [ -p pidfile ] [ -r broadcastdelay ] [ -s statsdir ] [ -t key ] [ -v variable ] [ -V variable ] [ -x ]
+Description
+The ntpd program is an operating system daemon which sets and maintains the system time of day in synchronism with Internet standard time servers. It is a complete implementation of the Network Time Protocol (NTP) version 4, but also retains compatibility with version 3, as defined by RFC-1305, and version 1 and 2, as defined by RFC-1059 and RFC-1119, respectively. ntpd does most computations in 64-bit floating point arithmetic and does relatively clumsy 64-bit fixed point operations only when necessary to preserve the ultimate precision, about 232 picoseconds. While the ultimate precision, is not achievable with ordinary workstations and networks of today, it may be required with future gigahertz CPU clocks and gigabit LANs.
+How NTP Operates
+The ntpd program operates by exchanging messages with one or more configured servers at designated poll intervals. When started, whether for the first or subsequent times, the program requires several exahanges from the majority of these servers so the signal processing and mitigation algorithms can accumulate and groom the data and set the clock. In order to protect the network from bursts, the initial poll interval for each server is delayed an interval randomized over 0-16s. At the default initial poll interval of 64s, several minutes can elapse before the clock is set. The initial delay to set the clock can be reduced using the iburst keyword with the server configuration command, as described on the Configuration Options page.</p>
+
+<p>Most operating systems and hardware of today incorporate a time-of-year (TOY) chip to maintain the time during periods when the power is off. When the machine is booted, the chip is used to initialize the operating system time. After the machine has synchronized to a NTP server, the operating system corrects the chip from time to time. In case there is no TOY chip or for some reason its time is more than 1000s from the server time, ntpd assumes something must be terribly wrong and the only reliable action is for the operator to intervene and set the clock by hand. This causes ntpd to exit with a panic message to the system log. The -g option overrides this check and the clock will be set to the server time regardless of the chip time. However, and to protect against broken hardware, such as when the CMOS battery fails or the clock counter becomes defective, once the clock has been set, an error greater than 1000s will cause ntpd to exit anyway.
+<!-- more -->
+Under ordinariy conditions, ntpd adjusts the clock in small steps so that the timescale is effectively continuous and without discontinuities. Under conditions of extreme network congestion, the roundtrip delay jitter can exceed three seconds and the synchronization distance, which is equal to one-half the roundtrip delay plus error budget terms, can become very large. The ntpd algorithms discard sample offsets exceeding 128 ms, unless the interval during which no sample offset is less than 128 ms exceeds 900s. The first sample after that, no matter what the offset, steps the clock to the indicated time. In practice this reduces the false alarm rate where the clock is stepped in error to a vanishingly low incidence.</p>
+
+<p>As the result of this behavior, once the clock has been set, it very rarely strays more than 128 ms, even under extreme cases of network path congestion and jitter. Sometimes, in particular when ntpd is first started, the error might exceed 128 ms. This may on occasion cause the clock to be set backwards if the local clock time is more than 128 s in the future relative to the server. In some applications, this behavior may be unacceptable. If the -x option is included on the command line, the clock will never be stepped and only slew corrections will be used.</p>
+
+<p>The issues should be carefully explored before deciding to use the -x option. The maximum slew rate possible is limited to 500 parts-per-million (PPM) as a consequence of the correctness principles on which the NTP protocol and algorithm design are based. As a result, the local clock can take a long time to converge to an acceptable offset, about 2,000 s for each second the clock is outside the acceptable range. During this interval the local clock will not be consistent with any other network clock and the system cannot be used for distributed applications that require correctly synchronized network time.</p>
+
+<p>In spite of the above precautions, sometimes when large frequency errors are present the resulting time offsets stray outside the 128-ms range and an eventual step or slew time correction is required. If following such a correction the frequency error is so large that the first sample is outside the acceptable range, ntpd enters the same state as when the ntp.drift file is not present. The intent of this behavior is to quickly correct the frequency and restore operation to the normal tracking mode. In the most extreme cases (time.ien.it comes to mind), there may be occasional step/slew corrections and subsequent frequency corrections. It helps in these cases to use the burst keyword when configuring the server.</p>
+
+<p>Frequency Discipline
+The ntpd behavior at startup depends on whether the frequency file, usually ntp.drift, exists. This file contains the latest estimate of clock frequency error. When the ntpd is started and the file does not exist, the ntpd enters a special mode designed to quickly adapt to the particular system clock oscillator time and frequency error. This takes approximately 15 minutes, after which the time and frequency are set to nominal values and the ntpd enters normal mode, where the time and frequency are continuously tracked relative to the server. After one hour the frequency file is created and the current frequency offset written to it. When the ntpd is started and the file does exist, the ntpd frequency is initialized from the file and enters normal mode immediately. After that the current frequency offset is written to the file at hourly intervals.</p>
+
+<p>Operating Modes
+ntpd can operate in any of several modes, including symmetric active/passive, client/server broadcast/multicast and manycast, as described in the Association Management page. It normally operates continuously while monitoring for small changes in frequency and trimming the clock for the ultimate precision. However, it can operate in a one-time mode where the time is set from an external server and frequency is set from a previously recorded frequency file. A broadcast/multicast or manycast client can discover remote servers, compute server-client propagation delay correction factors and configure itself automatically. This makes it possible to deploy a fleet of workstations without specifying configuration details specific to the local environment.</p>
+
+<p>By default, ntpd runs in continuous mode where each of possibly several external servers is polled at intervals determined by an intricate state machine. The state machine measures the incidental roundtrip delay jitter and oscillator frequency wander and determines the best poll interval using a heuristic algorithm. Ordinarily, and in most operating environments, the state machine will start with 64s intervals and eventually increase in steps to 1024s. A small amount of random variation is introduced in order to avoid bunching at the servers. In addition, should a server become unreachable for some time, the poll interval is increased in steps to 1024s in order to reduce network overhead.</p>
+
+<p>In some cases it may not be practical for ntpd to run continuously. A common workaround has been to run the ntpdate program from a cron job at designated times. However, this program does not have the crafted signal processing, error checking and mitigation algorithms of ntpd. The -q option is intended for this purpose. Setting this option will cause ntpd to exit just after setting the clock for the first time. The procedure for initially setting the clock is the same as in continuous mode; most applications will probably want to specify the iburst keyword with the server configuration command. With this keyword a volley of messages are exchanged to groom the data and the clock is set in about a minute. If nothing is heard after a couple of minutes, the daemon times out and exits. After a suitable period of mourning, the ntpdate program may be retired.</p>
+
+<p>When kernel support is available to discipline the clock frequency, which is the case for stock Solaris, Tru64, Linux and FreeBSD, a useful feature is available to discipline the clock frequency. First, ntpd is run in continuous mode with selected servers in order to measure and record the intrinsic clock frequency offset in the frequency file. It may take some hours for the frequency and offset to settle down. Then the ntpd is stopped and run in one-time mode as required. At each startup, the frequency is read from the file and initializes the kernel frequency.</p>
+
+<p>Poll Interval Control
+This version of NTP includes an intricate state machine to reduce the network load while maintaining a quality of synchronization consistent with the observed jitter and wander. There are a number of ways to tailor the operation in order enhance accuracy by reducing the interval or to reduce network overhead by increasing it. However, the user is advised to carefully consider the consequenses of changing the poll adjustment range from the default minimum of 64 s to the default maximum of 1,024 s. The default minimum can be changed with the tinker minpoll command to a value not less than 16 s. This value is used for all configured associations, unless overriden by the minpoll option on the configuration command. Note that most device drivers will not operate properly if the poll interval is less than 64 s and that the broadcast server and manycast client associations will also use the default, unless overriden.</p>
+
+<p>In some cases involving dial up or toll services, it may be useful to increase the minimum interval to a few tens of minutes and maximum interval to a day or so. Under normal operation conditions, once the clock discipline loop has stabilized the interval will be increased in steps from the minumum to the maximum. However, this assumes the intrinsic clock frequency error is small enough for the discipline loop correct it. The capture range of the loop is 500 PPM at an interval of 64s decreasing by a factor of two for each doubling of interval. At a minimum of 1,024 s, for example, the capture range is only 31 PPM. If the intrinsic error is greater than this, the drift file ntp.drift will have to be specially tailored to reduce the residual error below this limit. Once this is done, the drift file is automatically updated once per hour and is available to initialize the frequency on subsequent daemon restarts.</p>
+
+<p>The huff-n’-puff filter
+In scenarios where a considerable amount of data are to be downloaded or uploaded over telephone modems, timekeeping quality can be seriously degraded. This occurs because the differential delays on the two directions of transmission can be quite large. In many cases the apparent time errors are so large as to exceed the step threshold and a step correction can occur during and after the data transfer is in progress.</p>
+
+<p>The huff-n’-puff filter is designed to correct the apparent time offset in these cases. It depends on knowledge of the propagation delay when no other traffic is present. In common scenarios this occurs during other than work hours. The filter maintains a shift register that remembers the minimum delay over the most recent interval measured usually in hours. Under conditions of severe delay, the filter corrects the apparent offset using the sign of the offset and the difference between the apparent delay and minimum delay. The name of the filter reflects the negative (huff) and positive (puff) correction, which depends on the sign of the offset.</p>
+
+<p>The filter is activated by the tinker command and huffpuff keyword, as described in the Miscellaneous Options page.</p>
+
+<p>Notes
+If NetInfo support is built into ntpd, then ntpd will attempt to read its configuration from the NetInfo if the default ntp.conf file cannot be read and no file is specified by the -c option.</p>
+
+<p>Various internal ntpd variables can be displayed and configuration options altered while the ntpd is running using the ntpq and ntpdc utility programs.</p>
+
+<p>When ntpd starts it looks at the value of umask, and if zero ntpd will set the umask to 022.</p>
+
+<p>Command Line Options
+-a
+Enable authentication mode (default).
+-A
+Disable authentication mode.
+-b
+Synchronize using NTP broadcast messages.
+-c conffile
+Specify the name and path of the configuration file. (Disable netinfo?)
+-d
+Specify debugging mode. This flag may occur multiple times, with each occurrence indicating greater detail of display.
+-D level
+Specify debugging level directly.
+-f driftfile
+Specify the name and path of the drift file.
+-g
+Normally, ntpd exits if the offset exceeds the sanity limit, which is 1000 s by default. If the sanity limit is set to zero, no sanity checking is performed and any offset is acceptable. This option overrides the limit and allows the time to be set to any value without restriction; however, this can happen only once. After that, ntpd will exit if the limit is exceeded. This option can be used with the -q option.
+-k keyfile
+Specify the name and path of the file containing the NTP authentication keys.
+-l logfile
+Specify the name and path of the log file. The default is the system log facility.
+-L
+Listen to virtual IPs.
+-m
+Synchronize using NTP multicast messages on the IP multicast group address 224.0.1.1 (requires multicast kernel).
+-n
+Don’t fork.
+-N priority
+To the extent permitted by the operating system, run the ntpd at a high priority.
+-p pidfile
+Specify the name and path to record the ntpd’s process ID.
+-P
+Override the priority limit set by the operating system. Not recommended for sissies.
+-q
+Exit the ntpd just after the first time the clock is set. This behavior mimics that of the ntpdate program, which is to be retired. The -g and -x options can be used with this option.
+-r broadcastdelay
+Specify the default propagation delay from the broadcast/multicast server and this computer. This is necessary only if the delay cannot be computed automatically by the protocol.
+-s statsdir
+Specify the directory path for files created by the statistics facility.
+-t key
+Add a key number to the trusted key list.
+-v variable
+-V variable
+Add a system variable listed by default.
+-x
+Normally, the time is slewed if the offset is less than the step threshold, which is 128 ms by default, and stepped if above the threshold. This option forces the time to be slewed in all cases. If the step threshold is set to zero, all offsets are stepped, regardless of value and regardless of the -x option. In general, this is not a good idea, as it bypasses the clock state machine which is designed to cope with large time and frequency errors Note: Since the slew rate is limited to 0.5 ms/s, each second of adjustment requires an amortization interval of 2000 s. Thus, an adjustment of many seconds can take hours or days to amortize. This option can be used with the -q option.
+The Configuration File
+Ordinarily, ntpd reads the ntp.conf configuration file at startup time in order to determine the synchronization sources and operating modes. It is also possible to specify a working, although limited, configuration entirely on the command line, obviating the need for a configuration file. This may be particularly useful when the local host is to be configured as a broadcast/multicast client, with all peers being determined by listening to broadcasts at run time.</p>
+
+<p>Usually, the configuration file is installed in the /etc directory, but could be installed elsewhere (see the -c conffile command line option). The file format is similar to other Unix configuration files - comments begin with a # character and extend to the end of the line; blank lines are ignored.</p>
+
+<table>
+  <tbody>
+    <tr>
+      <td>Configuration commands consist of an initial keyword followed by a list of arguments, some of which may be optional, separated by whitespace. Commands may not be continued over multiple lines. Arguments may be host names, host addresses written in numeric, dotted-quad form, integers, floating point numbers (when specifying times in seconds) and text strings. Optional arguments are delimited by [ ] in the following descriptions, while alternatives are separated by</td>
+      <td>. The notation [ … ] means an optional, indefinite repetition of the last item before the [ … ].</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>Configuration Options
+Authentication Options
+Monitoring Options
+Access Control Options
+Reference Clock Options
+Miscellaneous Options</p>
+
+<p>Files
+/etc/ntp.conf - the default name of the configuration file 
+/etc/ntp.drift - the default name of the drift file 
+/etc/ntp.keys - the default name of the key file
+Bugs
+ntpd has gotten rather fat. While not huge, it has gotten larger than might be desirable for an elevated-priority ntpd running on a workstation, particularly since many of the fancy features which consume the space were designed more with a busy primary server, rather than a high stratum workstation in mind.</p>
+
+<p>如何设置Linux Time Zone</p>
+
+<p>在Linux下glibc提供了我们事先编译好的许多timezone文件, 他们就放在/usr/share/zoneinfo这个目录下,这里基本涵盖了大部分的国家和城市
+CET          Europe/  HST        MET          Portugal  UCT在这里面我们就可以找到自己所在城市的time zone文件. 那么如果我们想查看对于每个time zone当前的时间我们可以用zdump命令
+代码:</p>
+<h1 id="zdump-hongkong">zdump Hongkong</h1>
+<p>Hongkong  Fri Jul  6 06:13:57 2007 HKT那么我们又怎么来告诉系统我们所在time zone是哪个呢? 方法有很多,这里举出两种</p>
+
+<p>第一个就是修改/etc/localtime这个文件,这个文件定义了我么所在的local time zone.
+我们可以在/usr/share/zoneinfo下找到我们的time zone文件然后拷贝去到/etc/localtimezone(或者做个symbolic link)</p>
+
+<p>假设我们现在的time zone是BST(也就是英国的夏令时间,UTC+1)
+代码:</p>
+<h1 id="date">date</h1>
+<p>Thu Jul  5 23:33:40 BST 2007我们想把time zone换成上海所在的时区就可以这么做
+代码:</p>
+<h1 id="ln--sf-usrsharezoneinfoposixasiashanghai-etclocaltime">ln -sf /usr/share/zoneinfo/posix/Asia/Shanghai /etc/localtime</h1>
+<h1 id="date-1">date</h1>
+<p>Fri Jul  6 06:35:52 CST 2007
+这样时区就改过来了(注意时间也做了相应的调整)</p>
+
+<p>第二种方法也就设置TZ环境变量的值. 许多程序和命令都会用到这个变量的值. TZ的值可以有多种格式,最简单的设置方法就是使用tzselect命令
+代码:</p>
+<h1 id="tzselect">tzselect</h1>
+<p>…
+TZ=’America/Los_Angeles’;export TZtzselect
+会让你选择所在的国家和城市(我省略了这些步骤),最后输出相应的TZ变量的值.那么如果你设置了TZ的值之后时区就又会发生变化</p>
+
+<p>代码:</p>
+<h1 id="date-2">date</h1>
+<p>Thu Jul  5 15:48:11 PDT 2007
+通过这两个例子我们也可以发现TZ变量的值会override /etc/localtime. 也就是说当TZ变量没有定义的时候系统才使用/etc/localtime来确定time zone. 所以你想永久修改time zone的话那么可以把TZ变量的设置写入/etc/profile里</p>
+
+<p>好了现在我们知道怎么设置时区了,下面我们就来看看如何设置Linux的时间吧</p>
+
+<ol>
+  <li>Real Time Clock(RTC) and System Clock</li>
+</ol>
+
+<p>说道设置时间这里还要明确另外一个概念就是在一台计算机上我们有两个时钟:一个称之为硬件时间时钟(RTC),还有一个称之为系统时钟(System Clock)</p>
+
+<p>硬件时钟是指嵌在主板上的特殊的电路, 它的存在就是平时我们关机之后还可以计算时间的原因
+系统时钟就是操作系统的kernel所用来计算时间的时钟. 它从1970年1月1日00:00:00 UTC时间到目前为止秒数总和的值 在Linux下系统时间在开机的时候会和硬件时间同步(synchronization),之后也就各自独立运行了</p>
+
+<p>那么既然两个时钟独自运行,那么时间久了必然就会产生误差了,下面我们来看一个例子
+代码:</p>
+<h1 id="date-3">date</h1>
+<p>Fri Jul  6 00:27:13 BST 2007</p>
+<h1 id="hwclock-show">hwclock –show</h1>
+<p>Fri 06 Jul 2007 12:27:17 AM BST  -0.968931 seconds 
+通过hwclock –show 命令我们可以查看机器上的硬件时间(always in local time zone), 我们可以看到它和系统时间还是有一定的误差的, 那么我们就需要把他们同步</p>
+
+<p>如果我们想要把硬件时间设置成系统时间我们可以运行以下命令
+代码:</p>
+<h1 id="hwclock-hctosys">hwclock –hctosys</h1>
+<p>反之,我们也可以把系统时间设置成硬件时间
+代码:</p>
+<h1 id="hwclock-systohc">hwclock –systohc</h1>
+<p>那么如果想设置硬件时间我们可以开机的时候在BIOS里设定.也可以用hwclock命令
+代码:</p>
+<h1 id="hwclock-set-datemmddyy-hhmmss">hwclock –set –date=”mm/dd/yy hh:mm:ss”</h1>
+<p>如果想要修改系统时间那么用date命令就最简单了
+代码:</p>
+<h1 id="date--s-ddmmyyyy-hhmmss">date -s “dd/mm/yyyy hh:mm:ss”</h1>
+
+<p>现在我们知道了如何设置系统和硬件的时间. 但问题是如果这两个时间都不准确了怎么办? 那么我们就需要在互联网上找到一个可以提供我们准确时间的服务器然后通过一种协议来同步我们的系统时间,那么这个协议就是NTP了. 注意接下去我们所要说的同步就都是指系统时间和网络服务器之间的同步了</p>
+
+<ol>
+  <li>设置NTP Server前的准备</li>
+</ol>
+
+<p>其实这个标题应该改为设置”NTP Relay Server”前的准备更加合适. 因为不论我们的计算机配置多好运行时间久了都会产生误差,所以不足以给互联网上的其他服务器做NTP Server. 真正能够精确地测算时间的还是原子钟. 但由于原子钟十分的昂贵,只有少部分组织拥有, 他们连接到计算机之后就成了一台真正的NTP Server. 而我们所要做的就是连接到这些服务器上同步我们系统的时间,然后把我们自己的服务器做成NTP Relay Server再给互联网或者是局域网内的用户提供同步服务</p>
+
+<p>好了,前面讲了一大堆理论,现在我们来动手实践一下吧. 架设一个NTP Relay Server其实非常简单,我们先把需要的RPM包装上
+是否已经安装了NTP包可以用这条命令来确定：</p>
+
+<p>[root@NTPser ~]# rpm -qa | grep ntp
+ntp-4.2.2p1-9.el5_4.1
+chkfontpath-1.10.1-1.1
+出现以上代码则表示已安装NTP包，否则用下面方法安装：
+代码:</p>
+
+<h1 id="rpm--ivh-ntp-422p1-5el5rpm">rpm -ivh ntp-4.2.2p1-5.el5.rpm</h1>
+<p>那么第一步我们就要找到在互联网上给我们提供同步服务的NTP Server</p>
+
+<p>http://www.pool.ntp.org是NTP的官方网站,在这上面我们可以找到离我们城市最近的NTP Server. NTP建议我们为了保障时间的准确性,最少找两个个NTP Server
+那么比如在英国的话就可以选择下面两个服务器
+0.uk.pool.ntp.org
+1.uk.pool.ntp.org</p>
+
+<p>它的一般格式都是number.country.pool.ntp.org</p>
+
+<p>第二步要做的就是在打开NTP服务器之前先和这些服务器做一个同步,使得我们机器的时间尽量接近标准时间. 
+这里我们可以用ntpdate命令手动更新时间
+代码:</p>
+<h1 id="ntpdate-0ukpoolntporg">ntpdate 0.uk.pool.ntp.org</h1>
+<p>6 Jul 01:21:49 ntpdate[4528]: step time server 213.222.193.35 offset -38908.575181 sec</p>
+<h1 id="ntpdate-0poolntporg">ntpdate 0.pool.ntp.org</h1>
+<p>6 Jul 01:21:56 ntpdate[4530]: adjust time server 213.222.193.35 offset -0.000065 sec
+假如你的时间差的很离谱的话第一次会看到调整的幅度比较大,所以保险起见可以运行两次. 那么为什么在打开NTP服务之前先要手动运行同步呢?</p>
+<ol>
+  <li>因为根据NTP的设置,如果你的系统时间比正确时间要快的话那么NTP是不会帮你调整的,所以要么你把时间设置回去,要么先做一个手动同步</li>
+  <li>
+    <p>当你的时间设置和NTP服务器的时间相差很大的时候,NTP会花上较长一段时间进行调整.所以手动同步可以减少这段时间</p>
+  </li>
+  <li>配置和运行NTP Server</li>
+</ol>
+
+<p>现在我们就来创建NTP的配置文件了, 它就是/etc/ntp.conf. 我们只需要加入上面的NTP Server和一个driftfile就可以了
+代码:</p>
+<h1 id="vi-etcntpconf">vi /etc/ntp.conf</h1>
+
+<p>server 210.72.145.44     #这是中国国家授时中心的IP
+server 0.uk.pool.ntp.org
+server 1.uk.pool.ntp.org</p>
+
+<p>fudge 127.127.1.0 stratum 0  stratum  这行是时间服务器的层次。设为0则为顶级，如果要向别的NTP服务器更新时间，请不要把它设为0</p>
+
+<p>driftfile /var/lib/ntp/ntp.drift  非常的简单. 接下来我们就启动NTP Server,并且设置其在开机后自动运行
+代码:</p>
+<h1 id="etcinitdntpd-start">/etc/init.d/ntpd start</h1>
+<h1 id="chkconfig-level-35-ntpd-on">chkconfig –level 35 ntpd on</h1>
+
+<ol>
+  <li>查看NTP服务的运行状况</li>
+</ol>
+
+<p>现在我们已经启动了NTP的服务,但是我们的系统时间到底和服务器同步了没有呢? 为此NTP提供了一个很好的查看工具: ntpq (NTP query)</p>
+
+<p>我建议大家在打开NTP服务器后就可以运行ntpq命令来监测服务器的运行.这里我们可以使用watch命令来查看一段时间内服务器各项数值的变化
+代码:</p>
+<h1 id="watch-ntpq--p">watch ntpq -p</h1>
+<p>Every 2.0s: ntpq -p                                  Sat Jul  7 00:41:45 2007</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code> remote           refid      st t when poll reach   delay   offset  jitter =========================================================== +193.60.199.75   193.62.22.98     2 u   52   64  377    8.578   10.203 289.032 *mozart.musicbox 192.5.41.41      2 u   54   64  377   19.301  -60.218 292.411
+</code></pre></div></div>
+
+<p>现在我就来解释一下其中的含义</p>
+
+<p>remote: 它指的就是本地机器所连接的远程NTP服务器
+      refid: 它指的是给远程服务器(e.g. 193.60.199.75)提供时间同步的服务器
+          st: 远程服务器的层级别（stratum）. 由于NTP是层型结构,有顶端的服务器,多层的Relay Server再到客户端. 所以服务器从高到低级别可以设定为1-16. 为了减缓负荷和网络堵塞,原则上应该避免直接连接到级别为1的服务器的.
+            t: 这个…..我也不知道啥意思^_^
+    when: 我个人把它理解为一个计时器用来告诉我们还有多久本地机器就需要和远程服务器进行一次时间同步
+       poll: 本地机和远程服务器多少时间进行一次同步(单位为秒). 在一开始运行NTP的时候这个poll值会比较小,那样和服务器同步的频率也就增加了,可以尽快调整到正确的时间范围.之后poll值会逐渐增大,同步的频率也就会相应减小
+    reach: 这是一个八进制值,用来测试能否和服务器连接.每成功连接一次它的值就会增加
+    delay: 从本地机发送同步要求到服务器的round trip time
+    offset: 这是个最关键的值, 它告诉了我们本地机和服务器之间的时间差别. offset越接近于0,我们就和服务器的时间越接近
+     jitter: 这是一个用来做统计的值. 它统计了在特定个连续的连接数里offset的分布情况. 简单地说这个数值的绝对值越小我们和服务器的时间就越精确</p>
+
+<p>那么大家细心的话就会发现两个问题: 第一我们连接的是0.uk.pool.ntp.org为什么和remote server不一样? 第二那个最前面的+和*都是什么意思呢?</p>
+
+<p>第一个问题不难理解,因为NTP提供给我们的是一个cluster server所以每次连接的得到的服务器都有可能是不一样.同样这也告诉我们了在指定NTP Server的时候应该使用hostname而不是IP</p>
+
+<p>第二个问题和第一个相关,既然有这么多的服务器就是为了在发生问题的时候其他的服务器还可以正常地给我们提供服务.那么如何知道这些服务器的状态呢? 这就是第一个记号会告诉我们的信息</p>
+
+<ul>
+  <li>它告诉我们远端的服务器已经被确认为我们的主NTP Server,我们系统的时间将由这台机器所提供</li>
+  <li>它将作为辅助的NTP Server和带有<em>号的服务器一起为我们提供同步服务. 当</em>号服务器不可用时它就可以接管
+－ 远程服务器被clustering algorithm认为是不合格的NTP Server
+x 远程服务器不可用</li>
+</ul>
+
+<p>了解这些之后我们就可以实时监测我们系统的时间同步状况了</p>
+
+<ol>
+  <li>NTP安全设置</li>
+</ol>
+
+<p>运行一个NTP Server不需要占用很多的系统资源,所以也不用专门配置独立的服务器,就可以给许多client提供时间同步服务, 但是一些基本的安全设置还是很有必要的
+那么这里一个很简单的思路就是第一我们只允许局域网内一部分的用户连接到我们的服务器. 第二个就是这些client不能修改我们服务器上的时间</p>
+
+<p>关于权限设定部分 
+权限的设定主要以 restrict 这个参数来设定，主要的语法为： 
+restrict IP地址 mask 子网掩码 参数 
+其中 IP 可以是IP地址，也可以是 default ，default 就是指所有的IP 
+参数有以下几个： 
+ignore　：关闭所有的 NTP 联机服务 
+nomodify：客户端不能更改服务端的时间参数，但是客户端可以通过服务端进行网络校时。 
+notrust ：客户端除非通过认证，否则该客户端来源将被视为不信任子网 
+noquery ：不提供客户端的时间查询 
+注意：如果参数没有设定，那就表示该 IP (或子网)没有任何限制！</p>
+
+<p>在/etc/ntp.conf文件中我们可以用restrict关键字来配置上面的要求</p>
+
+<p>首先我们对于默认的client拒绝所有的操作
+代码:
+restrict default kod nomodify notrap nopeer noquery</p>
+
+<p>然后允许本机地址一切的操作
+代码:
+restrict 127.0.0.1</p>
+
+<p>最后我们允许局域网内所有client连接到这台服务器同步时间.但是拒绝让他们修改服务器上的时间
+代码:
+restrict 192.168.1.0 mask 255.255.255.0 nomodify</p>
+
+<p>把这三条加入到/etc/ntp.conf中就完成了我们的简单配置. NTP还可以用key来做authentication,这里就不详细介绍了</p>
+
+<ol>
+  <li>NTP client的设置</li>
+</ol>
+
+<p>做到这里我们已经有了一台自己的Relay Server.如果我们想让局域网内的其他client都进行时间同步的话那么我们就都应该照样再搭建一台Relay Server,然后把所有的client都指向这两台服务器(注意不要把所有的client都指向Internet上的服务器). 只要在client的/etc/ntp.conf加上这你自己的服务器就可以了
+代码:
+server ntp1.leonard.com
+server ntp2.leonard.com</p>
+
+<p>LINUX客户端使用
+ntpdate 172.30.218.114 
+来向NTP服务器同步自己的时间
+其它LINUX如果仅作为只客户端的话,则不能启动ntpd服务!否则无法运行ntpdata 服务器地址 来同步时间
+之后可以使用cron或修改crontab文件定期向NTP服务器更新时间,并用</p>
+<h1 id="hwclock-systohc-1">hwclock –systohc</h1>
+<p>将系统时间设置为硬件时间</p>
+
+<ol>
+  <li>
+    <p>一些补充和拾遗（挺重要）</p>
+  </li>
+  <li>
+    <p>配置文件中的driftfile是什么?
+我们每一个system clock的频率都有小小的误差,这个就是为什么机器运行一段时间后会不精确. NTP会自动来监测我们时钟的误差值并予以调整.但问题是这是一个冗长的过程,所以它会把记录下来的误差先写入driftfile.这样即使你重新开机以后之前的计算结果也就不会丢失了</p>
+  </li>
+  <li>
+    <p>如何同步硬件时钟?
+NTP一般只会同步system clock. 但是如果我们也要同步RTC(hwclock)的话那么只需要把下面的选项打开就可以了
+代码:</p>
+    <h1 id="vi-etcsysconfigntpd">vi /etc/sysconfig/ntpd</h1>
+    <p>SYNC_HWCLOCK=yes</p>
+  </li>
+</ol>
+
+<p>3、利用crontab让LINUX NTP定时更新时间
+注：让linux运行ntpdate更新时间时，linux不能开启NTP服务，否则会提示端口被占用：如下
+[root@ESXI ~]# ntpdate 1.rhel.pool.ntp.org                               <br />
+20 May 09:34:14 ntpdate[6747]: the NTP socket is in use, exiting</p>
+
+<p>crontab文件配置简要说明
+命令格式的前一部分是对时间的设定，后面一部分是要执行的命令。时间的设定我们有一定的约定，前面五个<em>号代表五个数字，数字的取值范围和含义如下：
+分钟　(0-59)
+小時　(0-23)
+日期　(1-31)
+月份　(1-12)
+星期　(0-6)//0代表星期天
+除了数字还有几个个特殊的符号就是“</em>”、“/”和“-”、“,”，“<em>”代表所有的取值范围内的数字，“/”代表每的意思,“</em>/5”表示每5个单位，“-”代表从某个数字到某个数字,“,”分开几个离散的数字。以下举几个例子说明问题：
+每天早上6点：
+0 6 * * *  command
+每两个小时：
+0 */2 * * *  command
+晚上11点到早上8点之间每两个小时，早上八点：
+0 23-7/2,8 * * * command
+每个月的4号和每个礼拜的礼拜一到礼拜三的早上11点：
+0 11 4 * 1-3 command 
+1月1日早上4点：
+0 4 1 1 * command</p>
+
+<p>3.3、设置开机自动启动服务
+运行setup或其它服务设置工具，将crond服务勾选上 
+chkconfig –level 2345 crond on  定义在这几个系统运行级别上启用crond (系统安装完默认就是这个设置)
+<strong>__</strong><strong>__</strong><strong>__</strong><strong>__</strong><strong>__</strong><strong>__</strong><strong>__</strong></p>
+
+<p>10.NTP客户端的设置</p>
+
+<p>一、LINUX做为客户端自动同步时间
+如果想定时进行时间校准，可以使用crond服务来定时执行。
+编辑 /etc/crontab 文件
+加入下面一行：</p>
+
+<p>30 8 * * * root /usr/sbin/ntpdate 192.168.0.1; /sbin/hwclock -w  #192.168.0.1是NTP服务器的IP地址
+然后重启crond服务
+service crond restart 
+这样，每天 8:30 Linux 系统就会自动的进行网络时间校准。</p>
+
+<p>二、WINDOWS 需要打开windows time服务和RPC的二个服务
+如果在打开windows time 服务，时报 错误1058，进行下面操作 
+1.运行 cmd 进入命令行，然后键入
+w32tm /register  进行注册
+正确的响应为：W32Time 成功注册。</p>
+
+<p>2.如果上一步正确，用 net start “windows time” 或 net start w32time 启动服务。</p>
+
+<p>11.其它造成无法成功更新的原因：
+1、客户端的日期必须要设置正确，不能超出正常时间24小时，不然会因为安全原因被拒绝更新。其次客户端的时区必须要设置好，以确保不会更新成其它时区的时间。
+2、fudge 127.127.1.0 stratum 10 如果是LINUX做为NTP服务器，stratum(层级)的值不能太大，如果要向上级NTP更新可以设成2
+3、LINUX的NTP服务器必须记得将从上级NTP更新的时间从系统时间写到硬件里去 hwclock –systohc 
+     NTP一般只会同步system clock. 但是如果我们也要同步RTC(hwclock)的话那么只需要把下面的选项打开就可以了
+      代码:
+      # vi /etc/sysconfig/ntpd
+      SYNC_HWCLOCK=yes
+4、Linux如果开启了NTP服务，则不能手动运行ntpdate更新时间（会报端口被占用），它只能根据/etc/ntp.conf 里server 字段后的服务器地址按一定时间间隔自动向上级NTP服务器更新时间。可以运行命令 ntpstat 查看每次更新间隔如：
+[root@ESXI ~]# ntpstat
+synchronised to NTP server (210.72.145.44) at stratum 2    #本NTP服务器层次为2，已向210.72.145.44 NTP同步过
+   time correct to within 93 ms                                               #时间校正到相差93ms之内
+   polling server every 1024 s                                                 #每1024秒会向上级NTP轮询更新一次时间</p>
+
+<p>网络时间协议（NTP）是一种通过因特网服务于计算机时钟的时间同步协议。它提供了一种同步时间机制，能在庞大而复杂多样的因特网中用光速调整时间分配。它使用的是可返回时间设计，分布式子网内的时间服务器，能自我组织操作、分层管理配置，经过有线或无线方式同步子网内的逻辑时钟达到国家标准时间。此外，通过本地路由选择运算法则及时间后台程序，服务器可以重新分配标准时间。
+NTP 的设计带来了三种产品——时钟偏移、时间延迟及差量，它们都与指定参考时钟相关联。时钟偏移表示调整本地时钟与参考时钟相一致而产生的偏差数；时间延迟表示在指定时间内发送消息到达参考时钟的延时时间；差量表示了相对于参考时钟本地时钟的最大偏差错误。因为大多数主机时间服务器通过其它对等时间服务器达到同步，所以这三种产品中的每一种都有两个组成部分：其一是由对等决定的部分，这部分是相对于原始标准时间的参考来源而言；其二是由主机衡量的部分，这部分是相对于对等而言。每一部分在协议中都是独立维持的，从而可以使错误控制和子网本身的管理操作变得容易。它们不仅提供了偏移和延迟的精密测量，而且提供了明确的最大错误范围，这样用户接口不但可以决定时间，而且可以决定时间的准确度。
+NTP 源于时间协议和 ICMP 时间标志消息，但其设计更强调精确度和健壮性两个方面，即使是在有多路网关、延迟差量及不可靠网络上使用时。当前使用的最新版是 NTPv3 ，它与以前的版本兼容。</p>
+
+<p>https://www.pool.ntp.org/en/</p>
+
+<p>在ROS官方安装项目中虽然没有包括NTP，但为了缩小PC间通信中的ROS Time的误
+差，下面我们设置NTP4。设置方法是安装chrony之后用ntpdate命令指定ntp服务器即
+可。这样一来会表示服务器和当前计算机之间的时间误差，进而会调到服务器的时间。这
+就是通过给不同的PC指定相同的NTP服务器，将时间误差缩短到最小的方法。</p>
+
+<p>$ sudo apt-get install -y chrony ntpdate
+$ sudo ntpdate -q ntp.ubuntu.com</p>
+
+<p>在处理Web系统数据时，由于几台服务器上的时间不一致，导致数据时间的不准确，出现了错乱。在更严格的服务上，因为服务器时间不准确或是不一致，很有可能会带来安全或是功能的隐患。因而，有必要采取措施保证网络中的服务器上的时间同步。这里，我们先看看使用NTP服务如何实现同步时间。</p>
+
+<p>Network Time Protocol(NTP)，即网络时间协议，它的目的是在国际互联网上传递统一、标准的时间。NTP服务器将本地系统的时钟与一个公共的NTP服务器同步然后作为时间主机提供服务，使本地网络的所有客户端能同步时钟。</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>   NTP服务的安装、配置、使用这里就不再细说了（不了解的可以google下）。我们知道在NTP服务器启动后，NTP客户端可以通过手动执行“ntpdate 服务器IP”来同步时间，或是通过配置NTP客户端定时进行时间同步。（当然，需要保证NTP服务器和客户端的之间没有防火墙Block它们的通信。）
+</code></pre></div></div>
+
+<p>下面我们接着来看，如何在我们的环境中拥有上百台机器，为了同步时间，不想手动的在每台机器上去运行ntpdate同步命令或是配置，你要知道几百台机器，你登陆再运行一次命令，也是需要耗费你很多的时间。当然，你要是部署每个服务器的时候就已经建好了NTP服务器，那还是可以那时候就进行NTP客户端的配置。但我们以前没这么做，那只有现在从头开始了。手工活太累太麻烦了，我们做个脚本，在NTP服务器上运行一次，就让所有服务器都同步一次时间。</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>   我们就来看看如何来使用最简单的方式来达到这个功能。Linux的ssh提供了一个远程执行命令的方式，现在就来用它来让每个服务器向NTP服务器来同步一次时间。ssh访问有两种方式：密码方式、公钥方式。使用秘钥方式，我们需要保存所有服务器的ip地址、用户、密码。你如果觉得不安全，那可以建立密钥方式访问，这时需要一些手工配置，当配置好使用公钥方式后，就可以不输入密码访问对方。
+</code></pre></div></div>
+
+<p>那就来看看脚本吧，脚本1是使用公钥方式进行访问的，脚本2是使用密码访问的，其中服务器信息都保存在/tmp/servers.txt文件中。</p>
+
+<p>脚本1：</p>
+
+<p>#!/bin/sh</p>
+
+<p>#in the servers.txt</p>
+
+<p>#username1  server1</p>
+
+<p>SERVERS=”/tmp/servers.txt”</p>
+
+<p>CMD=”ntpdate  ntp_server”</p>
+
+<p>while read line; do</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>     set — $line
+
+     username=$1
+
+     server=$2
+
+    ssh $username@$server $CMD
+</code></pre></div></div>
+
+<p>done &lt; $SERVERS</p>
+
+<p>脚本2：</p>
+
+<p>#!/usr/bin/expect</p>
+
+<p>set SERVERS “/tmp/servers.txt”</p>
+
+<p>set CMD “ntpdate ntp_server”</p>
+
+<p>set fp [open $SERVERS]</p>
+
+<p>while {-1 != [gets $fp line]} {</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    set ln [split $line " "]
+
+    set username [lindex $ln 0]
+
+    set passwd [lindex $ln 1]
+
+    set server [lindex $ln 2]
+
+    spawn ssh $username@$server $CMD;
+
+    expect “*password: “;
+
+    send “$passwd ”;
+
+    interact;
+</code></pre></div></div>
+
+<p>}</p>
+:ET

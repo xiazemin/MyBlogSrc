@@ -1,0 +1,89 @@
+---
+title: Go系统可能遇到的锁问题
+layout: post
+category: golang
+author: 夏泽民
+---
+https://github.com/gyuho/learn
+
+底层依赖 sync.Pool 的场景
+
+有一些开源库，为了优化性能，使用了官方提供的 sync.Pool，比如我们使用的 https://github.com/valyala/fasttemplate 这个库，每当你执行下面这样的代码的时候：
+
+template := "http://\{\{host\}\}/?q=\{\{query\}\}&foo=\{\{bar\}\}\{\{bar\}\}"     t := fasttemplate.New(template, "\{\{", "\}\}")     s := t.ExecuteString(map[string]interface{}{         "host":  "google.com",         "query": url.QueryEscape("hello=world"),         "bar":   "foobar",     })     fmt.Printf("%s", s) 复制代码
+内部都会生成一个 fasttemplate.Template 对象，并带有一个 byteBufferPool 字段：
+
+type Template struct {     template string     startTag string     endTag   string      texts          [][]byte     tags           []string     byteBufferPool bytebufferpool.Pool   ==== 就是这个字段 } 复制代码
+byteBufferPool 底层就是经过封装的 sync.Pool：
+
+type Pool struct {     calls       [steps]uint64     calibrating uint64      defaultSize uint64     maxSize     uint64      pool sync.Pool } 复制代码
+这种设计会带来一个问题，如果使用方每次请求都 New 一个 Template 对象。并进行求值，比如我们最初的用法，在每次拿到了用户的请求之后，都会用参数填入到模板：
+
+func fromTplToStr(tpl string, params map[string]interface{}) string {   tplVar := fasttemplate.New(tpl, `\{\{`, `\}\}`)   res := tplVar.ExecuteString(params)   return res } 复制代码
+在模板求值的时候：
+
+func (t *Template) ExecuteFuncString(f TagFunc) string {     bb := t.byteBufferPool.Get()     if _, err := t.ExecuteFunc(bb, f); err != nil {         panic(fmt.Sprintf("unexpected error: %s", err))     }     s := string(bb.Bytes())     bb.Reset()     t.byteBufferPool.Put(bb)     return s } 复制代码
+会对该 Template 对象的 byteBufferPool 进行 Get，在使用完之后，把 ByteBuffer Reset 再放回到对象池中。但问题在于，我们的 Template 对象本身并没有进行复用，所以这里的 byteBufferPool 本身的作用其实并没有发挥出来。
+<!-- more -->
+相反的，因为每一个请求都需要新生成一
+
+
+
+个 sync.Pool，在高并发场景下，执行时会卡在 bb := t.byteBufferPool.Get() 这一句上，通过压测可以比较快地发现问题，达到一定 QPS 压力时，会有大量的 Goroutine 堆积，比如下面有 18910 个 G 堆积在抢锁代码上：
+
+goroutine profile: total 18910 18903 @ 0x102f20b 0x102f2b3 0x103fa4c 0x103f77d 0x10714df 0x1071d8f 0x1071d26 0x1071a5f 0x12feeb8 0x13005f0 0x13007c3 0x130107b 0x105c931 #   0x103f77c   sync.runtime_SemacquireMutex+0x3c                               /usr/local/go/src/runtime/sema.go:71 #   0x10714de   sync.(*Mutex).Lock+0xfe                                     /usr/local/go/src/sync/mutex.go:134 #   0x1071d8e   sync.(*Pool).pinSlow+0x3e                                   /usr/local/go/src/sync/pool.go:198 #   0x1071d25   sync.(*Pool).pin+0x55                                       /usr/local/go/src/sync/pool.go:191 #   0x1071a5e   sync.(*Pool).Get+0x2e                                       /usr/local/go/src/sync/pool.go:128 #   0x12feeb7   github.com/valyala/fasttemplate/vendor/github.com/valyala/bytebufferpool.(*Pool).Get+0x37   /Users/xargin/go/src/github.com/valyala/fasttemplate/vendor/github.com/valyala/bytebufferpool/pool.go:49 #   0x13005ef   github.com/valyala/fasttemplate.(*Template).ExecuteFuncString+0x3f              /Users/xargin/go/src/github.com/valyala/fasttemplate/template.go:278 #   0x13007c2   github.com/valyala/fasttemplate.(*Template).ExecuteString+0x52                  /Users/xargin/go/src/github.com/valyala/fasttemplate/template.go:299 #   0x130107a   main.loop.func1+0x3a                                        /Users/xargin/test/go/http/httptest.go:22 复制代码
+有大量的 Goroutine 会阻塞在获取锁上，为什么呢?继续看看 sync.Pool 的 Get 流程：
+
+func (p *Pool) Get() interface{} {     if race.Enabled {         race.Disable()     }     l := p.pin()     x := l.private     l.private = nil     runtime_procUnpin() 复制代码
+然后是 pin：
+
+func (p *Pool) pin() *poolLocal {     pid := runtime_procPin()          s := atomic.LoadUintptr(&p.localSize) // load-acquire     l := p.local                          // load-consume     if uintptr(pid) < s {         return indexLocal(l, pid)     }     return p.pinSlow() } 复制代码
+因为每一个对象的 sync.Pool 都是空的，所以 pin 的流程一定会走到 p.pinSlow：
+
+func (p *Pool) pinSlow() *poolLocal {     runtime_procUnpin()     allPoolsMu.Lock()     defer allPoolsMu.Unlock()     pid := runtime_procPin() 复制代码
+而 pinSlow 中会用 allPoolsMu 来加锁，这个 allPoolsMu 主要是为了保护 allPools 变量：
+
+var (     allPoolsMu Mutex     allPools   []*Pool ) 复制代码
+在加了锁的情况下，会把用户新生成的 sync.Pool 对象 append 到 allPools 中：
+
+if p.local == nil {         allPools = append(allPools, p)     } 复制代码
+标准库的 sync.Pool 之所以要维护这么一个 allPools 意图也比较容易推测，主要是为了 GC 的时候对 pool 进行清理，这也就是为什么说使用 sync.Pool 做对象池时，其中的对象活不过一个 GC 周期的原因。sync.Pool 本身也是为了解决大量生成临时对象对 GC 造成的压力问题。
+
+说完了流程，问题也就比较明显了，每一个用户请求最终都需要去抢一把全局锁，高并发场景下全局锁是大忌。但是这个全局锁是因为开源库间接带来的全局锁问题，通过看自己的代码并不是那么容易发现。
+
+知道了问题，改进方案其实也还好实现，第一是可以修改开源库，将 template 的 sync.Pool 作为全局对象来引用，这样大部分 pool.Get 不会走到 pinSlow 流程。第二是对 fasttemplate.Template 对象进行复用，道理也是一样的，就不会有那么多的 sync.Pool 对象生成了。但前面也提到了，这个是个间接问题，如果开发工作繁忙，不太可能所有的依赖库把代码全看完之后再使用，这种情况下怎么避免线上的故障呢?
+
+压测尽量早做呗。
+
+metrics 上报和 log 锁
+
+这两个本质都是一样的问题，就放在一起了。
+
+公司之前 metrics 上报 client 都是基于 udp 的，大多数做的简单粗暴，就是一个 client，用户传什么就写什么，最终一定会走到：
+
+func (c *UDPConn) WriteToUDP(b []byte, addr *UDPAddr) (int, error) {     ---------- 刨去无用细节     n, err := c.writeTo(b, addr)     ---------- 刨去无用细节     return n, err } 复制代码
+或者是：
+
+func (c *UDPConn) WriteTo(b []byte, addr Addr) (int, error) {      ---------- 刨去无用细节     n, err := c.writeTo(b, a)     ---------- 刨去无用细节     return n, err } 复制代码
+调用的是：
+
+func (c *UDPConn) writeTo(b []byte, addr *UDPAddr) (int, error) {     ---------- 刨去无用细节     return c.fd.writeTo(b, sa) } 复制代码
+然后：
+
+func (fd *netFD) writeTo(p []byte, sa syscall.Sockaddr) (n int, err error) {     n, err = fd.pfd.WriteTo(p, sa)     runtime.KeepAlive(fd)     return n, wrapSyscallError("sendto", err) } 复制代码
+然后是：
+
+func (fd *FD) WriteTo(p []byte, sa syscall.Sockaddr) (int, error) {     if err := fd.writeLock(); err != nil {  =========> 重点在这里         return 0, err     }     defer fd.writeUnlock()      for {         err := syscall.Sendto(fd.Sysfd, p, 0, sa)         if err == syscall.EAGAIN && fd.pd.pollable() {             if err = fd.pd.waitWrite(fd.isFile); err == nil {                 continue             }         }         if err != nil {             return 0, err         }         return len(p), nil     } } 复制代码
+本质上，就是在高成本的网络操作上套了一把大的写锁，同样在高并发场景下会导致大量的锁冲突，进而导致大量的 Goroutine 堆积和接口延迟。
+
+同样的，知道了问题，解决办法也很简单。再看看日志相关的。因为公司目前大部分日志都是直接向文件系统写，本质上同一个时刻操作的是同一个文件，最终都会走到：
+
+func (f *File) Write(b []byte) (n int, err error) {     n, e := f.write(b)     return n, err }  func (f *File) write(b []byte) (n int, err error) {     n, err = f.pfd.Write(b)     runtime.KeepAlive(f)     return n, err } 复制代码
+然后：
+
+func (fd *FD) Write(p []byte) (int, error) {     if err := fd.writeLock(); err != nil { =========> 又是 writeLock         return 0, err     }     defer fd.writeUnlock()     if err := fd.pd.prepareWrite(fd.isFile); err != nil {         return 0, err     }     var nn int     for {         ----- 略去不相关内容         n, err := syscall.Write(fd.Sysfd, p[nn:max])         ----- 略去无用内容     } } 复制代码
+和 UDP 网络 FD 一样有 writeLock，在系统打日志打得很多的情况下，这个 writeLock 会导致和 metrics 上报一样的问题。
+
+总结
+
+上面说的几个问题实际上本质都是并发场景下的 lock contention 问题，全局写锁是高并发场景下的性能杀手，一旦大量的 Goroutine 阻塞在写锁上，会导致系统的延迟飚升，直至接口超时。在开发系统时，涉及到 sync.Pool、单个 FD 的信息上报、以及写日志的场景时，应该多加注意。早做压测保平安

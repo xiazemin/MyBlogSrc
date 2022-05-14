@@ -1,0 +1,178 @@
+I"V:<p>https://www.docker.com/products/container-runtime
+19.03.2
+https://docs.docker.com/engine/release-notes/
+<!-- more -->
+Docker新特性如下的几个点：
+多阶段构建
+资源管理
+Docker secrets
+swarm mode
+健康检查
+首先介绍Docker新推出的多阶段构建；其次介绍一下Docker在资源管理方面新加的一些命令，这些命令可以方便开发者来做资源管理；还有就是介绍一下Docker secret跟之前那些密码管理的方式有什么不同；还有就是swarm mode里面的一些新特性；最后再介绍一下swarm mode下面的健康检查。</p>
+
+<p>首先看一下多阶段构建，构建镜像了解Docker的同学应该比较熟悉。现在想象一个在Java语言下构建镜像的场景，这个场景下开发者提交代码，然后一个构建模块，之后就去拉取GitHub或者其他源代码仓库的代码，最后执行构建。像对这种静态语言的构建而言，其实过程会稍微麻烦一点，比如说要有编译器对它进行编译，然后跑单元测试，然后打包，打包到最后就生成了War包或者Jar包，最后推到Registry中去。这个过程有一个问题就是如果把所有的内容都放在一个Dockerfile里面，源代码就会包含在镜像里面，所以这里有源代码泄露的风险。还有就是具体的生产环境其实是不需要那些编译器源代码以及测试框架或者打包框架的，最终可能只需要一个简单的运行环境就可以了，这样会导致镜像变得特别大，所以这个方案不是特别好</p>
+
+<p>17.05版本，这个版本中引入了multi-stage build，也就是多阶段构建。它的思路就是把刚刚提到的在构建镜像的过程拆成两个阶段，这两个阶段都会产生镜像，第一个阶段就是去执行编译、测试然后打包，得到一个镜像，对于第一阶段得到的镜像，并不会使用这个镜像的全部内容；在第二阶段，可以把第一个阶段的Jar包拷贝到第二个阶段，这样的好处就是没有源代码泄露的风险，因为最终打包到生产环境的只有最终编译的字节码文件。同时整个镜像也变得很小，因为它里面没有包含源代码也没有包含一些编译器的软件、测试框架和打包工具，所以这个方案是比较完美的。</p>
+
+<p>下图展现了在Docker 1.13中引入的一些资源管理命令，比如docker system df，它可以查看整个容器集群里面资源的使用情况，包括镜像的使用情况以及数据卷的使用情况。还有就是以前要删除镜像或者删除容器可能都比较麻烦，需要指定镜像ID或容器ID，现在它提供了docker system prune的命令，可以很方便地一键清理所有没有被使用或者没有被引用的资源，这些资源包括所有停止的容器，还有就是所有没有被引用的镜像，以及数据卷和网络资源对象。没有被引用的镜像是什么意思呢？这里用了dangling这个英文单词，稍后会具体介绍。还有就是在一键清理这些资源的同时，可以针对某个特定的资源进行清理，也就是第三条命令，可以清理所有没有被使用的容器镜像、网络或者数据卷。</p>
+
+<p>DockerCon2017已经结束了，从去年的版本到现在，Docker产生了很多的变化。Docker的开发者们一直强调他们希望Docker的体验越简单越好。观察下最近几个月Docker的新特性，你会发现所言非虚，DockerCon2017大会也向我们展示了这一点。下面介绍下Docker最近几个月发布的新特性</p>
+
+<p>多阶段构建
+构建一个镜像一般需要多个阶段。</p>
+
+<p>编译你的应用
+然后跑测试
+当测试通过时，你将你的应用打包成可部署的软件包
+最后你把软件包添加到镜像里面
+你可以将这些步骤都放进一个Dockerfile中，但是这会导致镜像膨胀，加入了很多最终产品不需要的内容。例如编译和构建的框架，Docker镜像存储需要的空间也会变得很大。
+一个解决方法是在Docker外面编译测试打包应用程序，或者使用多个Dockerfile。你可以用一个Dockerfile来编译测试打包你的应用，用另外一个Dockerfile来添加之前打好的软件包，并做最终的交付。
+然而，整个构建的过程通过一个脚本捆绑在一起，而并不是以Docker的方式来执行构建。
+Docker对于添加新的特性或者语法到Dockerfile中是谨慎的，当他们最终决定着手通过一个简单而优雅的方式来解决这个构建的问题。通过引入多阶段构建(multi-stage builds)，使得通过使用多个FROM指令来定义多个构建的阶段成为可能。示例如下</p>
+
+<h1 id="first-stage-to-build-the-application">First stage to build the application</h1>
+<p>FROM maven:3.5.0-jdk-8-alpine AS build-env # build-env构建阶段的开始
+ADD ./pom.xml pom.xml
+ADD ./src src/
+RUN mvn clean package # build-env 构建阶段在此结束</p>
+
+<h1 id="final-stage-to-define-our-minimal-runtime">Final stage to define our minimal runtime</h1>
+<p>FROM FROM openjdk:8-jre  # 新的构建阶段的开始
+COPY –from=build-env target/app.jar app.jar
+RUN java -jar app.jar
+每一次使用FROM指令时，相当于定义了一个新的构建阶段，一直到下一个FROM指令之前或者到文件的结束为止，执行的指令均属于该构建阶段。通过AS指令来给这一构建阶段命名，同时指定了该阶段使用的基础镜像。在接下来的构建阶段，可以使用COPY –from=<stage>指令来拷贝之前构建阶段的软件制成品到当前构建阶段，继续进行构建，直到最后一个构建阶段生成的镜像，才是最终的交付镜像。通过对最终构建阶段的基础镜像选择，可以只让交付镜像包含最小的运行时和需要交付软件制成品，使得镜像变小，上传下载更加迅速。
+该特性是Docker 17.05版本的一部分，敬请期待，待版本稳定后，容器服务也会支持该特性</stage></p>
+
+<p>在FROM指令中使用参数指定镜像版本
+在Dockerfile中使用参数，并不是一件新鲜的事物，我们已经可以使用ARG指令来传递参数给构建过程，这些参数的值在Dockerfile中是可变的，经常被用来传递版本号，密码，例如SSH的密钥等。现在通过参数来指定基础镜像的版本也成为了可能，示例如下：</p>
+
+<p>ARG GO_VERSION=1.8
+FROM golang:${GO_VERSION}
+ADD . /src
+WORKDIR /src
+RUN go build
+CMD [“/bin/app”]
+通过使用上面的Dockerfile，我们可以构建基于另外一个GO语言版本的镜像：</p>
+
+<p>$ docker build –arg=GO_VERSION=1.7 .
+清理Docker资源
+使用Docker的开发者经常会抱怨Docker占用了太多的存储空间，如果不定期清理，这确实是个问题。Docker增加了docker system子命令来检查磁盘的使用空间，同时清理无用的资源。
+下面的命令列出了磁盘使用情况：</p>
+
+<p>$ docker system df
+TYPE                TOTAL               ACTIVE              SIZE                RECLAIMABLE
+Images              7                   5                   1.247GB             769MB (61%)
+Containers          7                   2                   115.9MB             99.23MB (85%)
+Local Volumes       1                   1                   85.59MB             0B (0%)
+你可以使用prune来清理不再需要的资源：</p>
+
+<p>$ docker system prune
+WARNING! This will remove:
+    - all stopped containers
+    - all volumes not used by at least one container
+    - all networks not used by at least one container
+    - all dangling images
+Are you sure you want to continue? [y/N] y
+只清理特定子系统的资源也是支持的：</p>
+
+<p>$ docker image/container/volume/network prune
+指定端口时增加可读性
+由于指定端口的语法让人困惑，Docker的使用者经常在理解和定义一个容器发布的端口时有困难。当你在使用或者定义容器的端口时，可能的格式如下：</p>
+
+<p>ports:</p>
+<ul>
+  <li>3000</li>
+  <li>3000-3005</li>
+  <li>49100:22</li>
+  <li>9090-9091:8080-8081</li>
+  <li>127.0.0.1:8001:8080-8081</li>
+  <li>6060:7060/udp
+当使用客户端时，这些语法还比较容易理解，但是当你需要在一个compose模版中定义许多这样的端口时，可读性就会变得很差。为了解决这一问题，现在你可以使用一个更加详细的格式来定义端口：</li>
+</ul>
+
+<p>ports:</p>
+<ul>
+  <li>target: 6060 # 容器端口
+published: 7060 # 映射到主机暴露的端口
+protocol: udp   # 使用的协议
+指定数据卷时增加可读性
+跟端口一样，数据卷(volume)也有类似的语法：</li>
+</ul>
+
+<p>volumes:</p>
+<ul>
+  <li>/var/lib/mysql</li>
+  <li>/opt/data:/var/lib/mysql</li>
+  <li>./cache:/tmp/cached</li>
+  <li>datavolume:/var/lib/mysql</li>
+  <li>~/configs/etc/configs/:ro
+也增加了一个更加详细的语法来声明和指定数据卷(volume)：</li>
+</ul>
+
+<p>volumes:</p>
+<ul>
+  <li>type: bind
+source: ~/configs
+target: /etc/configs
+read_only: true</li>
+</ul>
+
+<ol>
+  <li>多阶段构建
+　　17.06 CE最大的特性是它的多阶段构建（multi-stage builds），它最初在四月的DockerCon被公布，现在已经达到了稳定版本。多阶段构建能从一个Dockerfile中构建出更加简洁、体积更小的Docker镜像。
+　　多阶段构建通过构建过渡镜像并产生输出。这样就能在一个过渡镜像中编译代码，在最终的镜像中只使用它的输出。例如，Java开发者通常使用Apache Maven来构建应用，但是运行应用却不需要Maven。多阶段构建能大幅度的减小镜像的体积：
+　　REPOSITORY TAG IMAGE ID CREATED SIZE
+　　来看一个能创建店铺首页的AtSea示例应用：
+　　</li>
+</ol>
+
+<p>　　AtSea使用了多阶段构建，并包含两个过渡阶段：用一个node.js基础镜像构建ReactJS应用，用一个Maven基础镜像将Sprint Boot应用编译成单个镜像。
+　　FROM node:latest AS storefront
+　　最终的镜像大小只有209M，其中不包含Maven或node.js。
+　　还有其他的一些构建器方面的优化，包括在FROM指令中使用构建时参数。
+　　2. 日志和指标
+　　指标
+　　目前通过一个daemon的API端点提供日志的支持。可以将docker的/metrics端点暴露给插件：
+　　$ docker plugin install –grant-all-permissions cpuguy83/docker-metrics-plugin-test:latest
+　　这个插件仅用于示范。它在主机的网络上运行了一个反向代理，能将请求转发给插件中的本地的指标套接字。在真实场景中，可能会将收集的指标数据发送给外部的服务，或者使它可以被一个服务如Prometheus访问并收集。
+　　注意尽管指标插件在非实验性的daemon中可以使用，指标标签（metrics label）仍应该被看作是实验性的，可能在Docker未来的版本中发生改动。
+　　日志驱动插件
+　　添加了对日志驱动器插件的支持。
+　　Service日志
+　　docker service logs从实验版本改进到了稳定版，你可以轻松地获取Swarm上运行的一个服务的完整日志。同时也添加了服务中单个任务日志的端点。
+　　3. 网络
+　　Service中节点本地的网络支持
+　　Docker支持很多的网络选择。在Docker 17.06 CE中，可以将服务追加到节点本地的网络（node-local networks）。这包括如Host、Macvlan，IPVlan，Bridge和本地作用域的插件。例如对于一个Macvlan网络，可以在worker节点上创建一个节点特定的网络配置，然后在manager节点上创建一个加入了这些配置的网络：
+　　[Wrk-node1]$ docker network create —config-only —subnet=10.1.0.0/16 local-config
+　　4. Swarm Mode
+　　Swarm mode添加了很多的新特性，这里是一部分：
+　　配置对象
+　　swarm mode的一个新的配置对象，允许安全地像传递密码一样传递配置信息：
+　　$ echo “This is a config” | docker config create test_config -
+　　证书轮换的优化
+　　Swarm mode中内置的公钥基础设施（PKI）系统使得可以安全地部署一个容器调度系统。Swarmz中的节点使用双边TLS来认证、授权和加密他们之间，以及和Swarm其他节点的通讯。因为这些都依赖于证书，所以经常轮换很重要。自从Swarm mode伴随Docker 1.12发布以来，已经能以一小时一次的频次来安排证书轮换。有了Docker CE 17.06，添加了立即强制证书轮换的一次性操作：
+　　docker swarm ca –rotate
+　　Swarm Mode事件
+　　docker events可以用来从Docker中获取实时的信息。在编写自动化和监控应用时很有用。但是直到Dcoker CE 17.06，都不支持swarm mode的事件。现在docker events将会返回服务、节点、网络和和secret的信息。
+　　专用的数据路线
+　　docker init中添加了新的–datapath-addr标签，可以把swarm mode的管理任务和应用传递的数据隔离开来。这能把集群从IO贪婪的应用中拯救出来。如你用这种方式初始化集群：
+　　docker swarm init —advertise-addr=eth0 —datapath-addr=eth1
+　　集群管理的流量（Raft、grpc和gossip）将会通过eth0，而服务将会彼此通过eth1来通讯。
+　　5. 桌面版本
+　　Docker for Mac和Docker for Windows添加了三个新特性：
+　　GUI中新增了重置Docker数据而不需要丢失所有的设置
+　　现在重置数据不会丢失设置。
+　　</p>
+
+<p>　　为主机添加一个实验性的DNS
+　　如果在Docker for Mac或者Docker for Windows上运行容器，并且想访问其他的容器，你可以使用一个新的实验性主机：docker.for.mac.localhost和docker.for.win.lcoalhost来访问开放的端口。例如：
+　　$ docker run -d -it -p 80:80 nginx
+　　用来认证注册表访问的登录证书
+　　可以在Docker for Mac和Docker for Windows中添加证书来访问注册表，而不仅仅是使用用户名和密码。这能让访问Docker Trusted Registery和开源的注册表和其他任何的注册应用快速而简单。
+　　6. 云版本
+　　Cloudstor卷插件可以在Docker for AWS和Docker for Azure中使用。在Docker for AWS中，对于持久化卷（对于全局的EFS和可添加的EBS）的支持现在是稳定的了）。并且我们能跨可用区支持EBS卷。
+　　对于Docker for Azure来说，我们吓死你在支持不部署到Azure Gov. 通过Cloustor支持持久性卷现在是稳定的，可以通缉你广化寺用在Azure Public和Azure Gov中。
+　　7. 废弃
+　　在dockerd的命令行中，–api-enable-core标识已经被废弃很久了，而采用–api-cors-header。对于–api-enable-cors还没有完全去掉。
+　　Ubuntu 12.04 “precise pangolin”已经完结了生命周期，所以它现在不是Docker支持的操作系统。Ubuntu的后期版本仍旧是支持的。</p>
+:ET

@@ -1,0 +1,119 @@
+---
+title: gdb
+layout: post
+category: golang
+author: 夏泽民
+---
+https://asciinema.org/a/302911
+https://gocn.vip/topics/9826
+<!-- more -->
+GDB 有啥用？
+
+想了解代码底层的话，它是一大利器，更别说定位问题啥的。
+
+具体骚操作见曹大的使用 debugger 学习 golang
+
+但 GDB 从安装到可用，可能有一大堆问题要解决（尤其在 Mac 上），我们怎么能优雅的使用它，避免陷入问题中，是本文的重点。
+
+（涉及 Docker 和 Mac 两个平台上运行）
+
+先来看比较推荐的 Docker 方式
+
+Docker 篇：3 步即可调试
+docker 加持的话，非常方便，随用随起
+
+先上效果：戳 gdb-debug-go-in-docker
+
+gdb-debug-go-in-docker
+
+具体步骤如下：（完全回归工具本质，换台机器也能调试）
+
+// 1. 已当前目录映射启动gdb
+docker run --rm -it --security-opt="apparmor=unconfined" \
+  --security-opt="seccomp=unconfined"  \
+  --cap-add=SYS_PTRACE -v "$(pwd):/go/src/app" \
+  newbmiao/gdb-go1.14rc1:latest bash
+
+// 2. 编译go，不使用compressdwarf 、inline and escape
+go build -ldflags=-compressdwarf=false -gcflags=all="-N -l" -o test test.go
+
+// 3. 可以愉快的debug了
+gdb ./test
+一套打完，收工，就这么简单。文末会附上怎么定义的 docker。
+
+你可能有疑问，docker 这些参数是干啥的，下边附资料，感兴趣自行查看
+
+具体讨论见 issue：apparmor denies ptrace to docker-default profile
+AppArmor
+AppArmor 是一个 Linux 内核安全模块，可用于限制主机操作系统上运行的进程的功能。每个进程都可以拥有自己的安全配置文件。安全配置文件用来允许或禁止特定功能，例如网络访问或文件读/写/执行权限。
+
+详见AppArmor security profiles for Docker
+
+Seccomp
+Seccomp 是 Secure computing mode 的缩写，它是 Linux 内核提供的一个操作，用于限制一个进程可以执行的系统调用．当然，我们需要有一个配置文件来指明进程到底可以执行哪些系统调用，不可以执行哪些系统调用．在 Docker 中，它使用 Seccomp 来限制一个容器可以执行的系统调用。
+
+详见Seccomp security profiles for Docker
+
+SYS_PTRACE
+配合seccomp=unconfined, 允许容器使用 ptrace 运行 strace / ltrace 之类的程序。
+
+Mac 篇：需要证书签名
+版本： gdb 8.3.1 On macoOS High Serria 10.13.6
+
+步骤:
+
+创建系统证书 gdb-cert
+重点是标红处，其他一路下一步即可。（注意证书创建成功，才能签名成功）
+
+创建系统证书
+
+（如果创建失败，可以删除证书，重启创建(推荐)；或者尝试创建登录证书=》导出=》=》加载到系统证书）
+
+gdb 代码签名
+已创建脚本，直接执行：
+
+sh debugger/gdb/installMac.sh
+
+gdb 调试（方式同 docker 篇）
+证书相关具体参见：PermissionsDarwin
+同样列一下可能遇到的问题:
+
+codesign
+Unable to find Mach task port for process-id 3884: (os/kern) failure (0x5).
+ (please check gdb is codesigned - see taskgated(8))
+初次运行卡住
+$ gdb ./test
+>>> r
+Starting program: /Users/newbmiao/Documents/tech/Dig101-Go/test
+[New Thread 0xd03 of process 7603]
+# 卡住。。。
+解决方法：
+
+直接别的窗口找到对应进程 id，kill 掉，后续会正常
+
+ps aux|grep gdb
+kill -9 xxx
+SIG113 问题
+详见：GDB kind of doesn't work on macOS Sierra
+
+解决方法：
+
+# gdb 的配置
+$ cat ~/.gdbinit
+# gdb-dashboard
+// $ cat ~/.gdbinit.d/init
+set startup-with-shell off
+让 gdb 更理解 go 的调试信息
+让 gdb 打印更易读，不压缩 dwarf
+
+go build -ldflags=-compressdwarf=false -gcflags=all="-N -l" -o test test.go
+
+gdb 使用 $GOROOT/src/runtime/runtime-gdb.py 来加载 go 运行时支持. 可以从二进制文件中查看到: strings test |grep gdb
+libsystem_darwin.dylib 错误
+直接忽略就行，详见：GDB giving weird errors
+
+详细代码见NewbMiao/free-hands-tips
+See more:
+
+cyrus-and/gdb-dashboard
+Debugging Go Code with GDB

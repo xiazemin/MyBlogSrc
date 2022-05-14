@@ -1,0 +1,148 @@
+---
+title: funcMap 模板调用函数
+layout: post
+category: golang
+author: 夏泽民
+---
+tpl, err := template.Parse(filename)得到文件名为名字的模板，并保存在tpl变量中。tpl可以被执行来显示模板。
+
+template.ParseFiles(filenames)可以解析一组模板，使用文件名作为模板的名字。template.ParseGlob(pattern)会根据pattern解析所有匹配的模板并保存。
+
+简单的模板tpl可以通过tpl.Execute(io.Writer, data)去执行， 模板渲染后的内容写入到io.Writer中。Data是传给模板的动态数据。
+
+tpl.ExecuteTemplate(io.Writer, name, data)和上面的简单模板类似，只不过传入了一个模板的名字，指定要渲染的模板(因为tpl可以包含多个模板)。
+
+嵌套模板定义如下：
+{ {define "footer"}}
+<footer> 
+	<p>Here is the footer</p>
+</footer>
+{ {end}}
+
+这里定义了一个名为footer的模板，可以在其他模板中使用：
+{ {template "footer"}}
+<!-- more -->
+#1,函数变量 (调用结构体的方法)
+我们可以调用模板中对象的方法返回数据
+type User struct {  
+  ID    int
+  Email string
+}
+func (u User) HasPermission(feature string) bool {  
+  if feature == "feature-a" {
+    return true
+  } else {
+    return false
+  }
+}
+
+{ {if .User.HasPermission "feature-a"}}
+  <div class="feature">
+    <h3>Feature A</h3>
+    <p>Some other stuff here...</p>
+  </div>
+{ {else}}
+  <div class="feature disabled">
+    <h3>Feature A</h3>
+    <p>To enable Feature A please upgrade your plan</p>
+  </div>
+{ {end}}
+
+
+#2,函数变量 (调用)
+如果有时HasPermission方法的设计不得不需要更改，但是当前的函数方法有不满足要求，我们可以使用函数（func(string) bool）作为User类型的字段，这样在创建User的时候可以指派不同的函数实现：
+// Structs
+type ViewData struct {  
+  User User
+}
+type User struct {  
+  ID            int
+  Email         string
+  HasPermission func(string) bool
+}
+// Example of creating a ViewData
+vd := ViewData{
+		User: User{
+			ID:    1,
+			Email: "curtis.vermeeren@gmail.com",
+			// Create the HasPermission function
+			HasPermission: func(feature string) bool {
+				if feature == "feature-b" {
+					return true
+				}
+				return false
+			},
+		},
+	}
+// Executing the ViewData with the template
+err := testTemplate.Execute(w, vd)
+我们需要告诉Go模板我们想调用这个函数，这里使用call关键字。把上面的例子修改如下：
+{ {if (call .User.HasPermission "feature-b")}}
+  <div class="feature">
+    <h3>Feature B</h3>
+    <p>Some other stuff here...</p>
+  </div>
+{ {else}}
+  <div class="feature disabled">
+    <h3>Feature B</h3>
+    <p>To enable Feature B please upgrade your plan</p>
+  </div>
+{ {end}}
+
+#3，自定义函数
+另外一种方式是使用template.FuncMap创建自定义的函数,它创建一个全局的函数，可以在整个应用中使用。FuncMap通过map[string]interface{}将函数名映射到函数上。注意映射的函数必须只有一个返回值，或者有两个返回值但是第二个是error类型。
+// Creating a template with function hasPermission
+testTemplate, err = template.New("hello.gohtml").Funcs(template.FuncMap{
+    "hasPermission": func(user User, feature string) bool {
+      if user.ID == 1 && feature == "feature-a" {
+        return true
+      }
+      return false
+    },
+  }).ParseFiles("hello.gohtml")
+这个函数hasPermission检查用户是否有某个权限，它会被保存在FuncMap中。注意自定义的函数必须在调用ParseFiles()之前创建。
+
+这个函数在模板中的使用如下：
+{ { if hasPermission .User "feature-a" }}
+需要传入.User和feature-a参数。
+
+#4，自定义函数 (全局)
+我们前面实现的自定义方法需要依赖.User类型，很多情况下这种方式工作的很好，但是在一个大型的应用中传给模板太多的对象维护起来很困难。我们需要改变自定义的函数，让它无需依赖User对象。
+
+和上面的实现类似，我们创建一个缺省的hasPermission函数，这样可以正常解析模板。
+testTemplate, err = template.New("hello.gohtml").Funcs(template.FuncMap{
+  "hasPermission": func(feature string) bool {
+    return false
+  },
+}).ParseFiles("hello.gohtml")
+这个函数在main()中或者某处创建，并且保证在解析文件之前放入到 hello.gohtml 的function map中。这个缺省的函数总是返回false,但是不管怎样，函数是已定义的，而且不需要User，模板也可以正常解析。
+
+下一个技巧就是重新定义hasPermission函数。这个函数可以使用User对象的数据，但是它是在Handler处理中使用的，而不是传给模板，这里采用的是闭包的方式。所以在模板执行之前你死有机会重新定义函数的。
+func handler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html")
+	user := User{
+		ID:    1,
+		Email: "Curtis.vermeeren@gmail.com",
+	}
+	vd := ViewData{}
+	err := testTemplate.Funcs(template.FuncMap{
+		"hasPermission": func(feature string) bool {
+			if user.ID == 1 && feature == "feature-a" {
+				return true
+			}
+			return false
+		},
+	}).Execute(w, vd)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+在这个Handler中User被创建，ViewData使用这个User对象。hasPermission采用闭包的方式重新定义了函数。{ {if hasPermission "feature-a"}}的的确确没有传入User参数。
+
+#5，第三方自定义函数
+除了官方的预定义的函数外，一些第三方也定义了一些函数，你可以使用这些库，避免重复造轮子。
+
+比如sprig库，定义了很多的函数
+
+
+https://colobu.com/2019/11/05/Golang-Templates-Cheatsheet/

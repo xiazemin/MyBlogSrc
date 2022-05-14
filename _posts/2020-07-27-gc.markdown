@@ -1,0 +1,52 @@
+---
+title: Docker registry GC 原理分析
+layout: post
+category: docker
+author: 夏泽民
+---
+部署 registry 容器
+首先我们在本地部署一个 registry 容器，再使用 skopeo 工具替代 Docker 命令行客户端进行 copy 镜像和 delete 镜像。
+启动 registry 容器，docker run！
+-v /var/lib/registry:/var/lib/registry ，将本地的存储目录挂载到容器内的 registry 存储目录下。
+-v pwd/certs:/certs，将生成的 SSL 证书挂载到容器内。
+-e REGISTRY_STORAGE_DELETE_ENABLED=true，添加该参数才能进行 DELETE 镜像操作，不然的话会提示 Error in deleting repository in a private registry V2 #1573 这种错误。
+<!-- more -->
+GC 是什么？
+GC（Garbage collection）指垃圾回收。此前，《Kubernetess 中的垃圾回收》一文对 GC 的概念、策略以及实现方法有过简单的介绍。现在，我们通过 Docker 官方文档 Garbage collection 的例子对其进一步了解。
+假如有镜像 A 和镜像 B，分别引用了layer a、b 和 a、c。
+
+
+通过 registry API 删除镜像 B 之后，layer c 并没有删掉，只是删掉了对它的引用，所以 c 是多余的。
+
+
+GC 之后，layer c 就被删掉了，这样就没有无用的 layer 了。
+
+GC 的过程
+通过 registry GC 的源码 garbagecollect.go，我们可以看到 GC 主要分两个阶段，marking 和 sweep。
+marking
+marking 阶段是扫描所有的 manifest 文件。根据上文提到的 link 文件，扫描所有镜像 tags 目录下的 link 文件就可以得到这些镜像的 manifest，在 manifest 中保存在该镜像所有的 layer 和 config 文件的 digest 值，把这些值标记为不能清除。
+
+https://mp.weixin.qq.com/s/D8BFeEcbwDiB5PhM824CvQ
+
+
+https://gocn.vip/topics/10688
+
+在多线程的世界里，事情不会在按照我想的方式来正常的运转，我需要考虑 data racing，需要考虑 memory ordering。幸运的是，在经历了短暂的不适应之后，很快我就能很好的拥抱并发了，毕竟我们这个世界本来就是在并行运转的。虽然写多线程程序相比之前更加的困难，但其实只要掌握了一些多线程的并发原语，知道如何使用 mutex，semaphore，channel 这些，其实会发现多线程的世界也是蛮有意思的。再加上，新一代的编程语言，无论是 Go，还是 Rust，都能让大家更加游刃有余的处理并发问题，只要处理得当，给定一个输入，仍然能得到我们想要的输出。只不过，这时候要保证确定性要比之前困难了很多。
+
+简单来说，要做一次混沌实验，我们只需要做到如下的 4 个步骤:
+
+定义系统的稳态，这个稳态就是系统在正常运行的时候一些指标，譬如当前请求的 QPS，latency 等。
+
+将系统分为实验组以及对照组，做出一个假设，譬如我在实验组引入一个故障，这个稳态仍然能在实验组保持。
+
+执行试验，给实验组引入现实世界中的故障，譬如拔掉网卡。
+
+验证第 2 步的假设是否成立，如果实验组的稳态跟对照组不一样了，证明我们的系统在第 3 步的故障中不能很好的容错，所以我们需要改进。
+
+可以看到，上面的步骤非常的简单，但要在实际中很好的做混沌试验，还是有一些困难的，主要在以下几点：
+
+自动化。我们需要有一套自动化的系统帮我们进行故障注入，进行假设对比等。
+
+尽可能多的引入不同故障。现实环境中可能会出现非常多的故障，仅仅不是拔网线这么简单，所以引入的故障越多越好。
+
+业务方无感知。如果我们每次做混沌试验，都要业务系统去配合，譬如在业务里面写一些混沌相关的代码，让混沌试验调用，或者更改系统的部署逻辑，跟混沌试验配合，这种的就属于紧耦合的。

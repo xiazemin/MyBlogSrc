@@ -1,0 +1,314 @@
+I"�'<p>You need to loop over each of the elements in the slice and test. Equality for slices is not defined. However, there is a bytes.Equal function if you are comparing values of type []byte.</p>
+
+<p>func testEq(a, b []Type) bool {</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>// If one is nil, the other must also be nil.
+if (a == nil) != (b == nil) { 
+    return false; 
+}
+
+if len(a) != len(b) {
+    return false
+}
+
+for i := range a {
+    if a[i] != b[i] {
+        return false
+    }
+}
+
+return true }
+</code></pre></div></div>
+
+<!-- more -->
+<p>在 Golang 中 slice、map、channel 都是引用类型，因为是引用类型，所以 slice 和 map 不能使用 == 进行比较这里还能理解，可是为什么 channel 可以用 == 进行比较呢？？</p>
+
+<p>如下代码</p>
+
+<p>package main</p>
+
+<p>import “fmt”
+import _ “reflect”</p>
+
+<p>func main() {
+    ch1 := make(chan int)
+    ch2 := make(chan int)
+    fmt.Println(ch1 == ch2)</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>s1 := []int{1,2}
+s2 := []int{2,1}
+fmt.Println(s1 == s2)
+
+m1 := make(map[int]int)
+m2 := make(map[int]int)
+fmt.Println(m1 == m2) } 输出结果为
+</code></pre></div></div>
+
+<h1 id="command-line-arguments">command-line-arguments</h1>
+<p>./gotest.go:13:20: invalid operation: s1 == s2 (slice can only be compared to nil)
+./gotest.go:17:20: invalid operation: m1 == m2 (map can only be compared to nil)
+代码中，slice 和 map 使用 == 进行比较都报错了，为什么 channel 没有呢？？？</p>
+
+<p>C++的思维看，大概是 channel 实现了对==的重载，而 slice 和 map 没实现</p>
+
+<p>go 的 = 操作，就是简单的内存比较</p>
+
+<p>slice 的内存不连续，slice header 和 data 分开放的，所以不能比较</p>
+
+<p>map 的内存不连续，bucket 是分开放的，所以不能比较</p>
+
+<p>chan 的内存是连续的，就一个对象，所以可以比较</p>
+
+<p>在 Go 中，slice/map/function 值不能比较的原因是程序员这些值的比较规则有着不同的看法，所以干脆禁止这些值的比较，以防止引起困惑。</p>
+
+<p>比如，对于 map，有些人认为两个引用着同一个底层哈希表的 maps 相等，有的人则认为这样两者中存储的键值对完全一致，则两者相同。对于这第二种理解，很难处理含有 NaN 键值的 maps。</p>
+
+<p>对于 slice，有些人认为两者的长度和底层元素指针相同则相等，有些人认为两者的长度 /容量和底层元素指针必须都相等，有些人认为底层元素指针不必相等，只要它们对应的元素一一相等即可。</p>
+
+<p>因为 Go 中的函数均可以看作闭包，这导致了很多人对函数相等有不同的理解。有些人认为两个函数的底层指针相等即相等，有些人认为两者内部的代码实现相等即相等，有些人认为两个函数在相同的输入下必须总是产生相同的输出才相等。</p>
+
+<p>因为这些看法上的分歧，Go 干脆禁止 slice/map/function 值的比较。</p>
+
+<p>https://gfw.go101.org/article/value-conversions-assignments-and-comparisons.html#comparison-implementation</p>
+
+<p>nil 标识符是不能比较的</p>
+
+<p>package main</p>
+
+<p>import “fmt”</p>
+
+<p>func main() {
+    fmt.Println(nil == nil)
+}</p>
+
+<p>.\nil.go:6:18: invalid operation: nil == nil (operator == not defined on nil)</p>
+
+<p>func main() {
+	b := []int{}
+	var c []int
+	fmt.Println(nil == nil)
+	fmt.Println(b == nil, b, c == nil, c)
+	fmt.Println(b == c)
+}</p>
+
+<p>./compile8.go:8:18: invalid operation: nil == nil (operator == not defined on nil)
+false [] true [] //nil表示是非初始化对象，内存地址都是0， 初始化后是empty对象这个时候不是nil
+./compile8.go:10:16: invalid operation: b == c (slice can only be compared to nil)</p>
+
+<p>nil 不是关键字或保留字
+nil 并不是Go语言的关键字或者保留字，也就是说我们可以定义一个名称为 nil 的变量，比如下面这样：</p>
+
+<p>var nil = errors.New(“my god”)</p>
+
+<p>虽然上面的声明语句可以通过编译，但是并不提倡这么做。</p>
+
+<p>不同类型 nil 的指针是一样的
+复制代码
+package main</p>
+
+<p>import “fmt”</p>
+
+<p>func main() {</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>//fmt.Println(nil == nil)
+
+var arr []int
+var num *int
+var string *string
+fmt.Printf("%p\n", arr)
+fmt.Printf("%p\n", num)
+fmt.Printf("%p\n", string)
+</code></pre></div></div>
+
+<p>}
+复制代码
+0x0
+0x0
+0x0
+通过运行结果可以看出 arr 、num、 string 的指针都是 0x0。</p>
+
+<p>不同类型的 nil 是不能比较的
+复制代码
+package main</p>
+
+<p>import “fmt”</p>
+
+<p>func main() {</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>var arr []int
+var num *int
+var string *string
+fmt.Printf("%p\n", arr)
+fmt.Printf("%p\n", num)
+fmt.Println(arr == num)
+</code></pre></div></div>
+
+<p>}
+复制代码
+.\nil.go:14:18: invalid operation: arr == num (mismatched types []int and *int)
+两个相同类型的 nil 值也可能无法比较
+在Go语言中 map、slice 和 function 类型的 nil 值不能比较，比较两个无法比较类型的值是非法的，下面的语句无法编译。</p>
+
+<p>var s1 []int
+    var s2 []int
+    fmt.Printf(“\n”, s1 == s2)
+.\nil.go:16:22: invalid operation: s1 == s2 (slice can only be compared to nil)
+nil 是 map、slice、pointer、channel、func、interface 的零值
+复制代码
+package main</p>
+
+<p>import “fmt”</p>
+
+<p>func main() {</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>var m map[int]string
+var ptr *int32
+var c chan int32
+var slice []int32
+var f func()
+var i interface{}
+
+fmt.Printf("%#v \n", m)
+fmt.Printf("%#v \n", ptr)
+fmt.Printf("%#v \n", c)
+fmt.Printf("%#v \n", slice)
+fmt.Printf("%#v \n", f)
+fmt.Printf("%#v \n", i) } 复制代码 复制代码 map[int]string(nil) (*int32)(nil) (chan int32)(nil) []int32(nil) (func())(nil)
+</code></pre></div></div>
+<nil>
+复制代码
+零值是Go语言中变量在声明之后但是未初始化被赋予的该类型的一个默认值。
+
+不同类型的 nil 值占用的内存大小可能是不一样的
+一个类型的所有的值的内存布局都是一样的，nil 也不例外，nil 的大小与同类型中的非 nil 类型的大小是一样的。但是不同类型的 nil 值的大小可能不同。
+
+复制代码
+package main
+
+import (
+    "fmt"
+    "unsafe"
+)
+
+func main() {
+
+    // var arr []int
+    // var num *int
+    // var string *string
+    // fmt.Printf("%p\n", arr)
+    // fmt.Printf("%p\n", num)
+    // fmt.Println(arr == num)
+
+    // var s1 []int
+    // var s2 []int
+    // fmt.Printf("\n", s1 == s2)
+
+    var m map[int]string
+    var ptr *int32
+    var c chan int32
+    var slice []int32
+    var f func()
+    var i interface{}
+
+    fmt.Printf("%#v \n", m)
+    fmt.Printf("%#v \n", ptr)
+    fmt.Printf("%#v \n", c)
+    fmt.Printf("%#v \n", slice)
+    fmt.Printf("%#v \n", f)
+    fmt.Printf("%#v \n", i)
+
+    fmt.Println(unsafe.Sizeof(m))
+    fmt.Println(unsafe.Sizeof(ptr))
+    fmt.Println(unsafe.Sizeof(c))
+    fmt.Println(unsafe.Sizeof(slice))
+    fmt.Println(unsafe.Sizeof(f))
+    fmt.Println(unsafe.Sizeof(i))
+}
+复制代码
+复制代码
+map[int]string(nil)
+(*int32)(nil)
+(chan int32)(nil)
+[]int32(nil)
+(func())(nil)
+<nil>
+8
+8
+8
+24
+8
+16
+复制代码
+具体的大小取决于编译器和架构，上面打印的结果是在 64 位架构和标准编译器下完成的，对应 32 位的架构的，打印的大小将减半
+
+https://www.cnblogs.com/personblog/p/12260345.html
+
+
+之前在学习C/C++时，我们知道有NULL
+在C中NULL是一个（void*）的指针，其定义如下：
+
+#define NULL    ((void *)0)
+1
+而在C++中，NULL直接可以和0划等号，定义：
+
+/* Define NULL pointer value */
+#ifndef NULL
+    #ifdef __cplusplus
+        #define NULL    0
+    #else  /* __cplusplus */
+        #define NULL    ((void *)0)
+    #endif  /* __cplusplus */
+#endif  /* NULL */
+1
+2
+3
+4
+5
+6
+7
+8
+因为C++支持重载，若将NULL继续定义为void*类型，编译器无法判断该调哪个函数，因此限定NULL为0，但是C++中的空指针该怎么办，C++又引入了nullptr来表示空指针，它可以被转换成任意类型的指针类型和bool类型，但是不能转int类型。
+
+NULL不但可以表示0，还能表示 ‘\0’ ,他们几个的值都是一样的，都是0。
+
+今天我们主要来聊聊golang中的nil。
+对Golang有所了解的人一定会知道nil，在go代码中，nil简直无处不在。
+我们用的最多的可能就是对err的判断，如下：
+
+a , err := math.atoi ( s )
+if err != nil {
+	return err
+}
+1
+2
+3
+4
+我们常常将err和nil进行比较，当err==nil时，说明未出现错误，而不相等时说明函数出错，需要处理。
+这里的nil相当于零值，当我们声明了一个变量，但是未将其初始化，那么系统会自动为他赋一个零值，不同类型的零值分别如下：
+
+int	0
+bool	false
+string	“”
+pointer	nil
+map	nil
+slice	nil
+channel	nil
+function	nil
+interface	nil
+go文档中，nil是一个预定义的标识符，代表很多类型的zero value，它的定义：
+
+type Type int
+var nil Type
+1
+2
+看到这里 我们发现这个nil它是一个变量，可以人为改变的
+不同类型nil的内存地址始终是相同的 ，都是0x00
+
+为nil的slice它的len()和cap() 都是0，通过索引访问时会panic，但是可以使用append进行扩容。
+对于nil指针，我们不能访问指针指向的值，同样不能调用指针对象的方法，否则会panic，但我们可以通过指针接收器来解决，在函数里面进行判断即可。
+对于nil的map，我们把它当作一个只读的指针。
+对于nil的channel，关闭一个nil的channel会导致程序panic。
+interface有一些特殊，它的底层由两部分组成，分别是类型和值，只有当类型和值都为nil时，interface才为nil
+
+</nil></nil>
+:ET

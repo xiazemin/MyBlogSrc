@@ -1,0 +1,219 @@
+---
+title: IO 多路复用
+layout: post
+category: golang
+author: 夏泽民
+---
+https://gocn.vip/topics/10090
+1. 什么是 IO 多路复用
+一句话解释：单线程或单进程同时监测若干个文件描述符是否可以执行 IO 操作的能力。
+
+2. 解决什么问题
+说在前头
+应用程序通常需要处理来自多条事件流中的事件，比如我现在用的电脑，需要同时处理键盘鼠标的输入、中断信号等等事件，再比如 web 服务器如 nginx，需要同时处理来来自 N 个客户端的事件。
+
+逻辑控制流在时间上的重叠叫做 并发
+而 CPU 单核在同一时刻只能做一件事情，一种解决办法是对 CPU 进行时分复用 (多个事件流将 CPU 切割成多个时间片，不同事件流的时间片交替进行)。在计算机系统中，我们用线程或者进程来表示一条执行流，通过不同的线程或进程在操作系统内部的调度，来做到对 CPU 处理的时分复用。这样多个事件流就可以并发进行，不需要一个等待另一个太久，在用户看起来他们似乎就是并行在做一样。
+
+但凡事都是有成本的。线程/进程也一样，有这么几个方面：
+
+线程/进程创建成本
+CPU 切换不同线程/进程成本 Context Switch
+多线程的资源竞争
+有没有一种可以在单线程/进程中处理多个事件流的方法呢？一种答案就是 IO 多路复用。
+
+因此 IO 多路复用解决的本质问题是在用更少的资源完成更多的事。
+
+为了更全面的理解，先介绍下在 Linux 系统下所有 IO 模型。
+<!-- more -->
+/O 模型
+目前 Linux 系统中提供了 5 种 IO 处理模型
+
+阻塞 IO
+非阻塞 IO
+IO 多路复用
+信号驱动 IO
+异步 IO
+阻塞 IO
+这是最常用的简单的 IO 模型。阻塞 IO 意味着当我们发起一次 IO 操作后一直等待成功或失败之后才返回，在这期间程序不能做其它的事情。阻塞 IO 操作只能对单个文件描述符进行操作，详见read或write。
+
+非阻塞 IO
+我们在发起 IO 时，通过对文件描述符设置 O_NONBLOCK flag 来指定该文件描述符的 IO 操作为非阻塞。非阻塞 IO 通常发生在一个 for 循环当中，因为每次进行 IO 操作时要么 IO 操作成功，要么当 IO 操作会阻塞时返回错误 EWOULDBLOCK/EAGAIN，然后再根据需要进行下一次的 for 循环操作，这种类似轮询的方式会浪费很多不必要的 CPU 资源，是一种糟糕的设计。和阻塞 IO 一样，非阻塞 IO 也是通过调用read或 writewrite来进行操作的，也只能对单个描述符进行操作。
+
+IO 多路复用
+IO 多路复用在 Linux 下包括了三种，select、poll、epoll，抽象来看，他们功能是类似的，但具体细节各有不同：首先都会对一组文件描述符进行相关事件的注册，然后阻塞等待某些事件的发生或等待超时。更多细节详见下面的 "具体怎么用"。IO 多路复用都可以关注多个文件描述符，但对于这三种机制而言，不同数量级文件描述符对性能的影响是不同的，下面会详细介绍。
+
+信号驱动 IO
+信号驱动 IO是利用信号机制，让内核告知应用程序文件描述符的相关事件。这里有一个信号驱动 IO 相关的例子。
+
+但信号驱动 IO 在网络编程的时候通常很少用到，因为在网络环境中，和 socket 相关的读写事件太多了，比如下面的事件都会导致 SIGIO 信号的产生：
+
+TCP 连接建立
+一方断开 TCP 连接请求
+断开 TCP 连接请求完成
+TCP 连接半关闭
+数据到达 TCP socket
+数据已经发送出去 (如：写 buffer 有空余空间)
+上面所有的这些都会产生 SIGIO 信号，但我们没办法在 SIGIO 对应的信号处理函数中区分上述不同的事件，SIGIO 只应该在 IO 事件单一情况下使用，比如说用来监听端口的 socket，因为只有客户端发起新连接的时候才会产生 SIGIO 信号。
+
+异步 IO
+异步 IO 和信号驱动 IO 差不多，但它比信号驱动 IO 可以多做一步：相比信号驱动 IO 需要在程序中完成数据从用户态到内核态 (或反方向) 的拷贝，异步 IO 可以把拷贝这一步也帮我们完成之后才通知应用程序。我们使用 aio_read 来读，aio_write 写。
+
+同步 IO vs 异步 IO
+同步 IO 指的是程序会一直阻塞到 IO 操作如 read、write 完成
+异步 IO 指的是 IO 操作不会阻塞当前程序的继续执行
+所以根据这个定义，上面阻塞 IO 当然算是同步的 IO，非阻塞 IO 也是同步 IO，因为当文件操作符可用时我们还是需要阻塞的读或写，同理 IO 多路复用和信号驱动 IO 也是同步 IO，只有异步 IO 是完全完成了数据的拷贝之后才通知程序进行处理，没有阻塞的数据读写过程。
+3. 目前有哪些 IO 多路复用的方案
+解决方案总览
+os	解决方案
+Linux	select、poll、epoll
+MacOS/FreeBSD	kqueue
+Windows/Solaris	IOCP
+常见软件的 IO 多路复用方案
+软件	解决方案
+redis	Linux 下 epoll(level-triggered)，没有 epoll 用 select
+nginx	Linux 下 epoll(edge-triggered)，没有 epoll 用 select
+4. 具体怎么用
+我在工作中接触的都是 Linux 系统的服务器，所以在这里只介绍 Linux 系统的解决方案
+
+select
+相关函数定义如下
+
+/* According to POSIX.1-2001, POSIX.1-2008 */
+#include <sys/select.h>
+
+/* According to earlier standards */
+#include <sys/time.h>
+#include <sys/types.h>
+#include <unistd.h>
+
+int select(int nfds, fd_set *readfds, fd_set *writefds,
+            fd_set *exceptfds, struct timeval *timeout);
+
+int pselect(int nfds, fd_set *readfds, fd_set *writefds,
+            fd_set *exceptfds, const struct timespec *timeout,
+            const sigset_t *sigmask);
+
+void FD_CLR(int fd, fd_set *set);
+int  FD_ISSET(int fd, fd_set *set);
+void FD_SET(int fd, fd_set *set);
+void FD_ZERO(fd_set *set);
+
+select 的调用会阻塞到有文件描述符可以进行 IO 操作或被信号打断或者超时才会返回。
+
+select 将监听的文件描述符分为三组，每一组监听不同的需要进行的 IO 操作。readfds 是需要进行读操作的文件描述符，writefds 是需要进行写操作的文件描述符，exceptfds 是需要进行异常事件处理的文件描述符。这三个参数可以用 NULL 来表示对应的事件不需要监听。
+
+当 select 返回时，每组文件描述符会被 select 过滤，只留下可以进行对应 IO 操作的文件描述符。
+
+FD_xx 系列的函数是用来操作文件描述符组和文件描述符的关系。
+
+FD_ZERO 用来清空文件描述符组。每次调用 select 前都需要清空一次。
+
+fd_set writefds;
+FD_ZERO(&writefds)
+FD_SET 添加一个文件描述符到组中，FD_CLR 对应将一个文件描述符移出组中
+
+FD_SET(fd, &writefds);
+FD_CLR(fd, &writefds);
+FD_ISSET 检测一个文件描述符是否在组中，我们用这个来检测一次 select 调用之后有哪些文件描述符可以进行 IO 操作
+
+if (FD_ISSET(fd, &readfds)){
+    /* fd可读 */
+}
+select 可同时监听的文件描述符数量是通过 FS_SETSIZE 来限制的，在 Linux 系统中，该值为 1024，当然我们可以增大这个值，但随着监听的文件描述符数量增加，select 的效率会降低，我们会在『不同 IO 多路复用方案优缺点』一节中展开。
+
+pselect 和 select 大体上是一样的，但有一些细节上的区别。
+
+打开链接查看完整的使用 select 的例子
+
+poll
+相关函数定义
+
+#include <poll.h>
+
+int poll(struct pollfd *fds, nfds_t nfds, int timeout);
+
+#include <signal.h>
+#include <poll.h>
+
+int ppoll(struct pollfd *fds, nfds_t nfds,
+        const struct timespec *tmo_p, const sigset_t *sigmask);
+
+struct pollfd {
+    int fd; /* file descriptor */
+    short events; /* requested events to watch */
+    short revents; /* returned events witnessed */
+};
+和 select 用三组文件描述符不同的是，poll 只有一个 pollfd 数组，数组中的每个元素都表示一个需要监听 IO 操作事件的文件描述符。events 参数是我们需要关心的事件，revents 是所有内核监测到的事件。合法的事件可以参考这里。
+
+打开链接查看完整的使用 poll 的例子
+
+epoll
+相关函数定义如下
+
+#include <sys/epoll.h>
+
+int epoll_create(int size);
+int epoll_create1(int flags);
+
+int epoll_ctl(int epfd, int op, int fd, struct epoll_event *event);
+
+int epoll_wait(int epfd, struct epoll_event *events,
+            int maxevents, int timeout);
+int epoll_pwait(int epfd, struct epoll_event *events,
+            int maxevents, int timeout,
+            const sigset_t *sigmask);
+epoll_create&epoll_create1用于创建一个 epoll 实例，而epoll_ctl用于往 epoll 实例中增删改要监测的文件描述符，epoll_wait则用于阻塞的等待可以执行 IO 操作的文件描述符直到超时。
+
+打开链接查看完整的使用 epoll 的例子
+
+level-triggered and edge-triggered
+这两种底层的事件通知机制通常被称为水平触发和边沿触发，真是翻译的词不达意，如果我来翻译，我会翻译成：状态持续通知和状态变化通知。
+
+这两个概念来自电路，triggered 代表电路激活，也就是有事件通知给程序，level-triggered 表示只要有 IO 操作可以进行比如某个文件描述符有数据可读，每次调用 epoll_wait 都会返回以通知程序可以进行 IO 操作，edge-triggered 表示只有在文件描述符状态发生变化时，调用 epoll_wait 才会返回，如果第一次没有全部读完该文件描述符的数据而且没有新数据写入，再次调用 epoll_wait 都不会有通知给到程序，因为文件描述符的状态没有变化。
+
+select 和 poll 都是状态持续通知的机制，且不可改变，只要文件描述符中有 IO 操作可以进行，那么 select 和 poll 都会返回以通知程序。而 epoll 两种通知机制可选。
+
+状态变化通知 (edge-triggered) 模式下的 epoll
+在 epoll 状态变化通知机制下，有一些的特殊的地方需要注意。考虑下面这个例子
+
+服务端文件描述符 rfd 代表要执行 read 操作的 TCP socket，rfd 已被注册到一个 epoll 实例中
+客户端向 rfd 写了 2kb 数据
+服务端调用 epoll_wait 返回，rfd 可执行 read 操作
+服务端从 rfd 中读取了 1kb 数据
+服务端又调用了一次 epoll_wait
+在第 5 步的 epoll_wait 调用不会返回，而对应的客户端会因为服务端没有返回对应的 response 而超时重试，原因就是我上面所说的，epoll_wait 只会在状态变化时才会通知程序进行处理。第 3 步 epoll_wait 会返回，是因为客户端写了数据，导致 rfd 状态被改变了，第 3 步的 epoll_wait 已经消费了这个事件，所以第 5 步的 epoll_wait 不会返回。
+
+我们需要配合非阻塞 IO 来解决上面的问题：
+
+对需要监听的文件描述符加上非阻塞 IO 标识
+只在 read 或者 write 返回 EAGAIN 或 EWOULDBLOCK 错误时，才调用 epoll_wait 等待下次状态改变发生
+通过上述方式，我们可以确保每次 epoll_wait 返回之后，我们的文件描述符中没有读到一半或写到一半的数据。
+
+5. 不同 IO 多路复用方案优缺点
+poll vs select
+poll 和 select 基本上是一样的，poll 相比 select 好在如下几点：
+
+poll 传参对用户更友好。比如不需要和 select 一样计算很多奇怪的参数比如 nfds(值最大的文件描述符 +1)，再比如不需要分开三组传入参数。
+poll 会比 select 性能稍好些，因为 select 是每个 bit 位都检测，假设有个值为 1000 的文件描述符，select 会从第一位开始检测一直到第 1000 个 bit 位。但 poll 检测的是一个数组。
+select 的时间参数在返回的时候各个系统的处理方式不统一，如果希望程序可移植性更好，需要每次调用 select 都初始化时间参数。
+而 select 比 poll 好在下面几点
+
+支持 select 的系统更多，兼容更强大，有一些 unix 系统不支持 poll
+select 提供精度更高 (到 microsecond) 的超时时间，而 poll 只提供到毫秒的精度。
+但总体而言 select 和 poll 基本一致。
+
+epoll vs poll&select
+epoll 优于 select&poll 在下面几点：
+
+在需要同时监听的文件描述符数量增加时，select&poll 是 O(N) 的复杂度，epoll 是 O(1)，在 N 很小的情况下，差距不会特别大，但如果 N 很大的前提下，一次 O(N) 的循环可要比 O(1) 慢很多，所以高性能的网络服务器都会选择 epoll 进行 IO 多路复用。
+epoll 内部用一个文件描述符挂载需要监听的文件描述符，这个 epoll 的文件描述符可以在多个线程/进程共享，所以 epoll 的使用场景要比 select&poll 要多。
+总结
+本文从使用者的角度，从问题出发，介绍了多种 IO 多路复用方案，有任何问题欢迎在下方留言交流，或扫描二维码/微信搜索『技术成长之道』关注公众号后留言私信。
+
+PS：代码永远是最正确的，man 文档其次，更多细节可以多看代码和文档。
+
+参考
+
+Linux 系统编程（第二版）
+UNIX 网络编程 : 第 1 卷:套接口 API(第 3 版)

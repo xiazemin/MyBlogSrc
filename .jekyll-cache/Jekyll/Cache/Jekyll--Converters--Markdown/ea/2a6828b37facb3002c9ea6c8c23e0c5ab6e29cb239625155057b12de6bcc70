@@ -1,0 +1,76 @@
+I"�<p>当消息量特别大时，使用kafka之类的message queue自然是首选，但更多的时候，我们想用更加轻量的方案来解决这个问题。</p>
+
+<p>下面来详细分析一下技术需求，这个方案需要实现以下几点：</p>
+
+<p>消息聚合后处理（最大条数为BatchSize）
+延迟处理（延迟时间为LingerTime）
+自定义错误处理
+并发处理</p>
+
+<p>带buffer的channel相当于一个FIFO的队列
+多个常驻的goroutine来提高并发
+goroutine之间是并行的，但每个goroutine内是串行的，所以对batch操作是不用加锁的。</p>
+
+<!-- more -->
+
+<p>var (
+    eventQueue     = make(chan interface{}, 4)
+    batchSize      = 8
+    workers        = 2
+    lingerTime     = 14 * time.Millisecond
+    batchProcessor = func(batch []interface{}) error {
+        fmt.Printf(“%+v \n”, batch)
+        return nil
+    }
+    errHandler = func(err error, batch []interface{}) {
+        fmt.Println(“some error happens”)
+    }
+)</p>
+
+<p>for i := 0; i &lt; workers; i++ {
+    go func() {
+        var batch []interface{}
+        lingerTimer := time.NewTimer(0)
+        if !lingerTimer.Stop() {
+            &lt;-lingerTimer.C
+        }
+        defer lingerTimer.Stop()</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    for {
+        select {
+        case msg := &lt;-eventQueue:
+            batch = append(batch, msg)
+            if len(batch) != batchSize {
+                if len(batch) == 1 {
+                    lingerTimer.Reset(lingerTime)
+                }
+                break
+            }
+
+            if err := batchProcessor(batch); err != nil {
+                errHandler(err, batch)
+            }
+
+            if !lingerTimer.Stop() {
+                &lt;-lingerTimer.C
+            }
+
+            batch = make([]interface{}, 0)
+        case &lt;-lingerTimer.C:
+            if err := batchProcessor(batch); err != nil {
+                errHandler(err, batch)
+            }
+
+            batch = make([]interface{}, 0)
+        }
+    }
+}() }
+</code></pre></div></div>
+
+<p>for i := 0; i &lt; 100; i++ {
+    eventQueue &lt;- i
+    time.Sleep(1 * time.Millisecond)
+}</p>
+
+<p>https://www.jianshu.com/p/02f6647c3912</p>
+:ET

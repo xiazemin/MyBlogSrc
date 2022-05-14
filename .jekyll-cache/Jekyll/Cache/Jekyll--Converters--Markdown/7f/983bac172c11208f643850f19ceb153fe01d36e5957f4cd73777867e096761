@@ -1,0 +1,534 @@
+I"KP<p>先看看injector类型的声明：</p>
+
+<p>type injector struct {     <br />
+  values map[reflect.Type]reflect.Value     <br />
+  parent Injector
+}
+撇开 parent不看，values是一个映射表，用于保存注入的参数，它是一个用reflect.Type当键、reflect.Value为值的map。
+<!-- more -->
+parent Injector又是什么鬼？</p>
+
+<p>// Injector represents an interface for mapping and injecting dependencies into structs
+// and function arguments.
+type Injector interface {
+    Applicator
+    Invoker
+    TypeMapper
+    // SetParent sets the parent of the injector. If the injector cannot find a
+    // dependency in its Type map it will check its parent before returning an
+    // error.
+    SetParent(Injector)
+}</p>
+
+<p>// Applicator represents an interface for mapping dependencies to a struct.
+type Applicator interface {
+    // Maps dependencies in the Type map to each field in the struct
+    // that is tagged with ‘inject’. Returns an error if the injection
+    // fails.
+    Apply(interface{}) error
+}</p>
+
+<p>// Invoker represents an interface for calling functions via reflection.
+type Invoker interface {
+    // Invoke attempts to call the interface{} provided as a function,
+    // providing dependencies for function arguments based on Type. Returns
+    // a slice of reflect.Value representing the returned values of the function.
+    // Returns an error if the injection fails.
+    Invoke(interface{}) ([]reflect.Value, error)
+}</p>
+
+<p>// TypeMapper represents an interface for mapping interface{} values based on type.
+type TypeMapper interface {
+    // Maps the interface{} value based on its immediate type from reflect.TypeOf.
+    Map(interface{}) TypeMapper
+    // Maps the interface{} value based on the pointer of an Interface provided.
+    // This is really only useful for mapping a value as an interface, as interfaces
+    // cannot at this time be referenced directly without a pointer.
+    MapTo(interface{}, interface{}) TypeMapper
+    // Provides a possibility to directly insert a mapping based on type and value.
+    // This makes it possible to directly map type arguments not possible to instantiate
+    // with reflect like unidirectional channels.
+    Set(reflect.Type, reflect.Value) TypeMapper
+    // Returns the Value that is mapped to the current type. Returns a zeroed Value if
+    // the Type has not been mapped.
+    Get(reflect.Type) reflect.Value
+}
+Injector是注入接口声明的组合，我们先关注TypeMapper这个接口，从源码可以得知Map和MapTo是用来映射数据类型和数据到values map[reflect.Type]reflect.Value的方法。</p>
+
+<p>Map方法相对来说比较简单，利用反射获取对象的type。</p>
+
+<p>func (i *injector) Map(val interface{}) TypeMapper {
+    i.values[reflect.TypeOf(val)] = reflect.ValueOf(val)
+    return i
+}
+现在我们先假设参数中有多个string时，values map[reflect.Type]reflect.Value这个map只会保存最后一个string的映射，那我们该如何处理才能完整的保存所有的string参数呢？</p>
+
+<p>考虑interface类型在底层的实现(type,data)，inject库实现了一个从interface指针中获取类型的函数InterfaceOf，而MapTo则利用InterfaceOf来获取传入的数据类型。</p>
+
+<p>func InterfaceOf(value interface{}) reflect.Type {     <br />
+  t := reflect.TypeOf(value)</p>
+
+<p>for t.Kind() == reflect.Ptr {            <br />
+    t = t.Elem()     <br />
+  }</p>
+
+<p>if t.Kind() != reflect.Interface {            <br />
+    panic(“Called inject.InterfaceOf with a value that is not a pointer to an interface. (*MyInterface)(nil)”)     <br />
+  }     <br />
+  return t
+}</p>
+
+<p>func (i *injector) MapTo(val interface{}, ifacePtr interface{}) TypeMapper {
+    i.values[InterfaceOf(ifacePtr)] = reflect.ValueOf(val)
+    return i
+}
+简直是神来之笔，再找个别人的例子：</p>
+
+<p>package main</p>
+
+<p>import ( 
+  “fmt” 
+  “github.com/codegangsta/inject”
+)</p>
+
+<p>type SpecialString interface{}</p>
+
+<p>func main() {  <br />
+  fmt.Println(inject.InterfaceOf((<em>interface{})(nil)))      <br />
+  fmt.Println(inject.InterfaceOf((</em>SpecialString)(nil)))
+}
+输出</p>
+
+<p>interface {}
+main.SpecialString
+看到了吗？指向接口的空指针，虽然data是nil，但是我们只要它的type。分步解释一下：</p>
+
+<p>//以(<em>SpecialString)(nil)为例
+t := reflect.TypeOf(value) //t是</em>main.SpecialString，t.Kind()是ptr,t.Elem()是main.SpecialString
+for t.Kind() == reflect.Ptr { //循环判断，也许是指向指针的指针
+  t = t.Elem() //Elem returns a type’s element type.
+}
+if t.Kind() != reflect.Interface {
+  … //如果不是Interface类型，报panic
+}
+return t //返回(<em>SpecialString)(nil)的元素原始类型
+interface{}是什么，在go里面interface{}就是万能的Any。inject利用了(</em>interface{})(nil)携带数据类型的特点，只用一个空指针就搞定了数据类型的传输，而且扩展了同类型数据的绑定。</p>
+
+<p>让我们到martini.go去看看这个注入是怎么用的吧。</p>
+
+<p>// Martini represents the top level web application. inject.Injector methods can be invoked to map services on a global level.
+type Martini struct {     <br />
+  inject.Injector     <br />
+  handlers []Handler     <br />
+  action   Handler     <br />
+  logger   *log.Logger
+}</p>
+
+<p>// New creates a bare bones Martini instance. Use this method if you want to have full control over the middleware that is used.
+func New() *Martini {     <br />
+  m := &amp;Martini{Injector: inject.New(), action: func() {}, logger: log.New(os.Stdout, “[martini] “, 0)}     <br />
+  m.Map(m.logger)     <br />
+  m.Map(defaultReturnHandler())     <br />
+  return m
+}</p>
+
+<p>func (m <em>Martini) createContext(res http.ResponseWriter, req *http.Request) *context {
+    c := &amp;context{inject.New(), m.handlers, m.action, NewResponseWriter(res), 0}
+    c.SetParent(m)
+    c.MapTo(c, (</em>Context)(nil))
+    c.MapTo(c.rw, (*http.ResponseWriter)(nil))
+    c.Map(req)
+    return c
+}
+自定义的Martini结构体包含了inject.Injector接口，所以可以很方便的注入logger。后续Invoke中间件的时候，自然就可以通过Injector的Get方法获取logger对象。context则使用了MapTo方法注入了Context和http.ResponseWriter这两个接口类型。</p>
+
+<p>// Invoke attempts to call the interface{} provided as a function,
+// providing dependencies for function arguments based on Type.
+// Returns a slice of reflect.Value representing the returned values of the function.
+// Returns an error if the injection fails.
+// It panics if f is not a function
+func (inj *injector) Invoke(f interface{}) ([]reflect.Value, error) {
+    t := reflect.TypeOf(f)</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>var in = make([]reflect.Value, t.NumIn()) //Panic if t is not kind of Func
+for i := 0; i &lt; t.NumIn(); i++ {
+    argType := t.In(i)
+    val := inj.Get(argType)
+    if !val.IsValid() {
+        return nil, fmt.Errorf("Value not found for type %v", argType)
+    }
+
+    in[i] = val
+}
+
+return reflect.ValueOf(f).Call(in), nil } 其实没有太多有技术含量的东西，只要把反射吃透了，再弄清楚前文中Map和MapTo存储的类型数据映射map，那么go的依赖注入就这么赤裸裸的展现在你眼前。
+</code></pre></div></div>
+
+<p>将函数的值从空接口中反射出来，然后使用reflect.Call来传递参数并调用它。参数个数从t.NumIn()获取，循环遍历参数类型，再通过Get方法从values map[reflect.Type]reflect.Value获取对应类型的数据。</p>
+
+<p>func (i *injector) Get(t reflect.Type) reflect.Value {
+    val := i.values[t]</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>if val.IsValid() {
+    return val
+}
+
+// no concrete types found, try to find implementors
+// if t is an interface
+if t.Kind() == reflect.Interface {
+    for k, v := range i.values {
+        if k.Implements(t) {
+            val = v
+            break
+        }
+    }
+}
+
+// Still no type found, try to look it up on the parent
+if !val.IsValid() &amp;&amp; i.parent != nil {
+    val = i.parent.Get(t)
+}
+
+return val
+</code></pre></div></div>
+
+<p>}</p>
+
+<p>PHP 代码：</p>
+
+<p>function foobar() {
+    echo “Hello Golang\n”;
+}
+$funcs = array(
+    “foobar” =&gt; “foobar”,
+    “hello”  =&gt; “foobar”,
+);
+$funcs<a href="">“foobar”</a>;
+$funcs<a href="">“hello”</a>;
+它会输出：</p>
+
+<p>mikespook@mikespook-laptop:~/Desktop$ php foobar.php 
+Hello Golang
+Hello Golang</p>
+
+<p>用这个方法调用匹配名字的函数，非常有效。</p>
+
+<p>那么，在 Golang 中是否可能用函数的名字来调用某个函数呢？</p>
+
+<p>作为一个静态、编译型语言，答案是否定的……又是肯定的！</p>
+
+<p>在 Golang 中，你不能这样做：</p>
+
+<p>func foobar() {
+    // bla…bla…bla…
+}
+funcname := “foobar”
+funcname()
+不过可以：</p>
+
+<p>func foobar() {
+    // bla…bla…bla…
+}
+funcs := map[string]func() {“foobar”:foobar}
+funcs<a href="">“foobar”</a>
+但这里有一个限制：这个 map 仅仅可以用原型是“func()”的没有输入参数或返回值的函数。
+如果想要用这个方法实现调用不同函数原型的函数，需要用到 interface{}。</p>
+
+<p>是啊！interface{}，跟 C 中的 void 指针类似。还记得这个东西吗？不记得了？没事，看看这个吧：《The Go Programming Language Specification:Interface types》。</p>
+
+<p>这样，就可以添加有着不同函数原型的函数到一个 map 中：</p>
+
+<p>func foo() {
+    // bla…bla…bla…
+}
+func bar(a, b, c int) {
+    // bla…bla…bla…
+}
+funcs := map[string]interface{}{“foo”:foo, “bar”:bar}
+那么如何调用 map 中的函数呢？像这样吗：</p>
+
+<p>funcs<a href="">“foo”</a>
+绝对不行！这无法工作！你不能直接调用存储在空接口中的函数。</p>
+
+<p>反射走进我们的生活！在 Golang 中有着叫做“reflect”的包。你是否了解反射了呢？
+如果还没有，那么阅读一下这个：《Laws of reflection》吧。哦，这里有个中文版本：《反射的规则》。</p>
+
+<p>func Call(m map[string]interface{}, name string, params … interface{}) (result []reflect.Value, err error) {
+    f = reflect.ValueOf(m[name])
+    if len(params) != f.Type().NumIn() {
+        err = errors.New(“The number of params is not adapted.”)
+        return
+    }
+    in := make([]reflect.Value, len(params))
+    for k, param := range params {
+        in[k] = reflect.ValueOf(param)
+    }
+    result = f.Call(in)
+    return
+}
+Call(funcs, “foo”)
+Call(funcs, “bar”, 1, 2, 3)
+将函数的值从空接口中反射出来，然后使用 reflect.Call 来传递参数并调用它。</p>
+
+<p>Martini的官方文档中提到Martini完全兼容http.HandlerFunc接口.，底下谈到martini.Context的初始化就会有说明。</p>
+
+<p>先来看看Martini的结构体。</p>
+
+<p>// Martini represents the top level web application. inject.Injector methods can be invoked to map services on a global level.
+type Martini struct {
+    inject.Injector
+    handlers []Handler
+    action   Handler
+    logger   *log.Logger
+}
+inject.Injector是inject接口实例，Martini高度依赖inject。
+handlers是切片存储Hander类型，Handler是自定义类型。</p>
+
+<p>type Handler interface{}
+Martini有两种处理器，中间件处理器和请求处理器。中间件处理器通过Use方法将中间件追加保存到handlers切片中，请求处理器需要搭配路由进行存储。</p>
+
+<p>初始化
+为了更快速的启用Martini, martini.Classic() 提供了一些默认的方便Web开发的工具:</p>
+
+<p>m := martini.Classic()
+  // … middleware and routing goes here
+  m.Run()
+下面是Martini核心已经包含的功能 martini.Classic():</p>
+
+<p>Request/Response Logging （请求/响应日志） - martini.Logger
+Panic Recovery （容错） - martini.Recovery
+Static File serving （静态文件服务） - martini.Static
+Routing （路由） - martini.Router
+下面的这些服务已经被包含在核心Martini中: martini.Classic():</p>
+
+<p>*log.Logger - Martini的全局日志.
+martini.Context - http request context （请求上下文）.
+martini.Params - map[string]string of named params found by route matching. （名字和参数键值对的参数列表）
+martini.Routes - Route helper service. （路由协助处理）
+http.ResponseWriter - http Response writer interface. (响应结果的流接口)
+*http.Request - http Request. （http请求)
+martini.Context是每次请求的上下文。</p>
+
+<p>// Context represents a request context. Services can be mapped on the request level from this interface.
+type Context interface {
+    inject.Injector
+    // Next is an optional function that Middleware Handlers can call to yield the until after
+    // the other Handlers have been executed. This works really well for any operations that must
+    // happen after an http request
+    Next()
+    // Written returns whether or not the response for this context has been written.
+    Written() bool
+}
+它是什么时候被创建的呢？还记得《理解go的function types》吗？</p>
+
+<p>type HandlerFunc func(ResponseWriter, *Request)
+func (f HandlerFunc) ServeHTTP(w ResponseWriter, r *Request)
+martini.go实现了ServerHTTP方法。</p>
+
+<p>// ServeHTTP is the HTTP Entry point for a Martini instance. Useful if you want to control your own HTTP server.
+func (m *Martini) ServeHTTP(res http.ResponseWriter, req *http.Request) {
+    m.createContext(res, req).run()
+}
+因为Martini实现了http.HandlerFunc接口，所以它可以很简单的应用到现有Go服务器的子集中。</p>
+
+<p>package hello</p>
+
+<p>import (
+  “net/http”
+  “github.com/go-martini/martini”
+)</p>
+
+<p>func init() {
+  m := martini.Classic()
+  m.Get(“/”, func() string {
+    return “Hello world!”
+  })
+  http.Handle(“/”, m)
+}
+martini.Context的实例m.context就是在go服务器初始化的时候通过ServeHTTP被创建的。</p>
+
+<p>我们已经知道Martini如何应用到Go服务器的子集，那么当服务器运行的时候，处理器是如何被执行的呢？</p>
+
+<p>运行
+我们看看context结构体</p>
+
+<p>type context struct {
+    inject.Injector
+    handlers []Handler
+    action   Handler
+    rw       ResponseWriter
+    index    int
+}</p>
+
+<p>func (c *context) handler() Handler {
+    if c.index &lt; len(c.handlers) {
+        return c.handlers[c.index]
+    }
+    if c.index == len(c.handlers) {
+        return c.action
+    }
+    panic(“invalid index for context handler”)
+}</p>
+
+<p>func (c *context) Next() {
+    c.index += 1
+    c.run()
+}</p>
+
+<p>func (c *context) Written() bool {
+    return c.rw.Written()
+}</p>
+
+<p>func (c *context) run() {
+    for c.index &lt;= len(c.handlers) {
+        _, err := c.Invoke(c.handler())
+        if err != nil {
+            panic(err)
+        }
+        c.index += 1</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    if c.Written() {
+        return
+    }
+} } context实现了Context接口，自然也组合了inject.Injector。处理器处理请求的时候通过run()循环遍历调用handlers中的所有中间件和路由处理方法。
+</code></pre></div></div>
+
+<p>看到这里是不是发现一个很眼熟的函数Invoke()，没错又是inject的Invoke()</p>
+
+<p>martini框架是go语言轻量级的后端框架，使用简单易上手，极佳的路由匹配与转发，同时扩展性极强，模块化的中间件设计，这些都是它的特点，特别是利用依赖注入的思想，下面我们结合源码来讲讲吧。</p>
+
+<p>martini.go这个源码文件主要包含Martini这个结构体，里面包含Injector, logger以及中间件Handler。</p>
+
+<p>type Martini struct {</p>
+
+<p>inject.Injector // 依赖注入的调用者</p>
+
+<p>handlers []Handler // 中间件函数</p>
+
+<p>action Handler // 路由匹配，路由转发,在所有中间件函数处理后再执行</p>
+
+<p>logger *log.Logger // 日志</p>
+
+<p>}</p>
+
+<p>inject.go主要是实现依赖注入，用于存储中间件函数以及用户自定义函数回调时的参数。依赖注入不同于传统编程，传统编程是调用者自己来决定使用那些被调用者实现的，而依赖注入则是由注入器(injector)来决定，注入器创建被调用者，注入调用者。例如：在inject.go中，被调用者为func，注入属性就是对func注入实参。</p>
+
+<p>router.go主要是实现路由匹配，路由转发，分组路由等功能。</p>
+
+<p>通过阅读源码之后，发现martini框架核心的源码，其实就是martini.go, inject.go以及router.go，下面就来仔细分析一下每个类的功能与作用。</p>
+
+<p>inject.go源码</p>
+
+<p>依赖注入核心是inject.go代码，辅助实现martini机具扩展性的中间件。</p>
+
+<p>先来讲讲inject.go:</p>
+
+<p>type Injector struct {</p>
+
+<p>Application // 结构体各个字段赋值</p>
+
+<p>Invoker // 通过反射实现函数调用的接口</p>
+
+<p>TypeMapper //Maps以val的反射Type为key,反射Value为值</p>
+
+<p>SetParent(Injector) // 设置父Injector</p>
+
+<p>}</p>
+
+<p>type injector struct {</p>
+
+<p>values map[reflect.Type]reflect.Value // 存放注入参数的类型和值</p>
+
+<p>parent Injector // 父节点</p>
+
+<p>}</p>
+
+<p>type TypeMapper interface {</p>
+
+<p>Map(interface{}) TypeMapper // 具体类型的映射,根据值的具体类型直接建立映射</p>
+
+<p>MapTo(interface{}, interface{}) TypeMapper //转化类型映射</p>
+
+<p>….</p>
+
+<p>}</p>
+
+<p>这是几个关键的结构体，具体实现依赖注入就是，将Func以type Handler interface{} 的形式注入，其中参数保存在values的map中，调用方法时，遍历这个方法有的参数的Type，去values中获取对应的值，再使用Call方法实现调用。</p>
+
+<p>直观点说，Injector通过TypeMapper注入方法，与参数值到values中，通过Invoker.invoke去调用注入的方法，调用方法时，获取方法入参的Type，在通过values获取值，实现调用。</p>
+
+<p>martini.go源码</p>
+
+<p>type Martini struct {</p>
+
+<p>inject.Injector // 注入器，匿名类</p>
+
+<p>handlers []Handler // 中间件函数</p>
+
+<p>action Handler // 请求中间件函数处理后，进行路由分发</p>
+
+<p>logger *log.Logger //日志</p>
+
+<p>}</p>
+
+<p>type context struct { //每个请求上下文</p>
+
+<p>inject.Injector // 注入器</p>
+
+<p>handlers []Handler // 中间件函数</p>
+
+<p>action Handler // 最后的路由分发处理</p>
+
+<p>rw ResponseWriter // 每个返回值</p>
+
+<p>index int // 索引</p>
+
+<p>}</p>
+
+<p>我们在运行martini框架时，生成一个单例，包含所有注入器，中间件函数，路由；每个请求过来时，会调用createContext创建一个上下文，此时把各种中间件，注入器赋值进去。这样就可以实现每个请求过同样的中间件。中间件是一个type Handler interface{} 的函数，也就是中间件的Type一定要是函数，且返回的是一个参数，可以是基础类型或者结构体。</p>
+
+<p>router.go源码</p>
+
+<p>主要实现路由的存储与转发。</p>
+
+<p>type router struct {</p>
+
+<p>routes []*route // 存入各种方式的路由(Post,Get等)</p>
+
+<p>notFounds []Handler</p>
+
+<p>groups []group // 实现路由分组</p>
+
+<p>routesLock sync.RWMutex</p>
+
+<p>}</p>
+
+<p>type route struct {</p>
+
+<p>method string // 请求方式(Get or Post)</p>
+
+<p>regex *regexp.Regexp // 正则匹配</p>
+
+<p>handlers []Handler // 路由方法</p>
+
+<p>pattern string // 路由地址</p>
+
+<p>name string</p>
+
+<p>}</p>
+
+<p>router结构体主要是存储所有post，get等请求的路由方式；route结构体就是存储的具体路由方法，路由地址。</p>
+
+<p>martini总结</p>
+
+<p>整个Martini框架运行的模式，我们生成一个Martini的单例。</p>
+
+<p>1.通过martini.Use()来添加Handler中间件，Use添加中间件之后，每个请求都会过这个中间件。</p>
+
+<p>2.通过martini.Map()以及martini.MapTo()来注入每个Handler的参数与值。</p>
+
+<p>3.router.go路由器中，Post和Get等方法用来添加路由地址和路由方法。</p>
+
+<p>当请求来到，每个请求会createContext的上下文，context.run()用户运行每个中间件Handler，最后去调用martini.Action开始路由分发，匹配路由地址，执行Post或者Get方法，之后ResponseWriter写回返回值，本次请求结束。</p>
+
+:ET

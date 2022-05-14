@@ -1,0 +1,170 @@
+I"�"<p>打开系统(Linux) 的 “/var/run/” 目录可以看到有很多已 “.pid” 为结尾的文件
+这些文件只有一行，它记录的是相应进程的 pid，即进程号。所以通过 pid 文件可以很方便的得到一个进程的 pid，然后做相应的操作，比如检测、关闭。
+重要的作用，那就是防止进程启动多个副本。通过文件锁，可以保证一时间内只有一个进程能持有这个文件的写权限，所以在程序启动的检测逻辑中加入获取pid 文件锁并写pid文件的逻辑就可以防止重复启动进程的多个副本了。
+<!-- more -->
+/var/run是干什么用的
+根据linux的文件系统分层结构标准（FHS）中的定义：</p>
+
+<p>/var/run 目录中存放的是自系统启动以来描述系统信息的文件。
+比较常见的用途是daemon进程将自己的pid保存到这个目录。
+标准要求这个文件夹中的文件必须是在系统启动的时候清空，以便建立新的文件。
+为了达到这个要求，linux中/var/run使用的是tmpfs文件系统，这是一种存储在内存中的临时文件系统，当机器关闭的时候，文件系统自然就被清空了。使用df -Th命令能看到类似的输出结果:</p>
+
+<p>文件系统    类型    容量  已用  可用 已用%% 挂载点
+none         tmpfs    990M  384K  989M   1% /var/run
+none         tmpfs    990M     0  990M   0% /var/lock
+当然/var/run除了保存进程的pid之外也有其他的作用，比如utmp文件，就是用来记录机器的启动时间以及当前登陆用户的。</p>
+
+<p>linux系统中/var/run/目录下的*.pid文件是一个文本文件，其内容只有一行，即某个进程的PID。.pid文件的作用是防止进程启动多个副本，只有获得特定pid文件（固定路径和文件名）的写入权限（F_WRLCK）的进程才能正常启动并将自身的进程PID写入该文件，其它同一程序的多余进程则自动退出。</p>
+
+<p>编程实现：</p>
+
+<p>调用fcntl()系统调用设置指定的pid文件为F_WRLCK锁状态，如果锁成功则写入当前进程的PID，进程继续往下执行；如果上锁失败则说明已经有同样的进程在运行了，当前进程退出。
+#define PID_FILE “/var/run/xxxx.pid”
+int lock_file(int fd)
+{
+  struct flock fl;
+  fl.l_type = F_WRLCK;
+  fl.l_start = 0;
+  fl.l_whence = SEEK_SET;
+  fl.l_len = 0;
+  return (fcntl(fd, F_SETLK, &amp;fl));
+}
+int alone_runnind(void)
+{
+  int fd;
+  char buf[16];
+  fd = open(PID_FILE, O_RDWR | O_CREAT, 0666);
+  if (fd &lt; 0)
+  {
+    perror(“open”);
+    exit(1);
+  }
+  if (lock_file(fd) &lt; 0)
+  {
+    if (errno == EACCESS || errno == EAGAIN)
+    {
+      close(fd);
+      printf(“alone runnind\n”);
+      return -1;
+    }
+    printf(“can’t lock %s: %s\n”, PID_FILE, strerror(errno));
+  }
+  ftruncate(fd, 0);  //设置文件的大小为0
+  sprintf(buf, “%ld”, (long)getpid());
+  write(fd, buf, strlen(buf) + 1);
+  return 0;
+}
+需要注意：</p>
+
+<p>1.程退出后该进程加的锁自动失效；
+2.进程关闭了该文件描述符fd，则加的锁失效。（所以整个进程生命周期内不能关闭该fd）；
+3.锁的状态不会被子进程继承，如果进程关闭则失效而不管子进程是否运行。</p>
+
+<p>下面介绍下Linux下/var/run目录下的pid文件作用</p>
+
+<p>在Linux系统的目录/var/run下面一般我们都会看到很多的*.pid文件。而且往往新安装的程序在运行后也会在/var/run目录下面产生自己的pid文件。那么这些pid文件有什么作用呢？它的内容又是什么呢？</p>
+
+<p>(1) pid文件的内容：pid文件为文本文件，内容只有一行, 记录了该进程的ID。</p>
+
+<p>用cat命令可以看到。</p>
+
+<p>(2) pid文件的作用：防止进程启动多个副本。只有获得pid文件(固定路径固定文件名)写入权限(F_WRLCK)的进程才能正常启动并把自身的PID写入该文件中。其它同一个程序的多余进程则自动退出。</p>
+
+<p>(3) 编程技巧：</p>
+
+<p>调用fcntl设置pid文件的锁定F_SETLK状态，其中锁定的标志位F_WRLCK。</p>
+
+<p>如果成功锁定，则写入进程当前PID，进程继续往下执行。</p>
+
+<p>如果锁定不成功，说明已经有同样的进程在运行了，当前进程结束退出。
+lock.l_type = F_WRLCK;
+ lock.l_whence = SEEK_SET;</p>
+
+<p>if (fcntl(fd, F_SETLK, &amp;lock) &lt; 0){
+  //锁定不成功, 退出……
+ }
+sprintf (buf, “%d\n”, (int) pid);
+ pidsize = strlen(buf);
+ if ((tmp = write (fd, buf, pidsize)) != (int)pidsize){
+  //写入不成功, 退出……
+ }
+ (4) 一些注意事项：</p>
+
+<p>i) 如果进程退出，则该进程加的锁自动失效。
+ii) 如果进程关闭了该文件描述符fd， 则加的锁失效。(整个进程运行期间不能关闭此文件描述符)
+iii) 锁的状态不会被子进程继承。如果进程关闭则锁失效而不管子进程是否在运行。</p>
+
+<p>l在linux系统的目录/var/run下面一般我们都会看到很多的*.pid文件。而且往往新安装的程序在运行后也会在/var/run目录下面产生自己的pid文件。那么这些pid文件有什么作用呢？它的内容又是什么呢？</p>
+
+<p>(1) pid文件的内容：pid文件为文本文件，内容只有一行, 记录了该进程的ID。 
+用cat命令可以看到。 
+(2) pid文件的作用：防止进程启动多个副本。只有获得pid文件(固定路径固定文件名)写入权限(F_WRLCK)的进程才能正常启动并把自身的PID写入该文件中。其它同一个程序的多余进程则自动退出。</p>
+
+<p>(3) 编程技巧： 
+    调用fcntl设置pid文件的锁定F_SETLK状态，其中锁定的标志位F_WRLCK。 
+    如果成功锁定，则写入进程当前PID，进程继续往下执行。 
+    如果锁定不成功，说明已经有同样的进程在运行了，当前进程结束退出。</p>
+
+<p>============ 
+C代码  收藏代码
+lock.l_type = F_WRLCK;<br />
+lock.l_whence = SEEK_SET;</p>
+
+<p>if (fcntl(fd, F_SETLK, &amp;lock) &lt; 0){<br />
+    //锁定不成功, 退出……<br />
+}<br />
+sprintf (buf, “%d\n”, (int) pid);<br />
+pidsize = strlen(buf);<br />
+if ((tmp = write (fd, buf, pidsize)) != (int)pidsize){<br />
+    //写入不成功, 退出……<br />
+}</p>
+
+<p>(4) 一些注意事项： 
+    i) 如果进程退出，则该进程加的锁自动失效。 
+    ii) 如果进程关闭了该文件描述符fd， 则加的锁失效。(整个进程运行期间不能关闭此文件描述符) 
+    iii) 锁的状态不会被子进程继承。如果进程关闭则锁失效而不管子进程是否在运行。 
+(Locks are associated with processes. A process can only have one kind of lock set for each byte of a given file. When any file descriptor for that file is closed by the process, all of the locks that process holds on that file are released, even if the locks were made using other descriptors that remain open. Likewise, locks are released when a process exits, and are not inherited by child processes created using fork.)</p>
+
+<p>(5) 参考资料： 
+fcntl(文件锁) 
+表头文件 #include <unistd.h> 
+#include <fcntl.h> 
+函数定义int fcntl(int fd, int cmd, struct flock *lock); 
+函数解释fd:文件描写符 
+设置的文件描写符，参数cmd代表欲垄断的号召 
+F_DUPFD 
+复制参数fd的文件描写符，厉行获胜则归来新复制的文件描写符， 
+F_GETFD 
+获得close-on-exec符号，若些符号的FD_CLOEXEC位为0，代表在调用 
+exec()相干函数时文件将不会关闭 
+F_SETFD 设置close-on-exec符号，该符号以参数arg的 FD_CLOEXEC位定夺 
+F_GETFL获得open()设置的符号 
+F_SETFL改换open()设置的符号 
+F_GETLK获得文件锁定的事态，依据lock的描写，定夺是否上文件锁 
+F_SETLK设置文件锁定的事态，此刻flcok，构造的l_tpye值定然是F_RDLCK、F_WRLCK或F_UNLCK， 
+万一无法发生锁定，则归来-1 
+F_SETLKW 是F_SETLK的阻塞版本，在无法获得锁时会进去睡眠事态，万一能够获得锁可能捉拿到信号则归来 
+参数lock指针为flock构造指针定义如下 
+struct flock { 
+... 
+short l_typejngaoy.com; 
+short l_whence; 
+off_t l_start; 锁定区域的开关位置 
+off_t l_len; 锁定区域的大小 
+pid_t l_pid; 锁定动作的历程 
+... 
+}; 
+1_type有三种事态： 
+F_RDLCK读取锁（分享锁） 
+F_WRLCK写入锁（排斥锁） 
+F_UNLCK解锁 
+l_whence也有三种措施 
+SEEK_SET以文件开始为锁定的起始位置 
+SEEK_CUR以现在文件读写位置为锁定的起始位置 
+SEEK_END以文件尾为锁定的起始位置 
+归来值 获胜则归来0，若有讹谬则归来-1 
+l_len:加锁区的长度 
+l_pid:具有阻塞目前历程的锁，其持有历程的历程号储藏在l_pid中，由F_GETLK归来 
+等闲是将l_start设置为0,l_whence设置为SEEK_SET,l_len设置为0</fcntl.h></unistd.h></p>
+:ET

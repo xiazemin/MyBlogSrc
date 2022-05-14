@@ -1,0 +1,149 @@
+I"�0<p>rpc error: code = Unknown desc = dial tcp: lookup on: write udp : write: operation not permitted</p>
+
+<p>[86330449.294600] nf_conntrack: table full, dropping packet</p>
+
+<p>https://github.com/miekg/dns/issues/1137
+该问题是在Linux下多线程通信的情况下出现该的，一台设备上多个线程向同一个IP地址的同一个端口发送UDP信息，而且是当程序正常工作一段时间之后，出现的。而且发送包的数量比较大，所以猜测可能连接跟踪表满了，导致丢包</p>
+
+<p>解决 nf_conntrack: table full, dropping packet 的几种思路</p>
+
+<p>nf_conntrack 工作在 3 层，支持 IPv4 和 IPv6，而 ip_conntrack 只支持 IPv4。目前，大多的 ip_conntrack_* 已被 nf_conntrack_* 取代，很多 ip_conntrack_* 仅仅是个 alias，原先的 ip_conntrack 的 /proc/sys/net/ipv4/netfilter/ 依然存在，但是新的 nf_conntrack 在 /proc/sys/net/netfilter/ 中，这个应该是做个向下的兼容：</p>
+
+<p>不使用 nf_conntrack 模块</p>
+
+<p>首先要移除 state 模块，因为使用该模块需要加载 nf_conntrack。确保 iptables 规则中没有出现类似 state 模块的规则，如果有的话将其移除：</p>
+
+<p>-A INPUT -m state –state RELATED,ESTABLISHED -j ACCEPT
+3.使用 raw 表，不跟踪连接</p>
+
+<p>iptables 中的 raw 表跟包的跟踪有关，基本就是用来干一件事，通过 NOTRACK 给不需要被连接跟踪的包打标记，也就是说，如果一个连接遇到了 -j NOTRACK，conntrack 就不会跟踪该连接，raw 的优先级大于 mangle, nat, filter，包含 PREROUTING 和 OUTPUT 链。</p>
+
+<p>https://blog.csdn.net/lucky_greenegg/article/details/43192333</p>
+
+<!-- more -->
+<p>使用dmesg查看内核的消息：</p>
+
+<p>[27772673.752270] nf_conntrack: table full, dropping packet
+[27772678.728802] net_ratelimit: 1367 callbacks suppressed
+[27772678.728809] nf_conntrack: table full, dropping packet
+[27772678.728857] nf_conntrack: table full, dropping packet</p>
+
+<h1 id="tail--f-procnetnf_conntrack">tail -f /proc/net/nf_conntrack</h1>
+<p>ipv4     2 tcp      6 28 TIME_WAIT src=xxx.xxx.xxx.xxx dst=xxx.xxx.xxx.xxx sport=63518 dport=8063 src=xxx.xxx.xxx.xxx dst=xxx.xxx.xxx.xxx sport=8063 dport=63518 [ASSURED] mark=0 zone=0 use=2
+ipv4     2 tcp      6 64 TIME_WAIT src=xxx.xxx.xxx.xxx dst=xxx.xxx.xxx.xxx sport=60390 dport=8063 src=xxx.xxx.xxx.xxx dst=xxx.xxx.xxx.xxx sport=8063 dport=60390 [ASSURED] mark=0 zone=0 use=2
+ipv4     2 tcp      6 86 TIME_WAIT src=xxx.xxx.xxx.xxx dst=xxx.xxx.xxx.xxx sport=8788 dport=8063 src=xxx.xxx.xxx.xxx dst=xxx.xxx.xxx.xxx sport=8063 dport=8788 [ASSURED] mark=0 zone=0 use=2
+ipv4     2 tcp      6 111 TIME_WAI</p>
+
+<p>查看nf_conntrack的有些参数配置：
+[root@localhost product]# cat /proc/sys/net/netfilter/nf_conntrack_count
+4489
+[root@localhost product]# cat /proc/sys/net/netfilter/nf_conntrack_max
+65536</p>
+
+<p>默认情况下nf_conntrack_max是65536，可能的原因是短时间内有大量的短连接到了这台机器，超过了这个最大值，导致连接大量丢包，服务不可能用。</p>
+
+<p>解决办法
+尝试移除 conntrack 模块</p>
+
+<p>禁用连接跟踪
+提高跟踪连接的最大数只是一个临时的办法，因为不确定的连接数最大又多少，而且跟踪连接数还耗费一定的资源，既然暂时美誉办法把模块卸载，所以想办法禁用掉。</p>
+
+<p>可以把 table 大小调大很多，同时调整 hashsize 的大小</p>
+
+<p>https://colobu.com/2019/07/30/network-issue-because-of-nf-conntrack/
+init_conntrack调用时expect查表自旋锁
+高版本内核已经已经优化为有条件查询了，具体要不要查询取决于当前expect表中有没有可用项。
+init_conntrack调用时的unconfirmed list自旋锁
+高版本内核已经被优化成percpu，不用担心。
+helper调用时发现应用层数据需要help时的expect插入自旋锁
+比如本文所示的类FTP实例，当Helper逻辑发现了应用层存在一个预期的连接时，会插入一个项到expect表中，这个时候会使用一个自旋锁来保护插入动作。
+  这里的问题在于，即便你的系统中只有一个流创建了哪怕一个expect表项，所有的流在进入conntrack逻辑时均将会去查询expect表以确定自己是不是一个从属于一个Master的Slave，这意味着所有的流都要去抢这个全局的expect自旋锁，这件事是悲哀的。如何优化掉它呢？请自行思考。
+confirm时的unconfirmed自旋锁
+在一个流被confirm时，它首先要从unconfirmed链表中被删除，如前所述，这个锁已经优化为percpu的了，因此不必担心。
+confirm时的全局自旋锁
+在一个流被confrm时，它的ORIG tuple和REPLY tuple(如果发生了NAT，REPLY tuple会被更改)会被同时插入到一个全局的hash链表中，此时需要一个自旋锁保护，这是避不开的，好在这个锁对于一个连接而言只需要锁两次，一次是confirm时，一次是被删除时，这显然意味着我们不必过分担心。
+https://blog.csdn.net/dog250/article/details/78372576</p>
+
+<p>当服务器连接多于最大连接数时会出现kernel: ip_conntrack: table full, dropping packet的错误。</p>
+
+<p>解决方法，修改conntrack最大跟踪连接数：</p>
+
+<p>查看established连接状态最多保留几天，默认是432000秒，就是5天；如果觉得时间太长可以修改。还有各种tcp连接状态的保留时间，都可以修改的</p>
+<h1 id="vim-etcsysctlconf">vim /etc/sysctl.conf</h1>
+<p>net.nf_conntrack_max =</p>
+
+<p>https://blog.csdn.net/u010472499/article/details/78292811</p>
+
+<p>nf_conntrack(在老版本的 Linux 内核中叫 ip_conntrack)是一个内核模块,用于跟踪一个连接的状态的。连接状态跟踪可以供其他模块使用,最常见的两个使用场景是 iptables 的 nat 的 state 模块。 iptables 的 nat 通过规则来修改目的/源地址,但光修改地址不行,我们还需要能让回来的包能路由到最初的来源主机。这就需要借助 nf_conntrack 来找到原来那个连接的记录才行。而 state 模块则是直接使用 nf_conntrack 里记录的连接的状态来匹配用户定义的相关规则。例如下面这条 INPUT 规则用于放行 80 端口上的状态为 NEW 的连接上的包。</p>
+
+<p>在iptables中有四种状态：NEW，ESTABLISHED，RELATED，INVALID。</p>
+
+<p>NEW，表示这个分组需要发起一个连接，或者说，分组对应的连接在两个方向上都没有进行过分组传输。NEW说明 这个包是我们看到的第一个包。意思就是，这是conntrack模块看到的某个连接第一个包，它即将被匹配了。比如，我们看到一个SYN包，是我们所留意 的连接的第一个包，就要匹配它。第一个包也可能不是SYN包，但它仍会被认为是NEW状态。比如一个特意发出的探测包，可能只有RST位，但仍然是 NEW。</p>
+
+<p>ESTABLISHED，表示分组对应的连接已经进行了双向的分组传输，也就是说连接已经建立，而且会继续匹配 这个连接的包。处于ESTABLISHED状态的连接是非常容易理解的。只要发送并接到应答，连接就是ESTABLISHED的了。一个连接要从NEW变 为ESTABLISHED，只需要接到应答包即可，不管这个包是发往防火墙的，还是要由防火墙转发的。ICMP的错误和重定向等信息包也被看作是 ESTABLISHED，只要它们是我们所发出的信息的应答。</p>
+
+<p>RELATED，表示分组要发起一个新的连接，但是这个连接和一个现有的连接有关，例如：FTP的数据传输连接 和控制连接之间就是RELATED关系。RELATED是个比较麻烦的状态。当一个连接和某个已处于ESTABLISHED状态的连接有关系时，就被认为 是RELATED的了。换句话说，一个连接要想是RELATED的，首先要有一个ESTABLISHED的连接。这个ESTABLISHED连接再产生一 个主连接之外的连接，这个新的连接就是RELATED的了，当然前提是conntrack模块要能理解RELATED。ftp是个很好的例子，FTP- data连接就是和FTP-control有RELATED的。还有其他的例子，</p>
+
+<p>INVAILD，表示分组对应的连接是未知的，说明数据包不能被识别属于哪个连接或没有任何状态。有几个原因可以产生这种情况，比如，内存溢出，收到不知属于哪个连接的ICMP错误信息。一般地，我们DROP这个状态的任何东西。</p>
+
+<p>nf_conntrack模块常用命令
+查看nf_conntrack表当前连接数  <br />
+cat /proc/sys/net/netfilter/nf_conntrack_count</p>
+
+<p>查看nf_conntrack表最大连接数  <br />
+cat /proc/sys/net/netfilter/nf_conntrack_max</p>
+
+<p>通过dmesg可以查看nf_conntrack的状况：
+dmesg |grep nf_conntrack</p>
+
+<p>查看存储conntrack条目的哈希表大小,此为只读文件
+cat /proc/sys/net/netfilter/nf_conntrack_buckets</p>
+
+<p>查看nf_conntrack的TCP连接记录时间
+cat /proc/sys/net/netfilter/nf_conntrack_tcp_timeout_established</p>
+
+<p>通过内核参数查看命令，查看所有参数配置
+sysctl -a | grep nf_conntrack</p>
+
+<p>通过conntrack命令行工具查看conntrack的内容
+yum install -y conntrack<br />
+conntrack -L</p>
+
+<p>https://www.cnblogs.com/gyliu/p/12052245.html
+https://www.cnblogs.com/jianyungsun/p/12554455.html</p>
+
+<p>连接跟踪表是一个二维数组结构的哈希表(hash table)，哈希表的大小记作HASHSIZE，哈希表的每一项(hash table entry)称作bucket，因此哈希表中有HASHSIZE个bucket存在，每个bucket包含一个链表(linked list)，每个链表能够存放若干个conntrack条目(bucket size)。需要明确的是，nf_conntrack 模块并不是所有 Linux 内核都会加载，最常见的导致加载该模块的原因是使用了 iptables、lvs 等内核态 NAT/防火墙导致内核需要对连接表进行追踪，iptable_nat、ip_vs 等多个内核模块都依赖 nf_conntrack， 但是 nf_conntrack 的存在会影响高并发下的内核收包性能。</p>
+
+<p>https://www.starduster.me/2019/07/05/nf-conntrack-tuning/</p>
+
+<p>连接跟踪是许多网络应用的基础。例如，Kubernetes Service、ServiceMesh sidecar、 软件四层负载均衡器 LVS/IPVS、Docker network、OVS、iptables 主机防火墙等等，都依赖 连接跟踪功能。</p>
+
+<p>连接跟踪所做的事情就是发现并跟踪这些连接的状态，具体包括：</p>
+
+<p>从数据包中提取元组（tuple）信息，辨别数据流（flow）和对应的连接（connection）
+为所有连接维护一个状态数据库（conntrack table），例如连接的创建时间、发送 包数、发送字节数等等
+回收过期的连接（GC）
+为更上层的功能（例如 NAT）提供服务
+需要注意的是，连接跟踪中所说的“连接”，概念和 TCP/IP 协议中“面向连接”（ connection oriented）的“连接”并不完全相同，简单来说：</p>
+
+<p>TCP/IP 协议中，连接是一个四层（Layer 4）的概念。
+TCP 是有连接的，或称面向连接的（connection oriented），发送出去的包都要求对端应答（ACK），并且有重传机制
+UDP 是无连接的，发送的包无需对端应答，也没有重传机制
+CT 中，一个元组（tuple）定义的一条数据流（flow ）就表示一条连接（connection）。
+后面会看到 UDP 甚至是 ICMP 这种三层协议在 CT 中也都是有连接记录的
+但不是所有协议都会被连接跟踪</p>
+
+<p>要跟踪一台机器的所有连接状态，就需要</p>
+
+<p>拦截（或称过滤）流经这台机器的每一个数据包，并进行分析。
+根据这些信息建立起这台机器上的连接信息数据库（conntrack table）。
+根据拦截到的包信息，不断更新数据库</p>
+
+<p>https://arthurchiao.art/blog/conntrack-design-and-implementation-zh/</p>
+
+<p>什么是连接跟踪？
+连接跟踪是Linux内核中引入的nf_conntrack 模块所实现的功能，同时支持IPv4 和 IPv6，取代只支持 IPv4 的 ip_connktrack，用于跟踪连接的状态，供其他模块使用。顾名思义，就是跟踪并且记录连接状态。Linux为每一个经过网络堆栈的数据包都会记录其状态，生成一个新的连接记录，并将后续的数据包都分配给对应的连接，并更新连接的状态。连接跟踪主要用于Linux的NAT以及状态防火墙。</p>
+
+<p>https://blog.csdn.net/whatday/article/details/105251137</p>
+
+:ET

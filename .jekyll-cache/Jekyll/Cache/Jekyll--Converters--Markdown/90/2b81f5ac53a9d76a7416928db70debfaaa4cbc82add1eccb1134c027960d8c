@@ -1,0 +1,342 @@
+I"�E<p><img src="https://xiazemin.github.io/MyBlog/img/mysqlghost.png" />
+GHOST工作原理：</p>
+
+<p>1、首先新建一张ghost表，结构与源表相同
+2、使用alter命令修改ghost表
+3.1、模拟从库命令获取主库上该表的binlog(基于全镜像的行模式的binlog包含更改前和更改后的所有数据)，并解析成语句到ghost表上执行。
+3.2、获取源表的数据范围（如按照主键获取到最大值和最小值），然后将数据拆分为多个批次拷贝插入到ghost表中
+4、锁住源表，防止用户修改源表数据
+5、将源表重命名，将ghost表改名为源表
+6、释放表锁，清理gh-ost工具产生的表。
+<!-- more -->
+GHOST有工作模式：</p>
+
+<p>1.连接主库直接修改
+    直连主库
+    主库上创建ghost表
+    新表(ghost表)上直接alter修改表结构
+    迁移原表数据到新表
+    拉取解析binlog事件,应用到新表
+    cut-over阶段,用新表替换掉原表
+2.连接从库间接应用到主库
+    连接从库
+    校验完后,在主库创建新表
+    迁移原表数据到新表
+    模拟从库的从库,拉取解析增量binlog应用到主库
+    cut-over阶段,用新表替换掉原表</p>
+
+<p>两者不同的点就在于,通过连接从库来进行变更,对主库的性能影响最小，但使用主库能够减少网络影响，操作速度更快。
+如何保证源表和新表数据一致：</p>
+
+<p>由于使用binlog获得的数据总是新于或者等于从源表拷贝的数据：
+1、在应用binlog导出的数据时，将UPDATE和DELETE直接应用ghost表，将INSERT修改为REPLACE INTO再应用到ghost表。
+2、在copy源表数据到ghost表时，使用INSERT IGNORE来忽略掉ghost表已存在的记录
+3、对于在gh-ost工作期间发生的DELETE操作：
+    A：如果记录在从源表删除前被复制到ghost表， 则ghost表中记录会在应用binlog导出的DELETE命令时删除。
+    B：使用记录在从源表复制到ghost表之前被删除，则记录不会被复制到ghost表，应用binlog导出的DELETE命令也不会报错。
+GHOST支持跨服务器操作</p>
+
+<p>假设有一套主从复制A1–&gt;A2，A1为主库，A2为从库，另有一台服务器B1装有gh-ost，可以在B1上执行对A1上表的修改：
+    1、对于数据拷贝操作，B1发送查询到A1上先获取最大值和最小值，然后在B1上进行拆分成不同批次，再从B1上发送命令给A1执行小范围数据拷贝
+    2、对于Binlog解析，先模拟B1到A1的搭建复制，从A1上拉取binlog到B1，在B1上解析成SQL命令，再发送到A1上执行。</p>
+
+<p>对于跨服务器执行gh-ost命令，会导致大量数据在数据库服务器到命令服务器之间传输，需要考虑网络带宽和网络稳定
+重命名原理</p>
+
+<p>在pt-osc或者online ddl中,最后的rename操作一般是耗时比较短,但如果表结构变更过程中,有大查询进来,那么在rename操作的时候,会触发MDL锁的等待,如果在高峰期,这就是个严重的问题。所以gh-ost是怎么做的呢？</p>
+
+<p>gh-ost利用了MySQL的一个特性，就是原子性的rename请求，在所有被blocked的请求中，优先级永远是最高的。gh-ost基于此设计了该方案：一个连接对原表加锁，另启一个连接尝试rename操作，此时会被阻塞住，当释放lock的时候，rename会首先被执行，其他被阻塞的请求会继续应用到新表。
+唯一索引问题</p>
+
+<p>如果通过gh-ost来新增唯一索引，由于REPLACE INTO和INSERT IGNORE会受到ghost表上唯一索引的影响，当在唯一索引上存在数据重复时，会导致数据丢失。</p>
+
+<p>常用GHOST模板</p>
+
+<p>##================================================##
+mysql_ip=”127.0.0.1”
+mysql_port=3358
+ghost_user=”root”
+ghost_password=”123.com”
+ghost_database=”test1”
+ghost_table=”tb002”
+ghost_command=”ADD C4 INT COMMENT ‘测试列’”</p>
+
+<p>./gh-ost <br />
+–allow-on-master <br />
+–max-load=”Threads_running=256” <br />
+–critical-load=”Threads_running=512” <br />
+–chunk-size=1000 <br />
+–initially-drop-old-table <br />
+–initially-drop-ghost-table <br />
+–initially-drop-socket-file <br />
+–timestamp-old-table <br />
+–force-table-names=”” <br />
+–host=”${mysql_ip}” <br />
+–port=”${mysql_port}” <br />
+–user=”${ghost_user}” <br />
+–password=”${ghost_password}” <br />
+–database=”${ghost_database}” <br />
+–table=”${ghost_table}” <br />
+–alter=”${ghost_command}” <br />
+–verbose <br />
+–execute 
+GHOST常用参数：</p>
+
+<p>1、如果希望直接读取主库BINLOG，需要指定allow-on-master参数
+2、如果想避免上次操作失败产生的临时表导致新操作失败，建议使用initially-drop-ghost-table和initially-drop-socket-file参数
+3、如果希望GHOST操作完成后删除源表，使用ok-to-drop-table参数
+4、如果希望GHOST操作完成后保留源表，建议使用timestamp-old-table参数且不使用ok-to-drop-table参数
+5、使用参数max-load来控制主库繁忙时暂停GHOST运行
+6、使用参数critical-load来控制主库繁忙时终止GHOST运行
+7、使用参数throttle-flag-file或throttle-query来控制GHOST暂停运行
+8、使用参数panic-flag-file来控制GHOST停止运行
+9、使用参数throttle-control-replicas来控制GHOST对从库复制延迟的影响
+GHOST建议：</p>
+
+<p>1、避免同一时间允许多个GHOST
+2、请勿使用GHOST来创建唯一索引
+3、建议从主库读取BINLOG，执行效率较高
+4、建议设置critical-load和max-load时仅考虑Threads_running的值，使用Threads_connected容易因连接暴涨导致GHOST暂停或中止
+5、在磁盘空间足够的条件下，使用timestamp-old-table来保存源表，一方面立即删除源表会造成IO压力，另一方面防止执行中出现BUG或误操作。</p>
+
+<p>GHOST所有参数：</p>
+
+<p>Usage of gh-ost:
+  -allow-master-master
+        当运行MM双主模式时需要显示设置。</p>
+
+<p>-allow-nullable-unique-key
+        设置是否运行唯一键列中使用NULL值，使用ghost创建唯一索引，存在数据丢失风险，慎用！</p>
+
+<p>-allow-on-master
+        当使用主节点的BINLOG来操作时，需要设置该值为ON。</p>
+
+<p>-alter string
+        修改命令，不包含ALTER TABLE部分。</p>
+
+<p>-approve-renamed-columns ALTER
+        当使用ghost进行修改列名操作，需要设置该值</p>
+
+<p>-ask-pass
+        提升输入密码</p>
+
+<p>-assume-master-host string
+        在双主或多主复制场景下，设置以哪个主节点的BINLOG为主。</p>
+
+<p>-assume-rbr
+        假定使用基于ROW格式的复制模式</p>
+
+<p>-check-flag
+        Check if another flag exists/supported. This allows for cross-version scripting. Exits with 0 when all additional provided flags exist, nonzero otherwise. You must provide (dummy) values for flags that require a value. Example: gh-ost –check-flag –cut-over-lock-timeout-seconds –nice-ratio 0</p>
+
+<p>-chunk-size int
+        设置每个批次复制数据的行数，取值范围100至100000，默认为1000</p>
+
+<p>-concurrent-rowcount
+        (with –exact-rowcount), when true (default): count rows after row-copy begins, concurrently, and adjust row estimate later on; when false: first count rows, then start row copy (default true)
+        设置对拷贝记录的计数方式。</p>
+
+<p>-conf string
+        配置文件的路径</p>
+
+<p>-critical-load string
+        Comma delimited status-name=threshold, same format as –max-load. When status exceeds threshold, app panics and quits
+        设置GHOST运行的最大阈值，当超过该阈值后，终止GHOST运行。</p>
+
+<p>-critical-load-hibernate-seconds int
+        When nonzero, critical-load does not panic and bail out; instead, gh-ost goes into hibernate for the specified duration. It will not read/write anything to from/to any server
+        当该值不为0时，如果达到critical-load设置的阈值，会休眠指定时间，然后再次检查。</p>
+
+<p>-critical-load-interval-millis int
+        When 0, migration immediately bails out upon meeting critical-load. When non-zero, a second check is done after given interval, and migration only bails out if 2nd check still meets critical load
+        设置达到critical-load设置的阈值后的检查间隔。</p>
+
+<p>-cut-over string
+        choose cut-over type (default|atomic, two-step) (default “atomic”)
+        设置切换源表和新表表名的操作方式，默认为自动</p>
+
+<p>-cut-over-lock-timeout-seconds int
+        Max number of seconds to hold locks on tables while attempting to cut-over (retry attempted when lock exceeds timeout) (default 3)
+        设置在cut-over时获取表锁的超时时间。</p>
+
+<p>-database string
+        database name (mandatory)
+        数据库名</p>
+
+<p>-debug
+        debug mode (very verbose)
+        DEBUG模式</p>
+
+<p>-default-retries int
+        Default number of retries for various operations before panicking (default 60)
+        默认重试次数</p>
+
+<p>-discard-foreign-keys
+        DANGER! This flag will migrate a table that has foreign keys and will NOT create foreign keys on the ghost table, thus your altered table will have NO foreign keys. This is useful for intentional dropping of foreign keys
+        设置是否丢弃外键，谨慎设置。</p>
+
+<p>-dml-batch-size int
+        batch size for DML events to apply in a single transaction (range 1-100) (default 10)</p>
+
+<p>-exact-rowcount
+        actually count table rows as opposed to estimate them (results in more accurate progress estimation)</p>
+
+<p>-execute
+        actually execute the alter &amp; migrate the table. Default is noop: do some tests and exit
+        设置运行GHOST操作，默认不执行，仅检查并退出。</p>
+
+<p>-force-named-cut-over
+        When true, the ‘unpostpone|cut-over’ interactive command must name the migrated table</p>
+
+<p>-force-table-names string
+        table name prefix to be used on the temporary tables
+        设置临时表的前缀</p>
+
+<p>-heartbeat-interval-millis int
+        how frequently would gh-ost inject a heartbeat value (default 100)
+        设置检查心跳时间间隔</p>
+
+<p>-help
+        Display usage</p>
+
+<p>-hooks-hint string
+        arbitrary message to be injected to hooks via GH_OST_HOOKS_HINT, for your convenience</p>
+
+<p>-hooks-path string
+        directory where hook files are found (default: empty, ie. hooks disabled). Hook files found on this path, and conforming to hook naming conventions will be executed</p>
+
+<p>-host string
+        MySQL hostname (preferably a replica, not the master) (default “127.0.0.1”)</p>
+
+<p>-initially-drop-ghost-table
+        Drop a possibly existing Ghost table (remains from a previous run?) before beginning operation. Default is to panic and abort if such table exists
+        设置是否删除已存在的ghost表，默认不删除，如果ghost表存在，则立即退出。</p>
+
+<p>-initially-drop-old-table
+        Drop a possibly existing OLD table (remains from a previous run?) before beginning operation. Default is to panic and abort if such table exists
+        设置是否删除已存在的OLD表，默认不删除，如果存在，则立即退出。</p>
+
+<p>-initially-drop-socket-file
+        Should gh-ost forcibly delete an existing socket file. Be careful: this might drop the socket file of a running migration!
+        设置是否删除已有的socket文件</p>
+
+<p>-master-password string
+        MySQL password on master, if different from that on replica. Requires –assume-master-host</p>
+
+<p>-master-user string
+        MySQL user on master, if different from that on replica. Requires –assume-master-host</p>
+
+<p>-max-lag-millis int
+        replication lag at which to throttle operation (default 1500)
+        设置复制延迟阈值，如果复制延迟超过该阈值，则暂停GHOST操作。</p>
+
+<p>-max-load string
+        Comma delimited status-name=threshold. e.g: ‘Threads_running=100,Threads_connected=500’. When status exceeds threshold, app throttles writes
+        设置GHOST允许阈值，如果超过该值，则暂停GHOST操作。</p>
+
+<p>-migrate-on-replica
+        Have the migration run on a replica, not on the master. This will do the full migration on the replica including cut-over (as opposed to –test-on-replica)</p>
+
+<p>-nice-ratio float
+        force being ‘nice’, imply sleep time per chunk time; range: [0.0..100.0]. Example values: 0 is aggressive. 1: for every 1ms spent copying rows, sleep additional 1ms (effectively doubling runtime); 0.7: for every 10ms spend in a rowcopy chunk, spend 7ms sleeping immediately after
+        设置显示GHOST进度的格式</p>
+
+<p>-ok-to-drop-table
+        Shall the tool drop the old table at end of operation. DROPping tables can be a long locking operation, which is why I’m not doing it by default. I’m an online tool, yes?
+        设置GHOST完成后是否删除OLD表，对于超大表，删除表操作会持续很长时间，并且造成性能问题，建议将表删除操作放到业务低峰期操作。</p>
+
+<p>-panic-flag-file string
+        when this file is created, gh-ost will immediately terminate, without cleanup
+        当GHOST检查到该文件存在时，会立即退出而不做任何清理。</p>
+
+<p>-password string
+        MySQL password</p>
+
+<p>-port int
+        MySQL port (preferably a replica, not the master) (default 3306)</p>
+
+<p>-postpone-cut-over-flag-file string
+        while this file exists, migration will postpone the final stage of swapping tables, and will keep on syncing the ghost table. Cut-over/swapping would be ready to perform the moment the file is deleted.
+        当GHOST检查到该文件存在时，会将切换表名操作延期，直到该文件被删除。</p>
+
+<p>-quiet
+        quiet
+  -replica-server-id uint
+        server id used by gh-ost process. Default: 99999 (default 99999)
+        指定GHOST操作实例的server-id</p>
+
+<p>-replication-lag-query string
+        Deprecated. gh-ost uses an internal, subsecond resolution query
+        已弃用。</p>
+
+<p>-serve-socket-file string
+        Unix socket file to serve on. Default: auto-determined and advertised upon startup
+        指定实例使用的socket文件路径</p>
+
+<p>-serve-tcp-port int
+        TCP port to serve on. Default: disabled</p>
+
+<p>-skip-foreign-key-checks
+        set to ‘true’ when you know for certain there are no foreign keys on your table, and wish to skip the time it takes for gh-ost to verify that
+        忽略外键检查</p>
+
+<p>-skip-renamed-columns ALTER
+        in case your ALTER statement renames columns, gh-ost will note that and offer its interpretation of the rename. By default gh-ost does not proceed to execute. This flag tells gh-ost to skip the renamed columns, i.e. to treat what gh-ost thinks are renamed columns as unrelated columns. NOTE: you may lose column data
+        忽略列名修改操作</p>
+
+<p>-stack
+        add stack trace upon error</p>
+
+<p>-switch-to-rbr
+        let this tool automatically switch binary log format to ‘ROW’ on the replica, if needed. The format will NOT be switched back. I’m too scared to do that, and wish to protect you if you happen to execute another migration while this one is running
+        使用GHOST工具修改复制格式为ROW模式</p>
+
+<p>-table string
+        table name (mandatory)
+        修改表的表名</p>
+
+<p>-test-on-replica
+        Have the migration run on a replica, not on the master. At the end of migration replication is stopped, and tables are swapped and immediately swap-revert. Replication remains stopped and you can compare the two tables for building trust
+        在复制节点上进行测试</p>
+
+<p>-test-on-replica-skip-replica-stop
+        When –test-on-replica is enabled, do not issue commands stop replication (requires –test-on-replica)</p>
+
+<p>-throttle-additional-flag-file string
+        operation pauses when this file exists; hint: keep default, use for throttling multiple gh-ost operations (default “/tmp/gh-ost.throttle”)
+        当该文件存在时，GHOST操作会暂停，默认值为/tmp/gh-ost.throttle</p>
+
+<p>-throttle-control-replicas string
+        List of replicas on which to check for lag; comma delimited. Example: myhost1.com:3306,myhost2.com,myhost3.com:3307
+        设置要复制延迟的从库</p>
+
+<p>-throttle-flag-file string
+        operation pauses when this file exists; hint: use a file that is specific to the table being altered
+        当该文件存在时，GHOST操作会暂停</p>
+
+<p>-throttle-http string
+        when given, gh-ost checks given URL via HEAD request; any response code other than 200 (OK) causes throttling; make sure it has low latency response
+        基于HTTP方式来决定GHOST暂停</p>
+
+<p>-throttle-query string
+        when given, issued (every second) to check if operation should throttle. Expecting to return zero for no-throttle, &gt;0 for throttle. Query is issued on the migrated server. Make sure this query is lightweight
+        基于QUERY方式来决定GHOST暂停</p>
+
+<p>-timestamp-old-table
+        Use a timestamp in old table name. This makes old table names unique and non conflicting cross migrations
+        GHOST操作完成后，将老表设置带有时间戳</p>
+
+<p>-tungsten
+        explicitly let gh-ost know that you are running on a tungsten-replication based topology (you are likely to also provide –assume-master-host)
+        tungsten-replication是一种异构复制技术，如MySQL到MongoDB的复制</p>
+
+<p>-user string
+        MySQL user</p>
+
+<p>-verbose
+        verbose
+        设置该参数会导致GHOST输出更多详细信息</p>
+
+<p>-version
+        Print version &amp; exit</p>
+:ET

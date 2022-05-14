@@ -1,0 +1,27 @@
+I"�<p>golang中的锁是通过CAS原子操作实现的，Mutex结构如下：
+type Mutex struct {
+    state int32              <br />
+    sema  uint32
+}</p>
+
+<p>//state表示锁当前状态，每个位都有意义，零值表示未上锁
+//sema用做信号量，通过PV操作从等待队列中阻塞/唤醒goroutine，等待锁的goroutine会挂到等待队列中，并且陷入睡眠不被调度，unlock锁时才唤醒。具体在sync/mutex.go Lock函数实现中。</p>
+
+<p>插播一下sema
+虽然在Mutex中就是一个整形字段，但是它是很重要的一环，这个字段就是用于信号量管理goroutine的睡眠和唤醒的。
+sema具体实现还没详看，这里大概分析下功能，注意不准确！！
+首先sema为goroutine的“调度”提供了一种实现，可以让goroutine阻塞和唤醒
+信号量申请资源在runtime/sema.go中semacquire1
+信号量释放资源在semrelease1中
+首先sema中，一个semaRoot结构和一个全局semtable变量，一个semaRoot用于一个信号量的PV操作(猜测与goroutine调度模型MGP有关，一个Processor挂多个goroutine，对于一个processor下的多个goroutine的需要一个信号量来管理，当然需要一个轻量的锁在goroutine的状态转换时加锁，即下面的lock结构，这个锁与Mutex中的锁不相同的，是sema中自己实现的)，多个semaRoot的分配和查找就通过全局变量semtable来管理
+type semaRoot struct {
+    lock  mutex
+    treap *sudog // root of balanced tree of unique waiters.
+    nwait uint32 // Number of waiters. Read w/o the lock.
+}
+var semtable [semTabSize]struct {
+    root semaRoot
+    pad  [cpu.CacheLinePadSize - unsafe.Sizeof(semaRoot{})]byte
+}
+<!-- more --></p>
+:ET

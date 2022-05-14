@@ -1,0 +1,73 @@
+I"�<p>https://mp.weixin.qq.com/s/gNAani93Xrb02oDsgDc1fQ
+在某些垃圾回收器算法中，“停止世界”（Stop the World: STW，下同）是跟踪内存使用最重要的阶段，它会停止程序的执行，以扫描内存使用，并添加写障碍。让我们回顾一下它在内部如何工作，以及它可能面临的潜在问题。
+停止世界（Stop the world）
+停止程序意味着停止所有正在运行的 goroutine。下面是一个执行 STW 的简单程序：</p>
+
+<p>func main() {
+   runtime.GC()
+}
+<!-- more -->
+运行垃圾回收器，将触发 STW 两个阶段。
+有关垃圾回收器周期的更多信息，建议阅读我的另外一篇文章 “Go：垃圾收集器如何标记内存？ ① ”
+第一步：抢占所有正在运行的 goroutine</p>
+
+<p>一旦 goroutine 被抢占，它们将在安全点停止。同时，P 处理器将（正在运行的代码或在空闲列表）被标记为已停止，以不运行任何代码：
+然后，Go 调度程序将运行，将每个 M 与其 P 各自分离，并将其放入空闲列表中
+<img src="https://xiazemin.github.io/MyBlog/img/idlem.png" />
+关于在每个上运行的 goroutine ，它们将在全局队列中等待：</p>
+
+<p>然后，一旦世界停止了，只有唯一活动的 goroutine 才能安全地运行，并在工作完成后启动整个世界。下面跟踪图将有助于理解此阶段发生在何时：
+系统调用</p>
+
+<p>“STW”阶段也可能会影响系统调用，因为它们可能会在 STW 时返回。让我们以一个密集执行系统调用的例子，并查看其如何处理：</p>
+
+<p>func main() {
+   var wg sync.WaitGroup
+   wg.Add(10)
+   for i := 0; i &lt; 10; i++ {
+      go func() {
+         http.Get(<code class="language-plaintext highlighter-rouge">https://httpstat.us/200</code>)
+         wg.Done()
+      }()
+   }
+   wg.Wait()
+}</p>
+
+<p>这是跟踪
+	<img src="https://xiazemin.github.io/MyBlog/img/stw_trace.jpeg" />
+	STW 阶段，系统调用正在结束。但是，由于没有可用 P（如上一节所述，它们都被标记为已停止），goroutine 将被放入全局队列，并在世界恢复时稍后运行。</p>
+
+<p>延迟时间</p>
+
+<p>“STW” 第三步涉及将所有 M 与其 P 分离。但是，Go 将等待它们自行停止：在调度程序运行时，在 syscall 调用中等。等待 goroutine 被抢占应该很快，但是在某些情况下，可能会导致某些延迟。让我们以一个极端的情况为例：</p>
+
+<p>func main() {
+   var t int
+   for i := 0;i &lt; 20 ;i++  {
+      go func() {
+         for i := 0;i &lt; 1000000000 ;i++ {
+            t++
+         }
+      }()
+   }</p>
+
+<p>runtime.GC()
+}</p>
+
+<p>在这里，“ Stop the World”阶段需要 2.6 秒
+	<img src="https://xiazemin.github.io/MyBlog/img/stw640.webp" /></p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>没有函数调用的 goroutine 将不会被抢占，并且 P 在任务结束之前不会被释放。这将迫使“STW”等待。有几种解决方案可改善循环中的抢占，有关此方面的更多信息，建议阅读我另外一篇文章“ Go：Goroutine和抢占 ②”。
+</code></pre></div></div>
+
+<p>相关链接：</p>
+
+<p>https://medium.com/a-journey-with-go/go-how-does-the-garbage-collector-mark-the-memory-72cfc12c6976</p>
+
+<p>https://medium.com/a-journey-with-go/go-goroutine-and-preemption-d6bc2aa2f4b7</p>
+
+<p>原文：</p>
+
+<p>https://medium.com/a-journey-with-go/go-how-does-go-stop-the-world-1ffab8bc8846</p>
+
+:ET

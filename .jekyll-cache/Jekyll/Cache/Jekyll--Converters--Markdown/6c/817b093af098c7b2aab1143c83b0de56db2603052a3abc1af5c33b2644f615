@@ -1,0 +1,176 @@
+I"�<!-- more -->
+<p>一、INET协议族说明</p>
+
+<p>在socket编程中，可以指定协议类型。</p>
+
+<p>int socket(int domain, int type, int protocol);</p>
+
+<p>基本上上可以指定协议类型如下：</p>
+
+<p>tcp_socket = socket(PF_INET, SOCK_STREAM, 0);</p>
+
+<p>udp_socket = socket(PF_INET, SOCK_DGRAM, 0);</p>
+
+<p>raw_socket = socket(PF_INET, SOCK_RAW, protocol);</p>
+
+<p>其中SOCK_STREAM与SOCK_DGRAM是TCP与UDP协议族类型，是最常用的协议类型。</p>
+
+<p>SOCK_RAW是原生数据协议，这里的原生数据是建立在IP协议之上的传输层原生协议。</p>
+
+<p>二、SOCK_RAW说明</p>
+
+<p>SOCK_RAW指建立在IP之上的协议类型，可以直接访问IP协议，一般可以指定IPPROTO_TCP与IPPROTO_UDP。</p>
+
+<p>但SOCK_RAW指定的协议类型在RFC 9700中规范定义：</p>
+
+<p>Assigned Internet Protocol Numbers</p>
+
+<p>Decimal Keyword Protocol References</p>
+
+<hr />
+
+<p>0 Reserved [JBP]</p>
+
+<p>1 ICMP Internet Control Message [RFC792,JBP]</p>
+
+<p>6 TCP Transmission Control [RFC793,JBP]</p>
+
+<p>17     UDP         User Datagram                  [RFC768,JBP]</p>
+
+<p>以上协议可以使用getprotobyname函数根据字符串名字获取。</p>
+
+<p>int proto(const char *pname)</p>
+
+<p>{</p>
+
+<p>struct protoent *pro=getprotobyname(pname);</p>
+
+<p>if(pro==NULL) return -1;</p>
+
+<p>elsereturn pro-&gt;p_proto;</p>
+
+<p>}</p>
+
+<p>也可以在netinet/in.h的头文件中看到定义的宏或者枚举类型。</p>
+
+<p>==========================================================</p>
+
+<p>enum</p>
+
+<p>{</p>
+
+<p>IPPROTO_IP = 0,        /* Dummy protocol for TCP.  */</p>
+
+<p>#define IPPROTO_IP              IPPROTO_IP</p>
+
+<p>IPPROTO_HOPOPTS = 0,   /* IPv6 Hop-by-Hop options.  */</p>
+
+<p>#define IPPROTO_HOPOPTS         IPPROTO_HOPOPTS</p>
+
+<p>IPPROTO_ICMP = 1,      /* Internet Control Message Protocol.  */</p>
+
+<p>#define IPPROTO_ICMP            IPPROTO_ICMP</p>
+
+<p>IPPROTO_IGMP = 2,      /* Internet Group Management Protocol. */</p>
+
+<p>#define IPPROTO_IGMP            IPPROTO_IGMP</p>
+
+<p>IPPROTO_IPIP = 4,      /* IPIP tunnels (older KA9Q tunnels use 94).  */</p>
+
+<p>#define IPPROTO_IPIP            IPPROTO_IPIP</p>
+
+<p>IPPROTO_TCP = 6,       /* Transmission Control Protocol.  */</p>
+
+<p>#define IPPROTO_TCP             IPPROTO_TCP</p>
+
+<p>IPPROTO_EGP = 8,       /* Exterior Gateway Protocol.  */</p>
+
+<p>#define IPPROTO_EGP             IPPROTO_EGP</p>
+
+<p>IPPROTO_PUP = 12,      /* PUP protocol.  */</p>
+
+<p>#define IPPROTO_PUP             IPPROTO_PUP</p>
+
+<p>IPPROTO_UDP = 17,      /* User Datagram Protocol.  */</p>
+
+<p>#define IPPROTO_UDP             IPPROTO_UDP</p>
+
+<p>……</p>
+
+<p>==========================================================</p>
+
+<p>建议在IP之上的原生协议可以自己指定ICMP，TCP，UDP。</p>
+
+<p>一般在开发中有下面情况。</p>
+
+<p>int fd=socket(PF_INET,SOCK_RAW,IPPROTO_ICMP);</p>
+
+<p>int fd=socket(PF_INET,SOCK_RAW,IPPROTO_TCP);</p>
+
+<p>int fd=socket(PF_INET,SOCK_RAW,IPPROTO_UDP);</p>
+
+<p>如果使用原生数据发送数据的时候，一般情况下是不自动包含IP头的，除非通过选项设置setsockopt函数设置IP_HDRINCL选项。</p>
+
+<p>如果设置IP_HDRINCL选项，则可以在发送原生数据的时候，自动添加IP头。接收数据没有这个规则。</p>
+
+<p>如果指定IPPROTO_RAW来接收任意IP协议是不可能的。</p>
+
+<p>自动包含的IP头按如下规则生成：</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>   +---------------------------------------------------+
+
+   |IP Header fields modified on sending by IP_HDRINCL |
+
+   +----------------------+----------------------------+
+
+   |IP Checksum           |Always filled in.           |
+
+   +----------------------+----------------------------+
+
+   |Source Address        |Filled in when zero.        |
+
+   +----------------------+----------------------------+
+
+   |Packet Id             |Filled in when zero.        |
+
+   +----------------------+----------------------------+
+
+   |Total Length          |Always filled in.           |
+
+   +----------------------+----------------------------+
+</code></pre></div></div>
+
+<p>三、RAW的选项设置</p>
+
+<p>int setsockopt(int s, int level, int optname, const void *optval, socklen_t optlen);</p>
+
+<p>对RAW来说level一定要指定为IPPROTO_RAW</p>
+
+<p>可以指定的选项选项为：</p>
+
+<p>ICMP_FILTER</p>
+
+<p>IPPROTO_IP的所有选项对RAW也是有效的。</p>
+
+<p>一般如下指定SOL_IP和SOL_RAW。</p>
+
+<p>SOL_RAW级别上只有一个选项，即ICMP_FILTER，在IPPROTO_ICMP协议下有效。</p>
+
+<p>它激活绑定到IPPROTO_ICMP协议的一个用于RAW socket特殊的过滤器。该值对每种ICMP消息都有一个位（掩码），可以把那种ICMP消息过滤掉，缺省时是不过滤ICMP消息。</p>
+
+<p>示例代码如下：</p>
+
+<p>struct icmp_filter filter={};</p>
+
+<p>filter.data=1;/<em>设置后就过滤掉服务器的回显消息，只能看见一个消息</em>/</p>
+
+<p>r=setsockopt(fd,SOL_RAW,ICMP_FILTER,&amp;filter,sizeof(struct icmp_filter) );</p>
+
+<p>if(r==-1) printf(“setsockopt error:%m\n”),exit(-1);</p>
+
+<p>======================================================</p>
+
+<p>简单的代码，可以接收到ping发送的消息：</p>
+
+<p>int proto(const char <em>); main() { int pt=proto(“ICMP”); printf(“协议是:%d\n”,pt); int fd=socket(PF_INET,SOCK_RAW,pt); if(fd==-1) { printf(“socket error:%m\n”);exit(-1); } int r; //设置socket选项 int val=0; r=setsockopt(fd,IPPROTO_IP,IP_HDRINCL,&amp;val,sizeof(int)); if(r==-1) printf(“setsockopt error:%m\n”),exit(-1); struct icmp_filter filter={}; filter.data=1;/</em>设置 后 就 过滤掉服务器的 回显 消息，只能看见一个消息*/ r=setsockopt(fd,SOL_RAW,ICMP_FILTER,&amp;filter,sizeof(struct icmp_filter) ); if(r==-1) printf(“setsockopt error:%m\n”),exit(-1); //读取的原生数据包 struct ip buf={}; while(1) { bzero(&amp;buf,sizeof(struct ip)); r=recv(fd,&amp;buf,sizeof(struct ip),0); if(r&lt;=0) { printf(“没有读取到数据\n”); } printf(“读取到数据长度%d\n”,r); printf(“头长度:%d\n”,buf.ip_hl); printf(“版本%d\n”,buf.ip_v); } } int proto(const char *pname) { struct protoent *pro=getprotobyname(pname); if(pro==NULL) return -1; elsereturn pro-&gt;p_proto; }</p>
+:ET

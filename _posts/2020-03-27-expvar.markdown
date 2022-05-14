@@ -1,0 +1,682 @@
+---
+title: expvar
+layout: post
+category: golang
+author: 夏泽民
+---
+var (
+	vars      sync.Map // map[string]Var
+	varKeysMu sync.RWMutex
+	varKeys   []string // sorted
+)
+
+func NewString(name string) *String {
+	v := new(String)
+	Publish(name, v)
+	return v
+}
+
+	inerString := "hello"
+	pubString := expvar.NewString(inerString)
+	pubString.Set(inerString)
+	
+	expvar.Do(kvFunc)
+	
+	
+go自带的runtime包拥有各种功能，包括goroutine数量，设置逻辑线程数量，当前go版本，当前系统类型等等。前两天发现了go标准库还有一个更好用的可以监控服务运行各项指标和状态的包—-expvar。
+
+expvar包为监控变量提供了一个标准化的接口，它以 JSON 格式通过 /debug/vars 接口以 HTTP 的方式公开这些监控变量以及我自定义的变量。通过它，再加上metricBeat，ES和Kibana，可以很轻松的对服务进行监控。我这里是用gin把接口暴露出来，其实用别的web框架也都可以。下面我们来看一下如何使用它：
+
+router := gin.Default()  //初始化一个gin实例
+
+router.GET("/debug/vars", monitor.GetCurrentRunningStats) //接口路由，如果url不是/debug/vars，则用metricBeat去获取会出问题
+s := &http.Server{
+   Addr:           ":" + config.GetConfig().Listen.Port,
+   Handler:        router,
+   ReadTimeout:    5 * time.Second,
+   WriteTimeout:   5 * time.Second,
+   MaxHeaderBytes: 1 << 20,
+}
+
+s.ListenAndServe()  //开始监听
+<!-- more -->
+对应的handler函数
+
+package monitor
+
+import (
+   "encoding/json"
+   "expvar"
+   "fmt"
+   "github.com/gin-gonic/gin"
+   "math"
+   "net/http"
+   "quotedata/models"
+   "runtime"
+   "sort"
+   "time"
+)
+
+var CuMemoryPtr *map[string]models.Kline
+var BTCMemoryPtr *map[string]models.Kline
+
+
+// 开始时间
+var start = time.Now()
+
+// calculateUptime 计算运行时间
+func calculateUptime() interface{} {
+   return time.Since(start).String()
+}
+
+// currentGoVersion 当前 Golang 版本
+func currentGoVersion() interface{} {
+   return runtime.Version()
+}
+
+// getNumCPUs 获取 CPU 核心数量
+func getNumCPUs() interface{} {
+   return runtime.NumCPU()
+}
+
+// getGoOS 当前系统类型
+func getGoOS() interface{} {
+   return runtime.GOOS
+}
+
+// getNumGoroutins 当前 goroutine 数量
+func getNumGoroutins() interface{} {
+   return runtime.NumGoroutine()
+}
+
+// getNumCgoCall CGo 调用次数
+func getNumCgoCall() interface{} {
+   return runtime.NumCgoCall()
+}
+
+// 业务特定的内存数据
+func getCuMemoryMap() interface{} {
+   if CuMemoryPtr == nil {
+      return 0
+   } else {
+      return len(*CuMemoryPtr)
+   }
+}
+// 业务特定的内存数据
+func getBTCMemoryMap() interface{} {
+   if BTCMemoryPtr == nil {
+      return 0
+   } else {
+      return len(*BTCMemoryPtr)
+   }
+}
+
+var lastPause uint32
+
+// getLastGCPauseTime 获取上次 GC 的暂停时间
+func getLastGCPauseTime() interface{} {
+   var gcPause uint64
+   ms := new(runtime.MemStats)
+
+   statString := expvar.Get("memstats").String()
+   if statString != "" {
+      json.Unmarshal([]byte(statString), ms)
+
+      if lastPause == 0 || lastPause != ms.NumGC {
+         gcPause = ms.PauseNs[(ms.NumGC+255)%256]
+         lastPause = ms.NumGC
+      }
+   }
+
+   return gcPause
+}
+
+// GetCurrentRunningStats 返回当前运行信息
+func GetCurrentRunningStats(c *gin.Context) {
+   c.Writer.Header().Set("Content-Type", "application/json; charset=utf-8")
+
+   first := true
+   report := func(key string, value interface{}) {
+      if !first {
+         fmt.Fprintf(c.Writer, ",\n")
+      }
+      first = false
+      if str, ok := value.(string); ok {
+         fmt.Fprintf(c.Writer, "%q: %q", key, str)
+      } else {
+         fmt.Fprintf(c.Writer, "%q: %v", key, value)
+      }
+   }
+
+   fmt.Fprintf(c.Writer, "{\n")
+   expvar.Do(func(kv expvar.KeyValue) {
+      report(kv.Key, kv.Value)
+   })
+   fmt.Fprintf(c.Writer, "\n}\n")
+
+   c.String(http.StatusOK, "")
+}
+
+func init() {   //这些都是我自定义的变量，发布到expvar中，每次请求接口，expvar会自动去获取这些变量，并返回给我
+   expvar.Publish("运行时间", expvar.Func(calculateUptime))
+   expvar.Publish("version", expvar.Func(currentGoVersion))
+   expvar.Publish("cores", expvar.Func(getNumCPUs))
+   expvar.Publish("os", expvar.Func(getGoOS))
+   expvar.Publish("cgo", expvar.Func(getNumCgoCall))
+   expvar.Publish("goroutine", expvar.Func(getNumGoroutins))
+   expvar.Publish("gcpause", expvar.Func(getLastGCPauseTime))
+   expvar.Publish("CuMemory", expvar.Func(getCuMemoryMap))
+   expvar.Publish("BTCMemory", expvar.Func(getBTCMemoryMap))
+}
+
+可以看到，expvar返回给了我我之前自定义的数据，以及它本身要默认返回的数据，比如memstats。这个memstats是干嘛的呢，其实看到这些字段名就可以知道，是各种内存堆栈以及GC的一些信息，具体可以看源码注释：
+ype MemStats struct {
+   // General statistics.
+
+   // Alloc is bytes of allocated heap objects.
+   //
+   // This is the same as HeapAlloc (see below).
+   Alloc uint64
+
+   // TotalAlloc is cumulative bytes allocated for heap objects.
+   //
+   // TotalAlloc increases as heap objects are allocated, but
+   // unlike Alloc and HeapAlloc, it does not decrease when
+   // objects are freed.
+   TotalAlloc uint64
+
+   // Sys is the total bytes of memory obtained from the OS.
+   //
+   // Sys is the sum of the XSys fields below. Sys measures the
+   // virtual address space reserved by the Go runtime for the
+   // heap, stacks, and other internal data structures. It's
+   // likely that not all of the virtual address space is backed
+   // by physical memory at any given moment, though in general
+   // it all was at some point.
+   Sys uint64
+
+   // Lookups is the number of pointer lookups performed by the
+   // runtime.
+   //
+   // This is primarily useful for debugging runtime internals.
+   Lookups uint64
+
+   // Mallocs is the cumulative count of heap objects allocated.
+   // The number of live objects is Mallocs - Frees.
+   Mallocs uint64
+
+   // Frees is the cumulative count of heap objects freed.
+   Frees uint64
+
+   // Heap memory statistics.
+   //
+   // Interpreting the heap statistics requires some knowledge of
+   // how Go organizes memory. Go divides the virtual address
+   // space of the heap into "spans", which are contiguous
+   // regions of memory 8K or larger. A span may be in one of
+   // three states:
+   //
+   // An "idle" span contains no objects or other data. The
+   // physical memory backing an idle span can be released back
+   // to the OS (but the virtual address space never is), or it
+   // can be converted into an "in use" or "stack" span.
+   //
+   // An "in use" span contains at least one heap object and may
+   // have free space available to allocate more heap objects.
+   //
+   // A "stack" span is used for goroutine stacks. Stack spans
+   // are not considered part of the heap. A span can change
+   // between heap and stack memory; it is never used for both
+   // simultaneously.
+
+   // HeapAlloc is bytes of allocated heap objects.
+   //
+   // "Allocated" heap objects include all reachable objects, as
+   // well as unreachable objects that the garbage collector has
+   // not yet freed. Specifically, HeapAlloc increases as heap
+   // objects are allocated and decreases as the heap is swept
+   // and unreachable objects are freed. Sweeping occurs
+   // incrementally between GC cycles, so these two processes
+   // occur simultaneously, and as a result HeapAlloc tends to
+   // change smoothly (in contrast with the sawtooth that is
+   // typical of stop-the-world garbage collectors).
+   HeapAlloc uint64
+
+   // HeapSys is bytes of heap memory obtained from the OS.
+   //
+   // HeapSys measures the amount of virtual address space
+   // reserved for the heap. This includes virtual address space
+   // that has been reserved but not yet used, which consumes no
+   // physical memory, but tends to be small, as well as virtual
+   // address space for which the physical memory has been
+   // returned to the OS after it became unused (see HeapReleased
+   // for a measure of the latter).
+   //
+   // HeapSys estimates the largest size the heap has had.
+   HeapSys uint64
+
+   // HeapIdle is bytes in idle (unused) spans.
+   //
+   // Idle spans have no objects in them. These spans could be
+   // (and may already have been) returned to the OS, or they can
+   // be reused for heap allocations, or they can be reused as
+   // stack memory.
+   //
+   // HeapIdle minus HeapReleased estimates the amount of memory
+   // that could be returned to the OS, but is being retained by
+   // the runtime so it can grow the heap without requesting more
+   // memory from the OS. If this difference is significantly
+   // larger than the heap size, it indicates there was a recent
+   // transient spike in live heap size.
+   HeapIdle uint64
+
+   // HeapInuse is bytes in in-use spans.
+   //
+   // In-use spans have at least one object in them. These spans
+   // can only be used for other objects of roughly the same
+   // size.
+   //
+   // HeapInuse minus HeapAlloc esimates the amount of memory
+   // that has been dedicated to particular size classes, but is
+   // not currently being used. This is an upper bound on
+   // fragmentation, but in general this memory can be reused
+   // efficiently.
+   HeapInuse uint64
+
+   // HeapReleased is bytes of physical memory returned to the OS.
+   //
+   // This counts heap memory from idle spans that was returned
+   // to the OS and has not yet been reacquired for the heap.
+   HeapReleased uint64
+
+   // HeapObjects is the number of allocated heap objects.
+   //
+   // Like HeapAlloc, this increases as objects are allocated and
+   // decreases as the heap is swept and unreachable objects are
+   // freed.
+   HeapObjects uint64
+
+   // Stack memory statistics.
+   //
+   // Stacks are not considered part of the heap, but the runtime
+   // can reuse a span of heap memory for stack memory, and
+   // vice-versa.
+
+   // StackInuse is bytes in stack spans.
+   //
+   // In-use stack spans have at least one stack in them. These
+   // spans can only be used for other stacks of the same size.
+   //
+   // There is no StackIdle because unused stack spans are
+   // returned to the heap (and hence counted toward HeapIdle).
+   StackInuse uint64
+
+   // StackSys is bytes of stack memory obtained from the OS.
+   //
+   // StackSys is StackInuse, plus any memory obtained directly
+   // from the OS for OS thread stacks (which should be minimal).
+   StackSys uint64
+
+   // Off-heap memory statistics.
+   //
+   // The following statistics measure runtime-internal
+   // structures that are not allocated from heap memory (usually
+   // because they are part of implementing the heap). Unlike
+   // heap or stack memory, any memory allocated to these
+   // structures is dedicated to these structures.
+   //
+   // These are primarily useful for debugging runtime memory
+   // overheads.
+
+   // MSpanInuse is bytes of allocated mspan structures.
+   MSpanInuse uint64
+
+   // MSpanSys is bytes of memory obtained from the OS for mspan
+   // structures.
+   MSpanSys uint64
+
+   // MCacheInuse is bytes of allocated mcache structures.
+   MCacheInuse uint64
+
+   // MCacheSys is bytes of memory obtained from the OS for
+   // mcache structures.
+   MCacheSys uint64
+
+   // BuckHashSys is bytes of memory in profiling bucket hash tables.
+   BuckHashSys uint64
+
+   // GCSys is bytes of memory in garbage collection metadata.
+   GCSys uint64
+
+   // OtherSys is bytes of memory in miscellaneous off-heap
+   // runtime allocations.
+   OtherSys uint64
+
+   // Garbage collector statistics.
+
+   // NextGC is the target heap size of the next GC cycle.
+   //
+   // The garbage collector's goal is to keep HeapAlloc ≤ NextGC.
+   // At the end of each GC cycle, the target for the next cycle
+   // is computed based on the amount of reachable data and the
+   // value of GOGC.
+   NextGC uint64
+
+   // LastGC is the time the last garbage collection finished, as
+   // nanoseconds since 1970 (the UNIX epoch).
+   LastGC uint64
+
+   // PauseTotalNs is the cumulative nanoseconds in GC
+   // stop-the-world pauses since the program started.
+   //
+   // During a stop-the-world pause, all goroutines are paused
+   // and only the garbage collector can run.
+   PauseTotalNs uint64
+
+   // PauseNs is a circular buffer of recent GC stop-the-world
+   // pause times in nanoseconds.
+   //
+   // The most recent pause is at PauseNs[(NumGC+255)%256]. In
+   // general, PauseNs[N%256] records the time paused in the most
+   // recent N%256th GC cycle. There may be multiple pauses per
+   // GC cycle; this is the sum of all pauses during a cycle.
+   PauseNs [256]uint64
+
+   // PauseEnd is a circular buffer of recent GC pause end times,
+   // as nanoseconds since 1970 (the UNIX epoch).
+   //
+   // This buffer is filled the same way as PauseNs. There may be
+   // multiple pauses per GC cycle; this records the end of the
+   // last pause in a cycle.
+   PauseEnd [256]uint64
+
+   // NumGC is the number of completed GC cycles.
+   NumGC uint32
+
+   // NumForcedGC is the number of GC cycles that were forced by
+   // the application calling the GC function.
+   NumForcedGC uint32
+
+   // GCCPUFraction is the fraction of this program's available
+   // CPU time used by the GC since the program started.
+   //
+   // GCCPUFraction is expressed as a number between 0 and 1,
+   // where 0 means GC has consumed none of this program's CPU. A
+   // program's available CPU time is defined as the integral of
+   // GOMAXPROCS since the program started. That is, if
+   // GOMAXPROCS is 2 and a program has been running for 10
+   // seconds, its "available CPU" is 20 seconds. GCCPUFraction
+   // does not include CPU time used for write barrier activity.
+   //
+   // This is the same as the fraction of CPU reported by
+   // GODEBUG=gctrace=1.
+   GCCPUFraction float64
+
+   // EnableGC indicates that GC is enabled. It is always true,
+   // even if GOGC=off.
+   EnableGC bool
+
+   // DebugGC is currently unused.
+   DebugGC bool
+
+   // BySize reports per-size class allocation statistics.
+   //
+   // BySize[N] gives statistics for allocations of size S where
+   // BySize[N-1].Size < S ≤ BySize[N].Size.
+   //
+   // This does not report allocations larger than BySize[60].Size.
+   BySize [61]struct {
+      // Size is the maximum byte size of an object in this
+      // size class.
+      Size uint32
+
+      // Mallocs is the cumulative count of heap objects
+      // allocated in this size class. The cumulative bytes
+      // of allocation is Size*Mallocs. The number of live
+      // objects in this size class is Mallocs - Frees.
+      Mallocs uint64
+
+      // Frees is the cumulative count of heap objects freed
+      // in this size class.
+      Frees uint64
+   }
+}
+
+然后我在网上找到了对应的汉化版，哈哈，以下内容转发自http://lib.csdn.net/article/go/68270?knId=1441：
+
+1、Alloc uint64 //golang语言框架堆空间分配的字节数
+2、TotalAlloc uint64 //从服务开始运行至今分配器为分配的堆空间总 和，只有增加，释放的时候不减少
+3、Sys uint64 //服务现在系统使用的内存
+4、Lookups uint64 //被runtime监视的指针数
+5、Mallocs uint64 //服务malloc的次数
+6、Frees uint64 //服务回收的heap objects的字节数
+7、HeapAlloc uint64 //服务分配的堆内存字节数
+8、HeapSys uint64 //系统分配的作为运行栈的内存
+9、HeapIdle uint64 //申请但是未分配的堆内存或者回收了的堆内存（空闲）字节数
+10、HeapInuse uint64 //正在使用的堆内存字节数
+10、HeapReleased uint64 //返回给OS的堆内存，类似C/C++中的free。
+11、HeapObjects uint64 //堆内存块申请的量
+12、StackInuse uint64 //正在使用的栈字节数
+13、StackSys uint64 //系统分配的作为运行栈的内存
+14、MSpanInuse uint64 //用于测试用的结构体使用的字节数
+15、MSpanSys uint64 //系统为测试用的结构体分配的字节数
+16、MCacheInuse uint64 //mcache结构体申请的字节数(不会被视为垃圾回收)
+17、MCacheSys uint64 //操作系统申请的堆空间用于mcache的字节数
+18、BuckHashSys uint64 //用于剖析桶散列表的堆空间
+19、GCSys uint64 //垃圾回收标记元信息使用的内存
+20、OtherSys uint64 //golang系统架构占用的额外空间
+21、NextGC uint64 //垃圾回收器检视的内存大小
+22、LastGC uint64 // 垃圾回收器最后一次执行时间。
+23、PauseTotalNs uint64 // 垃圾回收或者其他信息收集导致服务暂停的次数。
+24、PauseNs [256]uint64 //一个循环队列，记录最近垃圾回收系统中断的时间
+25、PauseEnd [256]uint64 //一个循环队列，记录最近垃圾回收系统中断的时间开始点。
+26、NumForcedGC uint32 //服务调用runtime.GC()强制使用垃圾回收的次数。
+27、GCCPUFraction float64 //垃圾回收占用服务CPU工作的时间总和。如果有100个goroutine，垃圾回收的时间为1S,那么就占用了100S。
+28、BySize //内存分配器使用情况
+
+包expvar为公共变量提供了一个标准化的接口。如服务器中的操作计数器。
+它以 JSON 格式通过 /debug/vars 接口以 HTTP 的方式公开这些公共变量。
+设置或修改这些公共变量的操作是原子的。
+除了程序使用的公共变量，还注册了
+cmdline：这个变量就是启动命令
+memstats: 这个变量里面存放着内存的使用情况,
+ expvar 的使用可参考: https://orangetux.nl/post/expvar_in_action/
+
+以下具体介绍memstats,存放在runtime.mstatss.go文件的 mstats struct
+memstats：（单位为字节）红色为重点
+Alloc 堆空间分配的字节数
+TotalAlloc 从服务开始运行至今分配器为分配的堆空间总和
+Sys 进程从系统获得的内存空间，虚拟地址空间
+Lookups 被runtime监视的指针数
+Mallocs 服务 malloc的次数
+Frees 服务 回收的heap objects
+HeapAlloc 进程 堆内存分配使用的空间，通常是用户new出来的堆对象，包含未被gc掉的
+HeapSys  进程从系统获得的堆内存，因为golang底层使用TCmalloc机制，会缓存一部分堆内存，虚拟地址空间。
+HeapIdle  回收了的堆内存
+HeapInuse  正在使用的堆内存
+HeapReleased 返回给OS的堆内存
+HeapObjects  堆内存块申请的量
+StackInuse  正在使用的栈
+StackSys  系统分配的作为运行栈的内存
+MSpanInuse uint64 用于测试用的结构体使用的字节数, 不受GC控制
+MSpanSys uint64 系统为测试用的结构体分配的字节数
+MCacheInuse mcache 结构体申请的字节数（不会被视为垃圾回收）
+MCacheSys 操作系统申请的堆空间用于mcache的字节数
+BuckHashSys 用于剖析桶散列表的堆空间
+GCSys 垃圾回收标记元信息使用的内存
+OtherSys golang系统架构占用的额外空间
+NextGC 垃圾回收器检视的内存大小
+LastGC 垃圾回收器最后一次执行时间
+PauseTotalNs 圾回收或者其他信息收集导致服务暂停的次数
+PauseNs  记录每次gc暂停的时间(纳秒)，最多记录256个最新记录。
+PauseEnd [256]uint64 一个循环队列，记录最近垃圾回收系统中断的时间开始点
+NumGC 记录gc发生的次数。
+NumForcedGC uint32 服务调用runtime.GC()强制使用垃圾回收的次数
+GCCPUFraction float64 垃圾回收占用服务CPU工作的时间总和。如果有100个goroutine，垃圾回收的时间为1S,那么久占用了100S
+EnableGC bool 是否启用GC
+DebugGC bool 是否启动DebugGC
+BySize [61]struct{} 内存分配器使用情况
+工具集成
+有一些工具可以很方便地集成 expvar, 提供监控和可视化能力, 例如:
+
+expvarmon(https://github.com/divan/expvarmon), 基于控制台的轻量级监控工具
+netdata(https://github.com/firehol/netdata/wiki/Monitoring-Go-Applications), 功能全面的服务器实时监控工具, 提供 golang expvar 支持模块
+
+https://cloud.tencent.com/developer/section/1141671
+
+expvar包是 Golang 官方提供的公共变量包，它可以辅助调试全局变量。支持一些常见的类型：float64、int64、Map、String。如果我们的程序要用到上面提的四种类型（其中，Map 类型要求 Key 是字符串）。可以考虑使用这个包。
+
+功能
+它支持对变量的基本操作，修改、查询这些；
+
+整形类型，可以用来做计数器；
+
+操作都是线程安全的。这点很不错。相信大家都自己整过全局变量，除了变量还得整的锁，自己写确实挺麻烦的；
+
+此外还提供了调试接口，/debug/vars。它能够展示所有通过这个包创建的变量；
+
+所有的变量都是Var类型，可以自己通过实现这个接口扩展其它的类型；
+
+ type Var interface {
+     // String returns a valid JSON value for the variable.
+     // Types with String methods that do not return valid JSON
+     // (such as time.Time) must not be used as a Var.
+     String() string
+ }
+Handler()方法可以得到调试接口的http.Handler，和自己的路由对接。
+
+这些基础的功能就不多说了，大家可以直接看官方的文档。
+
+调试接口
+看源码的时候发现一个非常有意思的调试接口，/debug/vars会把所有注册的变量打印到接口里面。这个接口很有情怀。
+
+func init() {
+    http.HandleFunc("/debug/vars", expvarHandler)
+    Publish("cmdline", Func(cmdline))
+    Publish("memstats", Func(memstats))
+}
+源码
+var (
+    mutex   sync.RWMutex
+    vars    = make(map[string]Var)
+    varKeys []string // sorted
+)
+varKeys是全局变量所有的变量名，而且是有序的；
+
+vars根据变量名保存了对应的数据。当然mutex就是这个 Map 的锁；
+
+这三个变量组合起来其实是一个有序线程安全哈希表的实现。
+
+ type Var interface {
+     // String returns a valid JSON value for the variable.
+     // Types with String methods that do not return valid JSON
+     // (such as time.Time) must not be used as a Var.
+     String() string
+ }
+ 
+ type Int struct {
+     i int64
+ }
+
+ func (v *Int) Value() int64 {
+     return atomic.LoadInt64(&v.i)
+ }
+
+ func (v *Int) String() string {
+     return strconv.FormatInt(atomic.LoadInt64(&v.i), 10)
+ }
+
+ func (v *Int) Add(delta int64) {
+     atomic.AddInt64(&v.i, delta)
+ }
+
+ func (v *Int) Set(value int64) {
+     atomic.StoreInt64(&v.i, value)
+ }
+这个包里面的所有类型都实现了这个接口；
+
+以 Int 类型举例。实现非常的简单，注意Add和Set方法是线程安全的。别的类型实现也一样
+
+ func Publish(name string, v Var) {
+     mutex.Lock()
+     defer mutex.Unlock()
+     if _, existing := vars[name]; existing {
+         log.Panicln("Reuse of exported var name:", name)
+     }
+     vars[name] = v
+     varKeys = append(varKeys, name)
+     sort.Strings(varKeys)
+ }
+ 
+ func NewInt(name string) *Int {
+     v := new(Int)
+     Publish(name, v)
+     return v
+ }
+将变量注册到一开始介绍的vars和varKeys里面；
+
+注册时候也是线程安全的，所有的变量名在注册的最后排了个序；
+
+创建对象的时候会自动注册。
+
+ func Do(f func(KeyValue)) {
+     mutex.RLock()
+     defer mutex.RUnlock()
+     for _, k := range varKeys {
+         f(KeyValue{k, vars[k]})
+     }
+ }
+
+ func expvarHandler(w http.ResponseWriter, r *http.Request) {
+     w.Header().Set("Content-Type", "application/json; charset=utf-8")
+     fmt.Fprintf(w, "{\n")
+     first := true
+     Do(func(kv KeyValue) {
+         if !first {
+             fmt.Fprintf(w, ",\n")
+         }
+         first = false
+         fmt.Fprintf(w, "%q: %s", kv.Key, kv.Value)
+     })
+     fmt.Fprintf(w, "\n}\n")
+ }
+
+ func Handler() http.Handler {
+     return http.HandlerFunc(expvarHandler)
+ }
+Do方法，利用一个闭包，按照varKeys的顺序遍历所有全局变量；
+
+expvarHandler方法是http.Handler类型，将所有变量通过接口输出，里面通过Do方法，把所有变量遍历了一遍。挺巧妙；
+
+通过http.HandleFunc方法把expvarHandler这个外部不可访问的方法对外，这个方法用于对接自己的路由；
+
+输出数据的类型，fmt.Fprintf(w, "%q: %s", kv.Key, kv.Value)，可以发现，值输出的字符串，所以输出的内容是String()的结果。这里有一个技巧，虽然调用的字符串的方法，但是由于输出格式%s外面并没有引号，所有对于 JSON 来说，输出的内容是对象类型。相当于在 JSON 编码的时候做了一次类型转换。
+
+ type Func func() interface{}
+
+ func (f Func) Value() interface{} {
+     return f()
+ }
+
+ func (f Func) String() string {
+     v, _ := json.Marshal(f())
+     return string(v)
+ }
+ 
+ func cmdline() interface{} {
+     return os.Args
+ }
+这是一个非常有意思的写法，它可以把任何类型转换成Var类型；
+
+Func定义的是函数，它的类型是func() interface{}
+
+Func(cmdline)，使用的地方需要看清楚，参数是cmdline而不是cmdline()，所以这个写法是类型转换。转换完之后cmdline方法就有了String()方法，在String()方法里又调用了f()，通过 JSON 编码输出。这个小技巧在前面提到的http.HandleFunc里面也有用到，Golang 的程序员对这个是真爱，咱们编码的时候也要多用用啊。
+
+不足
+感觉这个包还是针对简单变量，比如整形、字符串这种比较好用。
+
+前面已经说了，Map 类型只支持 Key 是字符串的变量。其它类型还得自己扩展，扩展的话锁的问题还是得自己搞。而且 JSON 编码低版本不支持 Key 是整形类型的编码，也是个问题；
+Var接口太简单，只有一个String()方法，基本上只能输出变量所有内容，别的东西都没办法控制，如果你的变量有10000个键值对，那么这个接口基本上属于不能用。多说一句，这是 Golang 设计的常见问题，比如日志包，输出的类型是io.Writer，而这个接口只支持一个方法Write([]byte)，想扩展日志包的功能很难，这也失去了抽象出来一个接口的意义。
+路由里面还默认追加了启动参数和MemStats内存相关参数。我个人觉得后面这个不应该加，调用runtime.ReadMemStats(stats)会引起 Stop The World，总感觉不值当。
+总结
+看到就写了，并没有什么沉淀，写得挺乱的。这个包很简单，但是里面还是有些可以借鉴的编码和设计。新版本的 Golang 已经能解析整形为 Key 的哈希表了，这个包啥时候能跟上支持一下？

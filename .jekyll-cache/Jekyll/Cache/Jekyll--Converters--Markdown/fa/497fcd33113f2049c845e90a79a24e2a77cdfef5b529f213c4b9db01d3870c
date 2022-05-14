@@ -1,0 +1,145 @@
+I"	<p>type hchan struct {
+    qcount   uint           // total data in the queue 当前队列中的数据的个数
+    dataqsiz uint           // size of the circular queue   channel环形队列的大小
+    buf      unsafe.Pointer // points to an array of dataqsiz elements  存放数据的环形队列的指针
+    elemsize uint16     // channel 中存放的数据类型的大小|即每个元素的大小
+    closed   uint32     // channel 是否关闭的标示
+    elemtype *_type // element type channel中存放的元素的类型
+    sendx    uint   // send index   当前发送元素指向channel环形队列的下标指针
+    recvx    uint   // receive index 当前接收元素指向channel环形队列的下标指针
+    recvq    waitq  // list of recv waiters 等待接收元素的goroutine队列
+    sendq    waitq  // list of send waiters  等待发送元素的goroutine队列</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>// lock protects all fields in hchan, as well as several
+// fields in sudogs blocked on this channel.
+//
+// Do not change another G's status while holding this lock
+// (in particular, do not ready a G), as this can deadlock
+// with stack shrinking.
+// 保持此锁定时不要更改另一个G的状态（特别是，没有准备好G），因为这可能会因堆栈收缩而死锁。
+lock mutex } &lt;!-- more --&gt; https://studygolang.com/articles/20714 send/recv的细化操作 注意：缓存链表中以上每一步的操作，都是需要加锁操作的！
+</code></pre></div></div>
+
+<p>每一步的操作的细节可以细化为：</p>
+
+<p>第一，加锁
+第二，把数据从goroutine中copy到“队列”中(或者从队列中copy到goroutine中）。
+第三，释放锁</p>
+
+<p>channel主要是为了实现go的并发特性，用于并发通信的，也就是在不同的协程单元goroutine之间同步通信。</p>
+
+<p>下面主要从三个方面来讲解：</p>
+
+<p>make channel，主要也就是hchan的数据结构原型；
+发送和接收数据时，goroutine会怎么调度；
+设计思考；
+1.1 make channel
+我们创建channel时候有两种，一种是带缓冲的channel一种是不带缓冲的channel。创建方式分别如下：</p>
+
+<p>// buffered
+ch := make(chan Task, 3)
+// unbuffered
+ch := make(chan int)</p>
+
+<p>当我们向channel里面写入数据时候，会直接把数据存入circular queue(send)。</p>
+
+<p>当我们新建channel的时候，底层创建的hchan数据结构是在哪里分配内存的呢？其实Section2里面源码分析时候已经做了分析，hchan是在heap里面分配的。</p>
+
+<p>当我们使用make去创建一个channel的时候，实际上返回的是一个指向channel的pointer，所以我们能够在不同的function之间直接传递channel对象，而不用通过指向channel的指针。</p>
+
+<p>先获取全局锁；
+然后enqueue元素(通过移动拷贝的方式)；
+释放锁</p>
+
+<p>除了hchan数据结构外，不要通过共享内存去通信；而是通过通信(复制)实现共享内存。</p>
+
+<p>整个过程如下：</p>
+
+<p>G2调用 t:=&lt;-ch 获取一个元素；
+从channel的buffer里面取出一个元素task1；
+从sender等待队列里面pop一个sudog；
+将task4复制buffer中task1的位置，然后更新buffer的sendx和recvx索引值；
+这时候需要将G1置为Runable状态，表示G1可以恢复运行</p>
+
+<p>会创建一个sudog，将代表G2的sudog存入recvq等待队列。然后G2会调用gopark函数进入等待状态，让出OS thread，然后G2进入阻塞态。</p>
+
+<p>这个时候，如果有一个G1执行读取操作，最直观的流程就是：</p>
+
+<p>将recvq中的task存入buffer；
+goready(G2) 唤醒G2；
+但是我们有更加智能的方法：direct send; 其实也就是G1直接把数据写入到G2中的elem中，这样就不用走G2中的elem复制到buffer中，再从buffer复制给G1。</p>
+
+<p>https://blog.csdn.net/u010853261/article/details/85231944</p>
+
+<p>channel是消息传递的机制，用于多线程环境下lock free synchronization.
+它同时具备2个特性：</p>
+<ol>
+  <li>消息传递</li>
+  <li>同步</li>
+</ol>
+
+<p>golang里的channel的性能，可以参考前一篇：http://blog.sina.com.cn/s/blog_630c58cb01016xur.html
+此外，自带的runtime package里已经提供了benchmark代码，可以运行下面的命令查看其性能：
+go test -v -test.bench=”.*” runtime</p>
+
+<p>在我的pc上的结果是：
+BenchmarkChanUncontended        50000000            67.3 ns/op
+BenchmarkChanContended          50000000            67.7 ns/op
+BenchmarkChanSync               10000000           181 ns/op
+BenchmarkChanProdCons0          10000000           198 ns/op
+BenchmarkChanProdCons10         20000000            98.2 ns/op
+BenchmarkChanProdCons100        50000000            73.4 ns/op
+BenchmarkChanProdConsWork0      1000000          1874 ns/op
+BenchmarkChanProdConsWork10     1000000          1805 ns/op
+BenchmarkChanProdConsWork100    1000000          1771 ns/op
+BenchmarkChanCreation           10000000           195 ns/op
+BenchmarkChanSem                50000000            66.3 ns/op</p>
+
+<p>channel的实现，都在$GOROOT/src/pkg/runtime/chan.c里</p>
+
+<p>它是通过共享内存实现的
+struct Hchan {
+}</p>
+
+<p>ch := make(chan interface{}, 5)
+具体的实现是chan.c里的 Hchan* runtime·makechan_c(ChanType *t, int64 hint)
+此时，hint=5, t=interface{}</p>
+
+<p>它完成的任务就是：
+分配hint * sizeof(t) + sizeof(Hchan)的内存空间［也就是说，buffered chan的buffer越大，占用
+内存越大］</p>
+
+<p>ch &lt;- 5
+就会调用 void runtime·chansend(ChanType *t, Hchan *chan, byte *ep, bool *pres)
+    lock(chan)
+    如果chan是buffer chan {
+        比较当前已经放入buffer里的数据是否满了A
+        如果没有满 {
+            把ep(要放入到chan里的数据)拷贝到chan的内存区域 (此区域是sender/recver共享的)
+            找到receiver goroutine, make it ready, and schedule it to recv
+        } else {
+            已经满了
+            把当前goroutine状态设置为Gwaiting
+            yield
+        }</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>} else {
+    // 这是blocked chan
+    找到receiver goroutine (channel的隐喻就是一定存在多个goroutine)
+    让该goroutine变成ready (之前是Gwaiting), 从而参与schedule，获得控制权
+    具体执行什么，要看chanrecv的实现
+}
+</code></pre></div></div>
+
+<p>https://www.jianshu.com/p/7c84ae381711
+https://segmentfault.com/a/1190000018875154?utm_source=tag-newest</p>
+
+<p>https://www.cnblogs.com/wdliu/p/9272220.html</p>
+
+<p>https://www.jianshu.com/p/24ede9e90490</p>
+
+<p>https://studygolang.com/articles/21586?fr=sidebar
+https://studygolang.com/articles/19755
+https://www.jianshu.com/p/a118eae8774e
+https://www.jianshu.com/p/4d8d3cf04d37</p>
+:ET

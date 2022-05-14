@@ -1,0 +1,138 @@
+I"�<p>基于内存的时序数据库
+http://www.vldb.org/pvldb/vol8/p1816-teller.pdf
+http://www.evanlin.com/gorilla-facebook-tsdb/
+https://github.com/dgryski/go-tsz
+<!-- more -->
+https://github.com/open-falcon/rrdlite</p>
+
+<p>https://github.com/open-falcon</p>
+
+<p>https://github.com/open-falcon/open-falcon.github.io
+http://open-falcon.org/</p>
+
+<p>https://github.com/open-falcon/falcon-plus</p>
+
+<p>http://open-falcon.org/falcon-plus/</p>
+
+<p>https://github.com/ugorji/go</p>
+
+<p>https://book.open-falcon.org/zh_0_2/</p>
+
+<p>https://book.open-falcon.org/zh_0_2/distributed_install/agent.html</p>
+
+<ol>
+  <li>
+    <p>Agent
+agent用于采集机器负载监控指标，比如cpu.idle、load.1min、disk.io.util等等，每隔60秒push给Transfer。agent与Transfer建立了长连接，数据发送速度比较快，agent提供了一个http接口/v1/push用于接收用户手工push的一些数据，然后通过长连接迅速转发给Transfer。</p>
+  </li>
+  <li>
+    <p>Transfer
+transfer是数据转发服务。它接收agent上报的数据，然后按照哈希规则进行数据分片、并将分片后的数据分别push给graph&amp;judge等组件。同时 transfer 也支持将数据转发给 opentsdb 和 influxdb，也可以转发给另外一个 transfer。</p>
+  </li>
+  <li>
+    <p>Graph
+graph是存储绘图数据的组件。graph组件 接收transfer组件推送上来的监控数据，同时处理api组件的查询请求、返回绘图数据。</p>
+  </li>
+  <li>
+    <p>API
+api组件，提供统一的restAPI操作接口。比如：api组件接收查询请求，根据一致性哈希算法去相应的graph实例查询不同metric的数据，然后汇总拿到的数据，最后统一返回给用户。</p>
+  </li>
+  <li>
+    <p>HBS(Heartbeat Server)
+心跳服务器，公司所有agent都会连到HBS，每分钟发一次心跳请求。</p>
+  </li>
+  <li>
+    <p>Judge
+Judge用于告警判断，agent将数据push给Transfer，Transfer不但会转发给Graph组件来绘图，还会转发给Judge用于判断是否触发告警。</p>
+  </li>
+  <li>
+    <p>Alarm
+alarm模块是处理报警event的，judge产生的报警event写入redis，alarm从redis读取处理，并进行不同渠道的发送。</p>
+  </li>
+  <li>
+    <p>Task
+task是监控系统一个必要的辅助模块。定时任务，实现了如下几个功能：</p>
+  </li>
+</ol>
+
+<p>index更新。包括图表索引的全量更新 和 垃圾索引清理。
+falcon服务组件的自身状态数据采集。定时任务了采集了transfer、graph、task这三个服务的内部状态数据。
+falcon自检控任务。</p>
+
+<p>https://github.com/open-falcon/falcon-plus/blob/master/modules/gateway/README.md</p>
+
+<ol>
+  <li>
+    <p>Nodata
+nodata用于检测监控数据的上报异常。nodata和实时报警judge模块协同工作，过程为: 配置了nodata的采集项超时未上报数据，nodata生成一条默认的模拟数据；用户配置相应的报警策略，收到mock数据就产生报警。采集项上报异常检测，作为judge模块的一个必要补充，能够使judge的实时报警功能更加可靠、完善。</p>
+  </li>
+  <li>
+    <p>Aggregator
+集群聚合模块。聚合某集群下的所有机器的某个指标的值，提供一种集群视角的监控体验。</p>
+  </li>
+  <li>
+    <p>Agent-updater
+每台机器都要部署falcon-agent，如果公司机器量比较少，用pssh、ansible、fabric之类的工具手工安装问题也不大。但是公司机器量多了之后，手工安装、升级、回滚falcon-agent将成为噩梦。</p>
+  </li>
+</ol>
+
+<p>个人开发了agent-updater这个工具，用于管理falcon-agent，agent-updater也有一个agent：ops-updater，可以看做是一个超级agent，用于管理其他agent的agent，呵呵，ops-updater推荐在装机的时候一起安装上。ops-updater通常是不会升级的。</p>
+
+<p>具体参看：https://github.com/open-falcon/ops-updater</p>
+
+<ol>
+  <li>硬件监控
+在数据采集一节中我们介绍了常见的监控数据源。open-falcon作为一个监控框架，可以去采集任何系统的监控指标数据，只要将监控数据组织为open-falcon规范的格式就OK了。</li>
+</ol>
+
+<p>硬件的数据采集可以通过 HWCheck 来做。</p>
+
+<ol>
+  <li>HWCheck
+rvadmin工具等组件实现硬件监控，需要安装falcon-agent</li>
+</ol>
+
+<p>仅支持dell物理机，可以监控的指标有：</p>
+
+<p>cpu 内存 阵列卡 物理磁盘 虚拟磁盘 阵列卡电池 BIOS 主板电池 风扇 电压 主板温度 cpu温度</p>
+
+<ol>
+  <li>如何安装
+配置dell官方repo，安装srvadmin等依赖包
+#参考: http://linux.dell.com/repo/hardware/latest/
+wget -q -O - http://linux.dell.com/repo/hardware/latest/bootstrap.cgi | bash</li>
+</ol>
+
+<p>https://book.open-falcon.org/zh_0_2/usage/hwcheck.html</p>
+
+<ol>
+  <li>Data model
+Open-Falcon，采用和OpenTSDB相似的数据格式：metric、endpoint加多组key value tags，举两个例子：</li>
+</ol>
+
+<p>{
+    metric: load.1min,
+    endpoint: open-falcon-host,
+    tags: srv=falcon,idc=aws-sgp,group=az1,
+    value: 1.5,
+    timestamp: <code class="language-plaintext highlighter-rouge">date +%s</code>,
+    counterType: GAUGE,
+    step: 60
+}</p>
+
+<p>https://book.open-falcon.org/zh_0_2/philosophy/data-model.html</p>
+
+<p>https://book.open-falcon.org/zh_0_2/philosophy/data-collect.html</p>
+
+<p>机器负载信息，这个最常见，cpu.idle/load.1min/mem.memfree.percent/df.bytes.free.percent等等
+硬件信息，比如功耗、风扇转速、磁盘是否可写，系统组同学对这些比较关注
+服务监控数据，比如某个接口每分钟调用的次数，latency等等
+数据库、HBase、Redis、Openstack等开源软件的监控指标</p>
+
+<p>https://book.open-falcon.org/zh_0_2/philosophy/plugin.html</p>
+
+<p>https://book.open-falcon.org/zh_0_2/philosophy/tags-and-hostgroup.html</p>
+
+<p>监控系统有个agent部署在所有机器上采集负载信息，比如cpu、内存、磁盘、io、网络等等，但是对于业务监控数据，比如某个接口调用的cps、latency，是没法由agent采集的，需要业务方自行push，其他监控数据，比如MySQL相关监控指标，HBase相关监控指标，Redis相关监控指标，agent也是无能为力，需要业务方自行采集并push给监控。</p>
+
+:ET

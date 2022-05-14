@@ -1,0 +1,233 @@
+---
+title: tideways + xhgui（+toolkit） php 性能分析
+layout: post
+category: php
+author: 夏泽民
+---
+https://github.com/tideways/php-xhprof-extension
+1）PHP的xhprof扩展Facebook不再进行更新和维护，因为Faceboo已经全面使用HHVM，不再使用PHP zend引擎。
+2）xhprof不支持新版本的PHP（PHP7），tideways扩展是从xhprof项目fork下来继续进行维护的，目前支持PHP 7.2, 7.1, 7.0, 5.6 and 5.5 。
+3）tideways是开源项目，它收费的只是UI服务，其实 xhgui完全可以满足我们日常的需求
+<!-- more -->
+2 功能
+tideways是用来测试PHP性能的扩展，它能获取PHP执行的整个过程中调用的函数、调用函数次数、执行时间、CPU时间、内存占用、内存峰值、总执行时间、总CPU时间、总内存占用、总内存峰值等数据，通过以上数据进行分析，找出PHP的性能瓶颈、分析PHP执行过程等。
+3 优点
+1）tideways是一个PHP扩展，结合xhgui，无需在PHP代码中进行埋点来监控代码
+2）可以设置执行频率（例如1/100），无需每个请求都生成执行日志，从而导致性能损失；也可以主动控制是否生成执行日志，通过请求参数来控制（debug=1）
+3）有简单直接的UI对数据进行转化
+4）可以自由的搭配条件进行数据筛选，例如分析某个特定的接口，分析某个时间段的接口请求情况等
+4 缺点
+1）虽然是非侵入式的，但是如果对每个接口生成执行日志，那么对CPU和内存的消耗是不可忽略的。
+2）如果在线上，header文件万一有错误改动等问题，那么将导致PHP请求无法无法正常运行。
+
+2. 实现原理
+
+tideways扩展负责生成运行日志
+nginx中通过配置fastcgi_param PHP_VALUE  auto_prepend_file，在请求开始之前执行auto_prepend_file配置的PHP文件，文件中利用register_shutdown_function方法，在PHP进程结束的时候调用tideways_disable来实现tideways的嵌入，然后将执行日志存入mongodb或者mysql或者文件中，通过xhgui分析之后进行展示，展示形式包括柱状图、瀑布流、火焰图。
+
+4. 配置
+
+nginx配置
+
+server {
+  listen 80;
+  server_name site.localhost;
+  root /Users/markstory/Sites/awesome-thing/app/webroot/;
+  fastcgi_param PHP_VALUE "auto_prepend_file=/home/vagrant/code/xhgui-branch/external/header.php";
+}
+
+
+xhgui配置（生成日志的频率）
+
+'profiler.enable' => function() {
+   // url 中包含debug=1则百分百捕获
+   if(!empty($_GET['debug'])){
+       return True;
+   }else{
+       // 1%采样
+       return rand(1, 100) === 42;
+   }
+}
+
+如上代码，在xhgui的config/config.default.php中，可设置采样命中次数；
+return rand(1, 100) === 42; 为1%的采样率，改成return True;则标识每次都采样
+如果mongodb和xhgui不在同一台机器上的话，需要修改mongodb的配置，配置如下：
+// Can be either mongodb or file.
+   /*
+   'save.handler' => 'file',
+   'save.handler.filename' => dirname(__DIR__) . '/cache/' . 'xhgui.data.' . microtime(true) . '_' . substr(md5($url), 0, 6),
+   */
+   'save.handler' => 'mongodb',
+   // Needed for file save handler. Beware of file locking. You can adujst this file path
+   // to reduce locking problems (eg uniqid, time ...)
+   //'save.handler.filename' => __DIR__.'/../data/xhgui_'.date('Ymd').'.dat',
+   'db.host' => 'mongodb://127.0.0.1:27017',
+   'db.db' => 'xhprof',
+
+
+mongodb配置
+
+mongo
+ > use xhprof
+ > db.results.ensureIndex( { 'meta.SERVER.REQUEST_TIME' : -1 } )
+ > db.results.ensureIndex( { 'profile.main().wt' : -1 } )
+ > db.results.ensureIndex( { 'profile.main().mu' : -1 } )
+ > db.results.ensureIndex( { 'profile.main().cpu' : -1 } )
+ > db.results.ensureIndex( { 'meta.url' : 1 } )
+ 
+ 
+ 当我们发现生产环境的某个接口执行时间特别长时应该怎么做？直接登录线上机器单步调试？打大量的log然后分析？ 一般我们可以把分析流程拆分为如下几步操作：
+
+分析开发环境下执行是否会慢；
+如果是代码问题，在开发环境下就能检测出来；
+
+分析预发环境执行是否会慢；
+如果是数据库或者第三方扩展问题，在预发环境就能检查出来。
+
+从生产环境摘一台机器，分析代码执行慢的原因；
+如果是机器的问题，在生产环境就能检查出来。
+
+1，2，3步骤都需要去分析代码，看哪部分执行时间长。如果人工一句一句代码去排查，不但要耗费大量时间还会导致用户流失。大多时候我们会使用第三方的分析工具tideways或者xhprof来快速发现问题。选择哪一个工具比较好呢？xhprof虽然来自facebook但已经很久不更新，官方源已经显示This package is abandoned and no longer maintained（此包已废弃，不再维护）。tideways恰好相反，一直有商业公司在维护，并且积极的支持了PHP7。两个扩展都是开源的，综上所述我建议大家选择tideways来分析代码。
+
+tideways扩展能把每条请求生成详细的执行日志，通过对日志做简单的分析就能看到程序哪部分耗时最长，这里可以使用xhprof的UI程序（xhprof生成的日志和tideways生成的日志格式通用），交互虽然不大友好但是够用了。如果想有更好的视觉效果，建议下载xhgui，一款基于Bootstrap的xhprof UI程序。
+
+在开始搭建PHP非侵入式监控平台之前，我需要解释几个问题。
+
+一. Tideways这家公司如何盈利？
+Tideways这家公司与Sentry的营销模式一样，都是卖存储服务和数据分析服务。
+
+tideways.so扩展是开源的可以免费使用。但是tideways.so扩展只能生成日志文件，我们获得日志文件后还需要花很长时间去整理和分析。如果你购买了Tideways的服务，就能无缝的将日志存储到他们的服务器，登录他们提供的后台就能看到项目代码和服务器的运行状况。加上各种可视化的图表展示体验非常的好，有很多大公司愿意付费。
+
+二. 安装扩展后代码改动会不会很大？
+tideways.so扩展提供的监控方式是非侵入式的监控，不会对当前项目有任何的影响。我们只需要在Nginx配置文件中加上一行配置即可：
+
+fastcgi_param PHP_VALUE “auto_prepend_file=/home/admin/xhgui/external/header.php”;
+
+代码的含义：在执行主程序前都运行我们指定的PHP脚本
+
+具体如何安装这个服务，我在文章的下半部分会详细说明。现在仅需要知道『非侵入式的监控』不用改动一行项目代码。
+
+三. 每个请求都生成日志会不会影响服务性能？
+用户的每次请求都生成执行日志对服务性能会有轻微的影响。虽然tideways.so扩展提供的监控方式是非侵入式的，但对CPU和内存的消耗是不可忽略的。为了减少对内存和CPU的消耗，我们可以控制生成日志的频率，还能编写生成日志的规则。默认频率为1%(每100个请求生成1条日志，这里的概率非绝对)。
+
+如果有多台服务器，只需要对一台进行监控，机器比较多的话可以每个机房一台。
+
+搭建非侵入式监控环境
+安装PHP mongodb扩展；
+
+sudo pecl install mongodb
+
+pecl是php自带命令，全局如果找不到，请到php的安装目录bin下查看。
+
+安装PHP tideaways扩展；
+
+tideaways的文档写的非常详细，安装tideaways扩展（官方文档） 这里我用Centos举例。
+
+$ echo "[tideways]
+name = Tideways
+baseurl = https://s3-eu-west-1.amazonaws.com/qafoo-profiler/rpm" > /etc/yum.repos.d/tideways.repo
+
+$ rpm --import https://s3-eu-west-1.amazonaws.com/qafoo-profiler/packages/EEB5E8F4.gpg
+
+$ yum makecache --disablerepo=* --enablerepo=tideways
+
+$ yum install tideways-php tideways-cli tideways-daemon
+PS: MarkDown的语法转换可能存在问题，容易把中划线转没了，建议安装时从官网COPY命令，安装tideaways扩展
+
+修改php.ini文件；
+
+我们需要在php.ini文件中引入扩展
+
+[mongodb]
+extension=mongodb.so
+[tideways]
+extension=tideways.so
+;不需要自动加载，在程序中控制就行
+tideways.auto_prepend_library=0
+;频率设置为100，在程序调用时能改
+tideways.sample_rate=100
+安装mongodb-server（可选择安装mongodb客户端）;
+
+我们需要在系统中安装mongodb-server，用来存储tideways扩展生成的日志。多台服务器也只需要安装一个mongodb-server，用来做日志归拢。如果有单独的mongodb机器，可以跳过这一步。
+
+Centos下安装MongoDB服务：
+
+sudo yum install mongodb-server
+
+启动服务：
+
+sudo service mongod start
+
+Centos下安装MongoDB客户端：
+
+sudo yum install mongodb
+
+安装xhgui；
+
+git clone https://github.com/laynefyc/xhgui-branch.git
+cd xhgui-branch
+php install.php
+你也可以通过Composer去安装，composer require laynefyc/xhgui-chinese。
+
+PS: xhgui官方版本已经很久不更新，很多符号和单位都不适合中国用户。为了方便使用我单独维护了一个汉化的版本，并且坚持在更新。安装这个版本，将有更好的体验。如果你一定要安装原版请执行下面的命令
+
+git clone https://github.com/perftools/xhgui
+cd xhgui
+php install.php
+修改配置文件，如果你的MongoDB安装在当前机器可以不用修改xhgui的配置文件，否则你需要在配置文件中修改MongoDB的连接ip和域名，路径如下：xhgui/config/config.default.php
+
+// Can be either mongodb or file.
+   /*
+   'save.handler' => 'file',
+   'save.handler.filename' => dirname(__DIR__) . '/cache/' . 'xhgui.data.' . microtime(true) . '_' . substr(md5($url), 0, 6),
+   */
+   'save.handler' => 'mongodb',
+
+   // Needed for file save handler. Beware of file locking. You can adujst this file path
+   // to reduce locking problems (eg uniqid, time ...)
+   //'save.handler.filename' => __DIR__.'/../data/xhgui_'.date('Ymd').'.dat',
+   'db.host' => 'mongodb://127.0.0.1:27017',
+   'db.db' => 'xhprof',
+测试MongoDB连接情况并优化索引；
+
+当前机器安装过mongo客户端才能调用mongo命令，mongo客户端的安装方法第四步有详细说明。
+
+$ mongo
+> use xhprof
+> db.results.ensureIndex( { 'meta.SERVER.REQUEST_TIME' : -1 } )
+> db.results.ensureIndex( { 'profile.main().wt' : -1 } )
+> db.results.ensureIndex( { 'profile.main().mu' : -1 } )
+> db.results.ensureIndex( { 'profile.main().cpu' : -1 } )
+> db.results.ensureIndex( { 'meta.url' : 1 } )
+配置Nginx；
+
+Nginx需要加入两处配置，一是添加PHP_VALUE，告诉PHP程序在执行前要调用服务：
+
+server {
+  listen 80;
+  server_name site.localhost;
+  root /Users/markstory/Sites/awesome-thing/app/webroot/;
+  fastcgi_param PHP_VALUE "auto_prepend_file=/Users/markstory/Sites/xhgui/external/header.php";
+}
+另一个是需要配置一个路径指向5中安装的xhgui的webroot目录，如下配置是通过单独的域名来访问：
+
+server {
+    listen       80;
+    server_name  blog110.it2048.cn;
+    root  /home/admin/xhgui/webroot;
+
+    location / {
+        index  index.php;
+        if (!-e $request_filename) {
+            rewrite . /index.php last;
+        }
+    }
+
+    location ~ \.php$ {
+        fastcgi_pass   127.0.0.1:9001;
+        fastcgi_index  index.php;
+        fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+        include        fastcgi_params;
+    }
+}
+ 

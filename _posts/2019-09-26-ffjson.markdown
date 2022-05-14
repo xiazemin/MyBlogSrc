@@ -1,0 +1,145 @@
+---
+title: ffjson
+layout: post
+category: golang
+author: 夏泽民
+---
+ffjson 为Go中的结构生成 static MarshalJSON 和 UnmarshalJSON 函数。 生成的函数减少了对运行时反射进行序列化的依赖，通常是 2到 3倍。 在 ffjson 不理解类型的情况下，它返回 encoding/json，意味着它是一个安全的替代方法。 通过使用 ffjson，你的JSON序列化就变得更快，无需额外的代码更改。
+
+更改 struct 时，你需要再次运行 ffjson ( 或者让它成为构建工具的一部分)。
+<!-- more -->
+go get -u github.com/pquerna/ffjson
+ffjson myfile.go
+git add myfile_ffjson.go
+
+运行时性能状态：
+MarshalJSON 比 encoding/json 要快倍至 3 x。
+UnmarshalJSON 比 encoding/json 要快倍至 3 x。
+特性
+从v0.9开始的支持：，ffjson 支持结构解开。
+在替换过程中降低代价：因为 ffjson 实现了由 encoding/json 定义的接口，因此性能增强对你的结构用户。
+支持所有类型： 对于不支持快速路径的任何类型的大多数类型，都有本机支持，它将返回到使用 encoding/json的。 这意味着所有的结构都应该在盒子里工作。
+
+ffjson: 如果有希望 ffjson 忽略的结构，请将 ffjson: skip 添加到这里结构的文档字符串。
+对 ffjson的测试包括了大量的测试，包括模糊的测试套件，包括对JSON解析器的fuzz。
+使用 ffjson
+ffjson 基于现有的struct 类型生成代码。 例如 ffjson foo.go 默认会创建一个新的文件 foo_ffjson.go，它包含在 foo.go 中找到的所有结构的序列化函数。
+
+禁用结构的代码生成
+你可能不希望所有的结构都生成JSON代码。 若要完全禁用结构的生成，请将 ffjson: skip 添加到结构注释中。 例如：
+
+复制代码
+// ffjson: skiptypeFoostruct {
+ Barstring}
+你也可以选择不在注释中包含 ffjson: nodecoder 或者 ffjson: noencoder 而生成解码器或者编码器。 例如这将只生成这里结构的编码器( 封送) 部分：
+
+复制代码
+// ffjson: nodecodertypeFoostruct {
+ Barstring}
+你也可以使用 -noencoder/-nodecoder 命令行标志来完全禁用文件的编码器/解码器。
+
+使用ffjson与 go generate
+ffjson 非常适合 go generate。 它允许你在个人文件中指定ffjson命令并立即运行它们。 这样，你就不必维护一个单独的生成文件，使用你需要生成的文件。
+
+将这里注释添加到你的文件中的任何位置：
+//go:generate ffjson $GOFILE
+要为文件夹中带有标记的所有文件生成 ffjson，只需执行以下操作：
+go generate
+要为当前软件包和所有子软件包生成，请使用：
+go generate./...
+
+我应该在版本控制中包含ffjson文件？
+这个问题完全取决于你。 如果没有，你将拥有更复杂的构建过程。 如果这样做，则必须保持生成的文件更新，如果更改结构的内容。
+
+也就是说，ffjson运行正确，因这里它将在每次运行时生成相同的代码，所以不会更改生成的内容。 注意，如果使用相同的ffjson版本，这只是 true，那么如果有几个人在项目上工作，则可以能需要同步ffjson版本。
+
+性能陷阱
+ffjson 在某些情况下会回退到使用运行时编码器/解码器。 值得注意的情况有：
+
+接口结构成员。因为在运行时不能知道这些类型的类型，ffjson使用反射的编码器。
+具有自定义封送处理/取消引用的结构。
+使用复杂值映射。 像 map[string]int 这样的简单类型很不错。
+内联结构定义 type A struct{B struct{ X int} } 由编码器处理，但在解码器中当前有回退。
+生成解码器时，切片/切片的切片当前正在下降。
+减少垃圾收集
+ffjson 已经为垃圾生成做了很多工作。 然而，每当你通过 json.Marshal，你就会得到一个新的字节 Fragment。 在非常高的吞吐量服务器上，这可能导致GC压力增加。
+
+提示 1: 使用 ffjson.Marshal()/ffjson.Unmarshal( )
+这可能是最简单的优化。 你可以调用 ffjson，而不是通过编码/json。 这将禁用在接收到结构函数时编码/json对json所做的检查。
+
+
+import"github.com/pquerna/ffjson/ffjson"// BEFORE:buf, err:= json.Marshal(&item)
+ // AFTER:buf, err:= ffjson.Marshal(&item)
+这个简单的变化可能会使你的编码/解码速度加倍。
+
+
+提示 2: 缓冲缓冲区
+在你拥有大量并发编码的服务器上，你可以通过使用它来返回从 json.Marshal 获得的字节缓冲区。 一个示例可以如下所示：
+import"github.com/pquerna/ffjson/ffjson"funcEncode(iteminterface{}, outio.Writer) {
+ // Encodebuf, err:= ffjson.Marshal(&item)
+ // Write the buffer _,_ = out.Write(buf)
+ // We are now no longer need the buffer so we pool it.  ffjson.Pool(buf)
+}
+请注意，你回收池中的缓冲区仍然可以由垃圾回收器回收，因这里你不会风险地构建大内存使用。
+
+提示 3: 创建编码器
+有些情况下，你需要一次对多个对象进行编码。 可能是服务器备份，将大量条目写入文件等。
+
+为此，有一个类似 encoding/json的接口，它允许你创建可用的编码器。 下面是一个示例，我们希望对 Item 类型的一个 array 进行编码，其中输入项之间有逗号：
+
+
+import"github.com/pquerna/ffjson/ffjson"funcEncodeItems(items []Item, outio.Writer) {
+ // We create an encoder.enc:= ffjson.NewEncoder(out)
+ fori, item:=range items {
+ // Encode into the buffererr:= enc.Encode(&item)
+ // If err is nil, the content is written to out, so we can write to it as well.if i!= len(items) -1 {
+ _,_ = out.Write([]byte{','})
+ }
+ }
+}
+
+提示 4: 避免接口
+我们不想规定你的数据如何结构，但是在代码中使用接口将使ffjson使用这些golang编码器。 当ffjson必须这样做时，它甚至可能比直接使用 json.Marshal 慢。
+
+要查看发生了什么，请搜索生成的_ffjson.go 文件为文本 Falling back，这将指示ffjson无法为你的数据结构生成代码。
+
+提示 5: ffjson 所有内容 ！
+除了为主结构创建ffjson代码之外，还应该为json代码中包含/使用的任何结构创建代码。
+
+因此，如果你的结构如下所示：
+
+typeFoostruct {
+ VBar}
+此外，如果 Bar 被放在另一个文件中，还应该确保它是为生成的。 还要注意，目前它要求你按顺序执行这一操作，因为为 Foo 生成代码将检查 Bar 是否存在代码。 如果 Foo 和 Bar 被放置在不同的文件中，这只是一个问题。
+
+如果 myfile.go 包含结构类型，你想要更快，假设 GOPATH 被设置为现有项目（这意味着在这个特殊的例子，如果 myfile.go 是在 MyProject 目录的一个合理值，该项应在$GOPATH/src/myproject ) ，你可以运行：
+
+go get -u github.com/pquerna/ffjson
+ffjson myfile.go
+git add myfile_ffjson.go
+###
+
+性能：
+
+* MarshalJSON is 2x to 3x faster than encoding/json.
+
+* UnmarshalJSON is 2x to 3x faster than encoding/json.
+
+特点：
+* 支持解组（ Unmarshal Support）：从 v0.9版本之后，开始支持散集结构。
+
+*
+
+直接替代原件（Drop in Replacement ）：因 ffjson 执行的接口已被 encoding/json 定义，用户使用的性能增强。
+
+*
+
+支持所有类型：ffjson 适用于大多数 Go 的类型——有任何类型路径不支持的话，他将自动会退到 encoding/json，这意味着所有的工作都要在 box 外工作，如果不是，打开一个issue 。
+
+*
+
+ffjson 跳跃：如果你想 ffjson 忽略一个结构，添加 ffjson ， 跳过你想忽略的部分，然后重新串连。
+
+*
+
+拓展测试：包含广泛的测试套件，适合与 JSON parser 相对的模糊测试。

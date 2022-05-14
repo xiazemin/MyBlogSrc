@@ -1,0 +1,524 @@
+---
+title: dwarf
+layout: post
+category: golang
+author: 夏泽民
+---
+dwarf调试信息格式，内容包括有哪些类型的调试信息，调试信息的存放格式、某些调试信息的编码方法等。
+在使用gcc编译程序的时候，加上-g参数，那么最后生成的目标文件中会有调试信息，调试信息格式使用dwarf2格式。使用readelf工具加上-S参数，可以查看目标文件中有哪些调试信息section
+
+一个程序的完成过程一般是编码、编译、运行的过程，当然这是一个理想的过程，所有的开发几乎都不可能是一帆风顺的，总会有些意想不到的错误，这时便需要调试，良好的调试器应该每一个程序员的必备。
+那么调试器使用的调试信息是从哪里来的呢？答案简单的很，是从编译后的文件中来的(注意这里编译的时候要使用特定的编译选项，如VC使用debug模式，GCC使用”-g”)。在编译的时候，编译器会从源文件中收集大量的信息，例如变量名、变量类型、变量所在行号、函数名、函数参数、函数的地址范围、行号和地址的对应关系等等，然后按照一种特定的格式写入到编译后的文件中。调试的时候，调试器便从文件中读取并解析这些信息，以产生人们可读性比较强的信息。简单的说，调试信息就是在机器码和对应的源代码之间建立一座桥梁，大大方便和提高了调试程序的能力。
+调试信息一般都是按照什么样的格式存放的呢？主要有下面几种：stabs，COFF，PE-COFF，OMF，IEEE-695和DWARF。其中DWARF在Linux中被普遍使用，我们主要分析它。
+DWARF的全称是"Debugging With Attributed Record Formats"，遵从GNU FDL授权。现在已经有dwarf1，dwarf2，dwarf3三个版本。
+<!-- more -->
+Dwarf最初被贝尔实验室设计用来供Unix System V的sdb调试器使用，并且在1989年被Unix国际化部门的PLSIG (Programming Languages Special Interest Group)标准化成为dwarf1.0。但是dwarf1有着很多明显的缺点，于是PLSIG继续开发，改正了缺点，并加入了对C++等语言的支持，并在1990年正式公布了dwarf2的标准草案。但是稍后由于一些原因，PLSIG被解散，dwarf的开发陷入到多个并不合作的组织中间，造成dwarf2的一些实现细节要取决于特定的编译器。这种情况一直持续到1999年，开发工作受到了来自实现对HP/Inter IA-64架构提供较好支持的推动，成立了dwarf委员会，dwarf的原作者担任负责人，
+开始了dwarf3的开发，并于2006年1月份推出dwarf3.0，同时为了解决分歧，dwarf委员会加入了自由标准组织，在自由标准组织与来自Linux基金会的OSDL(Open Source Development Labs)合并后，dwarf重返独立状态并创建了自己的网站：dwarfstd.org。
+这三个版本中，dwarf2对dwarf1的改变很大，dwarf3大多是对dwarf2的扩充。
+现在dwarf已经是一种独立的标准，可以支持C、C++、JAVA、Fortran等语言。
+在了解了dwarf的历史之后，来看一下如何查看dwarf所包含的调试信息内容，并在下一篇文章中介绍这些内容的具体意思。查看内容的工具常用的有四种：
+1. readelf
+GNU提供的二进制工具，功能很多，并不限于读dwarf信息
+2. gdb
+这个就不用多说了吧，^_^
+3. drawfdump
+是一个被打包在libdwarf内的程序
+4. libdwarf
+是一个封装好的C库API，用来读取dwarf信息
+在这里我们主要使用readelf工具。
+先写一个简单的C程序，如下：
+1:  
+2: int add(int, int);
+3:  
+4: int main()
+5: ...{
+6: int i, j;
+7:  
+8: for(i = 0; i < 100; i += 5, j = i * 5)
+9: add(i, j);
+10:  
+11: return 0;
+12: }
+13:  
+14: int add(int a, int b)
+15: ...{
+16: return a + b;
+17: }
+然后使用gcc –g hello.c –o hello编译。生成hello文件。
+Hello文件是elf格式的，elf一般由多个节(section)组成，不熟悉的可以看前面两篇关于elf文件格式的文章。调试信息被包含在某几个节中，如果是用dwarf2格式编译的，这些节的名字一般是以.debug开头，如.debug_info，.debug_line，.debug_frame等，如果是用dwarf1格式编译的，这些节的名字一般是.debug，.line等。现在的编译器默认大多数是dwarf2格式编译，当然可以通过gcc的编译选项改变。
+现在来看hello文件都包含了哪些调试信息。
+首先来看都包含了哪些调试节，使用readelf –S hello命令，产生如下输出(已删一些无关内容)：
+[Nr] Name Type Addr Off Size 
+  
+[ 0] NULL 00000000 000000 000000 
+  
+[ 1] .text PROGBITS 00008000 008000 0006c4 
+  
+[ 2] .ARM.exidx ARM_EXIDX 000086c4 0086c4 000008 
+  
+[ 3] .data PROGBITS 000086d0 0086d0 000520 
+  
+[ 4] .bss NOBITS 00008bf0 008bf0 000020 
+  
+[ 5] .debug_aranges PROGBITS 00000000 008bf0 000020 
+  
+[ 6] .debug_pubnames PROGBITS 00000000 008c10 000023 
+  
+[ 7] .debug_info PROGBITS 00000000 008c33 0000cc 
+  
+[ 8] .debug_abbrev PROGBITS 00000000 008cff 00006b 
+  
+[ 9] .debug_line PROGBITS 00000000 008d6a 00003e 
+  
+[10] .debug_frame PROGBITS 00000000 008da8 000188 
+  
+[11] .debug_loc PROGBITS 00000000 008f30 000054 
+  
+[12] .ARM.attributes ARM_ATTRIBUTES 00000000 008f84 000010 
+  
+[13] .comment PROGBITS 00000000 008f94 000032 
+  
+[14] .shstrtab STRTAB 00000000 008fc6 0000ad 
+  
+[15] .symtab SYMTAB 00000000 00931c 000780 
+  
+[16] .strtab STRTAB 00000000 009a9c 000416
+  
+可见一共包含了17个节，其中7个调试信息的节。
+在来看一下各个调试信息节包含的内容，使用readelf –w* hello命令，*是调试节名的第一个字母，如-wi就是查看.debug_info节的内容，-wl就是查看.debug_line节的内容。
+对于一个调试文件，.debug_info和.debug_line节是必须有的，其他的不见得。同时也可以自己写链接脚本实现对所有节(不局限于调试节)的控制，如指定每个节的基址等。
+.debug_info基本包含了一个源文件内部的大部分信息，如函数、参数、变量、类型等等，我们看一下它的输出：
+The section .debug_info contains:
+  
+Compilation Unit @ offset 0x0:
+  
+Length: 200
+  
+Version: 2
+  
+Abbrev Offset: 0
+  
+Pointer Size: 4
+  
+<0><b>: Abbrev Number: 1 (DW_TAG_compile_unit)
+  
+DW_AT_stmt_list : 0 
+  
+DW_AT_high_pc : 0x8248 
+  
+DW_AT_low_pc : 0x81ac 
+  
+DW_AT_producer : GNU C 4.1.1 
+  
+DW_AT_language : 1 (ANSI C)
+  
+DW_AT_name : hello.c 
+  
+DW_AT_comp_dir : C:\Program Files\CodeSourcery\Sourcery G++\bin 
+  
+<1><5c>: Abbrev Number: 2 (DW_TAG_subprogram)
+  
+DW_AT_sibling : <92> 
+  
+DW_AT_external : 1 
+  
+DW_AT_name : main 
+  
+DW_AT_decl_file : 1 
+  
+DW_AT_decl_line : 5 
+  
+DW_AT_type : <92> 
+  
+DW_AT_low_pc : 0x81ac 
+  
+DW_AT_high_pc : 0x8214 
+  
+DW_AT_frame_base : 0 (location list)
+  
+<2><79>: Abbrev Number: 3 (DW_TAG_variable)
+  
+DW_AT_name : i 
+  
+DW_AT_decl_file : 1 
+  
+DW_AT_decl_line : 6 
+  
+DW_AT_type : <92> 
+  
+DW_AT_location : 2 byte block: 91 68 (DW_OP_fbreg: -24)
+  
+<2><85>: Abbrev Number: 3 (DW_TAG_variable)
+  
+DW_AT_name : j 
+  
+DW_AT_decl_file : 1 
+  
+DW_AT_decl_line : 6 
+  
+DW_AT_type : <92> 
+  
+DW_AT_location : 2 byte block: 91 6c (DW_OP_fbreg: -20)
+  
+<1><92>: Abbrev Number: 4 (DW_TAG_base_type)
+  
+DW_AT_name : int 
+  
+DW_AT_byte_size : 4 
+  
+DW_AT_encoding : 5 (signed)
+  
+<1><99>: Abbrev Number: 5 (DW_TAG_subprogram)
+  
+DW_AT_external : 1 
+  
+DW_AT_name : add 
+  
+DW_AT_decl_file : 1 
+  
+DW_AT_decl_line : 15 
+  
+DW_AT_prototyped : 1 
+  
+DW_AT_type : <92> 
+  
+DW_AT_low_pc : 0x8214 
+  
+DW_AT_high_pc : 0x8248 
+  
+DW_AT_frame_base : 0x2a (location list)
+  
+<2><b2>: Abbrev Number: 6 (DW_TAG_formal_parameter)
+  
+DW_AT_name : a 
+  
+DW_AT_decl_file : 1 
+  
+DW_AT_decl_line : 14 
+  
+DW_AT_type : <92> 
+  
+DW_AT_location : 2 byte block: 91 6c (DW_OP_fbreg: -20)
+  
+<2><be>: Abbrev Number: 6 (DW_TAG_formal_parameter)
+  
+DW_AT_name : b 
+  
+DW_AT_decl_file : 1 
+  
+DW_AT_decl_line : 14 
+  
+DW_AT_type : <92> 
+  
+DW_AT_location : 2 byte block: 91 68 (DW_OP_fbreg: -24)
+ 
+.debug_line包含了所有地址和源文件行的对应信息，内容如下：
+ 
+Dump of debug contents of section .debug_line:
+  
+Length: 58
+  
+DWARF Version: 2
+  
+Prologue Length: 30
+  
+Minimum Instruction Length: 2
+  
+Initial value of 'is_stmt': 1
+  
+Line Base: -5
+  
+Line Range: 14
+  
+Opcode Base: 13
+  
+Opcodes:
+  
+Opcode 1 has 0 args
+  
+Opcode 2 has 1 args
+  
+Opcode 3 has 1 args
+  
+Opcode 4 has 1 args
+  
+Opcode 5 has 1 args
+  
+Opcode 6 has 0 args
+  
+Opcode 7 has 0 args
+  
+Opcode 8 has 0 args
+  
+Opcode 9 has 1 args
+  
+Opcode 10 has 0 args
+  
+Opcode 11 has 0 args
+  
+Opcode 12 has 1 args
+  
+The Directory Table is empty.
+  
+The File Name Table:
+  
+Entry Dir Time Size Name
+  
+1 0 0 0 hello.c
+  
+Line Number Statements:
+  
+Extended opcode 2: set Address to 0x81ac
+  
+Special opcode 9: advance Address by 0 to 0x81ac and Line by 4 to 5
+  
+Special opcode 120: advance Address by 16 to 0x81bc and Line by 3 to 8
+  
+Special opcode 90: advance Address by 12 to 0x81c8 and Line by 1 to 9
+  
+Special opcode 88: advance Address by 12 to 0x81d4 and Line by -1 to 8
+  
+Advance PC by constant 34 to 0x81f6
+  
+Special opcode 78: advance Address by 10 to 0x8200 and Line by 3 to 11
+  
+Special opcode 34: advance Address by 4 to 0x8204 and Line by 1 to 12
+  
+Special opcode 120: advance Address by 16 to 0x8214 and Line by 3 to 15
+  
+Special opcode 174: advance Address by 24 to 0x822c and Line by 1 to 16
+  
+Special opcode 90: advance Address by 12 to 0x8238 and Line by 1 to 17
+  
+Advance PC by 16 to 0x8248
+  
+Extended opcode 1: End of Sequence
+
+
+  可以看到.debug_*都是调试信息的section，每个section代表不同类型的调试信息，
+  ection
+
+说明
+
+.debug_info
+
+调试信息主要内容，各个DIE
+
+.debug_abbrev
+
+调试信息缩写表，每个编译单元对应一个缩写表，每个缩写表包含一系列的缩写声明，每个缩写对应一个DIE
+
+.debug_line
+
+行号信息
+
+.debug_macinfo
+
+宏信息，编译器-g3参数才会产生宏信息
+
+.debug_aranges
+
+范围表，每个编译单元对应一个范围范围表，记录了该编译单元的某些ENTRY的text或者data的起始地址和长度，用于跨编译单元的快速查询
+
+.debug_pubnames
+
+全局符号查询表，以编译单元为单位，记录了每个编译单元的全局符号的名称
+
+.debug_frame
+
+函数的堆栈信息
+
+.debug_str
+
+.debug_info中使用到的字符串表
+
+.debug_loc
+
+Location list
+
+ 
+
+3      Gdb使用调试信息
+Gdb中实现源码级别调试，主要实现名称、位置的映射。而这些信息在gdb内部通过symbol来记录的。Symbols按照一定的关系组合在一起，形成symbol table。在gdb中有三类符号表。
+
+ 
+
+表格3‑1 gdb中的符号表
+
+符号表
+
+说明
+
+Minimal_symbol table
+
+该符号表通过分析elf文件中的.symtab section得来，该section中记录的是在elf文件的链接过程中所必须的一些全局的符号。该符号表在没有-g参数的时候也会有。
+
+Partial symboltable
+
+顾名思义，部分符号表，里面记录的是部分的符号的部分的信息，在gdb读入symbol file的时候会初步分析调试信息，建立这么一张partial symbol table，它有两个作用：1，满足一部分的调试需求；2，gdb可以根据partial symtab读入full  symtab。
+
+Full symbol table
+
+完整符号表，里面记录的是完整的符号信息，源码级别调试实现的基础。由于其信息很多，占的内存空间很大，所以gdb在一开始读入symbol file的时候并不会产生这么一个full symtab，而是在后续的调试过程中，如果有需要完整符号表的地方，才会把该cu的full symtab读入，这样效率较高。
+
+ 
+
+Gdb调试主要依靠这三个符号表实现，minimal symtab比较简单，也不属于调试信息分析的范畴，本文不会对minimal symtab多加叙述。Partial symtab和full symtab的建立是根据调试信息完成的。下面gdb对调试信息的使用过程也是这么两张符号表的建立的过程。
+
+3.1    Debug_info——PartialSymtab
+3.1.1     Partial symtab简介
+在展开partial symbol相关的讨论之前，我们先看看partialsymbol是什么。
+
+在gdb中使用structpartial_symbol，来描述一个partial symbol，其中包含的信息如下表所示。
+
+ 
+
+表格3‑2 struct partial_symbol
+
+数据项
+
+说明
+
+Domain
+
+该symbol的类型：变量、函数、type、label等。
+
+Address_class
+
+说明该符号的地址类型，即在什么地方可以找到该符号：寄存器、arglist、local变量、typedef类型等。
+
+Struct general_symbol_info
+
+所有类型符号的基础信息：name、value（是个union，取决于符号的类型）、在哪个section等。
+
+ 
+
+Partial symbol以一定的规则组合在一起，形成partial symtab，gdb中以source file为单位，每个source file对应一个struct partial_symtab，一个objfile中的所有的partial_symtab组成一个链表。Partial symtab中只记录该file中static类型的和global类型的一些符号。Struct partial_symtab的包含的信息如下表所示。
+
+ 
+
+表格3‑3 struct  partial_symtab
+
+数据项
+
+说明
+
+Struct partial_symtab *next
+
+Objfile的所有partial_symtab形成一个链表
+
+Filename、fullname、dirname
+
+文件名、路径等信息
+
+Struct objfile *objfile
+
+对应是哪个objfile
+
+Struct section_offsets
+
+Objfile的各个section的offset
+
+Textlow、 texthigh
+
+该file的地址范围
+
+Struct partial_symtab **dependencies
+
+该file依赖的文件。依赖的意思是在读入本file的symbol之前，要先将dependency的symbol先读入。比如hello.c中include hello.h，那么hello.h的dependency是hello.c，一个文件可能有很多dependency。
+
+Int global_offset， int n_gloabl_syms
+
+该文件对应的全局符号在objfile->global_psymbols中的偏移和个数
+
+Int static_offst, int  n_static_syms
+
+同上，不过是objfile->static_psymbols
+
+Struct symtab *symtab
+
+该file对应的full symtab
+
+Void(*read_symtab)（struct partial_symtab *）
+
+该函数指针用来根据该pst读取full symtab
+
+Void *read_symtab_private
+
+上述函数建立full symtab需要用到的一些数据
+
+Unsigned char readin
+
+标识该pst对应的symtab有没有被读入
+
+ 
+
+3.1.2     Partial_symtab建立流程
+              本节介绍读取调试信息，建立partialsymtab的流程。
+
+              gdb就可以根据此使用一些file_static和global的符号，进行一些基本的源码级别的调试了。
+
+该过程在gdb将symbol file添加进来的时候进行。不同的objfile格式，实现的函数不一样。针对Elf文件，具体调用函数elf_symfile_read()函数完成。该函数主要做了两件事情：1，读取objfile中.symtab、.dynsym(如果有的话)的符号，建立起minimal symtab；2，读取分析调试信息，建立partial symtab。
+
+
+解决因Dwarf版本不匹配，造成gdb无法加载调试信息错误
+当程序跑飞掉的时候，如果能令其生成core文件那该多好。但如果用gdb调试core时，没有调试信息呢（此处说的是，编译时加了-g选项,没有使用-O0以上的编译优化，也没有对可执行文件执行strip去掉符号信息）？
+
+warning: Can't read pathname for load map: Input/output error.
+Reading symbols from /usr/local/lib/xxx.so.2...Error while reading shared library symbols:
+Dwarf Error: wrong version in compilation unit header (is 4, should be 2) [in module /usr/local/lib/xxx.so.2]
+Reading symbols from /usr/lib64/libdl.so.2...done.
+Loaded symbols for /usr/lib64/libdl.so.2
+Reading symbols from /usr/lib64/libstdc++.so.6...done.
+Loaded symbols for /usr/lib64/libstdc++.so.6
+Reading symbols from /usr/lib64/libm.so.6...BFD: /usr/lib64/libm.so.6: invalid relocation type 37
+BFD: BFD (GNU Binutils) 2.18.50.20080226 assertion fail elf64-x86-64.c:278
+BFD: /usr/lib64/libm.so.6: invalid relocation type 37
+BFD: BFD (GNU Binutils) 2.18.50.20080226 assertion fail elf64-x86-64.c:278
+BFD: /usr/lib64/libm.so.6: invalid relocation type 37
+...
+
+由提示信息可知，因为gdb使用的Dwarf是2,而gcc/g++使用的Dwarf是4,版本不匹配，造成调试符号信息无法加载。最后，查了一下我的gdb是6.8.0的版本，而gcc/g++ 是4.8.2的版本。发现从gcc/g++ 4.5`版本开始依赖很多Dwarf 3和Dwarf 4的特性，但升级GCC时，没有升级gdb所致。具体解决方案有：
+
+第一种： 升级gdb
+
+第二种： 让gcc/g++生存Dwarf2版本的调试信息： 增加gcc/g++编译选项 -gdwarf-2 -gstrict-dwarf
+
+默认情况下，编译过的二进制文件已经包含了 DWARFv3 调试信息，只要 GDB7.1 以上版本都可以进行调试。 在OSX下，如无法执行调试指令，可尝试用sudo方式执行gdb。
+
+删除调试符号：go build -ldflags “-s -w”
+
+-s: 去掉符号信息。
+-w: 去掉DWARF调试信息。
+关闭内联优化：go build -gcflags “-N -l”
+
+调试相关函数：
+
+runtime.Breakpoint()：触发调试器断点。
+runtime/debug.PrintStack()：显示调试堆栈。
+log：适合替代 print显示调试信息。
+GDB 调试支持：
+
+参数载入：gdb -d $GCROOT 。
+手工载入：source pkg/runtime/runtime-gdb.py。
+更多细节，请参考: http://golang.org/doc/gdb
+
+https://www.php.cn/manual/view/35171.html
+import "debug/dwarf"
+Package dwarf 提供对从可执行文件加载的 DWARF调试信息的访问，这些信息在 DWARF 2.0 标准中定义，http://dwarfstd.org/doc/dwarf-2.0.0.pdf
+
+import "debug/elf"
+封装 ELF 实现了对 ELF 对象文件的访问。
+
+import "debug/gosym"
+
+gosym 包可以访问由 gc 编译器生成的 Go 二进制文件中嵌入的 Go 符号和行号表。
+
+import "debug/pe"
+Package pe实现对 PE（Microsoft Windows Portable Executable）文件的访问。
+
+import "debug/gosym"
+gosym 包可以访问由 gc 编译器生成的 Go 二进制文件中嵌入的 Go 符号和行号表。
+
+import "debug/plan9obj"
+Package plan9obj 实现对 Plan 9 a.out 目标文件的访问。

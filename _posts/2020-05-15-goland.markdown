@@ -1,0 +1,64 @@
+---
+title: 基于 GoLand 在 Docker 容器中调试 Go 应用程序
+layout: post
+category: golang
+author: 夏泽民
+---
+https://mp.weixin.qq.com/s/4-fkIWcr_3LdLFALVk4ZTA
+创建用于调试的 Dockerfile
+使用与上一篇文章相同的代码仓库[1]，我们可以将分支切换到 debug 分支[2]。
+
+
+
+首先，我们需要对 Dockerfile 进行一些更改。
+<!-- more -->
+ Compile stage
+FROM golang:1.13.8 AS build-env
+
+# Build Delve
+RUN go get github.com/go-delve/delve/cmd/dlv
+
+ADD . /dockerdev
+WORKDIR /dockerdev
+
+RUN go build -gcflags="all=-N -l" -o /server
+
+# Final stage
+FROM debian:buster
+
+EXPOSE 8000 40000
+
+WORKDIR /
+COPY --from=build-env /go/bin/dlv /
+COPY --from=build-env /server /
+
+CMD ["/dlv", "--listen=:40000", "--headless=true", "--api-version=2", "--accept-multiclient", "exec", "/server"]
+这些更改将 Go 调试器 Delve 添加到了容器镜像（Image）中，并让容器通过 Delve 启动应用程序。
+
+我们还需要使用特殊标志（flags）来编译应用程序，以提供更好的调试体验，即关闭编译器的优化。最后，我们将 Delve 和二进制文件都添加到镜像中。
+
+更改运行配置以允许调试器运行
+在开始调试会话之前，我们还需要更改容器的运行方式。在 Docker 容器运行配置的命令行选项（Command line options）部分中，我们需要添加以下值：
+
+--security-opt="apparmor=unconfined" --cap-add=SYS_PTRACE
+
+
+允许在容器内运行调试器，这会有一定安全风险。因此只应该在调试容器上使用，而不能在生产容器上使用。
+
+Pro tip：如果您不想更改原始 Docker 容器或用于它的运行配置，则可以创建重复的 Dockerfile 和重复的运行配置。使用 Dockerfile 上的复制重构将其复制到名为 Dockerfile.debug 的新文件中。
+
+如果您以前从未使用过 .debug 扩展名，IDE 会询问您如何关联文件。在 File pattern 列，填上 Dockerfile.debug 或保持 *.debug，然后在出现的列表中选择 Dockerfile 类型。
+
+
+
+要启动调试器，请像平常一样设置断点，然后创建一个新的 Go Remote Run Configuration，调试器将照常启动。
+
+您可能已经注意到，不需要将文件路径映射手动添加到 IDE，因为它会自动知道如何将源代码从容器映射到主机。
+
+注意：只要未清除二进制文件中的调试信息，此方法就起作用。
+
+
+
+今天就这样。我们已经讨论了创建和运行 Docker 配置的情况，这些配置使我们可以调试容器内的 Go 应用程序。
+
+在以后的文章中，我们将介绍如何使用 Docker Compose 和 Kubernetes 启动和调试应用程序。

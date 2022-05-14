@@ -1,0 +1,78 @@
+---
+title: go_radix
+layout: post
+category: golang
+author: 夏泽民
+---
+https://github.com/armon/go-radix
+https://github.com/Kentik/patricia
+作为一个基数树，它提供以下内容：
+
+O(k) 操作。在许多情况下，这可以能比散列表快，因为哈希函数是 O(k) 操作。
+最小/最大值查找
+有序迭代
+<!-- more -->
+echo 的三种匹配模式和优先级顺序匹配，优先级从下到下:
+
+Static (固定路径) 类似于/users/new
+Param (参数路径) 类似于/users/:id
+Match any (匹配所有) 类似于/users/1/files/*
+看到这些模式，http 自带的路由只支持 固定路径 和 匹配所有的模式。这也是提高的地方。
+
+type (
+    // Router 结构是`Echo`实例注册路由的地方。路由树
+    Router struct {
+        tree   *node // 节点
+        routes map[string]*Route // map 形式，Route 包含请求handler 和 匹配信息
+        echo   *Echo
+    }
+    // Route 包含请求的 handler 和 用于匹配的信息。
+    Route struct {
+        Method string `json:"method"`
+        Path   string `json:"path"`
+        Name   string `json:"name"`
+    }
+    // 节点结构
+    node struct {
+        kind          kind // 路由类型skind 0（/echo/hi）, pkind 1 (/users/:name),  akind 2(/orders/*)
+        label         byte // prefix的第一个字符，根据label和kind来查找子节点
+        prefix        string // 前缀
+        parent        *node // 父节点
+        children      children // 子节点，列表
+        ppath         string // 原始路径
+        pnames        []string // 路径参数只有类型为 1(:后面的的字段)， 2([*])才有，
+        methodHandler *methodHandler // 请求类型
+    }
+    kind          uint8
+    children      []*node
+    methodHandler struct {
+        connect  HandlerFunc
+        delete   HandlerFunc
+        get      HandlerFunc
+        head     HandlerFunc
+        options  HandlerFunc
+        patch    HandlerFunc
+        post     HandlerFunc
+        propfind HandlerFunc
+        put      HandlerFunc
+        trace    HandlerFunc
+    }
+)
+Echo 的路由基于 radix tree ，它让路由的查询非常快，且使用 sync pool 来重复利用内存并且几乎达到了零内存占用。看路由的结构，跟字典树的结构一致，基数树就是字典树的一种优化结构。所以，通过请求来查找 handler 会比 http 提供的路由要快。在 http 的路由查找中是通过遍历方式的O(n)，这里使用基数树O(K)的时间复杂度要好的多，同样比普通的Trie树的效率也要高。
+
+
+memdb
+提供实现一个简单内存数据库的memdb 包，该数据库建立在不可变的基数树上。 数据库提供了原子的原子性。一致性和隔离性。 因为它在记忆中，它并没有提供耐久性。 使用指定存在的表和索引的模式实例化数据库，并允许执行事务。
+
+数据库提供以下内容：
+
+多版本并发控制( MVCC ) - 通过利用不可以变的基本树来支持任意数量的并发读者，并允许编写者进行。
+
+事务支持- 数据库允许大量的事务，其中插入。更新或者删除多个对象。 事务可以跨多个表，并以原子方式应用。 数据库在ACID术语中提供原子性和隔离性，这样直到提交更新不可见。
+
+丰富的索引- 表可以支持任意数量的索引，可以是单个字段索引，也可以是更高级的复合字段索引。 可以从字符串中高效地将某些类型像UUID压缩到字节索引中，以减少存储需求。
+
+表- 调用方可以将表集填充为查询的一部分，这可以用于检测对数据库的修改。 这让调用者很容易地在数据库中观察更改的一般情况。
+https://github.com/hashicorp/go-memdb
+
+底层基于：https://github.com/hashicorp/go-immutable-radix

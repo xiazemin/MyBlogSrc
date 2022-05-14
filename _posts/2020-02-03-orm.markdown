@@ -1,0 +1,1605 @@
+---
+title: orm
+layout: post
+category: golang
+author: 夏泽民
+---
+什么是“持久化” 
+持久（Persistence），即把数据（如内存中的对象）保存到可永久保存的存储设备中（如磁盘）。持久化的主要应用是将内存中的数据存储在关系型的数据库中，当然也可以存储在磁盘文件中、XML数据文件中等等。
+
+什么是 “持久层” 
+持久层（Persistence Layer），即专注于实现数据持久化应用领域的某个特定系统的一个逻辑层面，将数据使用者和数据实体相关联。
+
+ 
+
+什么是ORM
+
+即Object-Relationl Mapping，它的作用是在关系型数据库和对象之间作一个映射，这样，我们在具体的操作数据库的时候，就不需要再去和复杂的SQL语句打交道，只要像平时操作对象一样操作它就可以了 。
+
+ 
+
+为什么要做持久化和ORM设计(重要)
+
+在目前的企业应用系统设计中，MVC，即 Model（模型）- View（视图）- Control（控制）为主要的系统架构模式。MVC 中的 Model 包含了复杂的业务逻辑和数据逻辑，以及数据存取机制（如 JDBC的连接、SQL生成和Statement创建、还有ResultSet结果集的读取等）等。将这些复杂的业务逻辑和数据逻辑分离，以将系统的紧耦 合关系转化为松耦合关系（即解耦合），是降低系统耦合度迫切要做的，也是持久化要做的工作。MVC 模式实现了架构上将表现层（即View）和数据处理层（即Model）分离的解耦合，而持久化的设计则实现了数据处理层内部的业务逻辑和数据逻辑分离的解耦合。 而 ORM 作为持久化设计中的最重要也最复杂的技术，也是目前业界热点技术。
+
+简单来说，按通常的系统设计，使用 JDBC 操作数据库，业务处理逻辑和数据存取逻辑是混杂在一起的。
+一般基本都是如下几个步骤：
+1、建立数据库连接，获得 Connection 对象。
+2、根据用户的输入组装查询 SQL 语句。
+3、根据 SQL 语句建立 Statement 对象 或者 PreparedStatement 对象。
+4、用 Connection 对象执行 SQL语句，获得结果集 ResultSet 对象。
+5、然后一条一条读取结果集 ResultSet 对象中的数据。
+6、根据读取到的数据，按特定的业务逻辑进行计算。
+7、根据计算得到的结果再组装更新 SQL 语句。
+8、再使用 Connection 对象执行更新 SQL 语句，以更新数据库中的数据。
+7、最后依次关闭各个 Statement 对象和 Connection 对象。
+
+由上可看出代码逻辑非常复杂，这还不包括某条语句执行失败的处理逻辑。其中的业务处理逻辑和数据存取逻辑完全混杂在一块。而一个完整的系统要包含成 千上万个这样重复的而又混杂的处理过程，假如要对其中某些业务逻辑或者一些相关联的业务流程做修改，要改动的代码量将不可想象。另一方面，假如要换数据库 产品或者运行环境也可能是个不可能完成的任务。而用户的运行环境和要求却千差万别，我们不可能为每一个用户每一种运行环境设计一套一样的系统。
+所 以就要将一样的处理代码即业务逻辑和可能不一样的处理即数据存取逻辑分离开来，另一方面，关系型数据库中的数据基本都是以一行行的数据进行存取的，而程序 运行却是一个个对象进行处理，而目前大部分数据库驱动技术（如ADO.NET、JDBC、ODBC等等）均是以行集的结果集一条条进行处理的。所以为解决 这一困难，就出现 ORM 这一个对象和数据之间映射技术。
+
+举例来说，比如要完成一个购物打折促销的程序，用 ORM 思想将如下实现（引自《深入浅出Hibernate》）：
+业务逻辑如下：
+public Double calcAmount(String customerid, double amount) 
+{
+    // 根据客户ID获得客户记录
+    Customer customer = CustomerManager.getCustomer(custmerid); 
+    // 根据客户等级获得打折规则
+    Promotion promotion = PromotionManager.getPromotion(customer.getLevel()); 
+    // 累积客户总消费额，并保存累计结果
+    customer.setSumAmount(customer.getSumAmount().add(amount); 
+    CustomerManager.save(customer); 
+    // 返回打折后的金额
+    return amount.multiply(protomtion.getRatio()); 
+}
+这 样代码就非常清晰了，而且与数据存取逻辑完全分离。设计业务逻辑代码的时候完全不需要考虑数据库JDBC的那些千篇一律的操作，而将它交给 CustomerManager 和 PromotionManager 两个类去完成。这就是一个简单的 ORM 设计，实际的 ORM 实现框架比这个要复杂的多。
+<!-- more -->
+数据库查询
+在 go 开发中, 查询数据库一般有两种选择:
+
+使用 orm (gorm\xorm 等)
+直接写 SQL
+直接编写 SQL 语义清晰, 不易出错, 但是遇到多个可变条件时显得不灵活
+
+ORM 有模型关系, 记录预加载 (sql 生成优化) 等功能, 但是 sql 语句对开发人员相对透明, 管了太多数据库相关的东西, 相对封闭, 语法晦涩语义不明确, 想要操作 db 连接、构造复杂 SQL 很繁琐
+
+查询构造器
+对于查询场景少、查询条件相对固定的系统, 直接写 SQL 无疑是一种好的选择。那么, 对于 SQL 多变的场景而又不想使用 orm 的开发者, 如何能快速开发数据层呢?
+
+go 的官方包已经提供了好用的 database/sql 工具, 也有各个数据库的驱动包, 屏蔽了底层驱动差异, 使数据库查询变得简单, 只需提供 SQL 语句和占位符参数即可快速查询, 也无需考虑 SQL 注入等问题。那么, 只要解决了 SQL 语句和占位符参数的构造问题, 就解决了直接写 SQL 的灵活性问题。
+
+为了解决 SQL 语句和占位符参数的构造问题, 我们需要查询构造器 (Query Builder)。简而言之, 查询构造器就是利用 database/sql 的优势, 提供了一种 orm 和 raw sql 之间的中间方案。有了查询构造器, 你可以在遇到不定 SQL 时动态构造 SQL, 遇到复杂确定 SQL 时直接写原生 SQL, 使数据查询更加灵活可控。
+
+思路
+做什么
+查询构造器, 顾名思义, 最主要的就是构造。构造什么? 查询语句。查询语句本身就是一个满足标准 SQL 规范的字符串, 所以我们要做查询构造器, 主要的任务就是构造字符串。
+
+拆解 SQL
+在构造一条 SQL 之前, 不妨看看一条 SQL 是什么样的吧。
+
+SELECT `name`,`age`,`school` FROM `test` WHERE `name` = 'jack'
+复杂点的, 带联合查询、分组、排序、分页
+
+SELECT `t1`.`name`,`t1`.`age`,`t2`.`teacher`,`t3`.`address` FROM `test` as t1 LEFT JOIN `test2` as `t2` ON `t1`.`class` = `t2`.`class` INNER JOIN `test3` as t3 ON `t1`.`school` = `t3`.`school` WHERE `t1`.`age` >= 20 GROUP BY `t1`.`age` HAVING COUNT(`t1`.`age`) > 2 ORDER BY `t1`.`age` DESC LIMIT 10 OFFSET 0
+当然, 标准 SQL 还有很多语法规定, 这里就不一一举例。而对于规范中最常用的语法, 我们的查询构造器必须要有构造它们的能力
+
+一个标准的查询语句结构如下:
+
+SELECT [字段] FROM [表名] [JOIN 子句] [WHERE 子句] [GROUP BY 子句] [HAVING 子句] [ORDER BY 子句] [LIMIT 子句]
+其中 JOIN 子句、WHERE 子句、 HAVING 子句和 LIMIT 子句会用到占位符参数
+
+再看 INSERT、UPDATE、DELETE 操作的结构:
+
+INSERT
+
+INSERT INTO [表名] ([字段名]) VALUES ([要插入的值])
+要插入的值会用到占位符参数
+
+UPDATE
+
+UPDATE [表名] [SET 子句] [WHERE 子句] 
+SET 子句和 WHERE 子句会用到占位符参数
+
+DELETE
+
+DELETE FROM [表名] [WHERE 子句] 
+WHERE 子句会用到占位符参数
+
+OK, 拆解后是不是觉得 SQL 语句的基本结构很简单? 要实现查询构造器, 只需按照这些语句的结构构造出相应的字符串, 并保存需要的占位符参数即可。
+
+实现
+有了思路, 实现起来就简单了。
+
+参考其他语言的查询构造器, 方法名直接体现 SQL 语法, 多为链式调用:
+
+$db.table("`test`").
+    where("a", ">", 20).
+    where("b", "=", "aaa").
+    get()
+要实现查询构造器, 这是一个好的示范。
+
+话不多说, 开写!
+
+首先定义我们的 SQLBuilder 类型:
+
+type SQLBuilder struct {
+    _select       string // select 子句字符串
+    _insert       string // insert 子句字符串
+    _update       string // update 子句字符串
+    _delete       string // delete 子句字符串
+    _table        string // 表名
+    _join         string // join 子句字符串
+    _where        string // where 子句字符串
+    _groupBy      string // group by 子句字符串
+    _having       string // having 子句字符串
+    _orderBy      string // order by 子句字符串
+    _limit        string // limit 子句字符串
+    _insertParams []interface{} // insert 插入值需要的占位符参数
+    _updateParams []interface{} // update SET 子句需要的占位符参数
+    _whereParams  []interface{} // where 子句需要的占位符参数
+    _havingParams []interface{} // having 子句需要的占位符参数
+    _limitParams  []interface{} // limit 子句需要的占位符参数
+    _joinParams   []interface{} // join 子句需要的占位符参数
+}
+SQLBuilder 的构造函数:
+
+func NewSQLBuilder() *SQLBuilder {
+    return &SQLBuilder{}
+}
+获取 SQL 字符串
+获取字符串很简单, 只要按照 SQL 的规定将各个子句组合即可。
+
+获取 QuerySQL:
+
+var ErrTableEmpty = errors.New("table empty")
+
+func (sb *SQLBuilder) GetQuerySQL() (string, error) {
+    if sb._table == "" {
+        return "", ErrTableEmpty
+    }
+    var buf strings.Builder
+
+    buf.WriteString("SELECT ")
+    if sb._select != "" {
+        buf.WriteString(sb._select)
+    } else {
+        buf.WriteString("*")
+    }
+    buf.WriteString(" FROM ")
+    buf.WriteString(sb._table)
+    if sb._join != "" {
+        buf.WriteString(" ")
+        buf.WriteString(sb._join)
+    }
+    if sb._where != "" {
+        buf.WriteString(" ")
+        buf.WriteString(sb._where)
+    }
+    if sb._groupBy != "" {
+        buf.WriteString(" ")
+        buf.WriteString(sb._groupBy)
+    }
+    if sb._having != "" {
+        buf.WriteString(" ")
+        buf.WriteString(sb._having)
+    }
+    if sb._orderBy != "" {
+        buf.WriteString(" ")
+        buf.WriteString(sb._orderBy)
+    }
+    if sb._limit != "" {
+        buf.WriteString(" ")
+        buf.WriteString(sb._limit)
+    }
+
+    return buf.String(), nil
+}
+tips: 上述代码使用 strings.Builder 包来拼接字符串。当然构造查询语句本身不是一个高频操作, 不考虑效率使用 + 来拼接也是可以的
+
+获取 InsertSQL:
+
+var ErrInsertEmpty = errors.New("insert content empty")
+
+func (sb *SQLBuilder) GetInsertSQL() (string, error) {
+    if sb._table == "" {
+        return "", ErrTableEmpty
+    }
+    if sb._insert == "" {
+        return "", ErrInsertEmpty
+    }
+
+    var buf strings.Builder
+
+    buf.WriteString("INSERT INTO ")
+    buf.WriteString(sb._table)
+    buf.WriteString(" ")
+    buf.WriteString(sb._insert)
+
+    return buf.String(), nil
+}
+获取 UpdateSQL:
+
+var ErrUpdateEmpty = errors.New("update content empty")
+
+func (sb *SQLBuilder) GetUpdateSQL() (string, error) {
+    if sb._table == "" {
+        return "", ErrTableEmpty
+    }
+
+    if sb._update == "" {
+        return "", ErrUpdateEmpty
+    }
+
+    var buf strings.Builder
+
+    buf.WriteString("UPDATE ")
+    buf.WriteString(sb._table)
+    buf.WriteString(" ")
+    buf.WriteString(sb._update)
+    if sb._where != "" {
+        buf.WriteString(" ")
+        buf.WriteString(sb._where)
+    }
+
+    return buf.String(), nil
+}
+获取 DeteleSQL:
+
+func (sb *SQLBuilder) GetDeleteSQL() (string, error) {
+    if sb._table == "" {
+        return "", ErrTableEmpty
+    }
+
+    var buf strings.Builder
+
+    buf.WriteString("DELETE FROM ")
+    buf.WriteString(sb._table)
+    if sb._where != "" {
+        buf.WriteString(" ")
+        buf.WriteString(sb._where)
+    }
+
+    return buf.String(), nil
+}
+获取占位符参数
+同样, 我们要填充占位符 "?" 的参数也需要获得, query、insert、update、delete 拥有的参数类型都有差别, 也都有着不同的顺序
+
+
+func (sb *SQLBuilder) GetQueryParams() []interface{} {
+    params := []interface{}{}
+    params = append(params, sb._joinParams...)
+    params = append(params, sb._whereParams...)
+    params = append(params, sb._havingParams...)
+    params = append(params, sb._limitParams...)
+    return params
+}
+
+func (sb *SQLBuilder) GetInsertParams() []interface{} {
+    params := []interface{}{}
+    params = append(params, sb._insertParams...)
+    return params
+}
+
+func (sb *SQLBuilder) GetUpdateParams() []interface{} {
+    params := []interface{}{}
+    params = append(params, sb._updateParams...)
+    params = append(params, sb._whereParams...)
+    return params
+}
+
+func (sb *SQLBuilder) GetDeleteParams() []interface{} {
+    params := []interface{}{}
+    params = append(params, sb._whereParams...)
+    return params
+}
+表名设置
+设置表名, 这里我们设置完成后返回 SQLBuilder 指针自己, 可以完成链式调用。之后大部分方法都会使用这种方式。
+
+func (sb *SQLBuilder) Table(table string) *SQLBuilder {
+
+    sb._table = table
+
+    return sb
+}
+用例:
+
+package main
+
+import (
+    "github.com/wazsmwazsm/QueryBuilder/builder"
+    "log"
+)
+
+func main() {
+    sb := builder.NewSQLBuilder()
+
+    sql, err := sb.Table("`test`").
+        Select("*").
+        GetQuerySQL()
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    params := sb.GetQueryParams()
+
+    log.Println(sql)    // SELECT * FROM `test`
+    log.Println(params) // []
+}
+select 子句
+设置 select 子句, 支持多个参数用逗号隔开, 注意最后一个逗号要去掉
+
+func (sb *SQLBuilder) Select(cols ...string) *SQLBuilder {
+    var buf strings.Builder
+
+    for k, col := range cols {
+
+        buf.WriteString(col)
+
+        if k != len(cols)-1 {
+            buf.WriteString(",")
+        }
+    }
+
+    sb._select = buf.String()
+
+    return sb
+}
+用例:
+
+package main
+
+import (
+    "github.com/wazsmwazsm/QueryBuilder/builder"
+    "log"
+)
+
+func main() {
+    sb := builder.NewSQLBuilder()
+
+    sql, err := sb.Table("`test`").
+        Select("`age`", "COUNT(age)").
+        GetQuerySQL()
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    params := sb.GetQueryParams()
+
+    log.Println(sql)    // SELECT `age`,COUNT(age) FROM `test`
+    log.Println(params) // []
+}
+where 子句
+where
+对于 where 子句, 第一个 where 条件需要 WHERE 关键字, 再有其它条件, 会通过 AND 和 OR 来连接, 那么我们可以增加 Where() 和 OrWhere() 方法, 两个方法公共逻辑可以提出来:
+
+func (sb *SQLBuilder) Where(field string, condition string, value interface{}) *SQLBuilder {
+    return sb.where("AND", condition, field, value)
+}
+
+func (sb *SQLBuilder) OrWhere(field string, condition string, value interface{}) *SQLBuilder {
+    return sb.where("OR", condition, field, value)
+}
+
+func (sb *SQLBuilder) where(operator string, condition string, field string, value interface{}) *SQLBuilder {
+    var buf strings.Builder
+
+    buf.WriteString(sb._where) // 载入之前的 where 子句
+
+    if buf.Len() == 0 { // where 子句还没设置
+        buf.WriteString("WHERE ")
+    } else { // 已经设置, 拼接 OR 或 AND 操作符
+        buf.WriteString(" ")
+        buf.WriteString(operator)
+        buf.WriteString(" ")
+    }
+
+    buf.WriteString(field) // 拼接字段
+
+    buf.WriteString(" ")
+    buf.WriteString(condition) // 拼接条件 =、!=、<、>、like 等
+    buf.WriteString(" ")
+    buf.WriteString("?") // 拼接占位符
+
+    sb._where = buf.String() // 写字符串
+
+    sb._whereParams = append(sb._whereParams, value) // push 占位符参数到数组
+
+    return sb
+}
+用例:
+
+package main
+
+import (
+    "github.com/wazsmwazsm/QueryBuilder/builder"
+    "log"
+)
+
+func main() {
+    sb := builder.NewSQLBuilder()
+
+    sql, err := sb.Table("`test`").
+        Select("`name`", "`age`", "`school`").
+        Where("`name`", "=", "jack").
+        Where("`age`", ">=", 18).
+        OrWhere("`name`", "like", "%admin%").
+        GetQuerySQL()
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    params := sb.GetQueryParams()
+
+    log.Println(sql)    // SELECT `name`,`age`,`school` FROM `test` WHERE `name` = ? AND `age` >= ? OR `name` like ?
+    log.Println(params) // [jack 18 %admin%]
+}
+上述代码可以解决简单的条件子句, 如果遇到 WHERE a = ? AND (b = ? OR c = ?) 这样的复杂子句, 该如何构造呢? 面对这种场景, 我们需要提供书写原生 where 子句的能力, 增加 WhereRaw() 和 OrWhereRaw() 方法:
+
+func (sb *SQLBuilder) WhereRaw(s string, values ...interface{}) *SQLBuilder {
+    return sb.whereRaw("AND", s, values)
+}
+
+func (sb *SQLBuilder) OrWhereRaw(s string, values ...interface{}) *SQLBuilder {
+    return sb.whereRaw("OR", s, values)
+}
+
+func (sb *SQLBuilder) whereRaw(operator string, s string, values []interface{}) *SQLBuilder {
+    var buf strings.Builder
+
+    buf.WriteString(sb._where) // append
+
+    if buf.Len() == 0 {
+        buf.WriteString("WHERE ")
+    } else {
+        buf.WriteString(" ")
+        buf.WriteString(operator)
+        buf.WriteString(" ")
+    }
+
+    buf.WriteString(s) // 直接使用 raw SQL 字符串
+    sb._where = buf.String()
+
+    for _, value := range values {
+        sb._whereParams = append(sb._whereParams, value)
+    }
+
+    return sb
+}
+用例:
+
+package main
+
+import (
+    "github.com/wazsmwazsm/QueryBuilder/builder"
+    "log"
+)
+
+func main() {
+    sb := builder.NewSQLBuilder()
+
+    sql, err := sb.Table("`test`").
+        Select("`name`", "`age`", "`school`").
+        WhereRaw("`title` = ?", "hello").
+        Where("`name`", "=", "jack").
+        OrWhereRaw("(`age` = ? OR `age` = ?) AND `class` = ?", 22, 25, "2-3").
+        GetQuerySQL()
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    params := sb.GetQueryParams()
+
+    log.Println(sql)    // SELECT `name`,`age`,`school` FROM `test` WHERE `title` = ? AND `name` = ? OR (`age` = ? OR `age` = ?) AND `class` = ?
+    log.Println(params) // [hello jack 22 25 2-3]
+}
+
+where in
+where in 也是常见的 where 子句, where in 子句分为 where in、or where in、where not in、or where not in 四种模式, 占位符数量等于 where in 的集合数量。
+
+我们希望构造 where in 子句的方法入参是一个 slice, 占位符的数量等于 slice 的长度, 那么我们需要封装一个生成占位符的函数:
+
+func GenPlaceholders(n int) string {
+    var buf strings.Builder
+
+    for i := 0; i < n-1; i++ {
+        buf.WriteString("?,") // 生成 n-1 个 "?" 占位符
+    }
+
+    if n > 0 {
+        buf.WriteString("?") // 生成最后一个占位符, 如果 n <= 0 则不生成任何占位符
+    }
+
+    return buf.String()
+}
+
+按照 where in 子句的四种模式, 增加 WhereIn() OrWhereIn() WhereNotIn() OrWhereNotIn() 方法:
+
+func (sb *SQLBuilder) WhereIn(field string, values ...interface{}) *SQLBuilder {
+    return sb.whereIn("AND", "IN", field, values)
+}
+
+func (sb *SQLBuilder) OrWhereIn(field string, values ...interface{}) *SQLBuilder {
+    return sb.whereIn("OR", "IN", field, values)
+}
+
+func (sb *SQLBuilder) WhereNotIn(field string, values ...interface{}) *SQLBuilder {
+    return sb.whereIn("AND", "NOT IN", field, values)
+}
+
+func (sb *SQLBuilder) OrWhereNotIn(field string, values ...interface{}) *SQLBuilder {
+    return sb.whereIn("OR", "NOT IN", field, values)
+}
+
+func (sb *SQLBuilder) whereIn(operator string, condition string, field string, values []interface{}) *SQLBuilder {
+    var buf strings.Builder
+
+    buf.WriteString(sb._where) // append
+
+    if buf.Len() == 0 {
+        buf.WriteString("WHERE ")
+    } else {
+        buf.WriteString(" ")
+        buf.WriteString(operator)
+        buf.WriteString(" ")
+    }
+
+    buf.WriteString(field)
+
+    plhs := GenPlaceholders(len(values)) // 生成占位符
+    buf.WriteString(" ")
+    buf.WriteString(condition)
+    buf.WriteString(" ")
+    buf.WriteString("(")
+    buf.WriteString(plhs) // 拼接占位符
+    buf.WriteString(")")
+
+    sb._where = buf.String()
+
+    for _, value := range values { 
+        sb._whereParams = append(sb._whereParams, value) // push 占位符参数
+    }
+
+    return sb
+}
+用例:
+
+package main
+
+import (
+    "github.com/wazsmwazsm/QueryBuilder/builder"
+    "log"
+)
+
+func main() {
+    sb := builder.NewSQLBuilder()
+
+    sql, err := sb.Table("`test`").
+        Select("`name`", "`age`", "`school`").
+        WhereIn("`id`", 1, 2, 3).
+        OrWhereNotIn("`uid`", 2, 4).
+        GetQuerySQL()
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    params := sb.GetQueryParams()
+
+    log.Println(sql)    // SELECT `name`,`age`,`school` FROM `test` WHERE `id` IN (?,?,?) OR `uid` NOT IN (?,?)
+    log.Println(params) // [1 2 3 2 4]
+}
+
+group by 子句
+group by 子句可以根据多个字段分组:
+
+func (sb *SQLBuilder) GroupBy(fields ...string) *SQLBuilder {
+    var buf strings.Builder
+
+    buf.WriteString("GROUP BY ")
+
+    for k, field := range fields {
+
+        buf.WriteString(field)
+
+        if k != len(fields)-1 {
+            buf.WriteString(",")
+        }
+    }
+
+    sb._groupBy = buf.String()
+
+    return sb
+}
+having 子句和 where 子句基本相同, 这里就不费篇幅说明了, 详细见 QueryBuilder/builder/builder.go
+
+用例:
+
+package main
+
+import (
+    "github.com/wazsmwazsm/QueryBuilder/builder"
+    "log"
+)
+
+func main() {
+    sb := builder.NewSQLBuilder()
+
+    sql, err := sb.Table("`test`").
+        Select("`school`", "`class`", "COUNT(*) as `ct`").
+        GroupBy("`school`", "`class`").
+        Having("`ct`", ">", "2").
+        GetQuerySQL()
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    params := sb.GetQueryParams()
+
+    log.Println(sql)    // SELECT `school`,`class`,COUNT(*) as `ct` FROM `test` GROUP BY `school`,`class` HAVING `ct` > ?
+    log.Println(params) // [2]
+}
+
+order by 子句和 limit 子句
+order by 子句可以根据多个字段来排序:
+
+func (sb *SQLBuilder) OrderBy(operator string, fields ...string) *SQLBuilder {
+    var buf strings.Builder
+
+    buf.WriteString("ORDER BY ")
+
+    for k, field := range fields {
+
+        buf.WriteString(field)
+
+        if k != len(fields)-1 {
+            buf.WriteString(",")
+        }
+    }
+
+    buf.WriteString(" ")
+    buf.WriteString(operator) // DESC 或 ASC
+
+    sb._orderBy = buf.String()
+
+    return sb
+}
+limit 来限制查询的结果, 这里我们使用 LIMIT OFFSET 语法, 这个语法是标准 SQL 规定的, LIMIT x,x 这个形式只有 mysql 支持
+
+func (sb *SQLBuilder) Limit(offset, num interface{}) *SQLBuilder {
+    var buf strings.Builder
+
+    buf.WriteString("LIMIT ? OFFSET ?")
+
+    sb._limit = buf.String()
+
+    sb._limitParams = append(sb._limitParams, num, offset)
+
+    return sb
+}
+
+用例:
+
+package main
+
+import (
+    "github.com/wazsmwazsm/QueryBuilder/builder"
+    "log"
+)
+
+func main() {
+    sb := builder.NewSQLBuilder()
+
+    sql, err := sb.Table("`test`").
+        Select("`name`", "`age`", "`school`").
+        Where("`name`", "=", "jack").
+        Where("`age`", ">=", 18).
+        OrderBy("DESC", "`age`", "`class`").
+        Limit(1, 10).
+        GetQuerySQL()
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    params := sb.GetQueryParams()
+
+    log.Println(sql)    // SELECT `name`,`age`,`school` FROM `test` WHERE `name` = ? AND `age` >= ? ORDER BY `age`,`class` DESC LIMIT ? OFFSET ?
+    log.Println(params) // [jack 18 10 1]
+}
+
+join 子句
+使用 join 子句后, SQL 变得复杂。标准 SQL join 有 left join、right join、inner join、full join 几种模式 join 子句的 on 条件类似 where 子句, 连表后需要给表起别名用来区分字段所属...面对这样灵活多变的语法, 我们这里较好的方式就是提供 raw sql 的形式来处理 join 操作:
+
+func (sb *SQLBuilder) JoinRaw(join string, values ...interface{}) *SQLBuilder {
+    var buf strings.Builder
+
+    buf.WriteString(sb._join)
+    if buf.Len() != 0 {
+        buf.WriteString(" ")
+    }
+    buf.WriteString(join) // 拼接 raw join sql
+
+    sb._join = buf.String()
+
+    for _, value := range values {
+        sb._joinParams = append(sb._joinParams, value)
+    }
+
+    return sb
+}
+用例 (构造一个复杂的查询):
+
+package main
+
+import (
+    "github.com/wazsmwazsm/QueryBuilder/builder"
+    "log"
+)
+
+func main() {
+    sb := builder.NewSQLBuilder()
+
+    sql, err := sb.Table("`test` as t1").
+        Select("`t1`.`name`", "`t1`.`age`", "`t2`.`teacher`", "`t3`.`address`").
+        JoinRaw("LEFT JOIN `test2` as `t2` ON `t1`.`class` = `t2`.`class`").
+        JoinRaw("INNER JOIN `test3` as t3 ON `t1`.`school` = `t3`.`school`").
+        Where("`t1`.`age`", ">=", 18).
+        GroupBy("`t1`.`age`").
+        Having("COUNT(`t1`.`age`)", ">", 2).
+        OrderBy("DESC", "`t1`.`age`").
+        Limit(1, 10).
+        GetQuerySQL()
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    params := sb.GetQueryParams()
+
+    log.Println(sql)    // SELECT `t1`.`name`,`t1`.`age`,`t2`.`teacher`,`t3`.`address` FROM `test` as t1 LEFT JOIN `test2` as `t2` ON `t1`.`class` = `t2`.`class` INNER JOIN `test3` as t3 ON `t1`.`school` = `t3`.`school` WHERE `t1`.`age` >= ? GROUP BY `t1`.`age` HAVING COUNT(`t1`.`age`) > ? ORDER BY `t1`.`age` DESC LIMIT ? OFFSET ?
+    log.Println(params) // [18 2 10 1]
+}
+
+insert
+insert SQL 构建:
+
+func (sb *SQLBuilder) Insert(cols []string, values ...interface{}) *SQLBuilder {
+    var buf strings.Builder
+
+    // 拼接字段
+    buf.WriteString("(")
+    for k, col := range cols {
+
+        buf.WriteString(col)
+
+        if k != len(cols)-1 {
+            buf.WriteString(",")
+        }
+    }
+    buf.WriteString(") VALUES (")
+
+    // 拼接占位符
+    for k := range cols {
+        buf.WriteString("?")
+        if k != len(cols)-1 {
+            buf.WriteString(",")
+        }
+    }
+    buf.WriteString(")")
+
+    sb._insert = buf.String()
+
+    for _, value := range values { // push 占位符参数
+        sb._insertParams = append(sb._insertParams, value)
+    }
+
+    return sb
+}
+用例:
+
+package main
+
+import (
+    "github.com/wazsmwazsm/QueryBuilder/builder"
+    "log"
+)
+
+func main() {
+    sb := builder.NewSQLBuilder()
+
+    sql, err := sb.Table("`test`").
+        Insert([]string{"`name`", "`age`"}, "jack", 18).
+        GetInsertSQL()
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    params := sb.GetInsertParams()
+
+    log.Println(sql)    // INSERT INTO `test` (`name`,`age`) VALUES (?,?)
+    log.Println(params) // [jack 18]
+}
+
+update
+update SQL 构建:
+
+package main
+
+import (
+    "github.com/wazsmwazsm/QueryBuilder/builder"
+    "log"
+)
+
+func main() {
+    sb := builder.NewSQLBuilder()
+
+    sql, err := sb.Table("`test`").
+        Update([]string{"`name`", "`age`"}, "jack", 18).
+        Where("`id`", "=", 11).
+        GetUpdateSQL()
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    params := sb.GetUpdateParams()
+
+    log.Println(sql)    // UPDATE `test` SET `name` = ?,`age` = ? WHERE `id` = ?
+    log.Println(params) // [jack 18 11]
+}
+
+delete
+delete SQL 构建:
+
+package main
+
+import (
+    "github.com/wazsmwazsm/QueryBuilder/builder"
+    "log"
+)
+
+func main() {
+    sb := builder.NewSQLBuilder()
+
+    sql, err := sb.Table("`test`").
+        Where("`id`", "=", 11).
+        GetDeleteSQL()
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    params := sb.GetDeleteParams()
+
+    log.Println(sql)    // DELETE FROM `test` WHERE `id` = ?
+    log.Println(params) // [11]
+}
+
+OK, 查询构造器的实现到此结束, 是不是很简单呢?
+
+使用
+查询构造器实现了, 那么就结合 database/sql 用用吧!
+
+以 mysql 为例:
+
+package main
+
+import (
+    "database/sql"
+    "fmt"
+    _ "github.com/go-sql-driver/mysql"
+    "github.com/wazsmwazsm/QueryBuilder/builder"
+    "log"
+)
+
+// Info 定义一个数据模型, 用于接收查询数据
+type Info struct {
+    Age      int
+    AgeCount int
+}
+
+func main() {
+    // 创建 mysql 连接
+    dataSource := fmt.Sprintf("%s:%s@tcp(%s:%v)/%s?charset=utf8",
+        "test", "test", "127.0.0.1", 3306, "test")
+    mysqlConn, err := sql.Open("mysql", dataSource)
+    if err != nil {
+        log.Panic("Db connect failed!" + err.Error())
+    }
+
+    // 创建查询构造器实例
+    sb := builder.NewSQLBuilder()
+
+    querySQL, err := sb.Table("`test`").
+        Select("`age`", "COUNT(age)").
+        GroupBy("`age`").
+        GetQuerySQL()
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    params := sb.GetQueryParams()
+
+    // 执行查询
+    rows, err := mysqlConn.Query(querySQL, params...)
+    if err != nil {
+        log.Panic(err)
+    }
+    defer rows.Close()
+
+    // 查询数据绑定到 info 结构中
+    infos := []*Info{}
+    for rows.Next() {
+        info := new(Info)
+        if err := rows.Scan(
+            &info.Age,
+            &info.AgeCount,
+        ); err != nil {
+            log.Panicln(err)
+        }
+        infos = append(infos, info)
+    }
+
+    for _, info := range infos {
+        fmt.Println(info)
+    }
+
+}
+
+
+为了支持业务层中的事务，我试图在Go中查找类似Spring的声明式事务管理，但是没找到，所以我决定自己写一个。 事务很容易在Go中实现，但很难做到正确地实现。
+
+需求:
+1.将业务逻辑与事务代码分开。
+在编写业务用例时，开发者应该只需考虑业务逻辑，不需要同时考虑怎样给业务逻辑加事务管理。如果以后需要添加事务支持，你可以在现有业务逻辑的基础上进行简单封装，而无需更改任何其他代码。事务实现细节应该对业务逻辑透明。
+
+2.事务逻辑应该作用于用例层（业务逻辑）
+不在持久层上。
+
+3.数据服务（数据持久性）层应对事务逻辑透明。
+这意味着持久性代码应该是相同的，无论它是否支持事务
+
+4.你可以选择延迟支持事物。
+你可以先编写没有事务的用例，稍后可以在不修改现有代码的情况下给该用例加上事务。你只需添加新代码。
+
+我最终的解决方案还不是声明式事务管理，但它非常接近。创建一个真正的声明式事务管理需要付出很多努力，因此我构建了一个可以实现声明式事务的大多数功能的事务管理，同时又没花很多精力。
+
+方案:
+最终解决方案涉及本程序的所有层级，我将逐一解释它们。
+
+数据库链接封装
+
+在Go的“sql”lib中，有两个数据库链接sql.DB和sql.Tx. 不需要事务时，使用sql.DB访问数据库; 当需要事务时，你使用sql.Tx. 为了共享代码，持久层需要同时支持两者。 因此需要对数据库链接进行封装，然后把它作为数据库访问方法的接收器。 我从这里¹得到了粗略的想法。
+
+// SqlGdbc (SQL Go database connection) is a wrapper for SQL database handler ( can be *sql.DB or *sql.Tx)
+// It should be able to work with all SQL data that follows SQL standard.
+type SqlGdbc interface {
+    Exec(query string, args ...interface{}) (sql.Result, error)
+    Prepare(query string) (*sql.Stmt, error)
+    Query(query string, args ...interface{}) (*sql.Rows, error)
+    QueryRow(query string, args ...interface{}) *sql.Row
+    // If need transaction support, add this interface
+    Transactioner
+}
+
+// SqlDBTx is the concrete implementation of sqlGdbc by using *sql.DB
+type SqlDBTx struct {
+    DB *sql.DB
+}
+
+// SqlConnTx is the concrete implementation of sqlGdbc by using *sql.Tx
+type SqlConnTx struct {
+    DB *sql.Tx
+}
+数据库实现类型SqlDBTx和sqlConnTx都需要实现SqlGdbc接口（包括“Transactioner”）接口才行。 需要为每个数据库（例如MySQL， CouchDB）实现“Transactioner”接口以支持事务。
+
+// Transactioner is the transaction interface for database handler
+// It should only be applicable to SQL database
+type Transactioner interface {
+    // Rollback a transaction
+    Rollback() error
+    // Commit a transaction
+    Commit() error
+    // TxEnd commits a transaction if no errors, otherwise rollback
+    // txFunc is the operations wrapped in a transaction
+    TxEnd(txFunc func() error) error
+    // TxBegin gets *sql.DB from receiver and return a SqlGdbc, which has a *sql.Tx
+    TxBegin() (SqlGdbc, error)
+}
+数据库存储层（datastore layer）的事物管理代码
+
+以下是“Transactioner”接口的实现代码，其中只有TxBegin（）是在SqlDBTx（sql.DB）上实现，因为事务从sql.DB开始，然后所有事务的其他操作都在SqlConnTx（sql.Tx）上。 我从这里²得到了这个想法。
+
+// TransactionBegin starts a transaction
+func (sdt *SqlDBTx) TxBegin() (gdbc.SqlGdbc, error) {
+    tx, err := sdt.DB.Begin()
+    sct := SqlConnTx{tx}
+    return &sct, err
+}
+
+func (sct *SqlConnTx) TxEnd(txFunc func() error) error {
+    var err error
+    tx := sct.DB
+
+    defer func() {
+        if p := recover(); p != nil {
+            tx.Rollback()
+            panic(p) // re-throw panic after Rollback
+        } else if err != nil {
+            tx.Rollback() // err is non-nil; don't change it
+        } else {
+            err = tx.Commit() // if Commit returns error update err with commit err
+        }
+    }()
+    err = txFunc()
+    return err
+}
+
+func (sct *SqlConnTx) Rollback() error {
+    return sct.DB.Rollback()
+}
+用例层的事物接口
+
+在用例层中，你可以拥有相同业务功能的一个函数的两个版本，一个支持事务，一个不支持，并且它们的名称可以共享相同的前缀，而事务可以添加“withTx”作为后缀。 例如，在以下代码中，“ModifyAndUnregister”是不支持事务的那个，“ModifyAndUnregisterWithTx”是支持事务的那个。 “EnableTxer”是用例层上唯一的事务支持接口，任何支持事务的“用例”都需要它。 这里的所有代码都在是用例层级（包括“EnableTxer”）代码，不涉及数据库内容。
+
+type RegistrationUseCaseInterface interface {
+...
+    // ModifyAndUnregister change user information and then unregister the user based on the User.Id passed in.
+    // It is created to illustrate transaction, no real use.
+    ModifyAndUnregister(user *model.User) error
+    // ModifyAndUnregisterWithTx change user information and then unregister the user based on the User.Id passed in.
+    // It supports transaction
+    // It is created to illustrate transaction, no real use.
+    ModifyAndUnregisterWithTx(user *model.User) error
+    // EnableTx enable transaction support on use case. Need to be included for each use case needs transaction
+    // It replaces the underline database handler to sql.Tx for each data service that used by this use case
+    EnableTxer
+}
+// EnableTxer is the transaction interface for use case layer
+type EnableTxer interface {
+    EnableTx()
+}
+以下是不包含事务的业务逻辑代码的示例。 “modifyAndUnregister（ruc，user）”是事务和非事务用例函数共享的业务功能。 你需要使用TxBegin（）和TxEnd（）（在TxDataInterface中）来包装业务功能以支持事务，这些是数据服务层接口，并且与数据库访问层无关。 该用例还实现了“EnableTx（）”接口，该接口实际上将底层数据库链接从sql.DB切换到sql.Tx.
+
+// The use case of ModifyAndUnregister without transaction
+func (ruc *RegistrationUseCase) ModifyAndUnregister(user *model.User) error {
+    return modifyAndUnregister(ruc, user)
+}
+
+// The use case of ModifyAndUnregister with transaction
+func (ruc *RegistrationUseCase) ModifyAndUnregisterWithTx(user *model.User) error {
+    tdi, err := ruc.TxDataInterface.TxBegin()
+    if err != nil {
+        return errors.Wrap(err, "")
+    }
+    ruc.EnableTx()
+    return tdi.TxEnd(func() error {
+        // wrap the business function inside the TxEnd function
+        return modifyAndUnregister(ruc, user)
+    })
+}
+
+// The business function will be wrapped inside a transaction and inside a non-transaction function
+// It needs to be written in a way that every error will be returned so it can be catched by TxEnd() function,
+// which will handle commit and rollback
+func modifyAndUnregister(ruc *RegistrationUseCase, user *model.User) error {
+    udi := ruc.UserDataInterface
+    err := modifyUser(udi, user)
+    if err != nil {
+        return errors.Wrap(err, "")
+    }
+    err = unregisterUser(udi, user.Name)
+    if err != nil {
+        return errors.Wrap(err, "")
+    }
+    return nil
+}
+
+func (ruc *RegistrationUseCase) EnableTx() {
+    // Only UserDataInterface need transaction support here. If there are other data services need it,
+    // then they also need to enable transaction here
+    ruc.UserDataInterface.EnableTx(ruc.TxDataInterface)
+}
+为什么我需要在“TxDataInterface”中调用函数“EnbaleTx”来替换底层数据库链接而不是直接在用例中执行？ 因为sql.DB和sql.Tx层级要比用例层低几个级别，直接调用会搞砸依赖关系。 保持合理依赖关系的诀窍是在每一层上都有TxBegin（）和TxEnd（）并逐层调用它们以维持合理的依赖关系。
+
+数据服务层的事物接口
+
+我们讨论了用例层和数据存储层上的事务功能，我们还需要数据服务层中的事务功能将这两者连接在一起。 以下代码是数据服务层的事务接口（“TxDataInterface”）。 “TxDataInterface”是仅为事物管理而创建的数据服务层接口。 每个数据库只需要实现一次。 还有一个“EnableTxer”接口（这是一个数据服务层接口，不要与用例层中的“EnableTxer”接口混淆），实现“EnableTxer”接口将开启数据服务类型对事务的支持，例如， 如果想要“UserDataInterface”支持事物，就需要它实现“EnableTxer”接口。
+
+// TxDataInterface represents operations needed for transaction support.
+// It only needs to be implemented once for each database
+// For sqlGdbc, it is implemented for SqlDBTx in transaction.go
+type TxDataInterface interface {
+    // TxBegin starts a transaction. It gets a DB handler from the receiver and return a TxDataInterface, which has a
+    // *sql.Tx inside. Any data access wrapped inside a transaction will go through the *sql.Tx
+    TxBegin() (TxDataInterface, error)
+    // TxEnd is called at the end of a transaction and based on whether there is an error, it commits or rollback the
+    // transaction.
+    // txFunc is the business function wrapped in a transaction
+    TxEnd(txFunc func() error) error
+    // Return the underline transaction handler, sql.Tx
+    GetTx() gdbc.SqlGdbc
+}
+
+// This interface needs to be included in every data service interface that needs transaction support
+type EnableTxer interface {
+    // EnableTx enables transaction, basically it replaces the underling database handle sql.DB with sql.Tx
+    EnableTx(dataInterface TxDataInterface)
+}
+
+// UserDataInterface represents interface for user data access through database
+type UserDataInterface interface {
+...
+    Update(user *model.User) (rowsAffected int64, err error)
+    // Insert adds a user to a database. The returned resultUser has a Id, which is auto generated by database
+    Insert(user *model.User) (resultUser *model.User, err error)
+    // Need to add this for transaction support
+    EnableTxer
+}
+以下代码是“TxDataInterface”的实现。 “TxDataSql”是“TxDataInterface”的具体类型。 它调用底层数据库链接的开始和结束函数来执行真正的事务操作。
+
+// TxDataSql is the generic implementation for transaction for SQL database
+// You only need to do it once for each SQL database
+type TxDataSql struct {
+    DB gdbc.SqlGdbc
+}
+
+func (tds *TxDataSql) TxEnd(txFunc func() error) error {
+    return tds.DB.TxEnd(txFunc)
+}
+
+func (tds *TxDataSql) TxBegin() (dataservice.TxDataInterface, error) {
+
+    sqlTx, error := tds.DB.TxBegin()
+    tdi := TxDataSql{sqlTx}
+    tds.DB = tdi.DB
+    return &tdi, error
+}
+func (tds *TxDataSql) GetTx() gdbc.SqlGdbc {
+    return tds.DB
+}
+事物策略:
+
+你可能会问为什么我在上面的代码中需要“TxDataSql”？ 确实可以在没有它的情况下实现事务，实际上最开的程序里就没有它。 但是我还是要在某些数据服务中实现“TxDataInterface”来开始和结束事务。 由于这是在用例层中完成的，用例层不知道哪个数据服务类型实现了接口，因此必须在每个数据服务接口上实现“TxDataInterface”（例如，“UserDataInterface”和“CourseDataInterface”）以保证 “用例层”不会选择没有接口的“数据服务（data service）”。 在创建“TxDataSql”之后，我只需要在“TxDataSql”中实现一次“TxDataInterface”，然后每个数据服务类型只需要实现“EnableTx（）”就行了。
+
+// UserDataSql is the SQL implementation of UserDataInterface
+type UserDataSql struct {
+    DB gdbc.SqlGdbc
+}
+
+func (uds *UserDataSql) EnableTx(tx dataservice.TxDataInterface) {
+    uds.DB = tx.GetTx()
+}
+
+func (uds *UserDataSql) FindByName(name string) (*model.User, error) {
+    //logger.Log.Debug("call FindByName() and name is:", name)
+    rows, err := uds.DB.Query(QUERY_USER_BY_NAME, name)
+    if err != nil {
+        return nil, errors.Wrap(err, "")
+    }
+    defer rows.Close()
+    return retrieveUser(rows)
+}
+上面的代码是“UserDataService”接口的实现程序。 “EnableTx（）”方法从“TxDataInterface”获得sql.Tx并将“UserDataSql”中的sql.DB替换为sql.Tx.
+
+数据访问方法（例如，FindByName（））在事务代码和非事务代码之间共享，并且不需要知道“UserDataSql.DB”是sql.DB还是sql.Tx.
+
+依赖关系漏洞:
+
+上面的代码实现中存在一个缺陷，这会破坏我的设计并使其不完美。它是“TxDataInterface”中的函数“GetTx（）”，它是一个数据服务层接口，因此它不应该依赖于gdbc.SqlGdbc（数据库接口）。你可能认为数据服务层的实现代码无论如何都需要访问数据库，当前这是正确的。但是，你可以在将来更改实现去调用gRPC微服务（而不是数据库）。如果接口不依赖于SQL接口的话，则可以自由更改实现，但如果不是，则即使你的接口实现已更改，该接口也会永久保留对SQL的依赖。
+
+为什么它是本程序中打破依赖关系的唯一地方？因为对于其他接口，容器负责创建具体类型，而程序的其余部分仅使用接口。但是对于事务，在创建具体类型之后，需要将底层数据库处理程序从sql.DB替换为sql.Tx，这破坏了设计。
+
+它有解决方法吗？是的，容器可以为需要事务的函数创建sql.Tx而不是sql.DB，这样我就不需要在以后的用例级别中替换它。但是，配置文件中需要一个标志来指示函数是否需要事务， 而且这个标志需要配备给用例中的每个函数。这是一个太大的改动，所以我决定现在先这样，以后再重新审视它。
+
+好处:
+通过这个实现，事务代码对业务逻辑几乎是透明的（除了我上面提到的缺陷）。业务逻辑中没有数据存储（datastore）级事务代码，如Tx.Begin，Tx.Commit和Tx.Rollback（但你确实需要业务级别事物函数Tx.Begin和Tx.End），不仅如此，你的持久性代码中也几乎没有数据存储级事务代码。 如需在用例层上启用事务，你只需要在用例上实现EnableTx（）并将业务函数封装在“TxBegin（）”，EnableTx（）和“TxEnd（）”中，如上例所示。 在持久层上，大多数事务代码已经由“txDataService.go”实现，你只需要为特定的数据服务（例如UserDataService）实现“EnableTx”。 事务支持的真正操作是在“transaction.go”文件中实现的，它实现了“Transactioner”接口，它有四个函数，“Rollback”, “Commit”, “TxBegin” 和 “TxEnd”。
+
+对用例增加事物支持的步骤:
+假设我们需要在用例“listCourse”中为一个函数添加事务支持，以下是步骤
+
+在列表课程用例（“listCourse.go”）中实现“EnableTxer”界面
+在域模型（“course”）数据服务层（courseDataMysql.go）中实现“EnableTxer”接口
+创建一个新的事务启用函数并将现有业务函数包装在“TxBegin（）”，EnableTx（）和“TxEnd（）”中
+缺陷:
+首先，它仍然不是声明​​式事物管理;第二，它没有完全达到需求中的＃4。要将用例函数从非事务更改为事务，你可以创建一个支持事务的新函数，它需要更改调用函数; 或者你修改现有函数并将其包装到事务中，这也需要代码更改。为了实现＃4，需要添加许多代码，因此我将其推迟到以后。第三，它不支持嵌套事务（Nested Transaction），因此你需要手动确保代码中没有发生嵌套事务。如果代码库不是太复杂，这很容易做到。如果你有一个非常复杂的代码库，有很多事务和非事务函数混在一起，那么手工做起来会比较困难，这是需要在程序中实现嵌套事务或找到已经支持它的方案。我没有花时间研究添加嵌套事务所需的工作量，但这可能并不容易。如果你对它感兴趣，这里³是一些讨论。到目前为止，对于大多数情况而言，当前的解决方案可能是在代价不大的情况下的最佳方案。
+
+应用范围:
+首先，它只支持SQL数据库的事务。 如果你有NoSql数据库，它将无法工作（大多数NoSql数据库无论如何都不支持事务）。 其次，如果事务跨越了数据库的边界（例如在不同的微服务器之间），那么它将无法工作。 在这种情况下，你需要使用Saga⁴。它的原理是为事物中的每个操作写一个补偿操作，然后在回滚阶段挨个执行每一个补偿操作。 在当前框架中添加Sage解决方案应该不难。
+
+其他数据库相关问题:
+关闭数据库链接（Close connection）
+
+我从来没有为数据库链接调用Close（）函数，因为没有必要这样做。 你可以传入sql.DB或sql.Tx作为持久性函数的接收器（receiver）。 对于sql.DB，数据库将自动创建链接池并为你管理链接。 链接完成后，它将返回到链接池，无需关闭。 对于sql.Tx，在事务结束时，你可以提交或回滚，之后链接将返回到连接池，而无需关闭。 请参阅此处⁵ 和 此处⁶ .
+
+对象关系映射（O/R mapping）
+
+我简要地查看了几个“O/R”映射库，但它们没有提供我所需要的功能。 我认为“O/R映射”只适合两种情况。 首先，你的应用程序主要是CRUD，没有太多的查询或搜索; 第二，开发人员不熟悉SQL。 如果不是这种情况，则O/R映射不会提供太多帮助。 我想从扩展数据库模块中获得两个功能，一个是将sql.row加载到我的域模型结构（包括处理NULL值）中（例如“User”），另一个是自动关闭sql类型，如sql.statement或sql.rows。 有一些sql扩展库似乎提供了至少部分这样的功能。 我还没有尝试，但似乎值得一试。
+
+延迟（Defer）:
+
+在进行数据库访问时，你将进行大量重复调用以关闭数据库类型（例如statements, rows）。例如以下代码中的“defer row.close（）”。 你想要记住这一点，要在错误处理函数之后调用“defer row.close（）”，因为如果不是这样，当出现错误时，“rows”将为nil，这将导致恐慌并且不会执行错误处理代码。
+
+
+func (uds *UserDataSql) Find(id int) (*model.User, error) {
+    rows, err := uds.DB.Query(QUERY_USER_BY_ID, id)
+    if err != nil {
+        return nil, errors.Wrap(err, "")
+    }
+    defer rows.Close()
+    return retrieveUser(rows)
+}
+恐慌（panic）:
+
+我看到很多Go数据库代码在出现数据库错误时抛出了恐慌（panic）而不是错误（error），这可能会导致微服务出现问题，因为在微服务环境中你通常希望服务一直运行。 假设当更新语句中出现SQL错误时，用户将无法访问该功能，这很糟糕。 但如果因为这个，整个微服务或网站被关闭，那就更糟了。 因此，正确的方法是将错误传播到上一级并让它决定要做什么。 因此正确的做法是不在你的程序中抛出panic，但如果第三方库抛出恐慌呢？ 这时你需要捕获恐慌并从中恢复以保持你的服务正常运行。 我在另一篇文章“日志管理”⁸中有具体示例.
+
+源程序:
+完整的源程序链接 github: https://github.com/jfeng45/se...
+
+索引:
+[1]db transaction in golang
+
+[2]database/sql Tx—detecting Commit or Rollback
+
+[3]database/sql: nested transaction or save point support
+
+[4]GOTO 2015 • Applying the Saga Pattern • Caitie McCaffrey — YouTube
+
+[5]Common Pitfalls When Using database/sql in Go
+
+[6]Go database/sql tutorial
+
+[7]sqlx
+
+[8]Go Microservice with Clean Architecture: Application Logging
+
+https://stackoverflow.com/questions/26593867/db-transaction-in-golang
+
+https://www.vividcortex.com/blog/2015/09/22/common-pitfalls-go/
+
+http://go-database-sql.org/connection-pool.html
+
+https://www.netmeister.org/blog/ops-lessons.html
+
+
+最近，我一直在研究 Go 中与数据库交互的各种解决方案。在 Go 中与数据库交互我使用的底层库是 sqlx。你只需要写出 SQL，并使用 db tag 标记结构，之后让 sqlx 处理其余工作。但是，我遇到的主要问题是符合语法习惯的查询构建。这让我调查了这个问题，并在本文中记下了一些想法。
+
+在 Go 中，第一类函数是进行 SQL 查询构建的惯用方法。该仓库包含我编写的一些示例代码：https://github.com/andrewpillar/query。
+
+GORM、分层复杂性和 Active Record 模式
+在 Go 中，大多数涉足数据库工作的人更可能使用 Gorm。Gorm 是一个功能完备的 ORM，支持迁移、关系、事务等等。对于那些使用过 ActiveRecord 或 Eloquent 的人来说，Gorm 的用法应该很熟悉。
+
+我以前简单地使用过 Gorm，对于简单的、基于 CRUD 的应用程序，这很好。然而，当涉及更多分层复杂性时，我发现它做的并不好。假设我们正在构建一个博客应用程序，我们允许用户通过 URL 中的查询字符串搜索帖子。如果存在这种情况，我们希望用的约束条件：WHERE title LIKE。
+
+posts := make([]Post, 0)
+search := r.URL.Query().Get("search")
+db := Gorm.Open("postgres", "...")
+if search != "" {
+	db = db.Where("title LIKE ?", "%" + search + "%")
+}
+db.Find(&posts)
+没有什么可争议的，我们只是检查是否有值并修改对 Gorm 本身的调用。但是，如果我们想在特定日期之后搜索帖子怎么办？我们需要添加一些检查，首先查看 URL 中是否存在关于日期的查询字符串 (after)，如果存在则修改查询条件。
+
+posts := make([]Post, 0)
+
+search := r.URL.Query().Get("search")
+after := r.URL.Query().Get("after")
+
+db := Gorm.Open("postgres", "...")
+if search != "" {
+	db = db.Where("title LIKE ?", "%" + search + "%")
+}
+if after != "" {
+	db = db.Where("created_at > ?", after)
+}
+db.Find(&posts)
+如上所示，我发现 GORM 的最大缺点是处理分层的复杂逻辑时十分繁琐。但通常情况下，编写 SQL 时你会想要这样做。试想你在查询中根据用户输入添加一个 Where 条件或者决定如何排序记录。
+
+我相信这归结为一件事，对此我前段时间在 HN 做了一个评论[2]：
+
+就我个人而言，我认为基于 ORM 的 Active Record 风格，对 Go 而言类似 Gorm，并不适合本身就不是 OOP 的语言。仔细翻阅 Gorm 的相关文档，Gorm 似乎严重依赖方法链，这对 Go 而言似乎也是错误的：考虑一下 Go 语言中如何处理 error。我认为，ORM 应该尽可能与语法习惯保持一致。
+
+此评论提交在博客 To ORM or not to ORM[3] 上，我强烈建议您阅读该文。该文作者在 Gorm 问题上得出了与我的一致结论。
+
+在 Go 中符合语法习惯的查询构建
+标准库中包 database/sql 非常适合与数据库交互。sqlx 是基于此的、处理返回数据的一个优秀扩展。但是，这仍然没有完全解决手头的问题。我们如何高效地、程序化地、符合 Go 语法习惯地构建复杂的查询 ? 假设我们使用 sqlx 进行上述相同的查询，那是什么样子呢？
+
+posts := make([]Post, 0)
+
+search := r.URL.Query().Get("search")
+after := r.URL.Query().Get("after")
+
+db := sqlx.Open("postgres", "...")
+
+query := "SELECT * FROM posts"
+args := make([]interface{}, 0)
+
+if search != "" {
+	query += " WHERE title LIKE ?"
+	args = append(args, search)
+}
+
+if after != "" {
+	if search != "" {
+		query += " AND "
+	} else {
+		query += " WHERE "
+	}
+
+	query += "created_at > ?"
+
+	args = append(args, after)
+}
+
+err := db.Select(&posts, sqlx.Rebind(query), args...)
+没有比我们用 Gorm 做的好多少，事实上更加丑陋。我们检查了两次 search 是否存在，以便我们可以为查询提供正确的 SQL 语法，我们将参数存储在 []interface{} 切片中，我们将 SQL 拼接到一个字符串。这些同样都是不可扩展、不易于维护的。
+
+理想情况下，我们希望能够构建查询，并将其交给 sqlx 来处理其余的事情。那么，Go 中的符合语法习惯的查询构建器会是什么样子？嗯，在我看来，它将采用两种形式之一，第一种是利用可选的结构体，另一种利用第一类函数。
+
+我们来看看 squirrel[4]。这个库提供了构建查询的能力，并以我认为更加符合 Go 语法习惯的方式直接执行它们。当然，在此我们只关注查询构建方面。
+
+使用 squirrel，我们可以像这样实现上面的逻辑。
+
+posts := make([]Post, 0)
+
+search := r.URL.Query().Get("search")
+after := r.URL.Query().Get("after")
+
+eqs := make([]sq.Eq, 0)
+
+if search != "" {
+	eqs = append(eqs, sq.Like{"title", "%" + search + "%"})
+}
+
+if after != "" {
+	eqs = append(eqs, sq.Gt{"created_at", after})
+}
+
+q := sq.Select("*").From("posts")
+
+for _, eq := range eqs {
+	q = q.Where(eq)
+}
+
+query, args, err := q.ToSql()
+
+if err != nil {
+	return
+}
+
+err := db.Select(&posts, query, args...)
+这比我们使用 Gorm 时要好一些，并且比我们之前做的字符串连接要好几英里。然而，编写仍然稍显繁琐。对 SQL 查询中的某些子句，squirrel 使用可选的结构体表示。在 Go 中对于 API，可选结构体是一种常见模式，旨在实现高度可配置。
+
+Go 中用于查询构建的 API 应满足以下两个需求：
+
+符合语法习惯
+可扩展
+如何用 Go 实现这一目标？
+
+查询构建：第一类函数
+Dave Cheney 根据 Rob Pike 关于同一主题的帖子撰写了两篇关于第一类函数的博客文章。感兴趣可以找到如下原文：
+
+Self-referential functions and the design of options[5]
+Functional options for friendly APIs[6]
+Do not fear the first class functions[7]
+我强烈建议阅读以上三篇文章，并在你下次实现高度可配置的 API 时使用他们所建议的模式。
+
+下面是查询构建的示例：
+
+posts := make([]*Post, 0)
+
+db := sqlx.Open("postgres", "...")
+
+q := Select(
+	Columns("*"),
+	Table("posts"),
+)
+
+err := db.Select(&posts, q.Build(), q.Args()...)
+我知道，这是一个很简单的例子。但是让我们来看看我们如何实现这样的 API，以便它可以用于查询构建。首先，我们应该实现一个查询结构来跟踪其在构建时的状态。
+
+type statement uint8
+
+type Query struct {
+	stmt  statement
+	table []string
+	cols  []string
+	args  []interface{}
+}
+
+const (
+	_select statement = iota
+)
+上述结构将跟踪我们正在构建的语句，包括 SELECT、UPDATE、INSERT、DELETE 等等，追踪我们正在操作的表，追踪我们正在使用的列，追踪将被传递到最终的查询语句中的参数。为了简单起见，让我们专注于实现 SELECT 语句的查询构建器。
+
+接下来，我们需要定义一种类型，该类型可用于修改我们正在构建的查询，该类型作为第一类函数将被多次传递。每次调用此函数时，它都应返回新的、被修改后的查询（如果适用）。
+
+type Option func(q Query) Query
+我们现在可以实现构建器的第一部分 : Select 函数。这将开始为我们的 SELECT 语句构建查询。
+
+func Select(opts ...Option) Query {
+	q := Query{
+		stmt: select_,
+	}
+
+	for _, opt := range opts {
+		q = opt(q)
+	}
+
+	return q
+}
+
+您现在应该能够看到一切如何慢慢地汇聚到一起，以及 UPDATE、INSERT、DELETE 等语句怎样简单的构建查询。如果没有实际实现一些 options 并传递到 Select 函数中，上面的 Select 函数是完全无用的，我们来继续实现。
+
+func Columns(cols ...string) Option {
+	returnfunc(q Query) Query {
+		q.cols = cols
+
+		return q
+	}
+}
+
+func Table(table string) Option {
+	returnfunc(q Query) Query {
+		q.table = table
+
+		return q
+	}
+}
+如您所见，我们以某种方式实现这些第一类函数，它们返回以后将被调用的、基础的 Option 函数。通常期望 Option 函数修改传递给它的 Query 对象，并返回 Query 的一个副本。
+
+为了对我们构建复杂查询的用例有用，我们应该实现 WHERE 向查询添加子句的功能。这将要求必须跟踪 WHERE 查询中的各种子句。
+
+type where struct {
+	col string
+	op  string
+	val interface{}
+}
+
+type Query struct {
+	stmt   statement
+	table  []string
+	cols   []string
+	wheres []where
+	args   []interface{}
+}
+我们为 WHERE 子句定义了一种自定义类型，并向原始 Query 结构添加一个属性 wheres。让我们为我们的需求实现两种类型的 Where 子句，第一种是 WHERE LIKE，另一种是 WHERE >。
+
+func WhereLike(col string, val interface{}) Option {
+	returnfunc(q Query) Query {
+		w := where{
+			col: col,
+			op:  "LIKE",
+			val: fmt.Sprintf("$%d", len(q.args) + 1),
+		}
+
+		q.wheres = append(q.wheres, w)
+		q.args = append(q.args, val)
+
+		return q
+	}
+}
+
+func WhereGt(col string, val interface{}) Option {
+	returnfunc(q Query) Query {
+		w := where{
+			col: col,
+			op:  ">",
+			val: fmt.Sprintf("$%d", len(q.args) + 1),
+		}
+
+		q.wheres = append(q.wheres, w)
+		q.args = append(q.args, val)
+
+		return q
+	}
+}
+在处理 WHERE 向查询添加子句时，我们需适当地为底层 SQL 驱动程序处理绑定值的语法。我们的示例是 Postgres，将实际值本身存储到 Query 的 args 切片中。
+
+因此，我们实现的如此少，并能够以符合语法习惯的方式实现我们期待的功能。
+
+posts := make([]Post, 0)
+
+search := r.URL.Query().Get("search")
+after := r.URL.Query().Get("after")
+
+db := sqlx.Open("postgres", "...")
+
+opts := []Option{
+	Columns("*"),
+	Table("posts"),
+}
+
+if search != "" {
+	opts = append(opts, WhereLike("title", "%" + search + "%"))
+}
+
+if after != "" {
+	opts = append(opts, WhereGt("created_at", after))
+}
+
+q := Select(opts...)
+
+err := db.Select(&posts, q.Build(), q.Args()...)
+稍好一点，但仍然不是很好。但是，我们可以扩展功能以获得我们想要的功能。因此，让我们实现一些函数，这些函数将返回满足我们特定需求的 Option。
+
+func Search(col, val string) Option {
+	returnfunc(q Query) Query {
+		if val == "" {
+			return q
+		}
+
+		return WhereLike(col, "%" + val + "%")(q)
+	}
+}
+
+func After(val string) Option {
+	returnfunc(q Query) Query {
+		if val == "" {
+			return q
+		}
+
+		return WhereGt("created_at", val)(q)
+	}
+}
+通过实现上述两个函数，我们现在可以干净地为我们的用例构建一个稍微复杂的查询。如果传递给它们的值被认为是正确的，这两个函数都只会修改查询。
+
+posts := make([]Post, 0)
+
+search := r.URL.Query().Get("search")
+after := r.URL.Query().Get("after")
+
+db := sqlx.Open("postgres", "...")
+
+q := Select(
+	Columns("*"),
+	Table("posts"),
+	Search("title", search),
+	After(after),
+)
+
+err := db.Select(&posts, q.Build(), q.Args()...)
+我发现在 Go 中这是构建复杂查询时一种更加符合语法习惯的方式。现在，当然你已经在帖子中做到了这一点，并且必须想知道，“这很好但你没有实现 Build（）和 Args（）方法”。在某种程度上，这是事实。为了不再延长这个帖子 (已经足够），我没有打扰。所以，如果您对这里介绍的一些想法感兴趣，请查看我提交在 GitHub 的 Code[8]。它没有任何严谨性，它没有覆盖查询构建器所需的所有内容，它也缺少 Join 字句；仅仅是为示例并支持 Postgres 绑定值语法。
+
+如果您对我在本文中所说的内容有任何不同意见，或想进一步讨论，请通过邮件 me@andrewpillar.com 与我联系。
+
+via: https://andrewpillar.com/programming/2019/07/13/orms-and-query-building-in-go/
+
+作者：andrewpillar[9]译者：zhoudingding[10]校对：polaris1119[11]
+
+本文由 GCTT[12] 原创编译，Go 中文网[13] 荣誉推出
+
+参考资料
+[1]
+Programming: https://andrewpillar.com/programming/
+
+[2]
+评论: https://news.ycombinator.com/item?id=19851753
+
+[3]
+To ORM or not to ORM: https://eli.thegreenplace.net/2019/to-orm-or-not-to-orm/
+
+[4]
+squirrel: https://github.com/masterminds/squirrel
+
+[5]
+Self-referential functions and the design of options: https://commandcenter.blogspot.com/2014/01/self-referential-functions-and-design.html
+
+[6]
+Functional options for friendly APIs: https://dave.cheney.net/2014/10/17/functional-options-for-friendly-apis
+
+[7]
+Do not fear the first class functions: https://dave.cheney.net/2016/11/13/do-not-fear-first-class-functions
+
+[8]
+Code: https://github.com/andrewpillar/query
+
+[9]
+andrewpillar: https://github.com/andrewpillar
+
+[10]
+zhoudingding: https://github.com/DingdingZhou/
+
+[11]
+polaris1119: https://github.com/polaris1119
+
+[12]
+GCTT: https://github.com/studygolang/GCTT
+
+[13]
+Go 中文网: https://studygolang.com/
+

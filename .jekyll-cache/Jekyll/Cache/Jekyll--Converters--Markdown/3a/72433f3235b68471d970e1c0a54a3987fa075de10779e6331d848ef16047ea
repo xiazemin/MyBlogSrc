@@ -1,0 +1,176 @@
+I"� <p>https://github.com/mjibson/esc
+https://mattjibson.com/esc/</p>
+
+<p>esc embeds files into go programs and provides http.FileSystem interfaces to them.</p>
+
+<p>It adds all named files or files recursively under named directories at the path specified. The output file provides an http.FileSystem interface with zero dependencies on packages outside the standard library.</p>
+
+<!-- more -->
+<p>go-bindata
+go-bindata 是目前我的程序 pugo 在用的嵌入静态资源的工具。它可以把静态文件嵌入到一个 go 文件中，并提供一些操作方法。</p>
+
+<p>安装 go-bindata：</p>
+
+<p>go get -u github.com/jteeuwen/go-bindata/…
+注意 go get 地址最后的三个点 …。这样会分析所有子目录并下载依赖编译子目录内容。go-bindata 的命令工具在子目录中。（还要记得把 $GOPATH/bin 加入系统 PATH）。</p>
+
+<p>使用命令工具 go-bindata （ pugo 的例子）：</p>
+
+<p>go-bindata -o=app/asset/asset.go -pkg=asset source/… theme/… doc/source/… doc/theme/… 
+-o 输出文件到 app/asset/asset.go，包名 -pkg=asset，然后是需要打包的目录，三个点包括所有子目录。这样就可以把所有相关文件打包到 asset.go 且开头是 package asset 保持和目录一致。</p>
+
+<p>pugo 里释放静态文件的代码：</p>
+
+<p>dirs := []string{“source”, “theme”, “doc”} // 设置需要释放的目录</p>
+
+<p>for _, dir := range dirs {
+    // 解压dir目录到当前目录
+    if err := asset.RestoreAssets(“./”, dir); err != nil {
+        isSuccess = false
+        break
+    }
+}
+if !isSuccess {
+    for _, dir := range dirs {
+        os.RemoveAll(filepath.Join(“./”, dir))
+    }
+}
+asset.go 内的静态内容还是根据实际的目录位置索引。所以我们可以直接通过目录或者文件地址去操作。</p>
+
+<p>-debug 开发模式
+go-bindata 支持开发模式，即不嵌入静态内容，只生成操作方法到输出的 go 代码中，如：</p>
+
+<p>go-bindata -debug -o=app/asset/asset.go -pkg=asset source/… theme/… doc/source/… doc/theme/… 
+-debug 参数开启开发模式。生成的代码会直接去读取静态文件到内存，而不是编码到代码中。代码文件更小，你更快速的编写业务逻辑。</p>
+
+<p>// -pkg=asset, 打包的包名是 asset
+bytes, err := asset.Asset(“theme/default/post.html”)    // 根据地址获取对应内容
+if err != nil {
+    fmt.Println(err)
+    return
+}
+t, err := template.New(“tpl”).Parse(string(bytes))      // 比如用于模板处理
+fmt.Println(t, err)
+http.FileSystem
+http.FileSystem 是定义 HTTP 静态文件服务的接口。go-bindata 的第三方包 go-bindata-assetfs 实现了这个接口，支持 HTTP 访问静态文件目录的行为。以我们上面编译好的 asset.go 为例：</p>
+
+<p>import (
+    “net/http”</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>"github.com/elazarl/go-bindata-assetfs"
+"github.com/go-xiaohei/pugo/app/asset" // 用 pugo 的asset.go进行测试 )
+</code></pre></div></div>
+
+<p>func main() {
+    fs := assetfs.AssetFS{
+        Asset:     asset.Asset,
+        AssetDir:  asset.AssetDir,
+        AssetInfo: asset.AssetInfo,
+    }
+    http.Handle(“/”, http.FileServer(&amp;fs))
+    http.ListenAndServe(“:12345”, nil)
+}
+访问 http://localhost:12345，就可以看到嵌入的 source,theme,doc 的目录列表页面，和 Nginx 查看静态文件目录一样的。</p>
+
+<p>go.rice
+go.rice 也支持打包静态文件到 go 文件中，但是行为和 go-bindata 很不相同。从使用角度，go.rice 其实是更便捷的静态文件操作库。打包静态文件反而是顺带的功能。</p>
+
+<p>安装和 go-bindata 一样，注意 三个点：</p>
+
+<p>go get github.com/GeertJohan/go.rice/…
+go.rice 把一个目录认为是一个 rice.Box 操作：</p>
+
+<p>import (
+    “fmt”
+    “html/template”</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>"github.com/GeertJohan/go.rice" )
+</code></pre></div></div>
+
+<p>func main() {
+    // 这里写相对于的执行文件的地址
+    box, err := rice.FindBox(“theme/default”)
+    if err != nil {
+        println(err.Error())
+        return
+    }
+    // 从目录 Box 读取文件
+    str, err := box.String(“post.html”)
+    if err != nil {
+        println(err.Error())
+        return
+    }
+    t, err := template.New(“tpl”).Parse(str)
+    fmt.Println(t, err)
+}
+rice 命令
+go.rice 的打包命令是 rice。用起来非常直接：在有使用 go.rice 操作的 go 代码目录，直接执行 rice embed-go:</p>
+
+<p>rice embed-go
+rice -i “github.com/fuxiaohei/xyz” embed-go // -i 处理指定包里的 go.rice 操作
+他就会生成当前包名下的、嵌入了文件的代码 rice-box.go。但是，它不递归处理 import。他会分析当前目录下的 go 代码中 go.rice 的使用，找到对应需要嵌入的文件夹。但是子目录下的和 import 的里面的 go.rice 使用不会分析，需要你手动 cd 过去或者 -i 指定要处理的包执行命令。这点来说非常的不友好。</p>
+
+<p>http.FileSystem
+go.rice 是直接支持 http.FileSystem 接口：</p>
+
+<p>func main() {
+    // MustFindBox 出错直接 panic
+    http.Handle(“/”, http.FileServer(rice.MustFindBox(“theme”).HTTPBox()))
+    http.ListenAndServe(“:12345”, nil)
+}
+有点略繁琐的是 rice.FindBox(dir) 只能加载一个目录。因此需要多个目录的场景，会有代码：</p>
+
+<p>func main() {
+    http.Handle(“/img”, http.FileServer(rice.MustFindBox(“static/img”).HTTPBox()))
+    http.Handle(“/css”, http.FileServer(rice.MustFindBox(“static/css”).HTTPBox()))
+    http.Handle(“/js”, http.FileServer(rice.MustFindBox(“static/js”).HTTPBox()))
+    http.ListenAndServe(“:12345”, nil)
+}
+esc
+esc 的作者在研究几款嵌入静态资源的工具后，发觉都不好用，就自己写出了 esc。它的需求很简单，就是嵌入静态资源 和 支持 http.FileSystem。esc 工具也这两个主要功能。</p>
+
+<p>安装 esc:</p>
+
+<p>go get github.com/mjibson/esc
+使用方法和 go-bindata 类似：</p>
+
+<p>// 注意 esc 不支持 source/… 三个点表示所有子目录
+go-bindata -o=asset/asset.go -pkg=asset source theme doc/source doc/theme
+直接支持 http.FileSystem：</p>
+
+<p>import (
+    “net/http”
+    “asset” // esc 生成 asset/asset.go 
+)</p>
+
+<p>func main() {
+    fmt.Println(asset.FSString(false, “/theme/default/post.html”))         // 读取单个文件
+    http.ListenAndServe(“:12345”, http.FileServer(asset.FS(false)))     // 支持 http.FileSystem，但是没有做展示目录的支持
+}
+esc 有个较大的问题是只能一个一个文件操作，不能文件夹操作，没有类似go-bindata 的 asset.RestoreDir() 方法。并且没有方法可以列出嵌入的文件的列表，导致也无法一个一个文件操作，除非自己写死。这是我不使用他的最大原因。</p>
+
+<p>go generate
+嵌入静态资源的工具推荐配合 go generate 使用。例如 pugo 的入口文件就有：</p>
+
+<p>package main</p>
+
+<p>import (
+    “os”
+    “time”</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>"github.com/go-xiaohei/pugo/app/command"
+"github.com/go-xiaohei/pugo/app/vars"
+"github.com/urfave/cli" )
+</code></pre></div></div>
+
+<p>//go:generate go-bindata -o=app/asset/asset.go -pkg=asset source/… theme/… doc/source/… doc/theme/…</p>
+
+<p>// ……
+在编译的时候执行：</p>
+
+<p>go generate &amp;&amp; go build
+这个是 go generate 的基本用法。更详细的了解可以看 官方博文。</p>
+
+<p>总结
+我在开发 pugo 的时候对这几款嵌入静态资源的程序进行了测试。go.rice 并不是我想要的模式，就没有考虑。esc 提供的操作方法太少，无法满足程序开发的需要。最后选择 go-bindata。但是 go-bindata 和 go.rice 都是将纯字符数据或 []byte 字符数据写入 go 文件，内容非常大。esc 是写入 gzip 压缩流的 Base64 编码。经过压缩后 go 代码的大小明显更少（我嵌入的都是模板等文本文件）。可见库类都有各自的优缺点。倘若有 go-bindata 那样丰富的 API，又有 esc 那样嵌入压缩过的字符数据，那该多好。</p>
+:ET

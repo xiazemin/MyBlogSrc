@@ -1,0 +1,118 @@
+---
+title: cAdvisor
+layout: post
+category: docker
+author: 夏泽民
+---
+为了解决docker stats的问题(存储、展示)，谷歌开源的cadvisor诞生了，cadvisor不仅可以搜集一台机器上所有运行的容器信息，还提供基础查询界面和http接口，方便其他组件如Prometheus进行数据抓取，或者cadvisor + influxdb + grafna搭配使用。
+cAdvisor可以对节点机器上的资源及容器进行实时监控和性能数据采集，包括CPU使用情况、内存使用情况、网络吞吐量及文件系统使用情况
+Cadvisor使用Go语言开发，利用Linux的cgroups获取容器的资源使用信息，在K8S中集成在Kubelet里作为默认启动项，官方标配
+<!-- more -->
+.使用docker部署
+
+docker run \
+  --volume=/:/rootfs:ro \
+  --volume=/var/run:/var/run:rw \
+  --volume=/sys:/sys:ro \
+  --volume=/var/lib/docker/:/var/lib/docker:ro \
+  --volume=/dev/disk/:/dev/disk:ro \
+  --publish=8080:8080 \
+  --detach=true \
+  --name=cadvisor \
+  google/cadvisor:latest
+
+cAdvisor 的主要功能，总结起来主要两点：
+
+展示 Host 和容器两个层次的监控数据。
+
+展示历史变化数据。
+
+由于 cAdvisor 提供的操作界面略显简陋，而且需要在不同页面之间跳转，并且只能监控一个 host，这不免会让人质疑它的实用性。但 cAdvisor 的一个亮点是它可以将监控到的数据导出给第三方工具，由这些工具进一步加工处理。
+
+我们可以把 cAdvisor 定位为一个监控数据收集器，收集和导出数据是它的强项，而非展示数据。
+
+cAdvisor 支持很多第三方工具
+1.1 cAdvisor
+它是Google用来监测单节点的资源信息的监控工具。Cadvisor提供了一目了然的单节点多容器的资源监控功能。Google的Kubernetes中也缺省地将其作为单节点的资源监控工具，各个节点缺省会被安装上Cadvisor。总结起来主要两点：
+
+展示 Host 和容器两个层次的监控数据。
+展示历史变化数据。
+ 由于 cAdvisor 提供的操作界面略显简陋，而且需要在不同页面之间跳转，并且只能监控一个 host，这不免会让人质疑它的实用性。但 cAdvisor 的一个亮点是它可以将监控到的数据导出给第三方工具，由这些工具进一步加工处理。
+
+ 我们可以把 cAdvisor 定位为一个监控数据收集器，收集和导出数据是它的强项，而非展示数据。
+
+1.2 InfluxDB
+InfluxDB 是用Go语言编写的一个开源分布式时序、事件和指标数据库，无需外部依赖。类似的数据库有Elasticsearch、Graphite等。
+
+InfluxDB主要特色功能
+
+基于时间序列，支持与时间有关的相关函数（如最大，最小，求和等）；
+可度量性：你可以实时对大量数据进行计算；
+基于事件：它支持任意的事件数据；
+InfluxDB主要特点
+
+无结构（无模式）：可以是任意数量的列；
+可拓展的；
+支持min, max, sum, count, mean, median 等一系列函数，方便统计；
+原生的HTTP支持，内置HTTP API；
+强大的类SQL语法；
+自带管理界面，方便使用；
+1.3 Grafana
+Grafana是一个可视化面板（Dashboard），有着非常漂亮的图表和布局展示，功能齐全的度量仪表盘和图形编辑器，支持Graphite、zabbix、InfluxDB、Prometheus和OpenTSDB作为数据源。Grafana主要特性：灵活丰富的图形化选项；可以混合多种风格；支持白天和夜间模式；多个数据源。
+
+2.部署过程
+创建自定义网络monitor（自定义网络名称），用于后期容器加入此网络中，当然你也可以忽略此步；
+创建Influxdb容器，创建数据用户、数据库；
+创建cAdvisor容器；
+创建Grafana容器，配置grafana；
+3.开始部署
+3.1 创建自定义网络
+前面也说过了，你可以不用创建自定网络，作者只是为了把后期创建的cAdvisor+InfluxDB+Grafana这三个容器都加入自己定义的网络便于理解和管理，所以才新建一个自定义网络：
+
+[root@ganbing ~]# docker network create monitor
+cc193568263604e3bc3e7a5d78f18d07af99810e1d5c19bac99fccfa045f48f5
+查看创建的网络：
+docker：快速构建容器监控系统cAdvisor+InfluxDB+Grafana
+3.2 创建influxdb容器
+启动容器，tutum/influxdb这里没有指定版本，默认会pull最新版本的influxdb：
+
+[root@ganbing ~]# docker run -d --name influxdb --net monitor -p 8083:8083 -p 8086:8086 tutum/influxdb
+参数说明：
+-d ：后台运行此容器；
+--name ：启运容器分配名字influxdb；
+--net : 把容器加入到新的网络monitor；
+-p ：映射端口，8083端口为infuxdb后台控制端口，8086端口是infuxdb的数据端口；
+tutum/influxdb：通过这个容器来运行的，默认会在docker官方仓库pull下来；
+
+查看influxdb容器是否启动：
+
+[root@ganbing ~]# docker ps -l
+CONTAINER ID        IMAGE               COMMAND             CREATED             STATUS              PORTS                                            NAMES
+30b9789e680d        tutum/influxdb      "/run.sh"           22 seconds ago      Up 21 seconds       0.0.0.0:8083->8083/tcp, 0.0.0.0:8086->8086/tcp   influxdb
+访问influxdb控制台，ip+8083端口访问：
+
+其实是有很多选择的，比如docker自带的docker stats命令，
+Scout，Data Dog，Sysdig Cloud,
+Sensu Monitoring Framework，CAdvisor等。
+通过docker stats命令可以很方便的看到当前宿主机上所有容器的CPU，内存以及网络流量等数据。但是docker stats命令的缺点就是统计的只是当前宿主机的所有容器，而获取的监控数据是实时的，没有地方存储，也没有报警功能。
+
+ssj docker stats
+CONTAINER           CPU %               MEM USAGE / LIMIT       MEM %               NET I/O             BLOCK I/O           PIDS
+f216e9be15bf        0.06%               76.27 MiB / 992.6 MiB   7.68%               5.94 kB / 2.13 kB   16.2 MB / 0 B       7
+ead53a6166f0        0.00%               8.703 MiB / 992.6 MiB   0.88%               578 B / 578 B       7.01 MB / 0 B       2
+
+而Scout、Sysdig Cloud
+，Data Dog虽然都提供了较完善的服务，但是它们都是托管的服务而且都收费，于是也不在考虑范围之内。Sensu Monitoring Framework集成度较高，也免费，但是部署过于复杂。最后，我们选择了CAdvisor做容器监控工具。
+CAdvisor谷歌出品，优点是开源产品，监控指标齐全，部署方便，而且有官方的docker镜像。缺点是集成度不高，默认只在本地保存2分钟数据。不过在调研之后发现可以加上InfluxDB存储数据，对接Grafana展示图表，比较便利地搭建好了容器监控系统，数据收集和图表展示效果良好，对系统性能也几乎没有什么影响。
+
+CAdvisor原理简介
+CAdvisor运行时挂载了宿主机根目录，docker根目录等多个目录，由此可以从中读取容器的运行时信息。docker基础技术有Linux namespace，Control Group(CGroup)，AUFS等，其中CGroup用于系统资源限制和优先级控制的。
+宿主机的/sys/fs/cgroup/目录下面存储的就是CGroup的内容了，CGroup包括多个子系统，如对块设备的blkio，cpu，内存，网络IO等限制。Docker在CGroup里面的各个子系统中创建了docker目录，而CAdvisor运行时挂载了宿主机根目录和 /sys目录，从而CAdvisor可以读取到容器的资源使用记录。比如下面可以看到容器b1f257当前时刻的CPU的使用统计。
+
+# cat /sys/fs/cgroup/cpu/docker/b1f25723c5c3a17df5026cb60e1d1e1600feb293911362328bd17f671802dd31/cpuacct.stat 
+user 95191
+system 5028
+
+而容器网络流量CAdvisor是从/proc/PID/net/dev中读取的，如上面的容器b1f257进程在宿主机的PID为6748，可以看到容器所有网卡的接收和发送流量以及错误数等。CAdvisor定期读取对应目录下面的数据并定期发送到指定的存储引擎存储，而本地会默认存储最近2分钟的数据并提供UI界面查看。
+
+

@@ -1,0 +1,67 @@
+I"w<p>PHP5在使用一个类时，如果发现这个类没有加载，就会自动运行__autoload()函数，在这个函数中我们可以加载需要使用的类。在我们这个简单的例子中，我们直接将类名加上扩展名”.class.php”构成了类文件名，然后使用require_once将其加载。从这个例子中，我们可以看出autoload至少要做三件事情，第一件事是根据类名确定类文件名，第二件事是确定类文件所在的磁盘路径(在我们的例子是最简单的情况，类与调用它们的PHP程序文件在同一个文件夹下)，第三件事是将类从磁盘文件中加载到系统中。第三步最简单，只需要使用include/require即可。要实现第一步，第二步的功能，必须在开发时约定类名与磁盘文件的映射方法，只有这样我们才能根据类名找到它对应的磁盘文件。</p>
+
+<p>        因此，当有大量的类文件要包含的时候，我们只要确定相应的规则，然后在__autoload()函数中，将类名与实际的磁盘文件对应起来，就可以实现lazy loading的效果。从这里我们也可以看出__autoload()函数的实现中最重要的是类名与实际的磁盘文件映射规则的实现。</p>
+
+<p>        但现在问题来了，如果在一个系统的实现中，如果需要使用很多其它的类库，这些类库可能是由不同的开发人员编写的，其类名与实际的磁盘文件的映射规则不尽相同。这时如果要实现类库文件的自动加载，就必须在__autoload()函数中将所有的映射规则全部实现，这样的话__autoload()函数有可能会非常复杂，甚至无法实现。最后可能会导致__autoload()函数十分臃肿，这时即便能够实现，也会给将来的维护和系统效率带来很大的负面影响
+<!-- more -->
+PHP 的 Autoload 机制的实现</p>
+
+<p>        我们知道，PHP文件的执行分为两个独立的过程，第一步是将PHP文件编译成普通称之为OPCODE的字节码序列（实际上是编译成一个叫做zend_op_array的字节数组），第二步是由一个虚拟机来执行这些OPCODE。PHP的所有行为都是由这些OPCODE来实现的。因此，为了研究PHP中autoload的实现机制，我们将autoload.php文件编译成opcode，然后根据这些OPCODE来研究PHP在这过程中都做了些什么：
+/* autoload.php 编译后的OPCODE列表，是使用OPDUMP工具</p>
+<ul>
+  <li>
+    <p>生成的结果，可以到网站 http://www.phpinternals.com/ 下载该软件。
+ */
+&lt;?php
+ // require_once (”Person.php”);</p>
+
+    <p>function __autoload ($classname) {
+     0  NOP              <br />
+     0  RECV                1
+     if (!class_exists($classname)) {
+         1  SEND_VAR            !0
+         2  DO_FCALL            ‘class_exists’ [extval:1]
+         3  BOOL_NOT            $0 =&gt;RES[~1]   <br />
+         4  JMPZ                ~1, -&gt;8
+         require_once ($classname. “.class.php”);
+             5  CONCAT              !0, ‘.class.php’ =&gt;RES[~2]   <br />
+             6  INCLUDE_OR_EVAL     ~2, REQUIRE_ONCE
+     }
+     7  JMP                 -&gt;8
+ }
+     8  RETURN              null</p>
+
+    <p>$p = new Person(’Fred’, 35);
+     1  FETCH_CLASS         ‘Person’ =&gt;RES[:0]   <br />
+     2  NEW                 :0 =&gt;RES[$1]   <br />
+     3  SEND_VAL            ‘Fred’
+     4  SEND_VAL            35
+     5  DO_FCALL_BY_NAME     [extval:2]
+     6  ASSIGN              !0, $1</p>
+
+    <p>var_dump ($p);
+     7  SEND_VAR            !0
+     8  DO_FCALL            ‘var_dump’ [extval:1]
+?&gt;
+        在autoload.php的第10行代码中我们需要为类Person实例化一个对象。因此autoload机制一定会在该行编译后的opcode中有所体现。从上面的第10行代码生成的OPCODE中我们知道，在实例化对象Person时，首先要执行FETCH_CLASS指令。我们就从PHP对FETCH_CLASS指令的处理过程开始我们的探索之旅。
+        现在我们清楚了，PHP在实例化一个对象时（实际上在实现接口，使用类常数或类中的静态变量，调用类中的静态方法时都会如此），首先会在系统中查找该类（或接口）是否存在，如果不存在的话就尝试使用autoload机制来加载该类。而autoload机制的主要执行过程为：
+① 检查执行器全局变量函数指针autoload_func是否为NULL。</p>
+  </li>
+</ul>
+
+<p>② 如果autoload_func==NULL, 则查找系统中是否定义有__autoload()函数，如果没有，则报告错误并退出。</p>
+
+<p>③ 如果定义了__autoload()函数，则执行__autoload()尝试加载类，并返回加载结果。</p>
+
+<p>④ 如果autoload_func不为NULL，则直接执行autoload_func指针指向的函数用来加载类。注意此时并不检查__autoload()函数是否定义。</p>
+
+<p>        真相终于大白，PHP提供了两种方法来实现自动装载机制，一种我们前面已经提到过，是使用用户定义的__autoload()函数，这通常在PHP源程序中来实现；另外一种就是设计一个函数，将autoload_func指针指向它，这通常使用C语言在PHP扩展中实现。如果既实现了__autoload()函数，又实现了autoload_func(将autoload_func指向某一PHP函数)，那么只执行autoload_func函数。
+Autoload 效率问题及对策</p>
+
+<p>        使用autoload机制时，很多人的第一反应就是使用autoload会降低系统效率，甚至有人干脆提议为了效率不要使用autoload。在我们了解了autoload实现的原理后，我们知道autoload机制本身并不是影响系统效率的原因，甚至它还有可能提高系统效率，因为它不会将不需要的类加载到系统中。</p>
+
+<p>        那么为什么很多人都有一个使用autoload会降低系统效率的印象呢？实际上，影响autoload机制效率本身恰恰是用户设计的自动加载函数。如果它不能高效的将类名与实际的磁盘文件(注意，这里指实际的磁盘文件，而不仅仅是文件名)对应起来，系统将不得不做大量的文件是否存在(需要在每个include path中包含的路径中去寻找)的判断，而判断文件是否存在需要做磁盘I/O操作，众所周知磁盘I/O操作的效率很低，因此这才是使得autoload机制效率降低的罪魁祸首！</p>
+
+<p>        因此，我们在系统设计时，需要定义一套清晰的将类名与实际磁盘文件映射的机制。这个规则越简单越明确，autoload机制的效率就越高。
+        结论：autoload机制并不是天然的效率低下，只有滥用autoload，设计不好的自动装载函数才会导致其效率的降低。</p>
+:ET

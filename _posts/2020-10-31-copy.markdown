@@ -1,0 +1,224 @@
+---
+title: mutex channel 浅拷贝深拷贝
+layout: post
+category: golang
+author: 夏泽民
+---
+Go channel 的发送接收数据的拷贝和 Go 的函数传参道理是一样的，都是默认的值拷贝。
+如果你传递一个值，那么 Go 会复制一份新的；如果传递一个指针，则会拷贝这个指针，不会去拷贝这个指针所指的变量（这一点 C++ 选手可能会理解比较深）。
+
+所以，如果你需要通过 channel 传递一个很大的 struct ，那么应该传递 指针。但是，要非常注意通过 channel 发送后，不要修改这个指，这会导致线程间潜在的竞争。
+
+
+https://ld246.com/article/1566389261378
+
+
+<!-- more -->
+{% raw %}
+通道的发送和接收特性
+对于同一个通道，发送操作之间是互斥的，接收操作之间也是互斥的。
+
+简单来说就是在同一时刻，Go的运行系统只会执行对同一个通道的任意个发送操作中的某一个，直到这个元素值被完全复制进该通道之后，其他发送操作才会执行。针对接收操作也是这样。
+对于通道中的同一个值，发送操作和接收操作也是互斥的。如正在被复制进通道但还未复制完成的元素值，这时接收方也不会看到和取走。
+
+tips
+元素值从外界进入通道会被复制。也就是说进入通道的并不是在接收操作符右边的那个元素值，而是他的副本。
+发送操作和接收操作中对元素值的处理都是不可分割的。
+不可分割意思就是发送操作要么还没复制元素，要么已经复制完毕，不会出现值只复制了一部分的情况。
+
+发送操作在完全完成之前会被阻塞。接收操作也是如此。
+发送操作包括，“复制元素值”，“放置副本到通道内” 二个步骤。在这二个步骤完成之前，发送操作会一直阻塞，他之后的代码是不会执行的。
+接收操作包括“复制通道内元素值”，“放置副本到接收方”，“删除原值” 三个操作。这三个操作在完成之前也是会一直阻塞的。
+
+tips: 上面讲的复制都属于浅拷贝。浅拷贝只是拷贝值以及值中直接包含的东西，深拷贝就是把所有深层次的结构一并拷贝，Golang只有浅拷贝。
+发送操作和接收操作在什么时候会被阻塞呢
+对于缓存通道
+
+如果通道已满，所有的发送操作就会阻塞，直到通道中有元素被取走
+如果通道已空，所有的接收操作就会阻塞，直到通道中有新的元素
+对于非缓存通道
+
+无论发送操作还是接受操作一开始就是阻塞的，只有配对的操作出现才会开始执行。
+收发操作何时会引起panic
+通道关闭，在进行发送操作会引发panic
+
+关闭一个已经关闭的通道也会引发panic
+更具体地说，当我们把接收表达式的结果同时赋给两个变量时，第二个变量的类型就是一定bool类型。它的值如果为false就说明通道已经关闭，并且再没有元素值可取了。
+
+注意，如果通道关闭时，里面还有元素值未被取出，那么接收表达式的第一个结果，仍会是通道中的某一个元素值，而第二个结果值一定会是true。因此，通过接收表达式的第二个结果值，来判断通道是否关闭是可能有延时的。
+
+package main
+import "fmt"
+func main() {
+    ch1 := make(chan int, 2)
+    // 发送方。
+    go func() {
+        for i := 0; i < 10; i++ {
+            fmt.Printf("Sender: sending element %v...\n", i)
+            ch1 <- i
+        }
+        fmt.Println("Sender: close the channel...")
+        close(ch1)
+    }()
+
+    // 接收方。
+    for {
+        elem, ok := <-ch1
+        if !ok {
+            fmt.Println("Receiver: closed channel")
+            break
+        }
+        fmt.Printf("Receiver: received an element: %v\n", elem)
+    }
+
+    fmt.Println("End.")
+}
+Channel引起的死锁的常见场景
+死锁是指两个或两个以上的协程的执行过程中，由于竞争资源或由于彼此通信而造成的一种阻塞的现象，若无外力作用，他们将无法推进下去,解决死锁的方法是加锁。。结合上面讲的channel相关知识，大家可以思考一下面情况为何为引起死锁。
+
+场景1：一个通道在一个go协程读写
+
+func main() {
+    c:=make(chan int)
+    c<-666
+    <-c
+}
+场景二：go程开启之前使用通道
+
+func main() {
+    c:=make(chan int)
+    c<-666
+    go func() {
+        <-c
+    }()
+}
+场景三：通道1中调用了通道2，通道2中调用通道1
+
+func main() {
+    c1, c2 := make(chan int), make(chan int)
+    go func() {
+        for {
+            select {
+            case <-c1:
+                c2 <- 10
+            }
+        }
+    }()
+    for {
+        select {
+        case <-c2:
+            c1 <- 10
+        }
+    }
+}
+{% endraw %}
+
+https://studygolang.com/articles/20270
+
+
+Go中没有原生的禁止拷贝的方式，所以如果有的结构体，你希望使用者无法拷贝，只能指针传递保证全局唯一的话，可以这么干，定义 一个结构体叫 noCopy，要实现 sync.Locker 这个接口
+
+// noCopy may be embedded into structs which must not be copied
+// after the first use.
+//
+// See https://golang.org/issues/8005#issuecomment-190753527
+// for details.
+type noCopy struct{}
+ 
+// Lock is a no-op used by -copylocks checker from `go vet`.
+func (*noCopy) Lock() {}
+func (*noCopy) UnLock() {}
+
+然后把 noCopy 嵌到你自定义的结构体里，然后 go vet 就可以帮我们进行检查了。
+
+package main
+ 
+import (
+"fmt"
+)
+ 
+type noCopy struct{}
+ 
+func (*noCopy) Lock() {}
+func (*noCopy) Unlock() {}
+ 
+type Demo struct {
+noCopy noCopy
+}
+ 
+func Copy(d Demo) {
+CopyTwice(d)
+}
+func CopyTwice(d Demo) {}
+ 
+func main() {
+d := Demo{}
+fmt.Printf("%+v", d)
+ 
+Copy(d)
+ 
+fmt.Printf("%+v", d)
+}
+
+$ go vet main.go
+# command-line-arguments
+./main.go:16: Copy passes lock by value: main.Demo contains main.noCopy
+./main.go:17: call of CopyTwice copies lock value: main.Demo contains main.noCopy
+./
+
+https://www.jb51.net/article/150776.htm
+
+
+https://www.jianshu.com/p/00e4afaeee2a
+
+
+互斥锁有两种状态：正常状态和饥饿状态。
+在正常状态下，所有等待锁的goroutine按照FIFO顺序等待。唤醒的goroutine不会直接拥有锁，而是会和新请求锁的goroutine竞争锁的拥有。新请求锁的goroutine具有优势：它正在CPU上执行，而且可能有好几个，所以刚刚唤醒的goroutine有很大可能在锁竞争中失败。在这种情况下，这个被唤醒的goroutine会加入到等待队列的前面。 如果一个等待的goroutine超过1ms没有获取锁，那么它将会把锁转变为饥饿模式。
+在饥饿模式下，锁的所有权将从unlock的gorutine直接交给交给等待队列中的第一个。新来的goroutine将不会尝试去获得锁，即使锁看起来是unlock状态, 也不会去尝试自旋操作，而是放在等待队列的尾部。
+如果一个等待的goroutine获取了锁，并且满足一以下其中的任何一个条件：(1)它是队列中的最后一个；(2)它等待的时候小于1ms。它会将锁的状态转换为正常状态。
+正常状态有很好的性能表现，饥饿模式也是非常重要的，因为它能阻止尾部延迟的现象。
+原子操作：指那些不能够被打断的操作被称为原子操作，当有一个CPU在访问这块内容addr时，其他CPU就不能访问。
+CAS：比较及交换，其实也属于原子操作，但它是非阻塞的，所以在被操作值被频繁变更的情况下,CAS操作并不那么容易成功，不得不利用for循环以进行多次尝试。
+自旋锁(spinlock)
+自旋锁是指当一个线程在获取锁的时候，如果锁已经被其他线程获取，那么该线程将循环等待，然后不断地判断是否能够被成功获取，知直到获取到锁才会退出循环。获取锁的线程一直处于活跃状态 Golang中的自旋锁用来实现其他类型的锁,与互斥锁类似，不同点在于，它不是通过休眠来使进程阻塞，而是在获得锁之前一直处于活跃状态(自旋)。
+Mutex结构
+
+type Mutex struct {
+    state int32  // 表示锁当前的状态
+    sema  uint32 // 信号量 用于向处于Gwaitting的G发送信号
+}
+状态值[2]
+
+mutexLocked
+值为 1，第一位为 1，表示 mutex 已经被加锁。根据 mutex.state & mutexLocked 的结果来判断 mutex 的状态：该位为 1 表示已加锁，0 表示未加锁。
+
+mutexWoken
+值为 2，第二位为 1，表示 mutex 是否被唤醒。根据 mutex.state & mutexWoken 的结果判断 mutex 是否被唤醒：该位为 1 表示已被唤醒，0 表示未被唤醒。
+
+mutexStarving
+值为 4，第三位为 1，表示 mutex 是否处于饥饿模式。根据 mutex.state & mutexWoken 的结果判断 mutex 是否处于饥饿模式：该位为 1 表示处于饥饿模式，0 表示正常模式。
+
+mutexWaiterShift
+值为 3，表示 mutex.state 右移 3 位后即为等待的 goroutine 的数量。
+
+starvationThresholdNs
+值为 1000000 纳秒，即 1ms，表示将 mutex 切换到饥饿模式的等待时间阈值。
+
+工作模式[2]
+
+正常模式下
+等待者以 FIFO 的顺序排队来获取锁，但被唤醒的等待者发现并没有获取到 mutex，并且还要与新到达的 goroutine 们竞争 mutex 的所有权。新到达的 goroutine 们有一个优势 —— 它们已经运行在 CPU 上且可能数量很多，所以一个醒来的等待者有很大可能会获取不到锁。在这种情况下它处在等待队列的前面。如果一个 goroutine 等待 mutex 释放的时间超过 1ms，它就会将 mutex 切换到饥饿模式。
+
+在饥饿模式下
+mutex 的所有权直接从对 mutex 执行解锁的 goroutine 传递给等待队列前面的等待者。新到达的 goroutine 们不要尝试去获取 mutex，即使它看起来是在解锁状态，也不要试图自旋（等也白等，在饥饿模式下是不会给你的），而是自己乖乖到等待队列的尾部排队去。
+
+如果一个等待者获得 mutex 的所有权，并且看到以下两种情况中的任一种：1) 它是等待队列中的最后一个，或者 2) 它等待的时间少于 1ms，它便将 mutex 切换回正常操作模式。
+
+正常模式有更好地性能，因为一个 goroutine 可以连续获得好几次 mutex，即使有阻塞的等待者。而饥饿模式可以有效防止出现位于等待队列尾部的等待者一直无法获取到 mutex 的情况。
+
+https://studygolang.com/articles/16933
+
+https://studygolang.com/articles/13529
+https://www.cnblogs.com/longchang/p/12612477.html
+
+https://blog.csdn.net/yzf279533105/article/details/97640423

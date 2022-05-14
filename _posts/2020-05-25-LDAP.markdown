@@ -1,0 +1,393 @@
+---
+title: LDAP in go
+layout: post
+category: golang
+author: 夏泽民
+---
+https://cybernetist.com/2020/05/18/getting-started-with-go-ldap/
+https://ldap.com/ldap-tools/
+https://www.openldap.org/
+https://github.com/go-ldap/ldap
+
+Recently I had to write a fair amount of Go code which interacts with Active Directory (AD) for one of my clients. AD uses Lightweight Directory Access Protocol (LDAP) [1] for client-server communication. LDAP is a very mature and powerful protocol to interact with directory services, though some of my friends argue that it’s a bit of a relic of past at this point. I disagree with this sentiment, but my explanation why would probably take a whole another blog post.
+<!-- more -->
+Around two or three years ago I faced a similar LDAP challenge. I had to write some Go code which would use LDAP for group membership and some other authorization related things. Back then LDAP Go libraries were in a pretty dire state. I ended up shelling out to the well known LDAP command-line tools. Unfortunately, that wasn’t an option this time, but luckily I quickly learned things in the Go LDAP have changed and for the better!
+
+This blog post provides a basic introduction to the wonderful go-ldap module. It’s the kind of introduction I wish it had existed when I started working on the LDAP project for my client. Besides, I wanted to have some sort of reference guide I could get back to in the future if I needed to. I hope you will not only find this post helpful, but that you will also learn something new. Let’s get started!
+
+Connect
+Before you can do anything with AD you need connect to the AD server. Let’s call the AD server LDAP server from now on; it feels a bit more natural and semantically correct to me. Plus the Go module I describe in this post is called ldap-go, so let’s stick to LDAP. The go-ldap module provides several options for you to connecto to LDAP server. Let’s walk through [some of] them in more detail.
+
+All variants of LDAP connections are handled by the DialURL function. There are some other function available in the module, but the docs suggest they have been deprecated in favour of DialURL function. Like the name suggests you provide a URL and the function attempts to connect to the remote LDAP server and returns the connection handle if successful.
+
+See the sample code below:
+
+ldapURL := "ldaps://ldap.example.com:636"
+l, err := ldap.DialURL(ldapURL)
+if err != nil {
+        log.Fatal(err)
+}
+defer l.Close()
+The code above attempts to establish a TLS connection with the remote server. DialURL infers the type of connection from the URL scheme which in this case was set to ldaps (note the “s” at the end).
+
+If you need more fine grained TLS configuration, the function accepts custom TLS config via additional parameter:
+
+ldapURL := "ldaps://ldap.example.com:636"
+l, err := ldap.DialURL(ldapURL, ldap.DialWithTLSConfig(&tls.Config{InsecureSkipVerify: true}))
+if err != nil {
+        log.Fatal(err)
+}
+defer l.Close()
+NOTE: The sample code above is for illustration purposes only! Never skip TLS verification when creating TLS connections!
+
+If you don’t want to use TLS you can use omit the “s” in the URL scheme like so:
+
+ldapURL := "ldap://ldap.example.com:389"
+l, err := ldap.DialURL(ldapURL)
+if err != nil {
+        log.Fatal(err)
+}
+defer l.Close()
+You can also omit the port from the LDAP URL. The code examples above show it for brevity. If you omit the port number the DialURL function automatically uses default port numbers for the particular URL scheme i.e. 636 for ldaps:// and 389 for “clear” (plaintext) lpap:// connections. The default LDAP port numbers are also accessible via the global variables DefaultLdapsPort and DefaultLdapPort.
+
+Alternatively, you can use the NewConn(conn net.Conn, isTLS bool) function which allows you to pass in a raw net.Conn (see here) connection which you may have established via different means.
+
+Finally, you can also upgrade an existing “plaintext” connection to the TLS one by using StartTLS() function:
+
+l, err := DialURL("ldap://ldap.example.com:389")
+if err != nil {
+    log.Fatal(err)
+}
+defer l.Close()
+
+// Now reconnect with TLS
+err = l.StartTLS(&tls.Config{InsecureSkipVerify: true})
+if err != nil {
+    log.Fatal(err)
+}
+Now that you learnt how to connect to LDAP server we can proceed to the next step: Binding.
+
+Bind
+Binding is the step where the LDAP server authenticates the client. If the client is successfully authenticated, the server grants it the access based on its privileges.
+
+There are different ways of doing LDAP binding using ldap-go. Let’s start with the simplest case: unauthenticated bind.
+
+Sometimes the LDAP servers allow limited read-only access to unauthenticated clients. Unauthenticated LDAP bind [1],[2] can be done as follows
+
+// connect code as shown earlier
+
+err = l.UnauthenticatedBind("cn=read-only-admin,dc=example,dc=com")
+if err != nil {
+    log.Fatal(err)
+}
+If you however need to authenticate there are two options at your disposal: SimpleBind and Bind. The latter is a nice wrapper around the former so I prefer to use that one in my code:
+
+// connect code as shown earlier
+
+err = l.Bind("cn=read-only-admin,dc=example,dc=com", "p4ssw0rd")
+if err != nil {
+    log.Fatal(err)
+}
+Finally, you can also do an “External” bind which according to the official RFC [3] allows a client to request the server to use credentials established by means external to the mechanism to authenticate the client.
+
+What this translates to in reality is the client binding into UNIX socket (your URL schema must be ldapi://) and the SASL/TLS auth happens “indirectly” over the UNIX socket.
+
+I’ve never used this form of authentication so I can’t speak much about it, but I’m guessing it can be useful in the “sidecar” scenario where you communicate with your sidecar process over a UNIX socket in which your sidecar process handles the LDAP authentication (and communication) on your behalf.
+
+LDAP CRUD
+Now that we’ve connected and authenticated we can do some damage. If the account you used for authentication has appropriate permissions you can start Adding, Modifying, Searching and Deleting LDAP records. Let’s have a look at each of these in more detail.
+
+In general, you will take actions on three basic records: groups, users and machine [accounts].
+
+Add and Modify
+You can create new LDAP records by using the Add function. It accepts a single parameter: an AddRequest. You can either craft the AddRequest manually (the AddRequest struct is exported along with all of its fields) or you can use the simple helper functions the library provides for you. We will have a look at both cases below.
+
+I decided to group both the Addition and Modifications examples together since they’re more related than I had initially thought as you will see later on!
+
+Adding Groups
+Adding groups to AD took me a bit while to figure out but after reading various AD documentation pages I ended up with something like this:
+
+// connect code comes here
+
+addReq := ldap.NewAddRequest("CN=testgroup,ou=Groups,dc=example,dc=com", []ldap.Control{})
+var attrs []ldap.Attribute
+attr := ldap.Attribute{
+      Type: "objectClass",
+      Vals: []string{"top", "group"},
+}
+attrs = append(attrs, attr)
+
+attr = ldap.Attribute{
+      Type: "name",
+      Vals: []string{"testgroup"},
+}
+attrs = append(attrs, attr)
+
+attr = ldap.Attribute{
+      Type: "sAMAccountName",
+      Vals: []string{"testgroup"},
+}
+attrs = append(attrs, attr)
+
+// make the group writable i.e. modifiable
+// https://docs.microsoft.com/en-us/windows/win32/adschema/a-instancetype
+instanceType := 0x00000004
+attr = ldap.Attribute{
+      Type: "instanceType",
+      Vals: []string{fmt.Sprintf("%d", instanceType},
+}
+attrs = append(attrs, attr)
+
+// make the group domain local and the group to be a security group
+// https://docs.microsoft.com/en-us/windows/win32/adschema/a-grouptype
+groupType := 0x00000004 | 0x80000000
+attr = ldap.Attribute{
+      Type: "groupType",
+      Vals: []string{fmt.Sprintf("%d", groupType)},
+}
+attrs = append(attrs, attr)
+
+addReq.Attributes = attrs
+
+if err := l.AddRequest(addReq); err != nil {
+      log.Fatal("error adding group:", addReq, err)
+}
+Now, this code looks a bit verbose, and indeed it is. There is a more concise way to do the same thing, but I wanted to show the above code for brevity as that was what my first code looked like.
+
+Here is a nicer way which does the same thing:
+
+// connect code comes here
+
+addReq := ldp.NewAddRequest("CN=testgroup,ou=Groups,dc=example,dc=com", []ldp.Control{})
+
+addReq.Attribute("objectClass", []string{"top", "group"})
+addReq.Attribute("name", []string{"testgroup"})
+addReq.Attribute("sAMAccountName", []string{"testgroup"})
+addReq.Attribute("instanceType", []string{fmt.Sprintf("%d", 0x00000004})
+addReq.Attribute("groupType", []string{fmt.Sprintf("%d", 0x00000004 | 0x80000000)})
+
+if err := l.AddRequest(addReq); err != nil {
+      log.Fatal("error adding group:", addReq, err)
+}
+There are a couple of things to highlight. First, you need to make sure your objectClass attributes are of the right type ("top" and "group").
+
+Next the instanceType hex number looks a bit intimidating, but it is exactly what AD expects if you want to create a “writable” i.e. modifiable group record [4].
+
+Finally, the groupType attribute looks even madder! It turns out if you want your group to have a domain local scope whilst also it’s being a security group (as opposed to a distribution group) you need to do a bitwise operation on the flags defined in AD docs [5].
+
+With this in place, you’re good to go. You can verify the group has been created using the familiar LDAP command-line tools:
+
+ldapsearch -LLL -o ldif-wrap=no -b "OU=testgroup,OU=Group,dc=example,dc=com" \
+         -D "${LDAP_USERNAME_DN}" -w "${LDAP_BIND_PASSWD}" -h "${LDAP_HOST}" \
+         '(CN=testgroup)' cn
+Adding Users
+Adding users turned out to be a bit more elaborate and it’s something that bit me because it wasn’t very obvious to me how to do it. The best way to learn is by doing so let’s have a look at a concrete example.
+
+Let’s say you want to create a new LDAP user and assign it to some password. Let’s say additionally you don’t want the password to expire. What I originally thought would do the trick was to do all of this in one simple AddRequest in a similar fashion as shown earlier in the group example.
+
+I thought I’d find the right LDAP attributes, shovel them into the AddRequest and that would be job done. I was terribly wrong and it took me some time to figure it out!
+
+It turns out the key is to split the whole process into 3 steps:
+
+Create a disabled account
+Set the password for the user
+Enable the user account
+Knowing this, the resulting code for the step 1 is pretty simple:
+
+// connect code comes here
+
+addReq = ldp.NewAddRequest("CN=fooUser,OU=Users,dc=example,dc=com", []ldp.Control{})
+addReq.Attribute("objectClass", []string{"top", "organizationalPerson", "user", "person"})
+addReq.Attribute("name", []string{"fooUser"})
+addReq.Attribute("sAMAccountName", []string{"fooUser"})
+addReq.Attribute("userAccountControl", []string{fmt.Sprintf("%d", 0x0202})
+addReq.Attribute("instanceType", []string{fmt.Sprintf("%d", 0x00000004})
+addReq.Attribute("userPrincipalName", []string{"fooUser@example.com"})
+addReq.Attribute("accountExpires", []string{fmt.Sprintf("%d", 0x00000000})
+
+addReq.Attributes = attrs
+
+if err := l.AddRequest(addReq); err != nil {
+      log.Fatal("error adding service:", addReq, err)
+}
+Now that the account has been created we can move on to the second step: setting the user password.
+
+Active Directory server stores a quoted password in little-endian UTF16 encoded in base64. That was a bit of a mouth full, but that’s literally what I found in docs. Luckily, for me Linux provides a few handy utilities to take care of all of this for you. To create a new password in the right format your can run the command shown below:
+
+echo -n "\"password\"" | iconv -f UTF8 -t UTF16LE | base64 -w 0
+Now that you have generated the password for the new user it’s time to set it in LDAP server. You do this by modifying the user account’s unicodePwd attribute. The below code shows how to accomplish that:
+
+// connect code comes here
+
+// https://github.com/golang/text
+// According to the MS docs the password needs to be enclosed in quotes o_O
+utf16 := unicode.UTF16(unicode.LittleEndian, unicode.IgnoreBOM)
+pwdEncoded, err := utf16.NewEncoder().String(fmt.Sprintf("%q", userPasswd))
+if err != nil {
+        log.Fatal(err)
+}
+
+modReq := ldap.NewModifyRequest("CN=fooUser,OU=Users,dc=example,dc=com", []ldap.Control{})
+modReq.Replace("unicodePwd", []string{pwdEncoded})
+
+if err := l.ModRequest(modReq); err != nil {
+      log.Fatal("error setting user password:", modReq, err)
+}
+NOTE: the unicode handling code actually comes from the Go text package [6]
+
+Finally you need to enable the user account by modifying its attributes [again]:
+
+modReq := ldap.NewModifyRequest("CN=fooUser,OU=Users,dc=example,dc=com", []ldap.Control{})
+modReq.Replace("userAccountControl", []string{fmt.Sprintf("%d", 0x0200})
+
+if err := l.ModRequest(modReq); err != nil {
+      log.Fatal("error enabling user account:", modReq, err)
+}
+Again, you can easily verify the user has been created:
+
+$ ldapsearch -LLL -o ldif-wrap=no -b "OU=fooUser,OU=Users,dc=example,dc=com" \
+         -D "{LDAP_USERNAME_DN}" -w "${LDAP_BIND_PASSWD}" -h "${LDAP_HOST}" \
+         '(CN=fooUser)' cn
+Adding machine accounts
+You can also create machine (aka service) accounts in LDAP which are often used in conjunction with Kerberos [7] for storing service attributes and granting access to different services and resources.
+
+Machine account can be created in a similar way the user accounts are created, but there are a few differences.
+
+Having to add "computer" value to the list of objectClass attribute values is probably the most important difference. Other than that the rest should be pretty much the same. Although some people don’t set the password for the machine accounts so you might want to skip that part completely and simply create the new LDAP record in a similar way the groups are created.
+
+Modify DN
+Sometimes you need to move an LDAP record between different Organizational Units (OU). The code to accomplish that is super simple:
+
+// connect code comes here
+
+// move fooUser from OU=Users to OU=SuperUsers
+req := ldap.NewModifyDNRequest("CN=fooUser,OU=Users,DC=example,DC=com", "CN=fooUser", true, "OU=SuperUsers,DC=example,DC=com")
+if err = conn.ModifyDN(req); err != nil {
+        log.Fatalf("Failed to modify userDN: %s\n", err)
+}
+It’s worth noting a few things here.
+
+First, the second parameter is an RDN (relative DN) as opposed to the [full] DN. LDAP server stores records (and other things) in a hierarchical structure (it’s actually a mad complicated graph structure). Every record exists in a rigid organizational hierarchy (probably a projection of business world from the time when AD was created, lol). So the record position is always either relative to some other [partial] DN or absolute if specified using the full DN form.
+
+The third parameter tells the remote server whether it should delete the original record once it has been moved. If we decided to keep it we’d set the value to false. The final parameter is the new parent entry DN.
+
+If you just wanted to rename the CN (or some other attribute) you would omit the last parameter by setting it to empty string i.e. the code which would rename the user fooUser to barUser without moving it around between different OUs would look like this:
+
+// move fooUser to "OU=SuperUsers,dc=example,dc=com"
+req := ldap.NewModifyDNRequest("CN=fooUser,OU=Users,DC=example,DC=com", "CN=barUser", true, "")
+if err = conn.ModifyDN(req); err != nil {
+        log.Fatalf("Failed to modify DN: %s\n", err)
+}
+Modify Password
+Another thing you might need to do occasionally is modiyfing existing passwords. To modify an existing password you’d do something like this:
+
+passwdModReq := ldap.NewPasswordModifyRequest("", "OldPassword", "NewPassword")
+if _, err = l.PasswordModify(passwdModReq); err != nil {
+        log.Fatalf("failed to modify password: %v", err)
+}
+If you don’t specify the new password the server will generate one for you automatically and send it back to you:
+
+passwdModReq := ldap.NewPasswordModifyRequest("", "OldPassword", "")
+passwdModResp, err := l.PasswordModify(passwdModReq)
+if err != nil {
+        log.Fatalf("failed to change password: %v", err)
+}
+
+newPasswd := passwdModResp.GeneratedPassword
+log.Printf("New password: %s\n", newPasswd)
+NOTE: unlike when modifying an user account password when creating new account, you do NOT need to quote the UTF-16 vase64 encoded string!
+
+Delete
+Deleting LDAP records is super easy. All you need to do is create an DelRequest by providing the particular record ldap DN and then run the delete command like so:
+
+delReq = ldap.NewDelRequest("CN=fooUser,OU=Users,dc=example,dc=com", []ldap.Control{})
+
+if err := l.Delete(delReq); err != nil {
+      log.Fatalf("Error deleting service: %v", err)
+}
+Again you can easily verify the user account has been deleted using the familiar ldapsearch command shown earlier.
+
+Query
+Last but not at least let’s talk about querying the LDAP records and their attributes.
+
+In order to query the LDAP records you need to create a SearchRequest which you then send to the LDAP server using Search function.
+
+The SearchRequest provides various options to fine-tune your query, but we’ll focus on the 3 I find the most important:
+
+BaseDN is the DN you are querying for the records
+Filter for filtering the results
+Attributes you are interested in
+Let’s have a look at a concrete example and explain it in detail:
+
+// connect code comes here
+
+user := "fooUser"
+baseDN := "DC=example,DC=com"
+filter := fmt.Sprintf("(CN=%s)", ldap.EscapeFilter(user))
+
+// Filters must start and finish with ()!
+searchReq := ldap.NewSearchRequest(baseDN, ldap.ScopeWholeSubtree, 0, 0, 0, false, filter, []string{"sAMAccountName"}, []ldap.Control{})
+
+result, err := l.Search(searchReq)
+if err != nil {
+        return fmt.Errorf("failed to query LDAP: %w", err)
+}
+
+log.Println("Got", len(result.Entries), "search results")
+We start by creating a new SearchRequest and supply it with the 3 parameters I had mentioned earlier. There is one thing to notice when constructing the SearchRequest. Actually, there are two things.
+
+First, have a proper look at the filter variable which we pass in as a search filter to the query. First thing you will notice is, the record CN is placed within the brackets (). If you don’t do that you’ll get an error when running the search:
+
+LDAP Result Code 201 "Filter Compile Error": ldap: filter does not start with an '('
+Second, notice how we escape the input when we create the filter using ldap.Escape() function. This is obviously helpful to avoid all kinds of random LDAP [security] shenanigans.
+
+Finally, let’s talk about the rest of the parameters. By passing ldap.ScopeWholeSubtree we tell LDAP server we want to search records across the whole tree of the given DN.
+
+There are other options available such as ldap.ScopeBaseObject which searches only within the given RDN. But for this example, I wanted to illustrate a domain-wise search.
+
+Another thing to notice is, we pass in a slice of LDAP Attributes we are interested in. If you leave the attribute slice empty the search will return all the LDAP record attributes, which is something you might need, but I wanted to show how you can ask for a select list of attributes. Beware of the size of the attributes if you decide to query all of them!
+
+There are plenty of other options to search LDAP at your disposal. Particularly, you should have a look at SearchWithPaging function which as its name suggests lets you page the query results if you expect huge loads of them.
+
+Display results
+Now that you know how to query the records you might want to display them in the terminal in some human-readable form. There are two handy functions at your disposal: Print and PrettyPrint.
+
+Personally I think they seem almost the same, though PrettyPrint lets you indent the result(s) so you can see the AD tree structure more clearly. See for yourself the results of using both of the functions:
+
+This is the result of Print():
+
+DN: CN=fooUser,OU=Users,DC=example,DC=com
+sAMAccountName: [fooUser]
+This is the result of PrettyPrint(2) (see the attribute 2-space indentation):
+
+  DN: CN=fooUser,OU=Users,DC=example,DC=com
+    sAMAccountName: [fooUser]
+Conclusion
+We have reached the end of this post. Congrats and thank you if you stayed with me until the end! Hopefully, you learned something new and useful which expands your Go toolbox.
+
+When I started using ldap-go library some things were not quite obvious to me, so hopefully the examples in this blog post help whoever ends up having to interact with AD using Go.
+
+As always, if you have any questions or find any inaccuracies in the post let me know in the comments. Until next time!
+
+
+https://github.com/qiniu/qlang
+
+
+https://github.com/shanghai-edu/ldap-test-tool/releases/
+https://github.com/shanghai-edu/ldap-test-tool
+https://github.com/go-ldap/ldap
+https://www.cnblogs.com/mafeng/p/10109558.html
+https://github.com/go-ldap/ldap
+
+https://studygolang.com/articles/21479?fr=sidebar
+
+https://www.cnblogs.com/mafeng/p/10109558.html
+https://github.com/go-ldap/ldap
+
+https://github.com/jenkins-x/sso-operator
+https://www.ctolib.com/janwenjohn-go-oauth2-sso.html
+
+http://dev.cmcm.com/archives/238
+
+https://go.ctolib.com/janwenjohn-go-oauth2-sso.html
+https://studygolang.com/articles/11794

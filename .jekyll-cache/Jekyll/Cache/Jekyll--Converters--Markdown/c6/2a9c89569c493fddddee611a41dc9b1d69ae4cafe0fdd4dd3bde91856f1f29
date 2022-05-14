@@ -1,0 +1,751 @@
+I"�.<p>中间件（通常）是一小段代码，它们接收一个请求，对其进行处理，每个中间件只处理一件事情，完成后将其传递给另一个中间件或最终处理程序，这样就做到了程序的解耦。如果没有中间件那么我们必须在最终的处理程序中来完成这些处理操作，这无疑会造成处理程序的臃肿和代码复用率不高的问题。中间件的一些常见用例是请求日志记录， Header操纵、 HTTP请求认证和 ResponseWriter劫持等等。
+<!-- more -->
+https://mp.weixin.qq.com/s/3DwHTa-9Bjxei9woi1qeCw
+https://mp.weixin.qq.com/s?__biz=MzUzNTY5MzU2MA==&amp;mid=2247483692&amp;idx=1&amp;sn=fa20c127b08a8d35feb4420b09470adf&amp;chksm=fa80d0bbcdf759ad9659f3b6e5ffc4e67217af4059ccadc4053f77ed1148bc783c365c29e4bf&amp;token=140743472&amp;lang=zh_CN&amp;scene=21#wechat_redirect</p>
+
+<p>创建中间件
+接下来我们用 Go创建中间件，中间件只将 http.HandlerFunc作为其参数，在中间件里将其包装并返回新的 http.HandlerFunc供服务器服务复用器调用。这里我们创建一个新的类型 Middleware，这会让最后一起链式调用多个中间件变的更简单。</p>
+
+<p>type 
+Middleware
+ func
+(
+http
+.
+HandlerFunc
+)
+ http
+.
+HandlerFunc</p>
+
+<p>下面的中间件通用代码模板让我们平时编写中间件变得更容易。</p>
+
+<p>中间件代码模板
+中间件是使用装饰器模式实现的，下面的中间件通用代码模板让我们平时编写中间件变得更容易，我们在自己写中间件的时候只需要往样板里填充需要的代码逻辑即可。</p>
+
+<p>func createNewMiddleware
+()</p>
+
+<p>Middleware</p>
+
+<p>{</p>
+
+<p>// 创建一个新的中间件</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>middleware  :=  func ( next  http . HandlerFunc )  http . HandlerFunc
+</code></pre></div></div>
+
+<p>{</p>
+
+<p>// 创建一个新的handler包裹next</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    handler  :=  func ( w http . ResponseWriter ,  r  * http . Request )
+</code></pre></div></div>
+
+<p>{</p>
+
+<p>// 中间件的处理逻辑</p>
+
+<p>……</p>
+
+<p>// 调用下一个中间件或者最终的handler处理程序</p>
+
+<p>next
+(
+w
+,
+ r
+)</p>
+
+<p>}</p>
+
+<p>// 返回新建的包装handler</p>
+
+<p>return
+ handler</p>
+
+<p>}</p>
+
+<p>// 返回新建的中间件</p>
+
+<p>return
+ middleware</p>
+
+<p>}</p>
+
+<p>使用中间件
+我们创建两个中间件，一个用于记录程序执行的时长，另外一个用于验证请求用的是否是指定的 HTTPMethod，创建完后再用定义的 Chain函数把 http.HandlerFunc和应用在其上的中间件链起来，中间件会按添加顺序依次执行，最后执行到处理函数。完整的代码如下：</p>
+
+<p>package
+ main</p>
+
+<p>import</p>
+
+<p>(</p>
+
+<p>“fmt”</p>
+
+<p>“log”</p>
+
+<p>“net/http”</p>
+
+<p>“time”</p>
+
+<p>)</p>
+
+<p>type 
+Middleware
+ func
+(
+http
+.
+HandlerFunc
+)
+ http
+.
+HandlerFunc</p>
+
+<p>// 记录每个URL请求的执行时长</p>
+
+<p>func 
+Logging
+()</p>
+
+<p>Middleware</p>
+
+<p>{</p>
+
+<p>// 创建中间件</p>
+
+<p>return
+ func
+(
+f http
+.
+HandlerFunc
+)
+ http
+.
+HandlerFunc</p>
+
+<p>{</p>
+
+<p>// 创建一个新的handler包装http.HandlerFunc</p>
+
+<p>return
+ func
+(
+w http
+.
+ResponseWriter
+,
+ r 
+*
+http
+.
+Request
+)</p>
+
+<p>{</p>
+
+<p>// 中间件的处理逻辑</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>        start  :=  time . Now ()
+
+        defer func ()
+</code></pre></div></div>
+
+<p>{
+ log
+.
+Println
+(
+r
+.
+URL
+.
+Path
+,
+ time
+.
+Since
+(
+start
+))</p>
+
+<p>}()</p>
+
+<p>// 调用下一个中间件或者最终的handler处理程序</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>        f ( w ,  r )
+</code></pre></div></div>
+
+<p>}</p>
+
+<p>}</p>
+
+<p>}</p>
+
+<p>// 验证请求用的是否是指定的HTTP Method，不是则返回 400 Bad Request</p>
+
+<p>func 
+Method
+(
+m 
+string
+)</p>
+
+<p>Middleware</p>
+
+<p>{</p>
+
+<p>return
+ func
+(
+f http
+.
+HandlerFunc
+)
+ http
+.
+HandlerFunc</p>
+
+<p>{</p>
+
+<p>return
+ func
+(
+w http
+.
+ResponseWriter
+,
+ r 
+*
+http
+.
+Request
+)</p>
+
+<p>{</p>
+
+<p>if
+ r
+.
+Method</p>
+
+<p>!=
+ m 
+{</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>            http . Error ( w ,  http . StatusText ( http . StatusBadRequest ),  http . StatusBadRequest )
+</code></pre></div></div>
+
+<p>return</p>
+
+<p>}</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>        f ( w ,  r )
+</code></pre></div></div>
+
+<p>}</p>
+
+<p>}</p>
+
+<p>}</p>
+
+<p>// 把应用到http.HandlerFunc处理器的中间件</p>
+
+<p>// 按照先后顺序和处理器本身链起来供http.HandleFunc调用</p>
+
+<p>func 
+Chain
+(
+f http
+.
+HandlerFunc
+,
+ middlewares 
+…
+Middleware
+)
+ http
+.
+HandlerFunc</p>
+
+<p>{</p>
+
+<p>for
+ _
+,
+ m 
+:=
+ range middlewares 
+{</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    f  =  m ( f )
+</code></pre></div></div>
+
+<p>}</p>
+
+<p>return
+ f</p>
+
+<p>}</p>
+
+<p>// 最终的处理请求的http.HandlerFunc</p>
+
+<p>func 
+Hello
+(
+w http
+.
+ResponseWriter
+,
+ r 
+*
+http
+.
+Request
+)</p>
+
+<p>{</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>fmt . Fprintln ( w ,
+</code></pre></div></div>
+
+<p>“hello world”
+)</p>
+
+<p>}</p>
+
+<p>func main
+()</p>
+
+<p>{</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>http . HandleFunc ( "/" ,
+</code></pre></div></div>
+
+<p>Chain
+(
+Hello
+,</p>
+
+<p>Method
+(
+“GET”
+),</p>
+
+<p>Logging
+()))</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>http . ListenAndServe ( ":8080" ,
+</code></pre></div></div>
+
+<p>nil
+)</p>
+
+<p>}</p>
+
+<p>运行程序后会打开浏览器访问 http://localhost:8080会有如下输出：</p>
+
+<p>2020
+/
+02
+/
+07</p>
+
+<p>21
+:
+07
+:
+52</p>
+
+<p>/</p>
+
+<p>359.503
+µ
+s</p>
+
+<p>2020
+/
+02
+/
+07</p>
+
+<p>21
+:
+09
+:
+17</p>
+
+<p>/</p>
+
+<p>34.727
+µ
+s</p>
+
+<p>到这里怎么用 Go编写和使用中间件就讲完，也就十分钟吧。不过这里更多的是探究实现原理，那么在生产环境怎么自己使用编写的这些中间件呢，我们接着往下看。</p>
+
+<p>使用 gorilla/mux应用中间件
+上面我们探讨了如何创建中间件，但是使用上每次用 Chain函数链接多个中间件和处理程序还是有些不方便，而且在上一篇文章中我们已经开始使用 gorilla/mux提供的 Router作为路由器了。好在 gorrila.mux支持向路由器添加中间件，如果发现匹配项，则按照添加中间件的顺序执行中间件，包括其子路由器也支持添加中间件。</p>
+
+<p>gorrila.mux路由器使用 Use方法为路由器添加中间件， Use方法的定义如下：</p>
+
+<p>func 
+(
+r 
+*
+Router
+)</p>
+
+<p>Use
+(
+mwf 
+…
+MiddlewareFunc
+)</p>
+
+<p>{</p>
+
+<p>for
+ _
+,
+ fn 
+:=
+ range mwf 
+{</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    r . middlewares  =  append ( r . middlewares ,  fn )
+</code></pre></div></div>
+
+<p>}</p>
+
+<p>}</p>
+
+<p>它可以接受多个 mux.MiddlewareFunc类型的参数， mux.MiddlewareFunc的类型声明为：</p>
+
+<p>type 
+MiddlewareFunc
+ func
+(
+http
+.
+Handler
+)
+ http
+.
+Handler</p>
+
+<p>跟我们上面定义的 Middleware类型很像也是一个函数类型，不过函数的参数和返回值都是 http.Handler接口，在《深入学习用 Go 编写 HTTP 服务器》中我们详细讲过 http.Handler它 是 net/http中定义的接口用来表示处理 HTTP 请求的对象，其对象必须实现 ServeHTTP方法。我们把上面说的中间件模板稍微更改下就能创建符合 gorrila.mux要求的中间件：</p>
+
+<p>func 
+CreateMuxMiddleware
+()
+ mux
+.
+MiddlewareFunc</p>
+
+<p>{</p>
+
+<p>// 创建中间件</p>
+
+<p>return
+ func
+(
+f http
+.
+Handler
+)
+ http
+.
+Handler</p>
+
+<p>{</p>
+
+<p>// 创建一个新的handler包装http.HandlerFunc</p>
+
+<p>return
+ http
+.
+HandlerFunc
+(
+func
+(
+w http
+.
+ResponseWriter
+,
+ r 
+*
+http
+.
+Request
+)</p>
+
+<p>{</p>
+
+<p>// 中间件的处理逻辑</p>
+
+<p>……</p>
+
+<p>// 调用下一个中间件或者最终的handler处理程序</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>        f . ServeHTTP ( w ,  r )
+</code></pre></div></div>
+
+<p>})</p>
+
+<p>}</p>
+
+<p>}</p>
+
+<p>接下来，我们把上面自定义的两个中间件进行改造，然后应用到我们一直在使用的 http_demo项目上，为了便于管理在项目中新建 middleware目录，两个中间件分别放在 log.go和 http_method.go中</p>
+
+<p>//middleware/log.go</p>
+
+<p>func 
+Logging
+()
+ mux
+.
+MiddlewareFunc</p>
+
+<p>{</p>
+
+<p>// 创建中间件</p>
+
+<p>return
+ func
+(
+f http
+.
+Handler
+)
+ http
+.
+Handler</p>
+
+<p>{</p>
+
+<p>// 创建一个新的handler包装http.HandlerFunc</p>
+
+<p>return
+ http
+.
+HandlerFunc
+(
+func
+(
+w http
+.
+ResponseWriter
+,
+ r 
+*
+http
+.
+Request
+)</p>
+
+<p>{</p>
+
+<p>// 中间件的处理逻辑</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>        start  :=  time . Now ()
+
+        defer func ()
+</code></pre></div></div>
+
+<p>{
+ log
+.
+Println
+(
+r
+.
+URL
+.
+Path
+,
+ time
+.
+Since
+(
+start
+))</p>
+
+<p>}()</p>
+
+<p>// 调用下一个中间件或者最终的handler处理程序</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>        f . ServeHTTP ( w ,  r )
+</code></pre></div></div>
+
+<p>})</p>
+
+<p>}</p>
+
+<p>}</p>
+
+<p>// middleware/http_demo.go</p>
+
+<p>func 
+Method
+(
+m 
+string
+)
+ mux
+.
+MiddlewareFunc</p>
+
+<p>{</p>
+
+<p>return
+ func
+(
+f http
+.
+Handler
+)
+ http
+.
+Handler</p>
+
+<p>{</p>
+
+<p>return
+ http
+.
+HandlerFunc
+(
+func
+(
+w http
+.
+ResponseWriter
+,
+ r 
+*
+http
+.
+Request
+)</p>
+
+<p>{</p>
+
+<p>if
+ r
+.
+Method</p>
+
+<p>!=
+ m 
+{</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>            http . Error ( w ,  http . StatusText ( http . StatusBadRequest ),  http . StatusBadRequest )
+</code></pre></div></div>
+
+<p>return</p>
+
+<p>}</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>        f . ServeHTTP ( w ,  r )
+</code></pre></div></div>
+
+<p>})</p>
+
+<p>}</p>
+
+<p>}</p>
+
+<p>然后在我们的路由器中进行引用：</p>
+
+<p>func 
+RegisterRoutes
+(
+r 
+*
+mux
+.
+Router
+)</p>
+
+<p>{</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>r . Use ( middleware . Logging ()) // 全局应用
+
+indexRouter  :=  r . PathPrefix ( "/index" ). Subrouter ()
+
+indexRouter . Handle ( "/" ,
+</code></pre></div></div>
+
+<p>&amp;
+handler
+.
+HelloHandler
+{})</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>userRouter  :=  r . PathPrefix ( "/user" ). Subrouter ()
+
+userRouter . HandleFunc ( "/names/{name}/countries/{country}" ,  handler . ShowVisitorInfo )
+
+userRouter . Use ( middleware . Method ( "GET" )) //给子路由器应用
+</code></pre></div></div>
+
+<p>}</p>
+
+<p>再次编译启动运行程序后访问</p>
+
+<p>http
+:
+//localhost:8080/user/names/James/countries/NewZealand</p>
+
+<p>从控制台里可以看到，记录了这个请求的处理时长：</p>
+
+<p>2020
+/
+02
+/
+08</p>
+
+<p>09
+:
+29
+:
+50</p>
+
+<p>Starting
+ HTTP server
+…</p>
+
+<p>2020
+/
+02
+/
+08</p>
+
+<p>09
+:
+55
+:
+20</p>
+
+<p>/
+user
+/
+names
+/
+James
+/
+countries
+/
+NewZealan</p>
+
+<p>51.157
+µ
+s</p>
+
+<p>到这里我们探究完了编写Web中间件的过程和原理，在实际开发中只需要根据自己的需求按照我们给的中间件代码模板编写中间件即可，在编写中间件的时候也要注意他们的职责范围，不要所有逻辑都往里放。</p>
+:ET

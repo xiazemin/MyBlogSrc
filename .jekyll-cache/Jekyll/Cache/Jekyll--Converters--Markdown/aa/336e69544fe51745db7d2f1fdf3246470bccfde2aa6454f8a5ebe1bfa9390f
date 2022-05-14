@@ -1,0 +1,183 @@
+I"�.<p>https://github.com/xiazemin/rsa</p>
+
+<p>openssl genrsa -out server.key 2048</p>
+
+<p>server.key</p>
+
+<p>openssl req -new -x509 -key server.key -out server.crt -days 365</p>
+
+<p>server.crt</p>
+
+<p>https://127.0.0.1:8081/</p>
+
+<p>我们用http.ListenAndServeTLS替换掉了http.ListenAndServe，就将一个HTTP Server转换为HTTPS Web Server了。不过ListenAndServeTLS 新增了两个参数certFile和keyFile</p>
+
+<p>http.ListenAndServeTLS(“:8081”, cwd+”/server.crt”,
+		cwd+”/server.key”, nil)</p>
+
+<p>也可以使用curl工具验证这个HTTPS server：</p>
+
+<p>curl -k https://localhost:8081
+Hi, This is an example of http service in golang!
+注意如果不加-k，curl会报如下错误：</p>
+
+<p>curl: (60) SSL certificate problem: self signed certificate
+More details here: https://curl.haxx.se/docs/sslcerts.html</p>
+
+<!-- more -->
+<p>单纯使用对称加密或单纯使用非对称加密都会存在一些问题，比如对称加密的密钥管理复杂；非对称加密的处理性能低、资源占用高等，因 此HTTPS结合了这两种方式。</p>
+
+<p>HTTPS服务端在连接建立过程（ssl shaking握手协议）中，会将自身的公钥发送给客户端。客户端拿到公钥后，与服务端协商数据传输通道的对称加密密钥-对话密钥，随后的这个协商过程则 是基于非对称加密的（因为这时客户端已经拿到了公钥，而服务端有私钥）。一旦双方协商出对话密钥，则后续的数据通讯就会一直使用基于该对话密 钥的对称加密算法了。</p>
+
+<p>实际应用中，HTTPS并非直接 传输公钥信息，而是使用携带公钥信息的数字证书来保证公钥的安全性和完整性。</p>
+
+<p>o的http.ListenAndServeTLS需要两个特别参数，一个是服务端的私钥 文件路径，另外一个是服务端的数字证书文件路径。在测试环境，我们没有必要花钱去购买什么证书，利用openssl工具，我们可以自己生成相 关私钥和自签发的数字证书。</p>
+
+<p>openssl genrsa -out server.key 2048用于生成服务端私钥文件server.key，后面的参数2048单位是bit，是私钥的长度。
+openssl生成的私钥中包含了公钥的信息，我们可以根据私钥生成公钥：</p>
+
+<p>$openssl rsa -in server.key -out server.key.public
+$ openssl rsa -in server.key -out server.key.public
+writing RSA key</p>
+
+<p>我们也可以根据私钥直接生成自签发的数字证书：</p>
+
+<p>$openssl req -new -x509 -key server.key -out server.crt -days 365
+server.key和server.crt将作为ListenAndServeTLS的两个输入参数。</p>
+
+<p>注意server.crt是证书而不是公钥</p>
+
+<p>通过设置tls.Config的InsecureSkipVerify为true，client将不再对服务端的证书进行校验。</p>
+
+<p>client端校验证书的原理是什么呢？回想前面我们提到的浏览器内置了知名CA的相关信息，用来校验服务端发送过来的数字证书。那么浏览器 存储的到底是CA的什么信息呢？其实是CA自身的数字证书(包含CA自己的公钥)。而且为了保证CA证书的真实性，浏览器是在出厂时就内置了 这些CA证书的，而不是后期通过通信的方式获取的。CA证书就是用来校验由该CA颁发的数字证书的。</p>
+
+<p>那么如何使用CA证书校验Server证书的呢？这就涉及到数字证书到底是什么了！</p>
+
+<p>我们可以通过浏览器中的”https/ssl证书管理”来查看证书的内容，一般服务器证书都会包含诸如站点的名称和主机名、公钥、签发机构 (CA)名称和来自签发机构的签名等。我们重点关注这个来自签发机构的签名，因为对于证书的校验，就是使用客户端CA证书来验证服务端证书的签名是否这 个CA签的。</p>
+
+<p>通过签名验证我们可以来确认两件事：
+1、服务端传来的数字证书是由某个特定CA签发的（如果是self-signed，也无妨），数字证书中的签名类似于日常生活中的签名，首先 验证这个签名签的是Tony Bai，而不是Tom Bai， Tony Blair等。
+2、服务端传来的数字证书没有被中途篡改过。这类似于”Tony Bai”有无数种写法，这里验证必须是我自己的那种写法，而不是张三、李四写的”Tony Bai”。</p>
+
+<p>一旦签名验证通过，我们因为信任这个CA，从而信任这个服务端证书。由此也可以看出，CA机构的最大资本就是其信用度。</p>
+
+<p>CA在为客户签发数字证书时是这样在证书上签名的：</p>
+
+<p>数字证书由两部分组成：
+1、C：证书相关信息（对象名称+过期时间+证书发布者+证书签名算法….）
+2、S：证书的数字签名</p>
+
+<p>其中的数字签名是通过公式S = F(Digest(C))得到的。</p>
+
+<p>Digest为摘要函数，也就是 md5、sha-1或sha256等单向散列算法，用于将无限输入值转换为一个有限长度的“浓缩”输出值。比如我们常用md5值来验证下载的大文件是否完 整。大文件的内容就是一个无限输入。大文件被放在网站上用于下载时，网站会对大文件做一次md5计算，得出一个128bit的值作为大文件的 摘要一同放在网站上。用户在下载文件后，对下载后的文件再进行一次本地的md5计算，用得出的值与网站上的md5值进行比较，如果一致，则大 文件下载完好，否则下载过程大文件内容有损坏或源文件被篡改。</p>
+
+<p>F为签名函数。CA自己的私钥是唯一标识CA签名的，因此CA用于生成数字证书的签名函数一定要以自己的私钥作为一个输入参数。在RSA加密 系统中，发送端的解密函数就是一个以私钥作 为参数的函数，因此常常被用作签名函数使用。签名算法是与证书一并发送给接收 端的，比如apple的一个服务的证书中关于签名算法的描述是“带 RSA 加密的 SHA-256 ( 1.2.840.113549.1.1.11 )”。因此CA用私钥解密函数作为F，对C的摘要进行运算得到了客户数字证书的签名，好比大学毕业证上的校长签名，所有毕业证都是校长签发的。</p>
+
+<p>接收端接收服务端数字证书后，如何验证数字证书上携带的签名是这个CA的签名呢？接收端会运用下面算法对数字证书的签名进行校验：
+F’(S) ?= Digest(C)</p>
+
+<p>接收端进行两个计算，并将计算结果进行比对：
+1、首先通过Digest(C)，接收端计算出证书内容（除签名之外）的摘要。
+2、数字证书携带的签名是CA通过CA密钥加密摘要后的结果，因此接收端通过一个解密函数F’对S进行“解密”。RSA系统中，接收端使用 CA公钥对S进行“解密”，这恰是CA用私钥对S进行“加密”的逆过程。</p>
+
+<p>将上述两个运算的结果进行比较，如果一致，说明签名的确属于该CA，该证书有效，否则要么证书不是该CA的，要么就是中途被人篡改了。</p>
+
+<p>但对于self-signed(自签发)证书来说，接收端并没有你这个self-CA的数字证书，也就是没有CA公钥，也就没有办法对数字证 书的签名进行验证。因此如果要编写一个可以对self-signed证书进行校验的接收端程序的话，首先我们要做的就是建立一个属于自己的 CA，用该CA签发我们的server端证书，并将该CA自身的数字证书随客户端一并发布。</p>
+
+<p>首先我们来建立我们自己的CA，需要生成一个CA私钥和一个CA的数字证书:
+openssl genrsa -out ca.key 2048
+ca.key
+openssl req -x509 -new -nodes -key ca.key -subj “/CN=xzm.com” -days 5000 -out ca.crt</p>
+
+<p>接下来，生成server端的私钥，生成数字证书请求，并用我们的ca私钥签发server的数字证书：
+openssl genrsa -out server.key 2048</p>
+
+<p>openssl req -new -key server.key -subj “/CN=localhost” -out server.csr
+生成Certificate Sign Request，CSR，证书签名请求。</p>
+
+<p>openssl x509 -req -in server.csr -CA ca.crt -CAkey ca.key -CAcreateserial -out server.crt -days 5000
+自CA用自己的CA私钥对服务端提交的csr进行签名处理，得到服务端的数字证书device.crt。</p>
+
+<p>现在我们的工作目录下有如下一些私钥和证书文件：
+CA:
+私钥文件 ca.key
+数字证书 ca.crt</p>
+
+<p>Server:
+私钥文件 server.key
+数字证书 server.crt</p>
+
+<p>接下来，我们就来完成我们的程序。</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>pool := x509.NewCertPool()
+caCertPath := "ca.crt"
+pool.AppendCertsFromPEM(caCrt)
+
+tr := &amp;http.Transport{
+    TLSClientConfig: &amp;tls.Config{RootCAs: pool},
+}
+</code></pre></div></div>
+
+<p>对客户端的证书进行校验(双向证书校验）</p>
+
+<p>服务端可以要求对客户端的证书进行校验，以更严格识别客户端的身份，限制客户端的访问。</p>
+
+<p>要对客户端数字证书进行校验，首先客户端需要先有自己的证书。
+生成客户端的私钥与证书。
+$ openssl genrsa -out client.key 2048
+client.key</p>
+
+<p>$ openssl req -new -key client.key -subj “/CN=xzm_cn” -out client.csr
+client.csr</p>
+
+<p>$ openssl x509 -req -in client.csr -CA ca.crt -CAkey ca.key -CAcreateserial -out client.crt -days 5000
+Signature ok
+subject=/CN=xzm_cn
+Getting CA Private Key</p>
+
+<p>通过将tls.Config.ClientAuth赋值为tls.RequireAndVerifyClientCert来实现Server强制校验client端证书。ClientCAs是用来校验客户端证书的ca certificate。</p>
+
+<p>Client端变化也很大，需要加载client.key和client.crt用于server端连接时的证书校验：</p>
+
+<p>2015/04/30 22:13:33 http: TLS handshake error from 127.0.0.1:53542:
+tls: client’s certificate’s extended key usage doesn’t permit it to be
+used for client authentication</p>
+
+<p>Get error: Get https://localhost:8081: remote error: handshake failure</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>c.sendAlert(alertHandshakeFailure)
+return nil, errors.New("tls: client's certificate's extended key usage doesn't permit it to be used for client authentication")
+</code></pre></div></div>
+
+<p>证书中的ExtKeyUsage信息应该包含clientAuth。翻看openssl的相关资料，了解到自CA签名的数字证书中包含的都是一些basic的信息，根本没有ExtKeyUsage的信息。我们可以用命令来查看一下当前client.crt的内容：</p>
+
+<p>$ openssl x509 -text -in client.crt -noout</p>
+
+<p>olang的tls又要校验ExtKeyUsage，如此我们需要重新生成client.crt，并在生成时指定extKeyUsage。经过摸索，可以用如下方法重新生成client.crt：</p>
+
+<p>1、创建文件client.ext
+内容：
+extendedKeyUsage=clientAuth</p>
+
+<p>2、重建client.crt</p>
+
+<p>$openssl x509 -req -in client.csr -CA ca.crt -CAkey ca.key -CAcreateserial -extfile client.ext -out client.crt -days 5000</p>
+
+<p>再通过命令查看一下新client.crt：</p>
+
+<p>看到输出的文本中多了这么几行：
+X509v3 extensions:
+X509v3 Extended Key Usage:
+TLS Web Client Authentication</p>
+
+<p>这说明client.crt的extended key usage已经添加成功了。</p>
+
+<p>四次握手协议：
+1、客户端请求建立SSL链接，并向服务端发送一个随机数–Client random和客户端支持的加密方法，比如RSA公钥加密，此时是明文传输。</p>
+
+<p>服务端回复一种客户端支持的加密方法、一个随机数–Server random、授信的服务器证书和非对称加密的公钥。
+3.客户端收到服务端的回复后利用服务端的公钥，加上新的随机数–Premaster secret 通过服务端下发的公钥及加密方法进行加密，发送给服务器。</p>
+
+<p>服务端收到客户端的回复，利用已知的加解密方式进行解密，同时利用Client random、Server random和Premaster secret通过一定的算法生成HTTP链接数据传输的对称加密key – session key。</p>
+
+:ET

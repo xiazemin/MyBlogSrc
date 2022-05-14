@@ -1,0 +1,125 @@
+---
+title: query_cache_size
+layout: post
+category: mysql
+author: 夏泽民
+---
+MySQL 查询缓存存储客户端请求的查询结果信息( SELECT 语句)。MySQL 服务器在接收到相同的请求时，会直接将查询缓存中的结果返回给客户端，不再去数据库中重新查询。而且，查询缓存是在多个会话中共享的，一个客户端的查询缓存结果可以被另一个客户端的相同请求复用，从而加快了查询效率。
+
+需要注意的是，查询缓存在 MySQL5.7.20 版本已过时，在 MySQL8.0 版本中被移除，所以使用时需要注意 MySQL 服务器的版本信息。
+
+查询缓存配置
+查询缓存的数据库支持
+
+可以使用 SHOW VARIABLES LIKE ‘have_query_cache’ 指令查询当前的 MySQL 数据库是否支持查询缓存：
+
+mysql> SHOW VARIABLES LIKE 'have_query_cache';
++------------------+-------+
+| Variable_name    | Value |
++------------------+-------+
+| have_query_cache | YES   |
++------------------+-------+
+1 row in set
+具体配置
+
+也可以通过 SHOW VARIABLES LIKE ‘%query_cache%’ 来查看查询缓存的详细配置信息： 
+
+mysql> SHOW VARIABLES LIKE '%query_cache%';
++------------------------------+---------+
+| Variable_name                | Value   |
++------------------------------+---------+
+| have_query_cache             | YES     |
+| query_cache_limit            | 1048576 |
+| query_cache_min_res_unit     | 4096    |
+| query_cache_size             | 0       |
+| query_cache_type             | ON      |
+| query_cache_wlock_invalidate | OFF     |
++------------------------------+---------+
+query_cache_limit
+
+指定单个查询能够使用的缓冲区的大小，默认值是1M大小
+
+query_cache_min_res_unit
+
+查询缓存分配的最小块的大小，默认大小是 4KB。
+
+MySQL 用于查询的缓存的内存被分成一个个变长数据块，用来存储类型，大小，数据等信息。当服务器启动的时候，会初始化缓存需要的内存。当查询结果需要缓存的时候，先从空闲块中申请一个数据块大于参数 query_cache_min_res_unit 的配置，即使缓存数据很小，申请数据块也是这个，因为查询开始返回结果的时候就分配空间，此时无法预知结果多大。分配内存块需要先锁住空间块，所以操作很慢，MySQL 会尽量避免这个操作，选择尽可能小的内存块，如果不够，继续申请，如果存储完时有多余的空间，则多余的空间将会被释放。
+
+query_cache_size
+
+查询缓存可用的内存大小，默认情况下是 0，表示无法使用查询缓存。
+
+查询缓存的内存可以手动配置，最小值不能小于 40K，具体的值需要参考系统的数据量和应用场景。如果设置的值太小，则设置不生效。
+
+mysql> SET GLOBAL query_cache_size  = 40000;
+Query OK, 0 rows affected
+
+mysql> SHOW VARIABLES LIKE 'query_cache_size';
++------------------+-------+
+| Variable_name    | Value |
++------------------+-------+
+| query_cache_size | 0     |
++------------------+-------+
+官方文档中说明，该情况下，MySQL 服务器还会返回一个警告，我本地的 MySQL 版本是 5.0.96-community-nt 的，并没有返回该警告。如果想看警告效果的话，可以去官网进行查看。
+
+query_cache_size 设置的值，如果不是 1024byte 的整数倍，将自动转化为最靠近 1024byte 的值。
+
+mysql>  SET GLOBAL query_cache_size = 1000000;
+Query OK, 0 rows affected
+
+mysql> SHOW VARIABLES LIKE 'query_cache_size';
++------------------+--------+
+| Variable_name    | Value  |
++------------------+--------+
+| query_cache_size | 999424 |
++------------------+--------+
+1 row in set
+query_cache_type
+
+当 query_cache_size 大于 0 的时候，查询缓存的应用将受到 query_cache_type 的影响。
+
+0 表示不使用查询缓存
+
+1 表示使用使用查询缓存；如果不想用查询缓存的话，可以使用 SELECT SQL_NO_CACHE 进行查询操作
+
+2 表示按需使用查询缓存，SQL 语句以 SELECT SQL_CACHE 开头表示使用查询缓存
+
+当 query_cache_size 为 0 时，应该同步将 query_cache_type 设置为 0，这样的话 MySQL 服务在执行查询语句的时候讲不再检查查询互斥锁，从而可以提高查询的效率。
+
+query_cache_type 是全局生效的，所有连接到 MySQL 服务的客户端都会共用这个配置，如果某个客户端想设置自己的 query_cache_type 属性，可以通过以下指令实现。
+
+mysql> SET SESSION query_cache_type = OFF;
+在启动时也可以设置 query_cache_type 的值，但是只能设置数字（0，1，2），不能再使用 ON 和 OFF。
+
+状态监控
+
+通过 SHOW STATUS LIKE ‘Qcache%’ 命令可以查询查询缓存当前的情况
+
+mysql> SHOW STATUS LIKE 'Qcache%';
++-------------------------+--------+
+| Variable_name           | Value  |
++-------------------------+--------+
+| Qcache_free_blocks      | 1      |
+| Qcache_free_memory      | 990760 |
+| Qcache_hits             | 0      |
+| Qcache_inserts          | 0      |
+| Qcache_lowmem_prunes    | 0      |
+| Qcache_not_cached       | 2      |
+| Qcache_queries_in_cache | 0      |
+| Qcache_total_blocks     | 1      |
++-------------------------+--------+
+应用场景
+查询缓存适用于进行大量重复的查询操作、并且改动量小的表。
+
+如果数据库表中数据和结构发生变化时（增删改、表结构调整），查询缓存将会失效并被清除。
+
+缓存清理
+可以使用以下对查询缓存进行清理操作
+
+FLUSH QUERY CACHE 清空查询缓存中的碎片
+
+RESET QUERY CACHE 从查询缓存中移除所有查询
+
+FLUSH TABLES 关闭所有打开的表，该操作将同步清空查询缓存中的内容
+<!-- more -->
+https://blog.csdn.net/u010514052/article/details/123209688

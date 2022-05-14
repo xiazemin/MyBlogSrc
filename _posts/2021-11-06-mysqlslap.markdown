@@ -1,0 +1,31 @@
+---
+title: mysqlslap sysbench
+layout: post
+category: mysql
+author: 夏泽民
+---
+mysqlslap 是 Mysql 自带的压力测试工具，可以模拟出大量客户端同时操作数据库的情况，通过结果信息来了解数据库的性能状况
+
+mysqlslap 的一个主要工作场景就是对数据库服务器做基准测试
+
+把多个查询语句写入了一个 sql 文件，然后使用此文件执行测试
+
+mysqlslap –user=root –password=111111 –concurrency=20 –number-of-queries=1000 –create-schema=employees –query=”select_query.sql” –delimiter=”;”
+
+–query 中指定了sql文件
+
+–delimiter 说明sql文件中语句间的分隔符是什么
+<!-- more -->
+https://www.techug.com/post/mysql-mysqlslap.html
+
+https://my.oschina.net/u/3470849/blog/2223119
+
+sysbench是一个开源的、模块化的、跨平台的多线程性能测试工具，可以用来进行CPU、内存、磁盘I/O、线程、数据库的性能测试。目前支持的数据库有MySQL、Oracle和PostgreSQL。以下操作都将以支持MySQL数据库为例进行。
+
+ https://www.cnblogs.com/lpfuture/p/5740840.html
+ 
+ https://www.jianshu.com/p/7a80898c6866
+ 
+ 
+
+

@@ -1,0 +1,181 @@
+---
+title: migrate
+layout: post
+category: golang
+author: 夏泽民
+---
+https://github.com/golang-migrate/migrate
+
+https://github.com/golang-migrate/migrate/tree/master/database/mysql
+
+https://github.com/rubenv/sql-migrate
+<!-- more -->
+https://www.ctolib.com/sql-migrate.html
+sql-migrate 是一个 Go 语言的数据库 Schema 移植工具。
+
+特性：
+
+可作为 CLI 命令行工具或者开发库使用
+
+支持 SQLite, PostgreSQL, MySQL, MSSQL 和 Oracle 数据库 (使用 gorp)
+
+可嵌入到应用程序
+
+使用 SQL 定义移植过程
+
+原子迁移
+
+可对移植过程进行撤回
+
+在一个项目中支持多种数据库类型
+
+安装 go-bindata 
+go get -u github.com/jteeuwen/go-bindata/...
+This package converts any file into managable Go source code. Useful for embedding binary data into a go program. The file data is optionally gzip compressed before being converted to a raw byte slice.
+
+这里我借助go-bindata 把我写好的sql文件，生成go源码，加入到工程中
+
+
+
+安装 sql-migrate
+
+go get -v github.com/rubenv/sql-migrate/...
+
+sql-migrate
+SQL Schema migration tool for Go. Based on gorp and goose.
+
+这里我借助它 在数据库中 初始化一些我需要的表格 索引等
+
+
+
+创建 postgres 用户及 数据库
+
+postgres=# CREATE USER dbuser WITH PASSWORD '123456';
+CREATE ROLE
+postgres=# CREATE DATABASE exampledb OWNER dbuser;
+CREATE DATABASE
+postgres=# GRANT ALL PRIVILEGES ON DATABASE exampledb TO dbuser;
+GRANT
+
+新建 migrations 目录，新建一个sql文件
+
+~/go/gopath/src/wjs/learnSqlMigrations $ ls
+main.go  migrations
+~/go/gopath/src/wjs/learnSqlMigrations/migrations $ ls
+1_init.sql
+
+
+sql 内容，创建student 和 people 表格，
+
+~/go/gopath/src/wjs/learnSqlMigrations/migrations $ cat 1_init.sql 
+-- +migrate Up
+create table student (
+	id text primary key,
+	name varchar(100) unique not null,
+	description text not null
+);
+ 
+CREATE TABLE people (id int);
+ 
+-- +migrate Down
+drop table student;
+drop table people;
+
+新建 main.go 文件
+
+//go:generate go-bindata -prefix migrations -pkg bdata -o bdata/migrations_gen.go migrations
+package main
+ 
+import (
+	"fmt"
+	"time"
+	"wjs/learnSqlMigrations/bdata"
+	"github.com/pkg/errors"
+	migrate "github.com/rubenv/sql-migrate"
+	log "github.com/sirupsen/logrus"
+ 
+	"github.com/jmoiron/sqlx"
+	_ "github.com/lib/pq"
+)
+ 
+var g_db *sqlx.DB
+ 
+// OpenDatabase opens the database and performs a ping to make sure the
+// database is up.
+func OpenDatabase(dsn string) (*sqlx.DB, error) {
+	db, err := sqlx.Open("postgres", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("database connection error: %s", err)
+	}
+	for {
+		if err := db.Ping(); err != nil {
+			log.Errorf("ping database error, will retry in 2s: %s", err)
+			time.Sleep(2 * time.Second)
+		} else {
+			break
+		}
+	}
+	return db, nil
+}
+ 
+func setPostgreSQLConnection() error {
+	log.Info("connecting to postgresql")
+	db, err := OpenDatabase("postgres://dbuser:123456@localhost/exampledb?sslmode=disable")
+	if err != nil {
+		return errors.Wrap(err, "database connection error")
+	}
+	g_db = db
+	return nil
+}
+ 
+func runDatabaseMigrations() error {
+	log.Info("applying database migrations")
+	m := &migrate.AssetMigrationSource{
+		Asset:    bdata.Asset,
+		AssetDir: bdata.AssetDir,
+		Dir:      "",
+	}
+	n, err := migrate.Exec(g_db.DB, "postgres", m, migrate.Up)
+	if err != nil {
+		return errors.Wrap(err, "applying migrations failed")
+	}
+	log.WithField("count", n).Info("migrations applied")
+ 
+	return nil
+}
+ 
+func main() {
+	setPostgreSQLConnection()
+	err := runDatabaseMigrations()
+	if err != nil {
+		log.Error(err)
+	}
+}
+运行 go generate
+
+就会生成 migrations_gen.go 文件，里面保存了 1_init.sql 文件的内容
+
+我们来看  main.go 第一行
+
+
+
+//go:generate go-bindata -prefix migrations -pkg bdata -o bdata/migrations_gen.go migrations
+
+
+
+-pkg 指定了生成的bindata文件包名是 bdata
+
+-o bdata/migrations_gen.go 指定了生成bindata文件的位置
+
+-prefix migrations  如果待转换文件路径前缀有 migrations 则，去掉这个前缀, 参考生成的migrations_gen.go源码
+
+
+
+运行 go run main.go
+
+exampledb=> \d
+ public | gorp_migrations | table | dbuser
+ public | people          | table | dbuser
+
+https://blog.csdn.net/wangjunsheng/article/details/80901895
+

@@ -1,0 +1,211 @@
+---
+title: Golang 中字典的 Comma Ok 是如何实现的
+layout: post
+category: golang
+author: 夏泽民
+---
+Golang 中函数的返回值的数量是固定的，而不是像 Python 中那样，函数的返回值数量是不固定的。
+
+如果我们把 Golang 中对 map 的取值看作是一个函数的话，那么直接取值和用 comma ok 方式取值的实现就变得很意思。
+
+Golang 中 map 的取值方式
+
+v1, ok := m["test"]
+v2 := m2["test"]
+https://gocn.vip/topics/9919
+<!-- more -->
+先看看汇编是如何实现的。
+
+package main
+
+import "log"
+
+func main() {
+    m1 := make(map[string]string)
+    v1, ok := m1["test"]
+    v2 := m1["test"]
+
+    log.Println(v1, v2, ok)
+}
+保存上述文件为 map_test.go，执行go tool compile -S map_test.go，截取关键部分
+
+...
+    0x00a9 00169 (map_test.go:7)    CALL    runtime.mapaccess2_faststr(SB)
+...
+    0x00f8 00248 (map_test.go:8)    CALL    runtime.mapaccess1_faststr(SB)
+...
+可以看到，虽然都是 m1["test"]，但是却调用了 runtime 中不同的方法。 可以在 go/src/runtime/map_faststr.go 文件中看到
+
+func mapaccess2_faststr(t *maptype, h *hmap, ky string) (unsafe.Pointer, bool) {}
+func mapaccess1_faststr(t *maptype, h *hmap, ky string) unsafe.Pointer {}
+这样明显就对上了，但是 Golang 又是如何实现把 m["test"] 替换为 mapaccess2_faststr 或者 mapaccess1_faststr 的呢？
+
+这就涉及 Golang 的编译过程了。查看官方文档，我们知道编译的过程包括：
+
+Parsing，包括词法分析，语法分析，抽象语法树的生成。
+Type-checking and AST transformations，包括类型检查，抽象语法树转换。
+Generic SSA，中间代码生成
+Generating machine code，生成机器码
+现在我们就一步一步的看一看，m["test"]是如何变成mapaccess2_faststr的。（mapaccess1_faststr同理，故不赘述）
+
+词法分析
+词法分析，Golang 中的词法分析主要是通过go/src/cmd/compile/internal/syntax/scanner.go（简称 scanner.go） 与 go/src/cmd/compile/internal/syntax/tokens.go（简称 tokens.go） 完成的，其中，tokens.go 中定义各种字符会被转化成什么样。 例如： tokens.go 中分别定义了 [ 与 ]
+
+_Lbrack    // [
+_Rbrack    // ]
+会被怎样处理。
+
+而在 scanner.go 中，通过一个大的 switch 处理各种字符。处理 [ 与 ] 的部分代码如下:
+
+switch c {
+    // 略过
+    case '[':
+        s.tok = _Lbrack
+    case ']':
+        s.nlsemi = true
+        s.tok = _Rbrack
+    // 略过
+}
+语法分析
+语法分析阶段会将词法分析阶段生成的转换成各种 Expr（表达式），表达式的定义在go/src/cmd/compile/internal/syntax/nodes.go（简称 nodes.go）。而 map 取值的表达式定义如下：
+
+// X[Index]
+IndexExpr struct {
+    X     Expr
+    Index Expr
+    expr
+}
+之后再通过go/src/cmd/compile/internal/syntax/parser.go（简称 parser.go）中的 pexpr 函数将词法分析阶段的 token 转化为表达式。关键部分如下：
+
+switch p.tok {
+    // 略
+    case _Lbrack: // 遇到一个左方括号
+        p.next()
+        p.xnest++
+
+        var i Expr
+        if p.tok != _Colon { // 遇到一个右方括号
+            i = p.expr()
+            if p.got(_Rbrack) {
+                // x[i]
+                t := new(IndexExpr) // 生成一个 Index表达式
+                t.pos = pos
+                t.X = x
+                t.Index = i
+                x = t
+                p.xnest--
+                break
+            }
+        }
+    //略
+}
+至此，已经将 m["key"] 转化为一个 IndexExpr 了。
+
+抽象语法树生成
+之后，在go/src/cmd/compile/internal/gc/noder.go文件中，再将 IndexExpr 转化成一个OINDEX类型的 node，关键代码如下：
+
+switch expr := expr.(type) {
+    // 略
+    case *syntax.IndexExpr:
+        return p.nod(expr, OINDEX, p.expr(expr.X), p.expr(expr.Index))
+    // 略
+}
+其中各种操作类型的定义，如上述的OINDEX在文件go/src/cmd/compile/internal/gc/syntax.go(简称为 syntax.go) 中，如下
+
+OINDEX       // Left[Right] (index of array or slice)
+类型检查
+对于上文获得的最后一个 OINDEX 类型的 node，他取值的对象即可能是字典，也可能是数组、字符串等。所以要对他们进行区分，而类型检查部分就是做这方面工作的。跟本文相关的函数是go/src/cmd/compile/internal/gc/typecheck.go（简称为 typecheck.go）文件中的typecheck1函数。其中关键代码如下：
+
+func typecheck1(n *Node, top int) (res *Node) {
+    // 略
+    switch n.Op {
+    case OINDEX: // 处理 OINDEX 类型的节点
+        // 略过部分检查代码
+        // 获取 Left[Right] 中的 Left的类型
+        l := n.Left
+        t := l.Type
+        switch t.Etype {
+        default:
+            yyerror("invalid operation: %v (type %v does not support indexing)", n, t)
+            n.Type = nil
+            return n
+
+        case TSTRING, TARRAY, TSLICE:
+            // 处理 Left 是字符串、数组、切片的情况
+            // 略
+
+        case TMAP:
+            // 如果 Left 是 MAP，则把该 node 的操作变成 OINDEXMAP
+            n.Right = defaultlit(n.Right, t.Key())
+            if n.Right.Type != nil {
+                n.Right = assignconv(n.Right, t.Key(), "map index")
+            }
+            n.Type = t.Elem()
+            n.Op = OINDEXMAP
+            n.ResetAux()
+        }
+    }
+}
+继续对操作为OINDEXMAP（OINDEXMAP也定义在syntax.go中）的 node 节点进行分析。可以看到，在typecheck.go的typecheckas2函数中，继续对OINDEXMAP的节点进行分析。其中关键代码如下：
+
+func typecheckas2(n *Node) {
+    // 略
+    cl := n.List.Len()
+    cr := n.Rlist.Len()
+    // 略
+
+    // x, ok = y
+    // 参数左边是两个，右边是一个
+    if cl == 2 && cr == 1 {
+        switch r.Op {
+        case OINDEXMAP, ORECV, ODOTTYPE:
+            switch r.Op {
+            case OINDEXMAP:
+                // 如果操作的对象是OINDEXMAP，将其变为 OAS2MAPR
+                n.Op = OAS2MAPR
+            }
+        }
+    }
+    //略
+}
+最终，我们的v1, ok := m["test"]的语句，变成了一个类型为OAS2MAPR的语法树节点。
+
+中间代码生成
+中间代码生成即将语法树生成与机器码无关的中间代码。生成中间代码的文件为go/src/cmd/compile/internal/gc/walk.go(简称 walk.go)，与本文相关的为walk.go文件中的walkexpr函数。关键代码如下：
+
+func walkexpr(n *Node, init *Nodes) *Node {
+    switch n.Op {
+    // a,b = m[i]
+    case OAS2MAPR:
+        // 略
+
+        // from:
+        //   a,b = m[i]
+        // to:
+        //   var,b = mapaccess2*(t, m, i)
+        //   a = *var
+        a := n.List.First()
+
+        // 根据 map 中 key 值类型不同以及值的长度进行优化
+        if w := t.Elem().Width; w <= 1024 { // 1024 must match runtime/map.go:maxZero
+            fn := mapfn(mapaccess2[fast], t)
+            r = mkcall1(fn, fn.Type.Results(), init, typename(t), r.Left, key)
+        } else {
+            fn := mapfn("mapaccess2_fat", t)
+            z := zeroaddr(w)
+            r = mkcall1(fn, fn.Type.Results(), init, typename(t), r.Left, key, z)
+        }
+        // 略
+        n.Rlist.Set1(r)
+        n.Op = OAS2FUNC
+
+       // 略
+
+        n = typecheck(n, ctxStmt)
+        n = walkexpr(n, init)
+    }
+}
+从上述函数我们可以看到，语法树中操作为OAS2MAPR的节点，最终变成了一个类型为OAS2FUNC的节点，而OAS2FUNC则意味着是一个函数调用，最终会被编译器替换为 runtime 中的函数。
+
+总结
+我们可以看到，虽然是简简单单的 map 取值，Golang 的编译器也帮我们做了很多额外的工作。同理，其实 Golang 中的 goroutines, defer, make 等等很多函数都是通过这样的方式去处理的

@@ -1,0 +1,270 @@
+---
+title: 错误使用 go-cache 导致出现的线上问题
+layout: post
+category: golang
+author: 夏泽民
+---
+https://gocn.vip/topics/10008
+<!-- more -->
+查看服务器的监控系统, CPU, 内存, 负载等指标正常
+排查日志, 日志能够响应的结果也正常. request.log 中响应时长高达数秒
+查看数据库, codis 监控, 各项指标正常
+不得已, 只能打开线上 pprof 查看 Go 相关参数是否正常. 果真一下子就找到问题发生的原因
+
+go-cache
+
+这是当时线上 pprof 的截图, 发现 40 多万 goroutine 都阻塞在 go-cache 的 Set 函数上. 更准确的说 40 多万 goroutine 在发生很严重的锁竞争. 这就让人觉得很意外了.
+
+幸好当时在压测接口的时候, 为了避免 go-cache 的影响结果的影响, 引入了一个配置项来控制是否开启 go-cache, 于是立马线上关闭 go-cache, 接口响应恢复正常.
+
+问题来了
+虽说问题解决了, 但是是由于什么原因造成的呢?
+
+为什么 go-cache 会发生这么严重的锁竞争 ?
+是由于 go-cache 有代码 bug 吗 ?
+如何才能稳定复现呢 ?
+go-cache 源码剖析
+为了探究这个 bug 引起的原因, 我将整个 go-cache 的源码读了一遍, 其实 go-cache 相对于 freecache, bigcache 还是相对简单许多.
+
+type cache struct {
+    defaultExpiration time.Duration
+    items             map[string]Item
+    mu                sync.RWMutex
+    onEvicted         func(string, interface{})
+    janitor           *janitor
+}
+从结构体上, go-cache 主要还是由 map + RWMutex 组成.
+
+Set -- go-cache 最重要的函数
+// Add an item to the cache, replacing any existing item. If the duration is 0
+// (DefaultExpiration), the cache's default expiration time is used. If it is -1
+// (NoExpiration), the item never expires.
+func (c *cache) Set(k string, x interface{}, d time.Duration) {
+    // "Inlining" of set
+    var e int64
+    if d == DefaultExpiration {
+        d = c.defaultExpiration
+    }
+    if d > 0 {
+        e = time.Now().Add(d).UnixNano()
+    }
+    c.mu.Lock()
+    c.items[k] = Item{
+        Object:     x,
+        Expiration: e,
+    }
+    // TODO: Calls to mu.Unlock are currently not deferred because defer
+    // adds ~200 ns (as of go1.)
+    c.mu.Unlock()
+}
+Set 需要三个参数: key, value, d(过期时间). 如果 d 为 0, 则使用 go-cache 默认过期时间, 这个默认过期时间是 go-cache.New() 时设置的. 如果 d 为 -1, 那么这个 key 不会过期
+
+实现过程:
+
+RWMutex.Lock
+设置过期时间, 将 value 放入 map 中
+RWMutex.Unlock
+还有另外几个衍生函数: SetDefault, Add, Replace, 这里就不做具体介绍
+
+Get go-cache 最重要的函数
+func (c *cache) Get(k string) (interface{}, bool) {
+    c.mu.RLock()
+    // "Inlining" of get and Expired
+    item, found := c.items[k]
+    if !found {
+        c.mu.RUnlock()
+        return nil, false
+    }
+    if item.Expiration > 0 {
+        if time.Now().UnixNano() > item.Expiration {
+            c.mu.RUnlock()
+            return nil, false
+        }
+    }
+    c.mu.RUnlock()
+    return item.Object, true
+}
+RWMutex.RLock
+判断是否存在
+判断是否过期
+RLock.RUnlock
+Increment/Decrement
+go-cache 对数值类型的值是比较友好的, 提供大量函数 Increment, IncrementFloat等函数, 能够轻松对内存中的各种数值进行加减, 其实现也简单
+
+func (c *cache) IncrementUint16(k string, n uint16) (uint16, error) {
+    c.mu.Lock()
+    v, found := c.items[k]
+    if !found || v.Expired() {
+        c.mu.Unlock()
+        return 0, fmt.Errorf("Item %s not found", k)
+    }
+    rv, ok := v.Object.(uint16)
+    if !ok {
+        c.mu.Unlock()
+        return 0, fmt.Errorf("The value for %s is not an uint16", k)
+    }
+    nv := rv + n
+    v.Object = nv
+    c.items[k] = v
+    c.mu.Unlock()
+    return nv, nil
+}
+RWMutex.Lock
+判断某个 key 在 map 中是否存在
+判断是否这个 key 是否过期
+对这个值加 n
+RWMutex.Unlock
+落盘/恢复方案
+go-cache 自带落盘/恢复方案, 将内存中的值进行落盘, 同时将文件中的内容恢复. 不过我感觉这个功能挺鸡肋的, 没必要在生产环境中使用. 这里就不做过多的介绍了.
+
+go-cache 过期清理方案
+
+func (c *cache) DeleteExpired() {
+    log.Printf("start check at:%v", time.Now())
+    var evictedItems []keyAndValue
+    now := time.Now().UnixNano()
+    c.mu.Lock()
+    for k, v := range c.items {
+        // "Inlining" of expired
+        if v.Expiration > 0 && now > v.Expiration {
+            ov, evicted := c.delete(k)
+            if evicted {
+                evictedItems = append(evictedItems, keyAndValue{k, ov})
+            }
+        }
+    }
+    c.mu.Unlock()
+    for _, v := range evictedItems {
+        c.onEvicted(v.key, v.value)
+    }
+}
+
+func (j *janitor) Run(c *cache) {
+    ticker := time.NewTicker(j.Interval)
+    for {
+        select {
+        case <-ticker.C:
+            c.DeleteExpired()
+        case <-j.stop:
+            ticker.Stop()
+            return
+        }
+    }
+}
+
+func runJanitor(c *cache, ci time.Duration) {
+    j := &janitor{
+        Interval: ci,
+        stop:     make(chan bool),
+    }
+    c.janitor = j
+    go j.Run(c)
+}
+
+func newCacheWithJanitor(de time.Duration, ci time.Duration, m map[string]Item) *Cache {
+    c := newCache(de, m)
+    // This trick ensures that the janitor goroutine (which--granted it
+    // was enabled--is running DeleteExpired on c forever) does not keep
+    // the returned C object from being garbage collected. When it is
+    // garbage collected, the finalizer stops the janitor goroutine, after
+    // which c can be collected.
+    C := &Cache{c}
+    if ci > 0 {
+        runJanitor(c, ci)
+        runtime.SetFinalizer(C, stopJanitor)
+    }
+    return C
+}
+可以看到 go-cache 每过一段时间 (j.Interval, 这个值也是通过 go-cache.New 设置), 就会启动清理工作.
+
+清理时原理:
+
+RWMutex.Lock()
+遍历整个 map, 检查 map 中的 value 是否过期
+RWMutex.Unlock()
+同时, 还利用了 runtime.SetFinalizer 在 go-cache 生命周期结束时, 主动完成对过期清理协程的终止
+
+源码分析总结
+遍览整个 go-cache 源码, 会发现 go-cache 完全靠着 RWMutex 保证数据的正确性.
+
+考虑下面的问题:
+
+当 go-cache.New() 时设置的定时清理的时间过长, 同时 Set 的 key 的过期时间比较长, 这样会不会导致 go-cache.map 中的元素过多?
+会不会当清理启动时, 锁定了 go-cache.map (注意这个时候是写锁), 由于 go-cache.map 中元素过多, 导致 map 一直被锁定, 那么这个时候所有的 Set 函数是不是就会产生 Lock 竞争?
+使用 go-cache 的时候, 当某个接口的 QPS 很高, 程序里由于使用问题, 将某些不该往 go-cache 存的 value 也存了进去, 那么会不会导致 Set 之间的 Lock 竞争呢?
+场景还原
+利用下面的程序可以轻松还原上面的问题场景. 上面提出的问题, 都会造成 go-cache lock 竞争. 这里利用 pprof 查看程序的指标
+
+var goroutineNums = flag.Int("gn", 2, "goroutine nums")
+func main() {
+    flag.Parse()
+    go func() {
+        log.Println(http.ListenAndServe("localhost:6060", nil))
+    }()
+
+    rand.Seed(time.Now().Unix())
+    lc := cache.New(time.Minute*5, time.Minute*2)
+    log.Printf("start at:%v", time.Now())
+    aaaKey := "aaa:%d:buy:cnt"
+    log.Println("set run over")
+
+    for i := 0; i < *goroutineNums; i++ {
+        go func(idx int) {
+            for {
+                key := fmt.Sprintf(aaaKey, rand.Int())
+                newKey := fmt.Sprintf("%s:%d", key, rand.Int())
+                v := rand.Int()
+                lc.Set(newKey, v, time.Millisecond)
+            }
+        }(i)
+    }
+
+    // 查看 go-cache 中 key 的数量
+    go func() {
+        ticker := time.NewTicker(time.Second)
+        for {
+            select {
+            case <-ticker.C:
+                log.Printf("lc size:%d", lc.ItemCount())
+            }
+        }
+    }()
+    select {}
+}
+模拟接口高 QPS
+./go-cache-test -gn 2000
+2020/03/12 00:32:33 start at:2020-03-12 00:32:33.949073 +0800 CST m=+0.001343027
+2020/03/12 00:32:34 lc size:538398
+2020/03/12 00:32:35 lc size:1149109
+high-qps
+
+瞬间就会出现锁竞争
+
+模拟 go-cache 启动清理时的情形
+./go-cache-test -gn 2   
+2020/03/12 00:37:33 start at:2020-03-12 00:37:33.171238 +0800 CST m=+0.001457393
+...
+2020/03/12 00:40:35 lc size:54750220
+2020/03/12 00:40:35 start clear at:2020-03-12 00:40:35.103586 +0800 CST m=+120.005547323
+2020/03/12 00:41:51 lc size:33
+2020/03/12 00:41:51 lc size:50
+clear
+
+会看到当清理 map 的时候, 如果 map 中的数据过多就会造成 Lock 竞争, 造成其他数据无法写入 map
+
+总结
+我使用的问题
+背景: 某接口 QPS 有点高
+
+当时考虑到用户购买状态 (这个状态可能随时变化) 如果能够在本地缓存中缓存 10s, 那么用户再次点进来的时候能从本地取了, 就造成大量的数据都写入了 map 中
+由于接口 QPS 比较高, 设置用户购买状态时就可能造成竞争, 造成接口响应超时
+go-cache 使用注意点
+尽量存放那些相对不怎么变化的数据, 适用于所有的 local cache(包括 map, sync.map)
+go-cache 的过期检查时间要设置相对较小, 也不能过小
+那些高 QPS 的接口尽量不要去直接 Set 数据, 如果必须 Set 可以采用异步操作
+监控 go-cache 里面 key 的数量, 如果过多时, 需要及时调整参数
+资料
+go-cache
+bigcache
+freecache
+runtime.SetFinalizer

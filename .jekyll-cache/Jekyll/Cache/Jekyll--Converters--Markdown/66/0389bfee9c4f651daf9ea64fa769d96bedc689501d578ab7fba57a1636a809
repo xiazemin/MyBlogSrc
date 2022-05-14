@@ -1,0 +1,172 @@
+I"5<p>如何查看进程发生缺页中断的次数？</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>     用ps -o majflt,minflt -C program命令查看。
+
+      majflt代表major fault，中文名叫大错误，minflt代表minor fault，中文名叫小错误。
+
+      这两个数值表示一个进程自启动以来所发生的缺页中断的次数。
+</code></pre></div></div>
+
+<p>发成缺页中断后，执行了那些操作？</p>
+
+<p>当一个进程发生缺页中断的时候，进程会陷入内核态，执行以下操作： 
+1、检查要访问的虚拟地址是否合法 
+2、查找/分配一个物理页 
+3、填充物理页内容（读取磁盘，或者直接置0，或者啥也不干） 
+4、建立映射关系（虚拟地址到物理地址） 
+重新执行发生缺页中断的那条指令 
+如果第3步，需要读取磁盘，那么这次缺页中断就是majflt，否则就是minflt。</p>
+
+<p>内存分配的原理</p>
+
+<p>从操作系统角度来看，进程分配内存有两种方式，分别由两个系统调用完成：brk和mmap（不考虑共享内存）。</p>
+
+<p>1、brk是将数据段(.data)的最高地址指针_edata往高地址推；</p>
+
+<p>2、mmap是在进程的虚拟地址空间中（堆和栈中间，称为文件映射区域的地方）找一块空闲的虚拟内存。</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code> 这两种方式分配的都是虚拟内存，没有分配物理内存。在第一次访问已分配的虚拟地址空间的时候，发生缺页中断，操作系统负责分配物理内存，然后建立虚拟内存和物理内存之间的映射关系。 &lt;!-- more --&gt; 在标准C库中，提供了malloc/free函数分配释放内存，这两个函数底层是由brk，mmap，munmap这些系统调用实现的。
+</code></pre></div></div>
+
+<p>下面以一个例子来说明内存分配的原理：</p>
+
+<p>情况一、malloc小于128k的内存，使用brk分配内存，将_edata往高地址推(只分配虚拟空间，不对应物理内存(因此没有初始化)，第一次读/写数据时，引起内核缺页中断，内核才分配对应的物理内存，然后虚拟地址空间建立映射关系)，
+<img src="https://xiazemin.github.io/MyBlog/img/brk.jpeg" />
+1、进程启动的时候，其（虚拟）内存空间的初始布局如图1所示。
+      其中，mmap内存映射文件是在堆和栈的中间（例如libc-2.2.93.so，其它数据文件等），为了简单起见，省略了内存映射文件。
+      _edata指针（glibc里面定义）指向数据段的最高地址。 
+2、进程调用A=malloc(30K)以后，内存空间如图2：
+      malloc函数会调用brk系统调用，将_edata指针往高地址推30K，就完成虚拟内存分配。
+      你可能会问：只要把_edata+30K就完成内存分配了？
+      事实是这样的，_edata+30K只是完成虚拟地址的分配，A这块内存现在还是没有物理页与之对应的，等到进程第一次读写A这块内存的时候，发生缺页中断，这个时候，内核才分配A这块内存对应的物理页。也就是说，如果用malloc分配了A这块内容，然后从来不访问它，那么，A对应的物理页是不会被分配的。 
+3、进程调用B=malloc(40K)以后，内存空间如图3。</p>
+
+<p>情况二、malloc大于128k的内存，使用mmap分配内存，在堆和栈之间找一块空闲内存分配(对应独立内存，而且初始化为0)，如下图：
+	<img src="https://xiazemin.github.io/MyBlog/img/mmap.jpeg" />
+4、进程调用C=malloc(200K)以后，内存空间如图4：
+      默认情况下，malloc函数分配内存，如果请求内存大于128K（可由M_MMAP_THRESHOLD选项调节），那就不是去推_edata指针了，而是利用mmap系统调用，从堆和栈的中间分配一块虚拟内存。
+      这样子做主要是因为::
+      brk分配的内存需要等到高地址内存释放以后才能释放（例如，在B释放之前，A是不可能释放的，这就是内存碎片产生的原因，什么时候紧缩看下面），而mmap分配的内存可以单独释放。
+      当然，还有其它的好处，也有坏处，再具体下去，有兴趣的同学可以去看glibc里面malloc的代码了。 
+5、进程调用D=malloc(100K)以后，内存空间如图5；
+6、进程调用free(C)以后，C对应的虚拟内存和物理内存一起释放
+<img src="https://xiazemin.github.io/MyBlog/img/brk_free.jpeg" />
+7、进程调用free(B)以后，如图7所示：
+        B对应的虚拟内存和物理内存都没有释放，因为只有一个_edata指针，如果往回推，那么D这块内存怎么办呢？
+当然，B这块内存，是可以重用的，如果这个时候再来一个40K的请求，那么malloc很可能就把B这块内存返回回去了。 
+8、进程调用free(D)以后，如图8所示：
+        B和D连接起来，变成一块140K的空闲内存。
+9、默认情况下：
+       当最高地址空间的空闲内存超过128K（可由M_TRIM_THRESHOLD选项调节）时，执行内存紧缩操作（trim）。在上一个步骤free的时候，发现最高地址空闲内存超过128K，于是内存紧缩，变成图9所示。
+ <img src="https://xiazemin.github.io/MyBlog/img/linux_stack.png" /></p>
+
+<p>Random stack offset：由于之前栈的地址是固定的，容易被人利用栈溢出进行攻击，这里栈每次有一个偏移量。</p>
+
+<p>RLIMIT_STACK：向栈中压入数据容量超过栈的容量时，会触发page fault，异常会检测到最近的虚拟地址空间，发现产生异常的地址与栈相邻，会扩大栈的大小（一般是8M）。如果栈被加长，栈针回退时不会再收缩，如果stack overflow则会导致segment fault。</p>
+
+<p>Memory Mapping Segment:内存映射的位置，一种高效I/O，后面会细说。</p>
+
+<p>对heap的操作函数  brk() 和 sbrk()　　
+　　　　　 int brk(void *addr);</p>
+
+<p>　　　　void sbrk(intptr_t increment);</p>
+
+<p>　　　　内核数据结构mm_struct中 start_brk是进程动态分配的起始地址（heap的起始地址），brk 是堆当前最后的地址。　　　　　　</p>
+
+<p>　　　　首先program break就是当前brk的位置，所以他是数据段初始化结束后heap的第一个位置，而不是heap的尾部。</p>
+
+<p>　　　　sbrk()是库函数，brk()是系统调用,相对于库函数来说一般系统调用会提供相对简单的工作。都是改变brk的值来扩展收缩堆（increment 为负数时收缩）。</p>
+
+<p>mmap 映射区函数
+　　　1.基础概念</p>
+
+<p>　　　　mmap 是一种内存映射方法，将一个文件或其他对象映射到进程的地址空间，实现文件磁盘地址和进程虚拟地址一一对应的关系。内核空间对这块区域的改变也直接反应到用户空间，实现不同进程的文件共享。</p>
+
+<p>　　　　linux内核使用vm_area_struct结构表示一个独立的虚拟内存区域，一个进程使用多个vm_area_struct来分别表示不同类型的虚拟内存区域.</p>
+
+<p>　　　　当vm_area_struct数目较少时，按照升序以单恋表的形式组织结构，在数目较多时使用AVL树来实现。
+　　mmap函数是创建一个新的vm_area_struct结构，并将其与物理地址相连。</p>
+
+<p>　　　2.  mmap内存映射原理</p>
+
+<p>　　　　分为三个阶段</p>
+
+<p>进程启动映射过程，并在虚拟地址空间中为映射创建虚拟映射区域　　
+　　　　　　　1&gt;进程在用户空间调用mmap。</p>
+
+<p>　　　　　　　原型：void *mmap(void *start, size_t length, int prot, int flags, int fd, off_t offset);</p>
+
+<p>　　　　　　　2&gt;在当前进程的虚拟地址空间中，寻找一段空间满足要求的连续的虚拟地址。</p>
+
+<p>　　　　　　　3&gt;为此虚拟区分配一个vm_area_struct 结构，接着对这个结构的各个域进行初始化</p>
+
+<p>　　　　　　　4&gt;将新建的虚拟结构（vm_area_struct）插入到进程的虚拟地址区的链表或数种。</p>
+
+<p>调用内核空间的系统调用函数mmap（不同于用户空间）实现文件物理地址和进程虚拟地址的一一映射关系 
+　　　　　　　5&gt;为映射分配了新的虚拟地址区域后，通过待映射的文件指针，在文件描述符表中找到对应的文件描述符，加入到struct file中　</p>
+
+<p>　　　　　　　6&gt;linux中的file_operation结构中定义了不同事件对应的设备驱动函数，其中有  int mmap(struct file *filp, struct vm_area_struct *vma)，其实这个函数就是将用户空间与设备内存相连，也就是对虚拟地址的访问转化为对设备的访问</p>
+
+<p>　　　　　　　7&gt;通过inode模块找到对应的文件，也就是磁盘的物理地址</p>
+
+<p>　　　　　　　8&gt;建立页表，实现文件地址和虚拟地址区域的映射关系。这里只建立了映射关系，主存中没有对应物理地址的数据。</p>
+
+<p>进程发起对这片映射空间的访问，引发缺页异常，实现文件内容到主存的拷贝
+　　　　　　　9&gt;进程的读写，通过查询页表发现这一段地址不再物理页面上，引发缺页异常</p>
+
+<p>　　　　　　　10&gt;进行缺页异常判断，申请调页</p>
+
+<p>　　　　　　　11&gt;先判断swap cache中没有没需要访问的内存页，如果没有调用nopage把所缺德页从磁盘装入主存</p>
+
+<p>　　　　　　　12&gt;之后可以进行读写，会有一段时间延迟，调用msync（）立即更新。</p>
+
+<p>　　　3. mmap优点总结</p>
+
+<p>　　　　     1&gt;对文件的读取操作跨过了页缓存，减少了数据的拷贝次数，使用内存读取代了I/O操作，提高了文件读取效率。</p>
+
+<p>　　　　2&gt;实现了用户空间和内核空间的高效交互方式</p>
+
+<p>　　　　3&gt;提供进程间共享内存及相互通信方式</p>
+
+<p>　　　　4&gt;实现高效的大规模数据传输　　</p>
+
+<p>首先，brk(),mmap()是系统调用；sbrk(),malloc(),calloc()是C库函数。</p>
+
+<p>1、系统调用brk:用户进程通过brk向内核申请空间，人们常常并不意识到在调用brk(),原因是人们经常通过像malloc()一类的c语言函数间接地使用到brk().如果把malloc()想象成零售，brk()则是批发。库函数malloc()为用户进程（malloc()为这个进程的一部分）提供一个小仓库，当进程需要内存空间时就向小仓库申请，小仓库存量不足就向内核批发。</p>
+
+<p>2.sbrk不是系统调用，是库函数。功能与brk()函数相似。brk函数和sbrk函数主要的工作是实现虚拟内存到物理内存的映射。</p>
+
+<p>3、系统调用mmap():一个进程可以通过系统调用mmap(),将一个已经打开的文件内容映射到它的用户空间。它实现了更有用的动态内存分布，可以将一个磁盘文件的全部或者部分内容映射到用户空间中，进程读写文件的操作变成了读写内存的操作。do_mmap_pgoff()函数，是mmap系统调用实现的核心。do_mmap_pgoff()的代码，只是新建了一个vm_area_struct结构，并把file结构的参数赋值给其成员变量m_file，并没有把文件内容实际装入内存。</p>
+
+<p>4、malloc分配策略：brk：小块内存（小于128k）   在原有的基础上上挪就好。 free以后不一定返还给系统。</p>
+
+<p>#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h></unistd.h></stdlib.h></stdio.h></p>
+
+<p>// #include <malloc.h>
+// int mallopt(int param, int value);</malloc.h></p>
+
+<p>// info mallopt, 一些系统可以man mallopt
+// M_TRIM_THRESHOLD: 紧缩内存阈值，对应的环境变量为MALLOC_TRIM_THRESHOLD_
+// M_MMAP_THRESHOLD: 使用mmap而非brk/sbrk分配内存阈值，即超过该值的malloc分配将使用mmap
+// ，否则使用brk/sbrk分配内存，对应的环境变量为MALLOC_MMAP_THRESHOLD_
+// 请注意：如今的glibc使用了动态的阈值，初始值为128<em>1024,
+// 下限为0，上限由DEFAULT_MMAP_THRESHOLD_MAX决定，32位系统为512</em>1024，64位系统为4<em>1024</em>1024*sizeof(long)
+// mmap分配内存必须是页对齐的：
+// Allocating memory using mmap(2) has the significant advantage that the allocated memory blocks can always be independently
+// released back to the system. (By contrast, the heap can be trimmed only if memory is freed at the top end.)
+// 相关函数：
+// mtrace muntrace mcheck mcheck_pedantic mcheck_check_all mprobe
+// malloc_stats mallinfo malloc_trim malloc_info</p>
+
+<p>// mmap分配的内存在调用munmap后会立即返回给系统，而brk/sbrk而受M_TRIM_THRESHOLD的影响
+// 但brk/sbrk分配的内存是否立即归还给系统，不仅受M_TRIM_THRESHOLD的影响，还要看高地址端（栓）的内存是否已经释放：
+// 假如依次malloc了str1、str2、str3，即使它们都是brk/sbrk分配的，如果没有释放str3，只释放了str1和str2，
+// 就算两者加起来超过了M_TRIM_THRESHOLD，因为str3的存在，str1和str2也不能立即归还可以系统，但可以被重用
+// 更多信息，请参考man手册：http://man7.org/linux/man-pages/man3/mallopt.3.html</p>
+
+<p>// argv[1] 每次分配的字节数，如果没有指定，则使用32
+// 请观察不同值时malloc和free的行为
+// 当argv[1]为131072，即为128K时，使用的是mmap分配，每一步的malloc和free都可以从top中观察到反应</p>
+:ET

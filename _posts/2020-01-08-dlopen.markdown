@@ -1,0 +1,36 @@
+---
+title: LD_PRELOAD和dlopen选项RTLD_DEEPBIND之间的优先级
+layout: post
+category: linux
+author: 夏泽民
+---
+RTLD_DEEPBIND的优先级更高，在符号名发生冲突时，LD_PRELOAD的全局符号介入对于使用RTLD_DEEPBIND标志位dlopen开的动态连接库无效。
+发现背景：
+在使用《在应用程序中替换Linux中Glibc的malloc的四种方法》一文中第3个方法接管程序内存时发现已接管内存总量比top命令看到的虚拟内存值小很多。于是查看/proc/[pid]/smaps查看虚拟内存页的使用情况（pmap命令也可以）。在进程中使用gdb查看各个内存页的首地址，转换为内存管理结构体发现，有很多内存没有接管，导致统计结果要比top少。 挑选了一个未接管的内存，通过 gdb 的dump binary memory 的命令存为磁盘文件，在通过UltralEdit等二进制编辑器大致浏览一下，根据内存包含的文本判断该内存是由某个动态链接库申请和使用的。而该链接库恰恰是通过dlopendlopen(strLibName,RTLD_NOW|RTLD_LOCAL|RTLD_DEEPBIND)方式打开的。
+<!-- more -->
+RTLD_DEEPBIND (since glibc 2.3.4) Place the lookup scope of the symbols in this library ahead of the global scope. This means that a self-contained library will use its own symbols in preference to global symbols with the same name contained in libraries that have already been loaded. This flag is not specified in POSIX.1-2001.
+
+记下来就考虑使用LD_PRELOAD方式接管是否可行的问题，经试验，其优先级低于RTLD_DEEPBIND。
+参见：http://stackoverflow.com/questions/13374240/why-ld-preload-doesnt-work-for-one-of-loaded-shared-libraries
+
+linux下dlopen中几个flag的含义
+
+void * dlopen(const char *pathname, int mode); 返回一个void *类型的handle，否则返回NULL。
+
+      pathname就是所要打开的动态库，如果这个库声明链接了其它库，即对其它库有依赖关系，那么所有相关有依赖关系的库都会被打开，这些打开的库称之为组（group）。
+
+      mode是打开方式，其值有多个，不同操作系统上实现的功能有所不同，在linux下，按功能可分为三类：       
+       1、解析方式
+
+        RTLD_LAZY：在dlopen返回前，对于动态库中的未定义的符号不执行解析（只对函数引用有效，对于变量引用总是立即解析）。
+       RTLD_NOW： 需要在dlopen返回前，解析出所有未定义符号，如果解析不出来，在dlopen会返回NULL，错误为：: undefined symbol: xxxx.......
+
+       2、作用范围，可与解析方式通过“|”组合使用。
+       RTLD_GLOBAL：动态库中定义的符号可被其后打开的其它库重定位。
+       RTLD_LOCAL： 与RTLD_GLOBAL作用相反，动态库中定义的符号不能被其后打开的其它库重定位。如果没有指明是RTLD_GLOBAL还是RTLD_LOCAL，则缺省为RTLD_LOCAL。
+
+       3、作用方式
+
+       RTLD_NODELETE： 在dlclose()期间不卸载库，并且在以后使用dlopen()重新加载库时不初始化库中的静态变量。这个flag不是POSIX-2001标准。
+       RTLD_NOLOAD： 不加载库。可用于测试库是否已加载(dlopen()返回NULL说明未加载，否则说明已加载），也可用于改变已加载库的flag，如：先前加载库的 flag为RTLD＿LOCAL，用dlopen(RTLD_NOLOAD|RTLD_GLOBAL)后flag将变成RTLD_GLOBAL。这个flag不是POSIX-2001标准。
+       RTLD_DEEPBIND：在搜索全局符号前先搜索库内的符号，避免同名符号的冲突。这个flag不是POSIX-2001标准。

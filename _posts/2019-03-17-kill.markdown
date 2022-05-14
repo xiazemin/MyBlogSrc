@@ -1,0 +1,68 @@
+---
+title: kill
+layout: post
+category: linux
+author: 夏泽民
+---
+1. kill与signals
+        我们这里所说的kill是指作为shell command的那个kill（相对地，linux系统中还有个叫做kill的system call, man 2 kill可查看其功能及用法），shell终端中输入man kill可以看到，kill的作用是向某个指定的进程或进程组发送指定信号，从而结束该进程/进程组。-s选项可以指定要发送的具体信号，如果没有指定，则默认发送SIGTERM信号至指定进程/进程组，若进程没有捕获该信号的逻辑，则SIGTERM的作用是终止进程。
+ 
+        kill支持发送的信号列表可以通过kill -l查看，而这些信号的具体含义可以通过man 7 signal查看。在我的机器上，man 7 signal输出的POSIX标准信号如下所示（kill支持的信号还有POSIX没有定义的非标准信号，这里没有摘出，感兴趣的同学可以通过man查看）。
+
+Signal     Value     Action   Comment  
+-------------------------------------------------------------------------  
+SIGHUP        1       Term    Hangup detected on controlling terminal  
+                              or death of controlling process  
+SIGINT        2       Term    Interrupt from keyboard  
+SIGQUIT       3       Core    Quit from keyboard  
+SIGILL        4       Core    Illegal Instruction  
+SIGABRT       6       Core    Abort signal from abort(3)  
+SIGFPE        8       Core    Floating point exception  
+SIGKILL       9       Term    Kill signal  
+SIGSEGV      11       Core    Invalid memory reference  
+SIGPIPE      13       Term    Broken pipe: write to pipe with no readers  
+SIGALRM      14       Term    Timer signal from alarm(2)  
+SIGTERM      15       Term    Termination signal  
+SIGUSR1   30,10,16    Term    User-defined signal 1  
+SIGUSR2   31,12,17    Term    User-defined signal 2  
+SIGCHLD   20,17,18    Ign     Child stopped or terminated  
+SIGCONT   19,18,25            Continue if stopped  
+SIGSTOP   17,19,23    Stop    Stop process  
+SIGTSTP   18,20,24    Stop    Stop typed at tty  
+SIGTTIN   21,21,26    Stop    tty input for background process  
+SIGTTOU   22,22,27    Stop    tty output for background process  
+
+上面的输出结果中：
+       第1列为信号名；
+       第2列为对应的信号值，需要注意的是，有些信号名对应着3个信号值，这是因为这些信号值与平台相关，将man手册中对3个信号值的说明摘出如下，the first one is usually valid for alpha and sparc, the middle one for i386, ppc and sh, and the last one for mips.
+       第3列为操作系统收到信号后的动作，Term表明默认动作为终止进程，Ign表明默认动作为忽略该信号，Core表明默认动作为终止进程同时输出core dump，Stop表明默认动作为停止进程。
+       第4列为对信号作用的注释性说明，浅显易懂，这里不再赘述。
+       需要特别说明的是，SIGKILL和SIGSTOP这两个信号既不能被应用程序捕获，也不能被操作系统阻塞或忽略。
+2. kill pid与kill -9 pid的区别
+        kill pid的作用是向进程号为pid的进程发送SIGTERM（这是kill默认发送的信号），该信号是一个结束进程的信号且可以被应用程序捕获。若应用程序没有捕获并响应该信号的逻辑代码，则该信号的默认动作是kill掉进程。这是终止指定进程的推荐做法。
+ 
+        kill -9 pid则是向进程号为pid的进程发送SIGKILL（该信号的编号为9），从本文上面的说明可知，SIGKILL既不能被应用程序捕获，也不能被阻塞或忽略，其动作是立即结束指定进程。通俗地说，应用程序根本无法“感知”SIGKILL信号，它在完全无准备的情况下，就被收到SIGKILL信号的操作系统给干掉了，显然，在这种“暴力”情况下，应用程序完全没有释放当前占用资源的机会。事实上，SIGKILL信号是直接发给init进程的，它收到该信号后，负责终止pid指定的进程。在某些情况下（如进程已经hang死，无法响应正常信号），就可以使用kill -9来结束进程。
+        若通过kill结束的进程是一个创建过子进程的父进程，则其子进程就会成为孤儿进程（Orphan Process），这种情况下，子进程的退出状态就不能再被应用进程捕获（因为作为父进程的应用程序已经不存在了），不过应该不会对整个linux系统产生什么不利影响。
+3. 应用程序如何优雅退出
+        Linux Server端的应用程序经常会长时间运行，在运行过程中，可能申请了很多系统资源，也可能保存了很多状态，在这些场景下，我们希望进程在退出前，可以释放资源或将当前状态dump到磁盘上或打印一些重要的日志，也就是希望进程优雅退出（exit gracefully）。
+        从上面的介绍不难看出，优雅退出可以通过捕获SIGTERM来实现。具体来讲，通常只需要两步动作：
+        1）注册SIGTERM信号的处理函数并在处理函数中做一些进程退出的准备。信号处理函数的注册可以通过signal()或sigaction()来实现，其中，推荐使用后者来实现信号响应函数的设置。信号处理函数的逻辑越简单越好，通常的做法是在该函数中设置一个bool型的flag变量以表明进程收到了SIGTERM信号，准备退出。
+ 
+        2）在主进程的main()中，通过类似于while(!bQuit)的逻辑来检测那个flag变量，一旦bQuit在signal handler function中被置为true，则主进程退出while()循环，接下来就是一些释放资源或dump进程当前状态或记录日志的动作，完成这些后，主进程退出。
+<!-- more -->
+SIGINT:用户按下一个中断键（一般为Ctr+C）后，内核就向与该终端有关联的进程发送这种信号
+SIGQUIT:这个是Ctr+\
+SIGTERM:这种信号时有系统提供给普通程序使用的，按照规定，他被用来种植一个进程
+上面几个信号都可以用来终止一个进程
+
+命令参数：
+
+-l  信号，若果不加信号的编号参数，则使用“-l”参数会列出全部的信号名称
+
+-a  当处理当前进程时，不限制命令名和进程号的对应关系
+
+-p  指定kill 命令只打印相关进程的进程号，而不发送任何信号
+
+-s  指定发送信号
+
+-u  指定用户 

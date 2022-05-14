@@ -1,0 +1,15 @@
+---
+title: submodules
+layout: post
+category: web
+author: 夏泽民
+---
+git 添加子模块 fatal: You are on a branch yet to be born
+
+
+<!-- more -->
+删除与.git / modules /目录下的子模块具有相同路径的文件夹。当子模块添加子模块时，如果子模块的url不正确，则会出现此错误。
+https://blog.csdn.net/baijiao5345/article/details/101316835
+
+
+

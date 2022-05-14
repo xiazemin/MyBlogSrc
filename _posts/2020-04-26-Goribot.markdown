@@ -1,0 +1,146 @@
+---
+title: Colly外的又一Go爬虫框架 — Goribot
+layout: post
+category: golang
+author: 夏泽民
+---
+https://segmentfault.com/a/1190000022452452
+gocolly是用go实现的网络爬虫框架，目前在github上具有3400+星，名列go版爬虫程序榜首。gocolly快速优雅，以回调函数的形式提供了一组接口，可以实现任意类型的爬虫。
+
+Goribot github.com/zhshch2002/goribot 参考了colly的回调函数的设计，并且加入了类似Scrapy的Pipeline支持，从而支持添加各种扩展功能。
+
+获取Goribot：
+
+go get -u github.com/zhshch2002/goribot
+<!-- more -->
+建立爬虫
+在代码中导入：
+
+import "github.com/gocolly/colly"
+Goribot的主体是Spider对象，用于管理http请求、回调函数以及各类插件扩展。
+
+s := goribot.NewSpider()
+Goribot的基本作业单位是任务，即一个HTTP请求和需要为其执行回调函数。
+
+s.AddTask(
+    goribot.GetReq("https://github.com"),
+    func(ctx *goribot.Context) {
+        fmt.Println(ctx.Resp.Text)
+    },
+)
+其中传入的回调函数与colly中的概念不同，这一函数只为这个请求执行，此设计类似Scrapy。
+
+同时Goribot也可以像colly一样为Spider添加全局回调函数，即为每个请求都添加OnReq、OnResp等函数。可以参考提供的例子。
+
+// 在蜘蛛执行 s.Run() 时一开始执行一次
+func (s *Spider) OnStart(fn func(s *Spider))
+// 在所有线程结束后，蜘蛛即将退出时调用一次
+func (s *Spider) OnFinish(fn func(s *Spider))
+// 有新的任务添加到队列里之前执行
+func (s *Spider) OnAdd(fn func(ctx *Context, t *Task) *Task)
+// 在发出新的 Http 请求前执行
+func (s *Spider) OnReq(fn func(ctx *Context, req *Request) *Request)
+// 有新的 Http 响应时执行，请求携带的回调函数在此之后运行
+func (s *Spider) OnResp(fn func(ctx *Context))
+// 有新的 Item 提交到队列后执行
+func (s *Spider) OnItem(fn func(i interface{}) interface{})
+// 蜘蛛内有 error 或 panic 发生 recover 后执行
+func (s *Spider) OnError(fn func(ctx *Context, err error))
+任务的回调函数可以传入多个，亦或者不传入，因为Goribot也提供类似colly的全局回调函数。
+
+// 无论是否传入回调函数，Goribot都会执行全局回调函数。如果任务简单的话，像colly一样使用也是没问题的。
+s.AddTask(goribot.GetReq("https://github.com"))
+
+// 为一个请求设置多个回调函数，即可构成Pipeline
+s.AddTask(
+    goribot.GetReq("https://github.com"),
+    func(ctx *goribot.Context) {
+        fmt.Println("first handler")
+    },
+    func(ctx *goribot.Context) {
+        fmt.Println("second handler")
+    },
+)
+Goribot的不同点
+Spider需要Run！
+Goribot的蜘蛛需要执行s.Run()才会开始执行。
+
+相对链接解析
+当我们从一个页面里获取到新的链接时，colly里像这样写：
+
+c.OnHTML("a[href]", func(e *colly.HTMLElement) {
+    c.Visit(e.Request.AbsoluteURL(e.Attr("href")))
+})
+在Goribot中，由回调函数提交的新任务，会被自动分析是否为相对链接，并自动转换：
+
+s.OnHTML("a[href]", func(ctx *goribot.Context, sel *goquery.Selection) {
+    ctx.AddTask(goribot.GetReq(sel.AttrOr("href", "")))
+})
+JSON处理
+Goribot提供两类Json处理方式，在全局回调内：
+
+s.OnJSON("args", func(ctx *goribot.Context, j gjson.Result) {
+    fmt.Println("on json", j.Str)
+})
+在任务回调内：
+
+s.AddTask(
+    goribot.GetReq("https://httpbin.org/").SetParam(map[string]string{
+        "Goribot test": "hello world",
+    }),
+    func(ctx *goribot.Context) {
+        fmt.Println( ctx.Resp.Json("args").Str)
+    },
+)
+Goribot扩展
+Goribot的Spider对象只提供基本功能，例如robots.txt支持、请求速率限制等功能由Goribot扩展提供。
+
+由此，Goribot框架也维护了概念的统一。即Spider只负责执行任务，其他的功能交给扩展修改参数、添加回调函数来实现。
+
+截止到撰文时Goribot的扩展有如下：
+
+Limiter | 限制请求、速率、并发、白名单
+SaveItemsAsJSON | 保存爬取结果到 JSON 文件
+SaveItemsAsCSV | 保存爬取结果到 CSV 文件
+Retry | 失败重试
+RobotsTxt | Robots.txt 支持
+SpiderLogError | 记录意外和错误
+SpiderLogPrint | 打印蜘蛛运行状态
+RefererFiller | 填充 Referer
+SetDepthFirst | 设置为深度优先策略
+ReqDeduplicate | 请求去重
+RandomProxy | 随机代理
+RandomUserAgent | 随机 UA
+异常记录
+在Goribot扩展部分有提到SpiderLogError | 记录意外和错误扩展。这是一个用来记录突发情况时爬虫状态以及页面响应的扩展。
+
+当我们设计爬虫时，每时每刻只抓取很少的页面，既不会触发反爬，人眼也能观察出页面的异常（如反爬、验证码）。但爬虫大规模运行后，因为页面大量且不易观察，就可以使用这个扩展来记录异常的状态。
+
+s := goribot.NewSpider()
+s.Use(goribot.SpiderLogError(os.Stdout)) // 记录异常日志并输出到Stderr，实际应用中输出到文件
+简单如此，激活一个扩展插件而已。
+
+接下来我们搞出点错误：
+
+s.OnResp(func(ctx *goribot.Context) {
+    if !strings.Contains(ctx.Resp.Text,"按时间排序"){
+        ctx.AddItem(goribot.ErrorItem{
+            Ctx: ctx,
+            Msg: "B站Ban我IP拉~",
+        })
+    }
+    ctx.AddTask(goribot.GetReq("https://www.bilibili.com/video/BV1tJ411V7eg"))
+    ctx.AddTask(goribot.GetReq("https://www.bilibili.com/video/BV1tJ411V7eg"))
+    ctx.AddTask(goribot.GetReq("https://www.bilibili.com/video/BV1tJ411V7eg"))
+    ctx.AddTask(goribot.GetReq("https://www.bilibili.com/video/BV1tJ411V7eg"))
+})
+s.AddTask(goribot.GetReq("https://www.bilibili.com/video/BV1tJ411V7eg"))
+s.Run()
+就如上述代码，这个蜘蛛启动后会不停拼命地访问B站的一个地址。应该不出多久我们就能看到如下内容：
+
+SpiderLogError B站Ban我IP拉~
+
+其中记录了错误、留言、请求和响应的具体信息。我们可以后期分析这些日志，归纳反爬策略以及特点，更高效的完成爬取作业。
+
+结语
+Goribot 结构十分简单，同时也提供了丰富的文档。Goribot 本身也实现了一个轻量化的分布式支持，其实用十分类似Scrapy 的分布式应用，用于建立更复杂的应用

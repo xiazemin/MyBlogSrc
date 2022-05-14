@@ -1,0 +1,143 @@
+I"S6<p>https://mariadb.com/kb/en/innodb-row-formats-overview/
+http://www.apimirror.com/mariadb/innodb-compressed-row-format/index</p>
+
+<p>To avoid compressing and uncompressing pages too many times, InnoDB tries to keep both compressed and uncompressed pages in the buffer pool when there is enough room. This results in a bigger cache. When there is not enough room, an adaptive LRU algorithm is used to decide whether compressed or uncompressed pages should be evicted from the buffer: for CPU-bound workloads, the compressed pages are evicted first; for I/O-bound workloads, the uncompressed pages are evicted first. Of course, when necessary, both the compressed and uncompressed version of the same data can be evicted from the buffer.</p>
+
+<p>https://mariadb.com/kb/en/innodb-compressed-row-format/
+https://stackoverflow.com/questions/24321896/mysql-row-format-compressed-vs-dynamic</p>
+
+<p>http://mysql.taobao.org/monthly/2016/02/01/
+第一种是传统的数据压缩，通过指定row_format及key_block_size，能够将用户表压缩到指定的page size并进行存储，默认使用zlib。这种压缩方式使用比较简单，但也是诟病较多的， 代码陈旧，相关代码基本上几个大版本都没发生过变化，一些优化点还是从facebook移植过来的（集中在5.6版本中, 不过现在fb已经放弃优化InnoDB压缩了，转而聚集在自家压缩更好的myrock上）。InnoDB压缩表的性能瓶颈明显，尤其是在压缩page到指定size失败时触发索引分裂。</p>
+
+<p>第二种是MySQL5.7引入的所谓transparent compression，通过文件系统punch hole和sparse file特性来实现的。具体的就是在将数据页进行压缩后，将留白的地方进行打洞，从而实现数据压缩的目的。这个实现的好处就是代码逻辑简单，整个feature的实现基本上没加多少代码，无需指定key_block_size（但依然需要根据文件系统block size对齐)，并且也能更方便的支持多种压缩算法。但缺点也明显，例如可能会产生大量的文件碎片，底层的文件管理可能更复杂；也无法降低buffer pool的占用(传统的压缩方式可以只在buffer pool保存压缩页)</p>
+
+<p>另外还有一种方式是通过MySQL函数compress/decompress，由应用端来决定存入的数据是否压缩，并控制解压操作。但这种方式不够灵活，需要应用来修改代码。
+https://www.bookstack.cn/read/aliyun-rds-core/7022559f75cc30cb.md</p>
+
+<p>案例一：IO问题。某游戏的一个大区DB由于数据量过大，内存缓冲池不能完全cache数据，IO瓶颈制约DB整体性能，导致该大区不能提供稳定服务。</p>
+
+<p>案例二：存储空间不足。某游戏的DB在合服过程中，由于数据量过大，导致合服效率极低。</p>
+
+<p>对于上述问题，通用的方案或者是升级硬件，或者是在游戏server层修改存储逻辑，代价都很非常大。互娱DBA团队通过在TMySQL 1.4版本增加InnoDB列压缩功能，对应用层透明并且节省了硬件成本从而有效解决该问题。
+         https://blog.csdn.net/fengqiaojiangshui/article/details/45155559  <br />
+<!-- more -->
+内存较大，硬盘是SSD设备：压缩表可以实现较小的数据库大小，减少的I/O和改进的吞吐量。
+服务器空间不足，数据必须存在，但很少操作：使用压缩表时将占用更多的CPU、内存和操作时间。
+重点： InnoDB表压缩对字符串类型更有效（BLOB， VARCHAR，TEXT）；如果是数字类型或二进制类型的，就不用压缩啦（当然我木有实验过哈，有时间大家可以测试下）</p>
+
+<p>https://blog.csdn.net/wnll_08/article/details/116491328</p>
+
+<p>1、压缩算法</p>
+
+<p>mysql进行压缩是借助于zlib库，采用L777压缩算法，这种算法在减少数据大小、CPU利用方面是成熟的、健壮的、高效的。同时这种算法是无失真的，因此原生的未压缩的数据总是能够从压缩文件中重构，LZ777实现原理是查找重复数据的序列号然后进行压缩，所以数据模式决定了压缩效率，一般而言，用户的数据能够被压缩50%以上。</p>
+
+<p>不同于应用程序压缩或者其他数据库系统的压缩，InnoDB压缩是同时对数据和索引进行压缩，很多情况下，索引能够占数据库总大小的40%-50%。如果压缩效果很好，一般innodb文件会减少25%-50%或者更多，而且减少I/O增加系统吞吐量，但是会增加CPU的占用，你可通过设置innodb_compression_level参数来平衡压缩级别和CPU占用。</p>
+
+<p>2、InnoDB数据存储及压缩</p>
+
+<p>所有数据和b-tree索引都是按页进行存储的，每行包含主键和表的其他列。辅助索引也是b-tree结构的，包含对值：索引值及指向每行记录的指针，这个指针实际上就是表的主键值。</p>
+
+<p>https://www.cnblogs.com/mysql-dba/p/5125220.html
+第一种是传统的数据压缩，通过指定row_format及key_block_size，能够将用户表压缩到指定的page size并进行存储，默认使用zlib。这种压缩方式使用比较简单，但也是诟病较多的， 代码陈旧，相关代码基本上几个大版本都没发生过变化，一些优化点还是从facebook移植过来的（集中在在5.6版本中, 不过现在fb已经放弃优化InnoDB压缩了，转而聚集在自家压缩更好的myrock上）。InnoDB压缩表的性能瓶颈明显，尤其是在压缩page到指定size失败时触发索引分裂。</p>
+
+<p>第二种是MySQL5.7引入的所谓transparent compression，通过文件系统punch hole和sparse file特性来实现的。具体的就是在将数据页进行压缩后，将留白的地方进行打洞，从而实现数据压缩的目的。这个实现的好处就是代码逻辑简单，整个feature的实现基本上没加多少代码，无需指定key_block_size（但依然需要根据文件系统block size对齐)，并且也能更方便的支持多种压缩算法。但缺点也明显，例如可能会产生大量的文件碎片，底层的文件管理可能更复杂；也无法降低buffer pool的占用(传统的压缩方式可以只在buffer pool保存压缩页)</p>
+
+<p>另外还有一种方式是通过MySQL函数compress/decompress，由应用端来决定存入的数据是否压缩，并控制解压操作。但这种方式不够灵活，需要应用来修改代码。</p>
+
+<p>在AliSQL中我们提供了一种新的列压缩方式，用户在建表时可以将列属性column_format指定为compressed，那么服务器就会在存入/取出这个列的数据时，自动对其进行压缩和解压动作。这个方案不仅降低了磁盘数据大小，而且也能最大程度的保证性能，例如在查询不涉及到压缩列时无需执行解压动作。该特性尤其适用于诸如blob或者text这样的大列。</p>
+
+<p>Percona Server也基于该补丁进行了功能扩展和优化。社区用户现在可以同时从AliSQL及Percona Server中获得该特性。</p>
+
+<p>https://developer.aliyun.com/article/64891
+表压缩能提升性能，减少存储空间，主要是用在字符类型比较大的表上（VARCHAR，VARBINARY和BLOB和TEXT类型），且读多写少的情况下，如果你的应用是io密集型的，不是cpu密集型的，那么压缩会带来很多性能的提升，例如：数据仓库。</p>
+
+<p>https://cloud.tencent.com/developer/article/1056453
+压缩原理</p>
+
+<p>InnoDB支持两种文件格式 Antelope（羚羊）和Barracuda（梭鱼）：</p>
+
+<p>Antelope ：是5.6之前的文件格式，支持InnoDB表的COMPACT和REDUNDANT行格式，共享表空间默认为Antelope</p>
+
+<p>Barracuda：是最新的文件格式，支持所有innodb行格式，包括最新的COMPRESSED和DYNAMIC行格式。</p>
+
+<p>https://www.modb.pro/db/65616</p>
+
+<p>缓存区BufferPool
+缓存区并不是Innodb中特有的概念，操作系统中也有缓存区的概念，当用户第一次从磁盘读取文件时，会把文件缓存到内存中，后续再对这个文件进行读操作就可以直接从内存中读，从而减少磁盘IO次数。缓存只是内存中的一块连续空间，InnoDB是如何合理利用缓存区的空间的呢？本文会从以下几个方面介绍InnoDB的缓存区：</p>
+
+<p>缓存区概览：InnoDB缓存区的结构和状态查询；
+缓存区实例(BufferPool Instance)：缓存区可以划分为多个实例；
+BufferChunk：缓存区实例内的数据块；
+控制块和数据页：InnoDB是以什么形式缓存数据库中的数据的；
+空闲空间管理；缓存区内的空闲空间管理逻辑；
+用户数据管理：数据库数据和索引在缓存区缓存的管理；
+自适应哈希索引：优化热点数据等值查询的哈希索引；
+ChangeBuffer简介：提高数据库更新效率的ChangeBuffer；
+锁信息管理：InnoDB中的行锁信息也是存放在缓存区中的；</p>
+
+<p>https://juejin.cn/post/7038787857011441672
+https://www.cnblogs.com/—wunian/p/8993336.html
+https://www.codetd.com/article/1414760</p>
+
+<p>https://www.cnblogs.com/wilburxu/p/9435818.html
+https://stackoverflow.com/questions/24321896/mysql-row-format-compressed-vs-dynamic</p>
+
+<p>To avoid compressing and uncompressing pages too many times, InnoDB tries to keep both compressed and uncompressed pages in the buffer pool when there is enough room. This results in a bigger cache. When there is not enough room, an adaptive LRU algorithm is used to decide whether compressed or uncompressed pages should be evicted from the buffer: for CPU-bound workloads, the compressed pages are evicted first; for I/O-bound workloads, the uncompressed pages are evicted first. Of course, when necessary, both the compressed and uncompressed version of the same data can be evicted from the buffer.</p>
+
+<p>MariaDB源码解读之引擎启动与查询流程
+sql/mysqld.cc/int mysqld_main(int argc, char <em>*argv)
+	-&gt;sql/mysqld.cc/static int init_server_components()
+		-&gt;sql/sql_plugin.cc/int plugin_init(int *argc, char **argv, int flags)
+			-&gt;sql/sql_plugin.cc/ builtins= mysql_optional_plugins; –&gt;extern struct st_maria_plugin *mysql_mandatory_plugins[]; –&gt;sql/sql_builtin.cc/struct st_maria_plugin *mysql_optional_plugins[] –&gt;storage/innobase/handler/ha_innodb.ccstatic/maria_declare_plugin(innobase)
+				-&gt;storage/innobase/handler/ha_innodb.ccstatic/maria_declare_plugin(innobase)
+					-&gt;storage/innobase/handler/ha_innodb.ccstatic/int innodb_init(void</em> p)
+						-&gt; storage/innobase/srv/srv0start.cc/dberr_t srv_start(bool create_new_db)
+							-&gt;storage/innobase/srv/srv0srv.cc/void srv_boot(void)
+								-&gt;storage/innobase/sync/sync0debug.cc/void sync_check_init();
+								-&gt;storage/innobase/log/log0recv.cc/void recv_sys_var_init();
+								-&gt;storage/innobase/trx/trx0trx.cc/void trx_pool_init();
+								-&gt;storage/innobase/row/row0mysql.cc/void row_mysql_init();
+								-&gt;storage/innobase/srv/srv0srv.cc/void srv_init();
+			-&gt;sql/sql_plugin.cc/static bool register_builtin(struct st_maria_plugin *plugin, struct st_plugin_int *tmp, struct st_plugin_int **ptr)
+			-&gt;sql/sql_plugin.cc/static int plugin_initialize(&amp;tmp_root, plugin_ptr, argc, argv, (flags &amp; PLUGIN_INIT_SKIP_INITIALIZATION)) in for(;;)
+				-&gt;sql/sql_plugin.cc/plugin_type_initialize[plugin-&gt;plugin-&gt;type] –&gt;{ha_initialize_handlerton} ⇋ int ha_initialize_handlerton(st_plugin_int *plugin)
+		-&gt;sql/sql_plugin.cc/init_default_storage_engine(default_storage_engine, table_plugin) ⇋ static int init_default_storage_engine_impl(const char *opt_name, char *engine_name, plugin_ref *res)</p>
+
+<p>https://blog.csdn.net/weixin_40730091/article/details/100543322</p>
+
+<p>MariaDB 共有三种线程调度方式</p>
+
+<p>one-thread-per-connection 每个连接一个线程</p>
+
+<p>no-threads 所有连接共用一个线程</p>
+
+<p>pool-of-threads 线程池</p>
+
+<p>no-threads 只适用于简单的系统，并发数稍高性能就会严重下降</p>
+
+<p>one-thread-per-connection 在多数情况下性能优良，是个合适的选择，生产系统也常用此配置。但在高并发、短连接的业务场景下，使用 one-thread-per-connection 会频繁得创建和销毁线程，严重影响性能</p>
+
+<p>pool-of-threads 适用于高并发短连接的业务场景，线程复用，避免频繁创建和销毁线程带来的性能损耗</p>
+
+<p>MariaDB 的 thread pool 在 win 和 unix 系统的实现不同，本文分析 unix 系统下的实现</p>
+
+<p>thread pool 由若干个 thread_group 组成，每个 thread_group 有若干个 worker 线程，和 0~1 个 listenr 线程</p>
+
+<p>server 接收到连接请求时，将这个连接分配给一个 group 处理，listener 线程负责监听请求，worker 线程处理请求内容</p>
+
+<p>https://developer.aliyun.com/article/560514
+https://github.com/MariaDB/server
+https://mariadb.com/kb/en/innodb-file-format/
+https://mariadb.com/kb/en/innodb-compressed-row-format/
+http://www.asktheway.org/official-documents/mysql/refman-5.6-en.html-chapter/optimization.html
+当行记录的长度没有超过行记录最大长度时，所有数据都会存储在当前页</p>
+
+<p>当行记录的长度超过行记录最大长度时，变长列（variable-length column）会选择外部溢出页（overflow page，一般是Uncompressed BLOB Page）进行存储</p>
+
+<p>Compact + Redundant：保留前768Byte在当前页（B+Tree叶子节点），其余数据存放在溢出页。768Byte后面跟着20Byte的数据，用来存储指向溢出页的指针</p>
+
+<p>Dynamic + Compressed：仅存储20Byte数据，存储指向溢出页的指针，这时比Compact和Redundant更高效，因为一个B+Tree叶子节点能存放更多的行记录</p>
+
+<p>http://zhongmingmao.me/2017/05/07/innodb-table-row-format/
+https://stackoverflow.com/questions/24321896/mysql-row-format-compressed-vs-dynamic</p>
+:ET

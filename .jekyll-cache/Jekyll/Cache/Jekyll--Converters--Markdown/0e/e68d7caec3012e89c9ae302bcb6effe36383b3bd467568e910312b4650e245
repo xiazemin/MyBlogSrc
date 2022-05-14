@@ -1,0 +1,107 @@
+I"�<p>Flannel实质上是一种“覆盖网络(overlay network)”，也就是将TCP数据包装在另一种网络包里面进行路由转发和通信，目前已经支持UDP、VxLAN、AWS VPC和GCE路由等数据转发方式。
+默认的节点间数据通信方式是UDP转发。
+<!-- more -->
+数据从源容器中发出后，经由所在主机的docker0虚拟网卡转发到flannel0虚拟网卡，这是个P2P的虚拟网卡，flanneld服务监听在网卡的另外一端。
+Flannel通过Etcd服务维护了一张节点间的路由表，详细记录了各节点子网网段 。
+源主机的flanneld服务将原本的数据内容UDP封装后根据自己的路由表投递给目的节点的flanneld服务，数据到达以后被解包，然后直接进入目的节点的flannel0虚拟网卡，然后被转发到目的主机的docker0虚拟网卡，最后就像本机容器通信一下的有docker0路由到达目标容器。</p>
+
+<p>配置文件
+/etc/sysconfig/flanneld</p>
+
+<h1 id="vi-etcsysconfigflanneld">vi /etc/sysconfig/flanneld</h1>
+
+<p>Flanneld configuration options
+etcd url location. Point this to the server where etcd runs
+FLANNELETCDENDPOINTS=”http://etcd:2379”</p>
+
+<p>etcd config key. This is the configuration key that flannel queries
+For address range assignment
+FLANNELETCDPREFIX=”/atomic.io/network”</p>
+
+<p>Any additional options that you want to pass
+FLANNEL_OPTIONS=””</p>
+
+<p>Flannel使用Etcd进行配置，来保证多个Flannel实例之间的配置一致性，所以需要在etcd上进行如下配置：（‘/atomic.io/network/config’这个key与上文/etc/sysconfig/flannel中的配置项FLANNELETCDPREFIX是相对应的，错误的话启动就会出错）
+[root@k8s-master ~]# etcdctl mk /atomic.io/network/config ‘{ “Network”: “10.0.0.0/16” }’ { “Network”: “10.0.0.0/16” }</p>
+
+<p>UDP报文封装
+我们来看下面这个图，这是在其中一个通信节点上抓取到的ping命令通信数据包。可以看到在UDP的数据内容部分其实是另一个ICMP（也就是ping命令）的数据包。
+原始数据是在起始节点的Flannel服务上进行UDP封装的，投递到目的节点后就被另一端的Flannel服务还原成了原始的数据包，两边的Docker服务都感觉不到这个过程的存在。
+docker IP 分配
+Flannel通过Etcd分配了每个节点可用的IP地址段后，偷偷的修改了Docker的启动参数。
+[root@k8s-node-1 ~]# ps aux | grep bip
+root       3142  0.1  2.7 560620 27364 ?        Ssl  19:50   0:11 /usr/bin/dockerd-current –add-runtime docker-runc=/usr/libexec/docker/docker-runc-current –default-runtime=docker-runc –exec-opt native.cgroupdriver=systemd –userland-proxy-path=/usr/libexec/docker/docker-proxy-current –seccomp-profile=/etc/docker/seccomp.json –insecure-registry registry:5000 –storage-driver overlay2 –bip=10.0.53.1/24 –ip-masq=true –mtu=1472</p>
+
+<p>这个是在运行了Flannel服务的节点上查看到的Docker服务进程运行参数。
+注意其中的“–bip=10.0.53.1/24”这个参数，它限制了所在节点容器获得的IP范围。
+这个IP范围是由Flannel自动分配的，由Flannel通过保存在Etcd服务中的记录确保它们不会重复。
+容器IP并不固定，IP分配还是Docker在做，Flannel只是分配了子网段。
+数据转发
+以下是 k8s集群两个node节点的路由表：
+[root@k8s-node-1 ~]# route -n
+Kernel IP routing table
+Destination     Gateway         Genmask         Flags Metric Ref    Use Iface
+0.0.0.0         192.168.1.1     0.0.0.0         UG    100    0        0 ens33
+10.0.0.0        0.0.0.0         255.255.0.0     U     0      0        0 flannel0
+10.0.53.0       0.0.0.0         255.255.255.0   U     0      0        0 docker0
+192.168.1.0     0.0.0.0         255.255.255.0   U     100    0        0 ens33</p>
+
+<p>[root@k8s-node-2 ~]# route -n                          <br />
+Kernel IP routing table
+Destination     Gateway         Genmask         Flags Metric Ref    Use Iface
+0.0.0.0         192.168.1.1     0.0.0.0         UG    100    0        0 ens33
+10.0.0.0        0.0.0.0         255.255.0.0     U     0      0        0 flannel0
+10.0.80.0       0.0.0.0         255.255.255.0   U     0      0        0 docker0
+192.168.1.0     0.0.0.0         255.255.255.0   U     100    0        0 ens33</p>
+
+<p>例如：现在有一个数据包要从IP为10.0.53.2的容器发到IP为10.0.80.2的容器。根据数据发送节点的路由表，它只与10.0.0.0/16匹配这条记录匹配，因此数据从docker0出来以后就被投递到了flannel0。同理在目标节点，由于投递的地址是一个容器，因此目的地址一定会落在docker0对于的10.0.80.0/24这个记录上，然后投递到了docker0网卡
+安装与配置
+在master、node上均执行如下命令，进行安装
+[root@k8s-master ~]# yum install flannel</p>
+
+<p>配置Flannel
+master、node上均编辑/etc/sysconfig/flanneld
+[root@k8s-master ~]# vi /etc/sysconfig/flanneld</p>
+
+<p>Flanneld configuration options
+etcd url location. Point this to the server where etcd runs
+FLANNELETCDENDPOINTS=”http://etcd:2379”</p>
+
+<p>etcd config key. This is the configuration key that flannel queries
+For address range assignment
+FLANNELETCDPREFIX=”/atomic.io/network”</p>
+
+<p>Any additional options that you want to pass
+FLANNEL_OPTIONS=””</p>
+
+<p>配置etcd中关于flannel的key
+Flannel使用Etcd进行配置，来保证多个Flannel实例之间的配置一致性，所以需要在etcd上进行如下配置：（‘/atomic.io/network/config’这个key与上文/etc/sysconfig/flannel中的配置项FLANNELETCDPREFIX是相对应的，错误的话启动就会出错）
+[root@k8s-master ~]# etcdctl mk /atomic.io/network/config ‘{ “Network”: “10.0.0.0/16” }’ 
+{ “Network”: “10.0.0.0/16” }</p>
+
+<p>启动
+启动Flannel之后，需要依次重启docker、kubernete。
+在master执行：
+systemctl enable flanneld.service</p>
+
+<p>systemctl start flanneld.service</p>
+
+<p>service docker restart</p>
+
+<p>systemctl restart kube-apiserver.service</p>
+
+<p>systemctl restart kube-controller-manager.service</p>
+
+<p>systemctl restart kube-scheduler.service</p>
+
+<p>在node上执行：
+systemctl enable flanneld.service</p>
+
+<p>systemctl start flanneld.service</p>
+
+<p>service docker restart</p>
+
+<p>systemctl restart kubelet.service</p>
+
+<p>systemctl restart kube-proxy.service</p>
+:ET

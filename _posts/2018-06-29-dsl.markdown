@@ -1,0 +1,363 @@
+---
+title: dsl
+layout: post
+category: elasticsearch
+author: 夏泽民
+---
+ElasticSearch具有和端点(_bulk)用于用单个请求索引多个文档
+_search端点
+现在已经把一些电影信息放入了索引，可以通过搜索看看是否可找到它们。 为了使用ElasticSearch进行搜索，我们使用_search端点，可选择使用索引和类型。也就是说，按照以下模式向URL发出请求：<index>/<type>/_search。其中，index和type都是可选的。
+
+换句话说，为了搜索电影，可以对以下任一URL进行POST请求：
+
+http://localhost:9200/_search - 搜索所有索引和所有类型。
+http://localhost:9200/movies/_search - 在电影索引中搜索所有类型
+http://localhost:9200/movies/movie/_search - 在电影索引中显式搜索电影类型的文档。
+因为我们只有一个单一的索引和单一的类型，所以怎么使用都不会有什么问题。为了简洁起见使用第一个URL。
+
+搜索请求正文和ElasticSearch查询DSL
+如果只是发送一个请求到上面的URL，我们会得到所有的电影信息。为了创建更有用的搜索请求，还需要向请求正文中提供查询。 请求正文是一个JSON对象，除了其它属性以外，它还要包含一个名称为“query”的属性，这就可使用ElasticSearch的查询DSL。
+
+{
+    "query": {
+        //Query DSL here
+    }
+}
+JSON
+你可能想知道查询DSL是什么。它是ElasticSearch自己基于JSON的域特定语言，可以在其中表达查询和过滤器。想象ElasticSearch它像关系数据库的SQL。
+
+基本自由文本搜索
+查询DSL具有一长列不同类型的查询可以使用。 对于“普通”自由文本搜索，最有可能想使用一个名称为“查询字符串查询”。
+
+查询字符串查询是一个高级查询，有很多不同的选项，ElasticSearch将解析和转换为更简单的查询树。如果忽略了所有的可选参数，并且只需要给它一个字符串用于搜索，它可以很容易使用。
+
+现在尝试在两部电影的标题中搜索有“kill”这个词的电影信息：
+
+curl   -H "Content-Type: application/json" -XPOST "http://localhost:9200/_search" -d'
+{
+    "query": {
+        "query_string": {
+            "query": "kill"
+        }
+    }
+}'
+指定搜索的字段
+在前面的例子中，使用了一个非常简单的查询，一个只有一个属性“query”的查询字符串查询。 如前所述，查询字符串查询有一些可以指定设置，如果不使用，它将会使用默认的设置值。
+
+这样的设置称为“fields”，可用于指定要搜索的字段列表。如果不使用“fields”字段，ElasticSearch查询将默认自动生成的名为“_all”的特殊字段，来基于所有文档中的各个字段匹配搜索。
+
+为了做到这一点，修改以前的搜索请求正文，以便查询字符串查询有一个fields属性用来要搜索的字段数组：
+
+curl -XPOST "http://localhost:9200/_search" -d'
+{
+    "query": {
+        "query_string": {
+            "query": "ford",
+            "fields": ["title"]
+        }
+    }
+}'
+
+因为在索引中有五部电影在_all字段(从类别字段)中包含单词“drama”，所以得到了上述查询的5个命中。 现在，想象一下，如果我们想限制这些命中为只是1962年发布的电影。要做到这点，需要应用一个过滤器，要求“year”字段等于1962。
+
+要添加过滤器，修改搜索请求正文，以便当前的顶级查询(查询字符串查询)包含在过滤的查询中：
+
+{
+    "query": {
+        "filtered": {
+            "query": {
+                "query_string": {
+                    "query": "drama"
+                }
+            },
+            "filter": {
+                //Filter to apply to the query
+            }
+        }
+    }
+}
+JSON
+过滤的查询是具有两个属性(query和filter)的查询。执行时，它使用过滤器过滤查询的结果。要完成这样的查询还需要添加一个过滤器，要求year字段的值为1962。
+
+ElasticSearch查询DSL有各种各样的过滤器可供选择。对于这个简单的情况，某个字段应该匹配一个特定的值，一个条件过滤器就能很好地完成工作。
+
+"filter": {
+    "term": { "year": 1962 }
+}
+
+curl -H "Content-Type: application/json" -XPOST "http://localhost:9200/_search" -d'
+{
+    "query": {
+        "filtered": {
+            "query": {
+                "query_string": {
+                    "query": "drama"
+                }
+            },
+            "filter": {
+                "term": { "year": 1962 }
+            }
+        }
+    }
+}'
+
+"no [query] registered for [filtered]"
+其中的filtered已经弃用，应该使用bool查询方法
+
+<!-- more -->
+创建索引
+$ curl -H "Content-Type: application/json" -XPUT 'http://localhost:9200/schools'
+{"acknowledged":true,"shards_acknowledged":true,"index":"schools"}
+批量功能在此索引中添加多个JSON对象。
+
+curl -H "Content-Type: application/json" -XPOST 'http://localhost:9200/schools/_bulk' -d '
+{
+   "index":{
+      "_index":"schools", "_type":"school", "_id":"1"
+   }
+}
+{
+   "name":"Central School", "description":"CBSE Affiliation", "street":"Nagan",
+   "city":"paprola", "state":"HP", "zip":"176115", "location":[31.8955385, 76.8380405],
+   "fees":2000, "tags":["Senior Secondary", "beautiful campus"], "rating":"3.5"
+}
+
+{
+   "index":{
+      "_index":"schools", "_type":"school", "_id":"2"
+   }
+}
+{
+   "name":"Saint Paul School", "description":"ICSE 
+   Afiliation", "street":"Dawarka", "city":"Delhi", "state":"Delhi", "zip":"110075",
+   "location":[28.5733056, 77.0122136], "fees":5000,
+   "tags":["Good Faculty", "Great Sports"], "rating":"4.5"
+}'
+多索引
+API中的大多数操作(主要是搜索和其他操作)用于一个或多个索引。 这有助于用户通过只执行一次查询来搜索多个位置或所有可用数据。 许多不同的符号用于在多个索引中执行操作。 我们将在本节讨论其中的一些。
+
+逗号分隔符号
+POST http://localhost:9200/index1,index2,index3/_search
+请求正文
+
+{
+   "query":{
+      "query_string":{
+         "query":"any_string"
+      }
+   }
+}
+JSON
+响应
+
+来自index1，index2，index3的JSON对象，其中包含any_string。
+
+所有索引的_all关键字
+POST http://localhost:9200/_all/_search
+请求正文
+
+{
+   "query":{
+      "query_string":{
+         "query":"any_string"
+      }
+   }
+}
+JSON
+响应
+来自所有索引的JSON对象，并且有any_string。
+
+通配符(*，+， - )
+POST http://localhost:9200/school*/_search
+请求正文
+
+{
+   "query":{
+      "query_string":{
+         "query":"CBSE"
+      }
+   }
+}
+JSON
+响应
+来自所有索引的JSON对象，从school 开始，有CBSE。
+
+或者，也可以使用以下代码 -
+
+POST http://localhost:9200/school*,-schools_gov /_search
+请求正文
+
+{
+   "query":{
+      "query_string":{
+         "query":"CBSE"
+      }
+   }
+}
+JSON
+响应
+来自所有索引的JSON对象，它们以“school”开头，但不是schools_gov并且在其中有CBSE。
+还有一些URL查询字符串参数 -
+
+ignore_unavailable - 如果URL中存在的一个或多个索引不存在，则不会发生错误或操作不会停止。 例如，schools 索引存在，但book_shops不存在 -
+POST http://localhost:9200/school*,book_shops/_search
+请求正文
+
+{
+   "query":{
+      "query_string":{
+         "query":"CBSE"
+      }
+   }
+}
+JSON
+响应
+
+{
+   "error":{
+      "root_cause":[{
+         "type":"index_not_found_exception", "reason":"no such index",
+         "resource.type":"index_or_alias", "resource.id":"book_shops", 
+         "index":"book_shops"
+      }],
+
+      "type":"index_not_found_exception", "reason":"no such index",
+      "resource.type":"index_or_alias", "resource.id":"book_shops", 
+      "index":"book_shops"
+
+   },"status":404
+}
+JSON
+看看下面的代码 -
+
+POST http://localhost:9200/school*,book_shops/_search?ignore_unavailable = true
+请求正文
+
+{
+   "query":{
+      "query_string":{
+         "query":"CBSE"
+      }
+   }
+}
+JSON
+响应(无错误)
+来自所有索引的JSON对象，从 school 开始，有CBSE。
+
+allow_no_indices
+
+如果带有通配符的网址没有索引，这个参数是true值时将防止错误。
+
+例如，不是以schools_pri开头的索引 -
+
+POST
+http://localhost:9200/schools_pri*/_search?allow_no_indices = true
+请求正文
+
+{
+   "query":{
+      "match_all":{}
+   }
+}
+JSON
+响应(无错误)
+
+{
+   "took":1,"timed_out": false, "_shards":{"total":0, "successful":0, "failed":0}, 
+   "hits":{"total":0, "max_score":0.0, "hits":[]}
+}
+JSON
+expand_wildcards
+
+此参数确定通配符是否需要扩展为打开索引或闭合索引或两者。 此参数的值可以是打开和关闭或无和全部。
+
+例如，关闭索引schools -
+
+POST http://localhost:9200/schools/_close
+响应
+
+{"acknowledged":true}
+JSON
+看看下面的代码 -
+
+POST http://localhost:9200/school*/_search?expand_wildcards = closed
+请求正文
+
+{
+   "query":{
+      "match_all":{}
+   }
+}
+JSON
+响应
+
+{
+   "error":{
+      "root_cause":[{
+         "type":"index_closed_exception", "reason":"closed", "index":"schools"
+      }],
+
+      "type":"index_closed_exception", "reason":"closed", "index":"schools"
+   }, "status":403
+}
+JSON
+日期索引名称中的数学支持
+Elasticsearch提供了根据日期和时间搜索索引的功能。我们需要以特定格式指定日期和时间。 例如，accountdetail-2015.12.30，索引将存储2015年12月30日的银行帐户详细信息。可以执行数学操作以获取特定日期或日期和时间范围的详细信息。
+
+<static_name{date_math_expr{date_format|time_zone}}>
+http://localhost:9200/<accountdetail-{now-2d{YYYY.MM.dd|utc}}>/_search
+static_name是表达式的一部分，在每个日期数学索引(如帐户详细信息)中保持相同。 date_math_expr包含动态确定日期和时间的数学表达式，如now-2d。date_format包含日期在索引中写入的格式，如YYYY.MM.dd。 如果今天的日期是2015年12月30日，则<accountdetail- {now-2d {YYYY.MM.dd}}>将返回accountdetail-2015.12.28。
+
+表达式 解析为
+<accountdetail-{now-d}> accountdetail-2016.12.29
+<accountdetail-{now-M}> accountdetail-2015.11.30
+<accountdetail-{now{YYYY.MM}}>  accountdetail-2015.12
+现在将看到Elasticsearch中可用于获取指定格式的响应的一些常见选项。
+
+美化结果
+可以通过附加一个网址查询参数(即pretty = true)，获得格式正确的JSON对象的响应。
+
+POST http://localhost:9200/schools/_search?pretty = true
+请求正文
+
+{
+   "query":{
+      "match_all":{}
+   }
+}
+JSON
+响应
+
+……………………..
+{
+   "_index" : "schools", "_type" : "school", "_id" : "1", "_score" : 1.0,
+   "_source":{
+      "name":"Central School", "description":"CBSE Affiliation", 
+      "street":"Nagan", "city":"paprola", "state":"HP", "zip":"176115",
+      "location": [31.8955385, 76.8380405], "fees":2000, 
+      "tags":["Senior Secondary", "beautiful campus"], "rating":"3.5"
+   }
+}    
+………………….
+JSON
+人类可读输出
+
+此选项可以将统计响应更改为人类可读的形式(如果human = true)或计算机可读形式(如果human = false)。 例如，如果human = true那么distance_kilometer = 20KM，如果human = false那么distance_meter = 20000，则是响应需要被另一个计算机程序使用。
+
+响应过滤
+可以通过将其添加到field_path参数中来过滤对较少字段的响应。 例如，
+
+POST http://localhost:9200/schools/_search?filter_path = hits.total
+请求正文
+
+{
+   "query":{
+      "match_all":{}
+   }
+}
+JSON
+响应
+
+{"hits":{"total":3}}
+JSON
+

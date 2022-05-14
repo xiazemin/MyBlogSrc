@@ -1,0 +1,121 @@
+I"�<p>https://colobu.com/2015/01/07/Protobuf-language-guide/</p>
+
+<p>定义一个消息类型
+先来看一个非常简单的例子。假设你想定义一个“搜索请求”的消息格式，每一个请求含有一个查询字符串、你感兴趣的查询结果所在的页数，以及每一页多少条查询结果。可以采用如下的方式来定义消息类型的.proto文件了：</p>
+
+<p>1
+2
+3
+4
+5
+message SearchRequest {
+  required string query = 1;
+  optional int32 page_number = 2;
+  optional int32 result_per_page = 3;
+}
+SearchRequest消息格式有3个字段，在消息中承载的数据分别对应于每一个字段。其中每个字段都有一个名字和一种类型。</p>
+
+<p>指定字段类型
+在上面的例子中，所有字段都是标量类型：两个整型（page_number和result_per_page），一个string类型（query）。当然，你也可以为字段指定其他的合成类型，包括枚举（enumerations）或其他消息类型。</p>
+
+<p>分配标识号
+正如上述文件格式，在消息定义中，每个字段都有唯一的一个数字标识符。这些标识符是用来在消息的二进制格式中识别各个字段的，一旦开始使用就不能够再改变。注：[1,15]之内的标识号在编码的时候会占用一个字节。[16,2047]之内的标识号则占用2个字节。所以应该为那些频繁出现的消息元素保留 [1,15]之内的标识号。切记：要为将来有可能添加的、频繁出现的标识号预留一些标识号。</p>
+
+<p>最小的标识号可以从1开始，最大到2^29 - 1, or 536,870,911。不可以使用其中的[19000－19999]的标识号， Protobuf协议实现中对这些进行了预留。如果非要在.proto文件中使用这些预留标识号，编译时就会报警。</p>
+
+<p>指定字段规则
+所指定的消息字段修饰符必须是如下之一：</p>
+
+<p>required：一个格式良好的消息一定要含有1个这种字段。表示该值是必须要设置的；
+optional：消息格式中该字段可以有0个或1个值（不超过1个）。
+repeated：在一个格式良好的消息中，这种字段可以重复任意多次（包括0次）。重复的值的顺序会被保留。表示该值可以重复，相当于java中的List。
+由于一些历史原因，基本数值类型的repeated的字段并没有被尽可能地高效编码。在新的代码中，用户应该使用特殊选项[packed=true]来保证更高效的编码。如：</p>
+
+<p>1
+repeated int32 samples = 4 [packed=true];
+required是永久性的：在将一个字段标识为required的时候，应该特别小心。如果在某些情况下不想写入或者发送一个required的字段，将原始该字段修饰符更改为optional可能会遇到问题——旧版本的使用者会认为不含该字段的消息是不完整的，从而可能会无目的的拒绝解析。在这种情况下，你应该考虑编写特别针对于应用程序的、自定义的消息校验函数。Google的一些工程师得出了一个结论：使用required弊多于利；他们更 愿意使用optional和repeated而不是required。当然，这个观点并不具有普遍性。</p>
+
+<p>添加更多消息类型
+在一个.proto文件中可以定义多个消息类型。在定义多个相关的消息的时候，这一点特别有用
+<!-- more -->
+复合类型
+枚举
+在 Proto Buffers 中，我们可以定义枚举和枚举类型，
+    enum Corpus {
+        UNIVERSAL = 0;
+        WEB = 1;
+        IMAGES = 2;
+        LOCAL = 3;
+        NEWS = 4;
+        PRODUCTS = 5;
+        VIDEO = 6;
+    }
+    Corpus corpus = 4;
+复制代码枚举定义在一个消息内部或消息外部都是可以的，如果枚举是 定义在 message 内部，而其他 message 又想使用，那么可以通过 MessageType.EnumType 的方式引用。
+定义枚举的时候，我们要保证第一个枚举值必须是0，枚举值不能重复，除非使用 option allow_alias = true 选项来开启别名。
+enum EnumAllowingAlias {
+    option allow_alias = true;
+    UNKNOWN = 0;
+    STARTED = 1;
+    RUNNING = 1;
+}
+复制代码枚举值的范围是32-bit integer，但因为枚举值使用变长编码，所以不推荐使用负数作为枚举值，因为这会带来效率问题
+定义消息
+Proto Buffers 使用message定义消息。例如:
+syntax = “proto3”;</p>
+
+<p>message SearchRequest {
+  string query = 1;
+  int32 page_number = 2;
+  int32 result_per_page = 3;
+}
+复制代码</p>
+
+<p>该文件的第一行指定使用proto3语法：如果不填，Protocol Buffers编译器将默认使用proto2。这必须是文件的第一个非空的非注释行。</p>
+
+<p>所述SearchRequest消息定义指定了三个字段（名称/值对），一个查询字符串，结果页面数以及每页的结果个数。每个字段都有一个名称和类型和编号。</p>
+
+<p>字段编号
+如您所见，消息定义中的每个字段都有唯一的编号。这些字段编号用于以消息二进制格式标识字段，并且在使用消息类型后不应更改。 请注意，1到15范围内的字段编号需要一个字节进行编码，包括字段编号和字段类型（您可以在协议缓冲区编码中找到更多相关信息）。16到2047范围内的字段编号占用两个字节。因此，您应该为非常频繁出现的消息元素保留数字1到15。请记住为将来可能添加的常用元素留出一些空间。
+您可以指定的最小字段数为1，最大字段数为
+2 29 - 1或536,870,911。您也不能使用数字19000到19999 （FieldDescriptor::kFirstReservedNumber ~ FieldDescriptor::kLastReservedNumber），因为它们是为Protocol Buffers实现保留的 - 如果您使用其中一个保留号码，Protocol Buffers编译器会报错。同样，您不能使用任何以前保留的字段编号。
+指定字段规则
+消息字段可以是以下之一：</p>
+
+<p>singular：格式良好的消息可以包含该字段中的零个或一个（但不超过一个）。
+repeated：此字段可以在格式良好的消息中重复任意次数（包括零）。将保留重复值的顺序。</p>
+
+<p>在proto3中，repeated标量数字类型的字段为默认使用编码。
+您可以在 Protocol Buffer Encoding 中找到有关编码的更多信息。
+在proto2中，</p>
+
+<p>required：必须有一个
+optional：0或者1个
+repeated：任意数量（包括0）</p>
+
+<p>https://juejin.im/post/6844903666302844936</p>
+
+<p>https://github.com/allegro/php-protobuf</p>
+
+<p>https://blog.csdn.net/u011957758/article/details/52455231</p>
+
+<p>https://juejin.im/post/6844903920205037582</p>
+
+<p>Protocol Buffers 是一种轻便高效的结构化数据存储格式，可以用于结构化数据串行化，很适合做数据存储或 RPC 数据交换格式。它可用于通讯协议、数据存储等领域的语言无关、平台无关、可扩展的序列化结构数据格式。目前提供了 C++、Java、Python 三种语言的 API。</p>
+
+<p>https://www.jianshu.com/p/c92e8106a32d</p>
+
+<p>https://www.jianshu.com/p/79cc0630241c</p>
+
+<p>https://www.imooc.com/article/43907</p>
+
+<p>proto 转json</p>
+
+<p>https://www.altova.com/convert-protocol-buffers?gclid=EAIaIQobChMI15KPk92a6wIVAYvICh2USQL-EAAYASAAEgJQyfD_BwE</p>
+
+<p>https://www.site24x7.com/tools/json-to-protobuf.html</p>
+
+<p>https://stackoverflow.com/questions/38406211/how-to-convert-from-json-to-protobuf</p>
+
+<p>https://segmentfault.com/a/1190000020270374</p>
+:ET

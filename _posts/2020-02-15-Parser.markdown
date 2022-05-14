@@ -1,0 +1,360 @@
+---
+title: php-Parser
+layout: post
+category: php
+author: 夏泽民
+---
+PHP-Parser是一款PHP源代码分析器，可以将PHP源代码解析为抽象语法树（AST）。
+项目主页是https://github.com/nikic/PHP-Parser。
+
+安装
+git --clone https://github.com/nikic/PHP-Parser.git
+进入 源代码目录 PHP-Parser，
+通过PHP包管理器composer.phar来安装（PHP版本5.6以上）：
+$php composer.phar require
+
+安装过程中可能会报一下错误：
+error:14090086:SSL routines:SSL3_GET_SERVER_CERTIFICATE Composer
+
+下载时，使用的证书不对，解决办法：
+curl https://curl.haxx.se/ca/cacert.pem -o cacert.pem
+
+配置php.ini文件，增加：
+[openssl]
+openssl.cafile=xxx/cacert.pem
+
+用法
+$php bin/php-parse test.php
+<!-- more -->
+PHP-Parser 是一个用来格式化 PHP 代码的好工具，比如被混淆过的 PHP 代码，可以通过 PHP-Parser 快速格式化。
+
+PHP-Parser 可以在https://github.com/nikic/PHP-Parser/releases这里获取到，比如我这次下载的 4.1.0 的版本。
+
+不过要记住，必须安装 PHP7.0 以上的版本才满足使用条件，可以从 composer.json 文件看到这个条件。（如果下载的 PHP-Parser 是以前较低的版本，可能 PHP5 的环境也能满足，主要看 composer.json 这个文件的要求。可以根据自己当前的 PHP 版本决定下载哪个版本的 PHP-Parser）
+
+可以在命令行执行 php -v 查看当前环境的 php 版本。如果 windows 下 php 运行的是 php7，但 php -v 看到的是 php5，则需要修改环境变量关于 php 的路径。
+
+接下来，保证电脑安装了 composer，如果是 windows 需要下载 composer 并安装，linux 环境一般可能自带了。（其实不安装 composer 也可以，因为后面通过 php 命令行下载了一个 composer.phar 的文件，这个文件可以充当 composer 的功能）
+
+然后进入 PHP-Parser 目录，如果是 windows 则使用 cmd 命令（管理员运行）到 PHP-Parser 目录，执行：
+
+php -r ” eval(‘?>’ .file_get_contents(‘https://getcomposer.org/installer&#8217;));”
+
+这条命令其实就是从
+https://getcomposer.org/installer 这里下载 composer.phar 到当前目录。
+
+如果发现失败，可能是因为没有启用 openssl 扩展，可以去 php7 目录打开 php.ini 启用 openssl 扩展，再重启 php 即可。
+
+然后再执行：
+
+php composer.phar require nikic/php-parser
+
+就可以安装好 PHP-Parser 的依赖环境。这是按官方的方法。
+
+但问题是，执行 php composer.phar require nikic/php-parser 时，出了问题。
+
+提示：
+
+Using version ^4.1@dev for nikic/php-parser
+./composer.json has been updated
+Loading composer repositories with package information
+Updating dependencies (including require-dev)
+Your requirements could not be resolved to an installable set of packages.
+
+Problem 1
+– The requested package nikic/php-parser No version set (parsed as 1.0.0) is satisfiable by nikic/php-parser[No version set (parsed as 1.0.0)] but these conflict with your requirements or minimum-stability.
+
+Installation failed, reverting ./composer.json to its original content.
+
+这个意思是没有设置 nikic/php-parser 的版本号，被默认理解为使用 1.0.0 的版本，但这和要求的最低稳定性相冲突。
+
+所以这样做，打开 composer.json，在”name”: “nikic/php-parser”,这行下面增加一行：”version”: “4.1.0”,
+
+为什么我知道是使用 4.1.0 的版本呢？
+
+其实可以执行：composer show -all nikic/php-parser，这条命令看到 nikic/php-parser 的全部版本。
+
+注：如果下载 PHP-Parser 早期的版本，可能修改 composer.json 时，
+“version”: “4.1.0”,
+
+这行视具体情况修改对应的版本号。
+
+修改完 composer.json 后，再执行
+php composer.phar require nikic/php-parser 这条命令，就安装成功了。
+
+后面就可以使用 PHP-Parser 了。
+
+前一阵和前同事交流在检测webshell方面的相关方法，其中提出了使用lex yacc做一套语法解析来解析字节码段来判断是否存在webshell。
+
+后来在查找相关资料中，找到了github开源的一个工具：PHP-Parser。能够把php文件解析AST（抽象语法树）
+
+Project: https://github.com/nikic/PHP-Parser
+
+ 
+
+安装：
+
+php composer.phar require nikic/php-parser
+例如：
+
+<?php
+use PhpParser\Error;
+use PhpParser\NodeDumper;
+use PhpParser\ParserFactory;
+
+$code = <<<'CODE'
+<?php
+
+function test($foo)
+{
+    var_dump($foo);
+}
+CODE;
+
+$parser = (new ParserFactory)->create(ParserFactory::PREFER_PHP7);
+try {
+    $ast = $parser->parse($code);
+} catch (Error $error) {
+    echo "Parse error: {$error->getMessage()}\n";
+    return;
+}
+
+$dumper = new NodeDumper;
+echo $dumper->dump($ast) . "\n";
+转储AST为：
+
+array(
+    0: Stmt_Function(
+        byRef: false
+        name: Identifier(
+            name: test
+        )
+        params: array(
+            0: Param(
+                type: null
+                byRef: false
+                variadic: false
+                var: Expr_Variable(
+                    name: foo
+                )
+                default: null
+            )
+        )
+        returnType: null
+        stmts: array(
+            0: Stmt_Expression(
+                expr: Expr_FuncCall(
+                    name: Name(
+                        parts: array(
+                            0: var_dump
+                        )
+                    )
+                    args: array(
+                        0: Arg(
+                            value: Expr_Variable(
+                                name: foo
+                            )
+                            byRef: false
+                            unpack: false
+                        )
+                    )
+                )
+            )
+        )
+    )
+)
+可以看到各个节点的含义，相比较查看opcode然后再去解析容易的多，opcode比较晦涩难懂。
+
+如果做得好，再进行回归成原始的代码，例如webshell中存在很多字符串拼接、函数拼接等操作。回归最终原始代码，再去检测会变得容易的多。
+
+ 
+
+关于php-parser的文档也有很多：
+
+https://github.com/nikic/PHP-Parser/tree/master/doc
+
+ 
+
+我个人的目前思路：
+
+1、获取web目录
+
+2、对每个php文件生成AST
+
+3、解析AST，进行语法回归，转储原始代码 // 这个地方比较有难度
+
+4、使用多引擎（正则、机器学习、第三方接口）进行判断文件是否异常
+
+由于要做基于数据流分析的静态代码分析，所以前端的工作如：词法分析、语法分析必不可少。Yacc和Lex什么的就不再考虑了，查了一天的资料，发现两款比较适合，一款是Java下的ANTLR，另一款是专门做PHP AST生成的PHP-Parser。
+
+ANTLR是编译原理领域比较著名的工具了，相对于Yacc和Lex，更加实用。但是对PHP的语法文件只有一个，折腾了半天才生成调通，发现不太适合，对于”$a=1”生成tokens竟然是[$,a,=,1]，无法识别assignment，做得过于粗糙，令人无比失望。
+
+相比之下，PHP-Parser更加专业一些，毕竟专注PHP的词法、语法分析工作。
+
+ 
+
+1、介绍
+
+PHP-Parser的项目主页是https://github.com/nikic/PHP-Parser。可以对多版本的PHP进行完美解析，生成一颗抽象语法树。
+
+对于词法分析，PHP有个内置函数token_get_all()可以用来获取TOKENS，作为语法分析的输入，这个开源项目也是用的token_get_all()生成的token流。
+
+ 
+
+2、安装
+
+安装也很简单，这里我是使用的PHP中的包管理工具composer添加的，在项目目录中执行以下命令即可：
+
+php composer.phar require nikic/php-parser
+
+如果没有下载Composer，应该先执行下面的命令：
+
+Curl -s http://getcomposer.org/installer | php  
+
+ 
+
+3、生成AST
+
+使用composer添加php-parser之后，就可以方便使用。
+
+首先介绍一下PHP-Parser中定义的一些节点类型：
+
+（1）PhpParser\Node\Stmt是语句节点，不带任何返回信息（return）的结构，如赋值语句”$a = $b” ;
+
+（2）PhpParser\Node\Expr是表达式节点，可以返回一个值的语言结构，如$var和func()。
+
+（3）PhpParser\Node\Scalar是常量节点，可以用来表示任何常量值。如’string’,0,以及常量表达式。
+
+（4）还有一些节点没有包括进去，如参数节点(PhpParser\Node\Arg)。
+
+一些节点类的名称使用了下划线，这是为了避免和PHP关键字冲突。
+
+PHP-parser的HelloWorld程序如下，该代码片段会生成AST：
+
+
+
+输出结果为：
+
+
+
+<span style="font-size:12px;">Array
+(
+    [0] => PhpParser\Node\Stmt\Echo_ Object
+    (
+            [subNodes:protected] => Array
+                (
+                    [exprs] => Array
+                        (
+                            [0] => PhpParser\Node\Scalar\String Object
+                                (
+                                    [subNodes:protected] => Array
+                                        (
+                                            [value] => 1+2
+                                        )
+ 
+                                    [attributes:protected] => Array
+                                        (
+                                            [startLine] => 1
+                                            [endLine] => 1
+                                        )
+ 
+                                )
+ 
+                            [1] => PhpParser\Node\Scalar\String Object
+                                (
+                                    [subNodes:protected] => Array
+                                        (
+                                            [value] => chongrui
+                                        )
+ 
+                                    [attributes:protected] => Array
+                                        (
+                                            [startLine] => 1
+                                            [endLine] => 1
+                                        )
+ 
+                                )
+ 
+                        )
+ 
+                )
+ 
+            [attributes:protected] => Array
+                (
+                    [startLine] => 1
+                    [endLine] => 1
+                )
+ 
+        )
+ 
+)</span>
+可以看到，这课AST只有一个节点Echo_，此节点有一个子节点exprs，可以使用$stmts[0]->exprs进行访问。
+
+对于节点中的attributes信息是用来存储startLine和endLine以及comments的。可以使用getAttributes(),getAttribute(‘startLine’),setAttribute(),hasAttribute()方法进行访问。
+
+开始行号startLine可以通过getLine()/setLine()方法进行访问（也可以getAttribute(‘startLine’)）。注释信息可以使用getDocComment()获取。
+
+访问节点上的值：如访问值“chongrui”，使用$stmts[0]->exprs[1]->value;即可。
+
+ 
+
+ 
+
+4、节点遍历
+
+对抽象语法树的遍历非常方便，使用PhpParser\NodeTraverser类即可。同时，支持自定义的Visitor对象。因为在实际应用中，对PHP源码进行分析，往往是不知道AST的具体结构，这时需要动态的去判断每个节点的类型信息。
+
+这些判断统一写到MyNodeVisitor中，该类继承了一个父类NodeVisitorAbstract，这个类中有一些方法：
+
+
+
+（1）beforeTraverse()方法用于遍历之前，通常用来在遍历前对值进行重置。
+
+（2）afterTraverse()方法和（1）相同，唯一不同的地方是遍历之后才触发。
+
+（3）enterNode()和leaveNode()方法在对每个节点访问时触发。
+
+enterNode在进入节点时触发，比如在访问节点的子节点之前。这个方法可以返回NodeTraverser::DONT_TRAVERSER_CHILDREN，用来跳过该节点的孩子节点。
+
+leaveNode在遍历节点完成之后触发。它可以返回
+
+NodeTraverser::REMOVE_NODE，这种情况下，当前节点会被删除。如果返回一个节点的集合，那么这些节点会并入到父节点的array中，比如array(A,B,C),B节点被array(X,Y,Z)替换，变成array(A,X,Y,Z,C) .
+
+下面的代码片段对$code进行解析，生成AST，并且在遍历时，当发现遍历节点时String类型时，就进行输出。
+
+结果会输出1,2。
+
+
+
+5、其他AST表示
+
+有时候会将AST进行文本化持久保存，这个功能PHP-Parser也支持。
+
+（1）简单的进行序列化
+
+使用serialize()和unserialize()进行序列化和反序列化操作，可以对AST进行持久保存。 
+
+（2）易于阅读的保存形式
+
+分别是完美打印和XML持久存储，在这里不做详细介绍，有需要的时候可以看项目的文档：
+
+https://github.com/nikic/PHP-Parser/blob/master/doc/3_Other_node_tree_representations.markdown
+
+ 
+
+ 
+
+6、总结
+
+至少在PHP静态分析方面，PHP-Parser在功能方面大大优于ANTLR。如何构建一个PHP自动化审计系统，这个PHP-Parser肯定会发挥不小的作用：）~
+
+
+https://github.com/topics/php
+
+采集网页用到的dom工具 组件sunra/php-simple-html-dom-parser
+
+PHP Parser written in Go
+
+https://github.com/z7zmey/php-parser
+
+https://github.com/phalcon/php-zephir-parser

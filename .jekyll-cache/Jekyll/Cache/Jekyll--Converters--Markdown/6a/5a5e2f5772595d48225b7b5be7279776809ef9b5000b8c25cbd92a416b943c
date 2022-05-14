@@ -1,0 +1,51 @@
+I"�<p>io 包提供了 io.Reader 和 io.Writer 接口来进行输入输出操作
+<!-- more -->
+读取规则(补充)
+在 Reddit 反馈之后，我决定添加有关读取规则的这一部分。读取器的行为取决于它的实现，但是你应该知道从读取器读取数据时， io.Reader 中的一些规则：</p>
+
+<p>译者注：p 为缓冲区，n 为字节数
+如果可能，Read() 将读取 len(p) 到 p
+调用 Read() 后，返回的字节数 n 可能小于 len(p)
+出错时，Read() 仍可在缓冲区 p 中返回 n 个字节。例如，从突然关闭的 TCP 套接字读取。取决于您的程序设计，您可以选择将字节保存在 p 中或重新尝试从 TCP 套接字中读取
+当 Read() 读完所有可用数据时，读取器可能返回非零 n 和 err = io.EOF。尽管如此，您可以自己实现返回规则，如可以选择在流的末尾返回非零 n 和 err = nil。在这种情况下，任何后续读取必须返回 n = 0，err = io.EOF
+最后，调用 Read() 返回 n = 0 和 err = nil 并不意味着 EOF，因为下一次调用 Read() 可能会返回更多数据
+如您所见，直接从读取器读取流数据可能会非常棘手。幸运的是，标准库中的读取器使用的一些方法使其易于流式传输。不过，在使用读取器之前，请查阅其文档</p>
+
+<p>从读取器中流式传输数据
+直接从读取器流式传输数据很容易。Read 方法被设计为在循环内调用，每次迭代时，它从源读取一大块数据并将其放入缓冲区 p 中。直到 Read 方法返回io.EOF 错误</p>
+
+<p>以下是一个简单的示例，它使用 string.NewReader(string) 创建的字符串读取器来从字符串源中流式传输字节值:</p>
+
+<p>func main() {
+	reader := strings.NewReader(“Clear is better than clever”)
+	p := make([]byte, 4)
+	for {
+		n, err := reader.Read(p)
+		if err == io.EOF {
+			break
+		}
+		fmt.Println(string(p[:n]))
+	}
+}
+上面的源代码用 make([] byte，4) 创建一个 4 字节长的传输缓冲区 p。缓冲区故意保持小于字符串源的长度, 这是为了演示如何从大于缓冲区的源正确传输数据块</p>
+
+<p>更新: Reddit 上有人指出上面的代码中有 bug, 它永远不会捕获非零错误 err != io.EOF . 以下修复了代码:</p>
+
+<p>func main() {
+	reader := strings.NewReader(“Clear is better than clever”)
+	p := make([]byte, 4)</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>for {
+	n, err := reader.Read(p)
+	if err != nil{
+	    if err == io.EOF {
+		fmt.Println(string(p[:n])) //should handle any remainding bytes.
+		break
+	    }
+	    fmt.Println(err)
+	    os.Exit(1)
+	}
+	fmt.Println(string(p[:n]))
+} } 自定义一个 io.Reader 上一节使用标准库中的现有 IO 读取器实现。现在，让我们看看如何编写自己的读取器。以下是 io.Reader 的简单实现，它从流中过滤掉非字母字符。 https://blog.csdn.net/weixin_33352924/article/details/113074376
+</code></pre></div></div>
+:ET

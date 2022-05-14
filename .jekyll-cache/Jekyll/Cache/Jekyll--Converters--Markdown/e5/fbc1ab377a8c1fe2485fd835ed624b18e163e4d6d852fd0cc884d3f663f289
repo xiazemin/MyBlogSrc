@@ -1,0 +1,216 @@
+I"�<p>https://mp.weixin.qq.com/s/9CciL8ifi_Q_qfyNEPLNlg
+<!-- more -->
+一个 interface{} 可以包含任何数据，同时他也是一个非常有用的参数，因为他可以是任何的 type。要了解 interface{} 是如何工作的，它是怎样可以符合任何类型的，我们必须要先知道它名字背后的概念。</p>
+
+<p>Interfaces（接口）</p>
+
+<p>这里有一个对空接口很好的定义，by Jordan Oreilli:</p>
+
+<p>interface 包含两种功能：一坨方法的集合，同时他也是一个类型 (type)</p>
+
+<p>interface{} 的类型是一个没有方法的接口。由于它没有需要实现的方法，所以所有的类型都至少实现了零个方法，自然满足了 interface 类型的条件，所有的类型都符合空的 interface</p>
+
+<p>一个使用 Interface{} 类型做参数的方法，可以接收任何类型的参数。Go 会为方法把参数转化为 interface 类型。</p>
+
+<p>Russ Cox 曾写过一篇内部描述 interfaces 的文章，描述了一个 interface 由两部分组成：</p>
+
+<p>一个指针指向存储类型信息</p>
+
+<p>一个指针指向具体的数据</p>
+
+<p>Russ  用 C 语言描述了 interface 的定义</p>
+
+<p>虽然现在的 runtime 使用 Go 写的，但是表述依然是相同的。我们可以通过打印出 interface{} 的指针地址来证明他：</p>
+
+<p>func main() {
+  var i int8 = 1
+  read(i)
+}</p>
+
+<p>//go:noinline
+func read(i interface{}) {
+  println(i)
+}</p>
+
+<p>print:
+(0x10591e0,0x10be5c6)</p>
+
+<p>两个指针地址一个指向了类型信息，另一个指向了值。</p>
+
+<p>Underlying structure</p>
+
+<p>空接口的底层描述是在 reflection package 的文档里：</p>
+
+<p>type emptyInterface struct {
+   typ  *rtype            // word 1 with type description
+   word unsafe.Pointer    // word 2 with the value
+}
+和上面说的一样，我们可以看到空 interface 有一个描述 type 的指针，以及包含具体数据的 word</p>
+
+<p>rtype 的结构体包含了具体的 type 的描述：</p>
+
+<p>type rtype struct {
+   size       uintptr
+   ptrdata    uintptr
+   hash       uint32
+   tflag      tflag
+   align      uint8
+   fieldAlign uint8
+   kind       uint8
+   alg        *typeAlg
+   gcdata     *byte
+   str        nameOff
+   ptrToThis  typeOff
+}</p>
+
+<p>在这些字段中，有一些我们已知的内容：</p>
+
+<p>size 是字节大小</p>
+
+<p>kind 包含了 int8, int16, bool 等类型</p>
+
+<p>align 是这个类型的变量的对齐方式</p>
+
+<p>根据嵌入到空接口的类型，我们可以映射出字段或者方法：</p>
+
+<p>type structType struct {
+   rtype
+   pkgPath name
+   fields  []structField
+}</p>
+
+<p>该结构体还有两个包含字段列表的映射关系。它清楚地展示了将内建的类型转换成空接口将会导致一次水平转换，在字段描述和它的值被存在内存中的地方</p>
+
+<p>这是我们看到的空接口的描述：</p>
+
+<p>interface is composed by two words</p>
+
+<p>现在让我们看下，从空接口实际上可以转换到那种类型上。</p>
+
+<p>Conversions</p>
+
+<p>让我们试试用空接口来转换错误的类型</p>
+
+<p>func main() {
+  var i int8 = 1
+  read(i)
+}</p>
+
+<p>//go:noinline
+func read(i interface{}) {
+  n := i.(int16)
+  println(n)
+}</p>
+
+<p>虽然从 int8 转到 int16 是可以的，但是程序会 panic:</p>
+
+<p>panic: interface conversion: interface {} is int8, not int16</p>
+
+<p>goroutine 1 [running]:
+main.read(0x10592e0, 0x10be5c1)
+main.go:10 +0x7d
+main.main()
+main.go:5 +0x39
+exit status 2</p>
+
+<p>我们生产 asm 代码来看看 Go 到底检查了什么</p>
+
+<p>code generated while checking the type of an empty interface</p>
+
+<p>步骤如下</p>
+
+<p>步骤 1： 用 int16 (指令 LEAQ：Load Effective Address)的类型与空接口的内部类型（指令 MOVQ：读取空接口 48字节偏移的内存）作比较（指令 CMPQ）</p>
+
+<p>步骤 2：指令 JNE，如果不等于就跳转，跳转到在第 3 步创建的指令，来处理错误信息</p>
+
+<p>步骤 3：代码抛出异常，并生成上一步的错误信息</p>
+
+<p>步骤 4：这是错误指令的结尾。这个特定的指令由显示该指令（main.go:10+0x7d）错误信息所引用</p>
+
+<p>任何从空接口内部类型的转换都是在原始类型转换之后进行。转换成空接口然后再转换回原始类型对你的程序耗时有一些影响。让我们运行一些基准测试来大致了解一下。</p>
+
+<p>性能</p>
+
+<p>这里有两个基准测试。一个是复制一个结构体，另外一个是复制一个空接口。</p>
+
+<p>package main_test</p>
+
+<p>import (
+  “testing”
+)</p>
+
+<p>var x MultipleFieldStructure</p>
+
+<p>type MultipleFieldStructure struct {
+  a int
+  b string
+  c float32
+  d float64
+  e int32
+  f bool
+  g uint64
+  h *string
+  i uint16
+}</p>
+
+<p>//go:noinline
+func emptyInterface(i interface {}) {
+  s := i.(MultipleFieldStructure)
+  x = s
+}</p>
+
+<p>//go:noinline
+func typed(s MultipleFieldStructure) {
+  x = s
+}</p>
+
+<p>func BenchmarkWithType(b *testing.B) {
+  s := MultipleFieldStructure{a: 1, h: new(string)}
+  for i := 0; i &lt; b.N; i++ {
+    typed(s)
+  }
+}</p>
+
+<p>func BenchmarkWithEmptyInterface(b *testing.B) {
+  s := MultipleFieldStructure{a: 1, h: new(string)}
+  for i := 0; i &lt; b.N; i++ {
+    emptyInterface(s)
+  }
+}</p>
+
+<p>结果如下</p>
+
+<p>BenchmarkWithType-8               300000000           4.24 ns/op
+BenchmarkWithEmptyInterface-8      20000000           60.4 ns/op</p>
+
+<p>将类型转换为空接口，再从空接口转换回类型的两次过程消耗量超过 55 纳秒。而且时长会随着结构体内部字段的增加而增加：</p>
+
+<p>BenchmarkWithType-8             100000000         17 ns/op
+BenchmarkWithEmptyInterface-8    10000000        153 ns/op</p>
+
+<p>但是，用指针转换回相同的结构体指针是一个好办法。转换看起来是下面这个样子</p>
+
+<p>func emptyInterface(i interface {}) {
+  s := i.(*MultipleFieldStructure)
+  y = s
+}</p>
+
+<p>现在结果有显著的不同</p>
+
+<p>BenchmarkWithType-8                 2000000000          2.16 ns/op
+BenchmarkWithEmptyInterface-8       2000000000          2.02 ns/op</p>
+
+<p>对于像 int 或者 string 这样的基本类型，性能测试略微不同</p>
+
+<p>int:</p>
+
+<p>BenchmarkWithTypeInt-8              2000000000          1.42 ns/op
+BenchmarkWithEmptyInterfaceInt-8    1000000000          2.02 ns/op</p>
+
+<p>string:</p>
+
+<p>BenchmarkWithTypeString-8           1000000000          2.19 ns/op
+BenchmarkWithEmptyInterfaceString-8  50000000           30.7 ns/op</p>
+
+<p>合理并节制使用空接口，在大多数情况下，空接口会对你的程序性能造成一些真正的影响。</p>
+:ET

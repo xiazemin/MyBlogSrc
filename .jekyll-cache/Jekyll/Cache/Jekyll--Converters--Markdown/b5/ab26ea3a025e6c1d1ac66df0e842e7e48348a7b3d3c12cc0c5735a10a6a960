@@ -1,0 +1,266 @@
+I"�Q<p>在现代的CPU中，为了性能优化（优化发生在CPU和Complier两个阶段），会对内存的操作（loads and stores)顺序进行重排序（reordering of memory operations），这样就导致了乱序执行(out-of-order execution)
+换一句话，代码的编写顺序(program order)和实际内存的访问顺序(order of memory operations)，不一定是一致的。
+在单线程的环境下，乱序执行(out of order execution)并不会影响结果，因为即便方法内的内存读写操作是out of order execution，但方法与方法的调用顺序是一致的，可以保证结果的正确性。
+但在多线程环境下，多个线程共享同一块内存，且并发执行，那么out of order execution可能会影响程序的行为，产生无法预期的结果。
+所以，很明显，多线程环境下，我们要去解决这种可能产生”无法预期“结果的情况。
+在开始之前，先举一个例子说明，在多线程环境下，out of order execution，会引起哪些问题？</p>
+
+<p>int _answer;</p>
+
+<p>bool _complete;</p>
+
+<p>void A()</p>
+
+<p>{</p>
+
+<p>_answer = 123;</p>
+
+<p>_complete = true;</p>
+
+<p>}</p>
+
+<p>void B()</p>
+
+<p>{</p>
+
+<p>if (_complete)</p>
+
+<p>{</p>
+
+<p>Console.WriteLine(_answer);</p>
+
+<p>}</p>
+
+<p>}</p>
+
+<p>如果方法A和方法B，在不同的线程上并行，B方法输出的结果_answer有没有可能是0？
+答案是肯定的。
+out of order execution可以是loads，也可以是stores，即读和写均可以是out of order execution.</p>
+
+<p>A和B两个方法并行，执行A的时候，_answer=123;和_complete=true; 因为</p>
+
+<p>out of order execution，可能_complete=true会先于_answer=123;执行。</p>
+
+<p>这样，B方法，就有可能通过_compete为true的判断，而输出还未初始化的_answer，这在Java，C#这些语言中会输出int的默认值0，在C/C++中，没有默认值，则会输出不可预期的结果。</p>
+
+<p>out of order execution只是在多线程环境下，会引起的问题之一。</p>
+
+<p>还有一种情况来自于CPU和内存之间的通信，CPU的读写速度要远远高于内存，因为这种悬殊的差异，每次CPU读写都访问内存的话，效率会很慢，这是不现实的，所以，在CPU和内存之间，还有一层缓存（速度极快），通过缓存(L1,L2,L3)来提高数据的读写效率。</p>
+
+<p>当CPU要读取一个变量的值时，会先从缓存cache中寻找，如果存在，则直接从cache获取，如果不存在，则发生cache miss,就会去主存读取，写入的操作也是一样的，也要经由缓存，并不是每次都将新的值，立即刷新到内存中。</p>
+
+<p>这样就会导致在多线程环境下，你无法保证新的值，可以立即被其它的线程看到，因为线程之间是并行的。这也是为何未做任何处理的单例设计模式，实例会被创建多次的奇怪情况。</p>
+
+<p>所以，多线程环境下，引出的两个问题：</p>
+
+<p>1.乱序访问 out of order execution</p>
+
+<p>2.内存可见性 memory visibility
+<!-- more -->
+为了解决多线程环境的副作用，我们需要添加Memory Barrier（内存栅栏），来避免CPU和编译器进行指令重排(reordering)。关闭out of order execution，并保证新的数据，总是可以被其它的线程可见。
+在wikipedia中，Memory Barrier又叫membar, memory fence or fence instruction.
+理解barrier或是fence,有助于我们更好的理解它的意图。
+barrier译为障碍，fence 译为栅栏，围栏
+所以，他具有”限定，约束”的作用。
+我们可以想象一下，地铁进站或者在路上开车，我们假设从A点到达B点，怎么合理的利用”系统资源“，可以让目标更快的到达终点?
+其实在不限流，不管控的情况下，你会发现，一切的进行都是”乱序的，无序的“，开车有快有慢，开的快的可以并线超车，有的就开80迈，有的开100迈，有的甚至超速，地铁进站，有的人不紧不慢，你着急赶时间，你可以一路小跑着进去，这种乱序的，无序的，充分的利用了”系统资源“，在总体上，就可以更快的达到终点，也就提高了效率。
+相反，如果大家都排着队走，一个跟着一个，浪费了系统的资源不说，速度也会大打折扣，但有的时候，这种”限流，管控“是必要的，比如我需要按着我想要的顺序去执行等等，这个不难理解，以现代的计算机性能来看，这种限制带来的性能差异变化几乎是无感知的</p>
+
+<p>Memory Barrier就是一条CPU指令，他可以确保操作执行的顺序和数据的可见性。我们在指定的代码处，插入Memory Barrier（fence)
+“相当于告诉 CPU 和Complier先于这个命令的必须”先“执行，后于这个命令的必须”后“执行。
+内存屏障也会强制更新一次不同CPU的缓存，会将屏障前的写入操作，刷到到缓存中，这样试图读取该数据的线程，会得到新值。确保了同步。”</p>
+
+<p>添加了Memory Barrier的代码：
+int _answer;</p>
+
+<p>bool _complete;</p>
+
+<p>void A()</p>
+
+<p>{</p>
+
+<p>_answer = 123;</p>
+
+<p>Thread.MemoryBarrier();  // 屏障 1</p>
+
+<p>_complete = true;</p>
+
+<p>Thread.MemoryBarrier();  // 屏障 2</p>
+
+<p>}</p>
+
+<p>void B()</p>
+
+<p>{</p>
+
+<p>Thread.MemoryBarrier();  // 屏障 3</p>
+
+<p>if (_complete)</p>
+
+<p>{</p>
+
+<p>Thread.MemoryBarrier();    // 屏障 4</p>
+
+<p>Console.WriteLine (_answer);</p>
+
+<p>}</p>
+
+<p>}</p>
+
+<p>屏障 1 和 4 可以使这个例子不会打印 “ 0 “。屏障 2 和 3 提供了一个“最新（freshness）”保证：它们确保如果B在A后运行，读取_complete的值会是true。（乱序访问和内存不可见性，均得到了解决）</p>
+
+<p>在实际的应用过程中发现，Thread.MemoryBarrier()在使用起来还是比较繁琐的，不够方便，那么，有没有更为简单的实现？
+使用lock代码块，锁住需要”约束“的代码。lock隐式的执行了Memory Barrier（fence)
+lock可以保证，当前只有一个线程能够进入到代码块，并且代码块中的会按program order的顺序执行，对内存的Loads and stores操作都会及时的进行更新，保证始新的值始终都可以被其它的线程可见。
+Memory Barrier(lock)会关闭CPU或编译器所做的性能优化，如果频繁的调用，会有性能损耗，这也是为什么会出现double checked locking和Lazy Initialization 两种效率更高的实现方式。</p>
+
+<p>最近在看Tiny Mode方面的资料，TinyMode Scripting是基于ECS Pattern，这些Script之间的执行顺序默认也是无序的，但如果某些Script可以按照你希望的顺序执行，那么你需要进行”约束，限定“，这里的概念就叫fence，所以，Tiny Mode fence和上面讲到的Memory Barrier，本质是一样的。</p>
+
+<p>For performance gains modern CPUs often execute instructions out of order to make maximum use of the available silicon (including memory read/writes). Because the hardware enforces instructions integrity you never notice this in a single thread of execution. However for multiple threads or environments with volatile memory (memory mapped I/O for example) this can lead to unpredictable behavior.</p>
+
+<p>A memory fence/barrier is a class of instructions that mean memory read/writes occur in the order you expect. For example a ‘full fence’ means all read/writes before the fence are comitted before those after the fence.</p>
+
+<p>Note memory fences are a hardware concept. In higher level languages we are used to dealing with mutexes and semaphores - these may well be implemented using memory fences at the low level and explicit use of memory barriers are not necessary. Use of memory barriers requires a careful study of the hardware architecture and more commonly found in device drivers than application code.</p>
+
+<p>The CPU reordering is different from compiler optimisations - although the artefacts can be similar. You need to take separate measures to stop the compiler reordering your instructions if that may cause undesirable behaviour (e.g. use of the volatile keyword in C).</p>
+
+<p>The most important one would be memory access reordering.</p>
+
+<p>Absent memory fences or serializing instructions, the processor is free to reorder memory accesses. Some processor architectures have restrictions on how much they can reorder; Alpha is known for being the weakest (i.e., the one which can reorder the most).</p>
+
+<p>A very good treatment of the subject can be found in the Linux kernel source documentation, at Documentation/memory-barriers.txt.</p>
+
+<p>Most of the time, it’s best to use locking primitives from your compiler or standard library; these are well tested, should have all the necessary memory barriers in place, and are probably quite optimized (optimizing locking primitives is tricky; even the experts can get them wrong sometimes).</p>
+
+<p>https://stackoverflow.com/questions/286629/what-is-a-memory-fence</p>
+
+<p>c++   c++11   atomic   memory-barriers   memory-model</p>
+
+<p>我对std::memory_order_acquire和std::memory_order_release的理解如下：</p>
+
+<p>获取意味着获取围栏之后出现的内存访问不能重新排序到围栏之前。</p>
+
+<p>释放意味着在释放围栏之前出现的内存访问不能在围栏之后重新排序。</p>
+
+<p>我不明白为什么特别是对于C ++ 11原子库，获取围栏与加载操作相关联，而释放围栏与存储操作相关联。</p>
+
+<p>为了澄清，C ++ 11 <atomic>库允许您以两种方式指定内存栅栏：要么可以将栅栏指定为原子操作的额外参数，例如：</atomic></p>
+
+<p>x.load(std::memory_order_acquire);
+或者你可以使用std::memory_order_relaxed并分别指定围栏，如：</p>
+
+<p>x.load(std::memory_order_relaxed);
+std::atomic_thread_fence(std::memory_order_acquire);
+我不明白的是，鉴于上述获取和发布的定义，为什么C ++ 11特别将获取与加载相关联，并与商店一起 发布 ？ 是的，我已经看过许多示例，这些示例显示了如何使用获取/加载与发布/存储来在线程之间进行同步，但一般来说似乎是获取fences（防止语句后的内存重新排序）和发布的想法fences（在语句之前防止内存重新排序）与加载和存储的想法正交。</p>
+
+<p>那么，为什么，例如，编译器不会让我说：</p>
+
+<p>x.store(10, std::memory_order_acquire);
+我意识到我可以通过使用memory_order_relaxed ，然后单独的atomic_thread_fence(memory_order_acquire)语句来完成上述操作，但同样，为什么我不能直接使用store与memory_order_acquire ？</p>
+
+<p>一个可能的用例可能是，如果我想确保某些存储（比如x = 10 ） 在执行可能影响其他线程的其他语句之前发生。</p>
+
+<p>主要用C++11的atomic或atomic_thread_fence，性能上几乎一样，and makes life easier。在X86上对于memory_order来说只用memory_order_relaxed 就够了，相当于compiler fence；如果需要cpu fence的话就用memory_order_seq_cst，不过我从来没用过memory_order_seq_cst。原文解释了原因。</p>
+
+<p>原文：</p>
+
+<p>在编写single writer lock-free代码的时候，通常需要手动使用memory fence/barrier来确保修改对其他core可见并防止乱序（对于multiple writer的情况一般需要atomic RMW操作，隐含了memory fence，不需手动加）。一般来说memory fence分为两层：compiler fence和CPU fence，前者只在编译期生效，目的是防止compiler生成乱序的内存访问指令；后者通过插入或修改特定的CPU指令，在运行时防止内存访问指令乱序执行。下面分别说下在X86/GCC环境下我对这两种memory fence用法的一些经验。</p>
+
+<p>Compiler Fence
+GCC的compiler fence有一个众所周知的写法：</p>
+
+<p>asm volatile(“”: : :”memory”)
+那么这句话是什么意思呢？它只是插入了一个空指令”“，什么也没做。其实不然，这句话的关键在最后的”memory” clobber，它告诉编译器：这条指令（其实是空的）可能会读取任何内存地址，也可能会改写任何内存地址。那么编译器会变得保守起来，它会防止这条fence命令上方的内存访问操作移到下方，同时防止下方的操作移到上面，也就是防止了乱序，是我们想要的结果。</p>
+
+<p>但这还没完，这条命令还有另外一个副作用：它会让编译器把所有缓存在寄存器中的内存变量flush到内存中，然后重新从内存中读取这些值。这并不一定是我们想要的结果，比如有些变量只在当前线程中使用，留在寄存器中很好，多了一对写/读内存操作是不必要的开销。</p>
+
+<p>那么有没有办法避免这种副作用呢？我们可以通过gcc内联汇编命令的input和output操作符明确指定哪些内存操作不能乱序，如这个例子：</p>
+
+<p>WRITE(x)
+asm volatile(“”: “=m”(y) : “m”(x):) // memory fence
+READ(y)
+这里先对变量x进行写操作，后对变量y进行读操作，中间的内联汇编告诉编译器插入一条指令（其实是空的），它可能会读x的内存，会写y的内存，因此编译器不会把这两个操作乱序。这种明确的memory fence的好处是：使编译器尽量少的对其他不相关的变量造成影响，避免了额外开销。</p>
+
+<p>CPU Fence
+X86属于strong memory model，这意味着在大多数情况下cpu会保证内存访问指令有序执行。具体的说，如果对内存读(Load)和写(Store)操作进行两两组合：LoadLoad, LoadStore, StoreLoad, StoreStore，只有StoreLoad组合可能乱序，而且Store和Load的内存地址必须是不一样的。在上面的队列模板库的例子中，由于只使用了StoreStore（对应C++11的Release memory order)和LoadLoad(对应C++11的Acquire memory order)，因此不需要额外的CPU fence</p>
+
+<p>在大多数情况下，我们被告知比起Thread.VolatileRead更喜欢Volatile.Read，因为后者散发全围栏，而前者仅散发相关的半围栏（例如获取围栏）;效率更高。</p>
+
+<p>However, in my understanding, Thread.VolatileRead actually offers something that Volatile.Read does not, because of the implementation of Thread.VolatileRead:</p>
+
+<p>public static int VolatileRead(ref int address) {
+  int num = address;
+  Thread.MemoryBarrier();
+  return num;
+}
+Because of the full memory barrier on the second line of the implementation, I believe that VolatileRead actually ensures that the value last written to address will be read. According to Wikipedia, “A full fence ensures that all load and store operations prior to the fence will have been committed prior to any loads and stores issued following the fence.”.</p>
+
+<p>Is my understanding correct? And therefore, does Thread.VolatileRead still offer something that Volatile.Read does not?</p>
+
+<p>最佳答案
+我可能还没来得及玩游戏，但我还是想插话。首先，我们需要就一些基本定义达成共识。</p>
+
+<p>Acquisition-fence（获取栅栏）：一种内存屏障，不允许其他读取和写入在栅栏之前移动。
+释放栅栏：一种内存屏障，不允许其他读取和写入在篱笆后面移动。
+我喜欢使用箭头符号来帮助说明围栏的作用。 ↑箭头表示释放栅栏，而↓箭头表示捕获栅栏。可以将箭头想像成按箭头方向推动内存访问。但是，这一点很重要，内存访问可以越过尾巴。阅读上面的围栏的定义，并确信箭头从视觉上代表这些定义。</p>
+
+<p>Using this notation let us analyze the examples from JaredPar’s answer starting with Volatile.Read. But, first let me make the point that Console.WriteLine probably produces a full-fence barrier unbeknownst to us. We should pretend for a moment that it does not to make the examples easier to follow. In fact, I will just omit the call entirely as it is unnecessary in the context of what we are trying to achieve.</p>
+
+<p>// Example using Volatile.Read
+x = 13;
+var local = y; // Volatile.Read
+↓              // acquire-fence
+z = 13;
+So using the arrow notation we more easily see that the write to z cannot move up and before the read of y. Nor can the read of y move down and after the write of z because that would be effectively same as the other way around. In other words, it locks the relative ordering of y and z. However, the read of y and the write to x can be swapped as there is no arrow head preventing that movement. Likewise, the write to x can move past the tail of the arrow and even past the write to z. The specification technically allows for that..theoretically anyway. That means we have the following valid orderings.</p>
+
+<h2 id="volatileread">Volatile.Read</h2>
+<p>write x    |    read y     |    read y
+read y     |    write x    |    write z
+write z    |    write z    |    write x
+Now let us move on to the example with Thread.VolatileRead. For the sake of the example I will inline the call to Thread.VolatileRead to make it easier to visualize.</p>
+
+<p>// Example using Thread.VolatileRead
+x = 13;
+var local = y; // inside Thread.VolatileRead
+↑              // Thread.MemoryBarrier / release-fence
+↓              // Thread.MemoryBarrier / acquire-fence
+z = 13;
+Look closely. There is no arrow (because there is no memory barrier) between the write to x and the read of y. That means these memory accesses are still free to move around relative to each other. However, the call to Thread.MemoryBarrier, which produces the additional release-fence, makes it appear as if the next memory access had volatile write semantics. This means the writes to x and z can no longer be swapped.</p>
+
+<h2 id="threadvolatileread">Thread.VolatileRead</h2>
+<p>write x    |    read y
+read y     |    write x
+write z    |    write z
+当然，有人声称Microsoft的CLI（.NET Framework）和x86硬件的实现已经保证了所有写入的释放范围语义。因此，在这种情况下，两个调用之间可能没有任何区别。在具有Mono的ARM处理器上？在这种情况下，情况可能会有所不同。</p>
+
+<p>现在让我们继续处理您的问题。</p>
+
+<p>由于第二行的内存已满   实施，我相信VolatileRead实际上可以确保   上次写入地址的值将被读取。是我的理解   正确？
+不，这是不正确的！易失性读取与“新鲜读取”不同。为什么？这是因为存储屏障位于读取指令之后。这意味着实际读取仍然可以随时间向上或向后移动。另一个线程可以写入该地址，但是当前线程可能已经将读取移动到另一个线程提交它之前的时间点。</p>
+
+<p>因此，这就引出了一个问题：“如果看似很少的保证，人们为什么还要烦恼使用易失性读取呢？”。答案是，它绝对保证下一个读取比之前的读取要新。这就是它的价值！这就是为什么许多无锁代码会循环旋转，直到逻辑可以确定操作成功完成为止。换句话说，无锁代码采用了这样的概念，即在多次读取的序列中后来的读取将返回较新的值，但是该代码不应假定任何读取必须代表最新的值。</p>
+
+<p>考虑一下。无论如何，读取返回最新值意味着什么？到您使用该值时，它可能不再是最新的了。另一个线程可能已经将不同的值写入相同的地址。您还能将其称为最新值吗？</p>
+
+<p>但是，在考虑了上面讨论的“新鲜”阅读甚至意味着什么的警告之后，您仍然想要某种行为像“新鲜”阅读一样，然后需要在阅读之前放置一个获取栅栏。请注意，这显然与易失性读取不同，但最好与开发人员对“新鲜”含义的直觉相匹配。然而，在这种情况下，术语“新鲜”不是绝对的。相反，相对于屏障，读取是“新鲜的”。也就是说，它不能早于执行屏障的时间点。但是，如上所述，该值可能无法代表您在使用或基于该值做出决定时的最新值。</p>
+
+<p>atomic_thread_fence的围栏作用域是否已被指定为“ {}”的作用域单元？</p>
+
+<p>例如，
+MainActivity C ++</p>
+
+<p>//section A
+if(A == 1)
+{
+   //section B
+   atomic_thread_fence(..);
+   //section C
+}
+//section D</p>
+
+<p>关于上述代码，我想知道围栏是否仅适用于B部分和C部分，或者是否也适用于其他部分。</p>
+
+<p>栅栏没有范围的概念。取而代之的是，它们具有在栅栏之前的加载/存储和在栅栏之后的加载/存储的概念：在您的示例中，之前的加载/存储包括B和A部分（以及之前）的加载/存储。围栏之后的装载和存放包括C和D部分（及其后）的装载和存放。</p>
+
+<p>并且，仅当A == 1时，围栏才有效（即，位于未采用的分支中的围栏不会有任何副作用）。</p>
+:ET

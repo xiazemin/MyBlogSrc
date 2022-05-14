@@ -1,0 +1,168 @@
+I"�<p>如果字段名的首字母小写，这个字段就是不可导出的。但其实，通过golang提供的反射，我们是可以在包外访问并操作到结构体中的非导出字段的。</p>
+
+<p>package aboutGoTest</p>
+
+<p>type Student struct {
+	name string
+	Age  int
+}</p>
+
+<p>var TestStudent = Student{
+	name: “jack”,
+	Age:  12,
+}
+<!-- more -->
+取地址访问/修改</p>
+
+<p>package main</p>
+
+<p>import (
+	at “aboutGoTest”
+	“fmt”
+	“reflect”
+)</p>
+
+<p>func main() {</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>fmt.Printf("testStudent.name: %v\n", getUnExportedField(&amp;at.TestStudent, "name"))
+</code></pre></div></div>
+
+<p>}</p>
+
+<p>func getUnExportedField(ptr interface{}, fieldName string) reflect.Value {
+	v := reflect.ValueOf(ptr).Elem().FieldByName(fieldName)
+	return v
+}
+可见，通过反射机制可以成功取出name字段。
+这里，通过reflect.Value.Elem.FieldByName获取的v是非导出字段反射对象。
+注意，reflect.Value.Elem需要reflect.Value的类型必须是interface或者ptr。对于前者，返回interface底层的值；对于后者，返回ptr指向的值。</p>
+
+<p>但是这样获取到的值是不可以修改的，如果要修改name字段，需要用到reflect.NewAt函数，这个函数通过一个类型值的底层地址（指针 p）和类型，返回指向该值的一个指针，这个返回值是可寻址的，即可通过它直接访问该值。
+具体的修改是使用reflect.value.Set函数。</p>
+
+<p>package main</p>
+
+<p>import (
+	at “aboutGoTest”
+	“fmt”
+	“reflect”
+	“unsafe”
+)</p>
+
+<p>func main() {</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>fmt.Printf("testStudent.name: %v\n", getUnExportedField(&amp;at.TestStudent, "name"))
+
+if err := setUnExportedStrField(&amp;at.TestStudent, "name", "kangkang"); err != nil {
+	fmt.Println("err: %v", err)
+}
+
+fmt.Printf("testStudent.name: %v\n", getUnExportedField(&amp;at.TestStudent, "name")) }
+</code></pre></div></div>
+
+<p>func getUnExportedField(ptr interface{}, fieldName string) reflect.Value {
+	v := reflect.ValueOf(ptr).Elem().FieldByName(fieldName)
+	return v
+}</p>
+
+<p>func setUnExportedStrField(ptr interface{}, fieldName string, newFieldVal interface{}) (err error) {
+	// 获取非导出字段反射对象
+	v := reflect.ValueOf(ptr).Elem().FieldByName(fieldName)
+	// 获取非导出字段可寻址反射对象
+	// 与上面的区别是：这个是可寻址的
+	v = reflect.NewAt(v.Type(), unsafe.Pointer(v.UnsafeAddr())).Elem()</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>nv := reflect.ValueOf(newFieldVal)
+if v.Kind() != nv.Kind() {
+	return fmt.Errorf("expected kind %v, got kind: %v", v.Kind(), nv.Kind())
+}
+v.Set(nv)
+return nil } 结果： testStudent.name: jack testStudent.name: kangkang
+</code></pre></div></div>
+
+<p>不取地址访问
+上面介绍的方法都是要传入指针的，事实上不取地址也是可以访问非导出字段的
+代码：
+package main</p>
+
+<p>import (
+	at “aboutGoTest”
+	“fmt”
+	“reflect”
+)</p>
+
+<p>func main() {</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>fmt.Printf("testStudent.name: %v\n", getUnExportedField(at.TestStudent, "name")
+</code></pre></div></div>
+
+<p>}</p>
+
+<p>func getUnExportedField(source interface{}, fieldName string) (ret reflect.Value) {
+	v := reflect.ValueOf(source)</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>vptr := reflect.New(v.Type()).Elem()
+vptr.Set(v)
+
+ret = vptr.FieldByName(fieldName)
+return } 这里使用了reflect.New方法，与reflect.NewAt方法不同，这个方法基于指定类型创建一个可以表示该类型的指针，因此这里实际上是在函数内部构造了一个指针，所以外部不用再取地址； 不取地址的修改是反应不到原结构体的，因为在传参的时候是值拷贝
+</code></pre></div></div>
+
+<p>package main</p>
+
+<p>import (
+	at “aboutGoTest”
+	“fmt”
+	“reflect”
+	“unsafe”
+)</p>
+
+<p>func main() {</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>fmt.Printf("testStudent.name: %v\n", getUnExportedField(at.TestStudent, "name"))
+
+if ret, err := setUnExportedField(at.TestStudent, "name", "kangkang"); err != nil {
+	fmt.Println("err: %v", err)
+} else {
+
+	fmt.Printf("testStudent.name: %v\n", getUnExportedField(at.TestStudent, "name"))
+
+	v := ret.Interface().(at.Student)
+	fmt.Printf("ret.name: %v\n", getUnExportedField(v, "name"))
+
+}
+</code></pre></div></div>
+
+<p>}</p>
+
+<p>func getUnExportedField(source interface{}, fieldName string) (ret reflect.Value) {
+	v := reflect.ValueOf(source)</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>vptr := reflect.New(v.Type()).Elem()
+vptr.Set(v)
+
+ret = vptr.FieldByName(fieldName)
+return }
+</code></pre></div></div>
+
+<p>func setUnExportedField(source interface{}, fieldName string, newFieldVal interface{}) (reflect.Value, error) {
+	v := reflect.ValueOf(source)</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>vptr := reflect.New(v.Type()).Elem()
+vptr.Set(v)
+
+tv := vptr.FieldByName(fieldName)
+tv = reflect.NewAt(tv.Type(), unsafe.Pointer(tv.UnsafeAddr())).Elem()
+
+nv := reflect.ValueOf(newFieldVal)
+if tv.Kind() != nv.Kind() {
+	return v, fmt.Errorf("expected kind %v, got kind: %v", v.Kind(), nv.Kind())
+}
+tv.Set(nv)
+return vptr, nil } https://blog.csdn.net/somanlee/article/details/108304525
+</code></pre></div></div>
+
+<p>https://blog.csdn.net/fangkang7/article/details/105045514</p>
+
+<p>https://studygolang.com/articles/12348?fr=sidebar</p>
+:ET

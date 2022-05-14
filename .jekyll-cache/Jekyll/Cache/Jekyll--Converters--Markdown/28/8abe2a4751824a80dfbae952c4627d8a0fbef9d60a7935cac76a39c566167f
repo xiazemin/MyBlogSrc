@@ -1,0 +1,241 @@
+I"'*<p>https://www.alexedwards.net/blog/json-surprises-and-gotchas</p>
+
+<p>Go中的比较操作符，你真的了解吗？假如面试官问你下面输出什么，你的答案是什么？</p>
+
+<p>type blankSt struct {
+  a int
+  _ string
+}
+var (
+  bst1 = blankSt{1, “333”}
+  bst2 = blankSt{1, “44444”}
+)
+fmt.Println(bst1 == bst2)
+<!-- more --></p>
+
+<p>基本定理
+在Go中，比较运算符也是遵循定理的， 两条基本定理如下：</p>
+
+<p>定理一：相等运算符==和!=适用于具有可比性的操作数，排序运算符&lt;，&lt;=，&gt;和&gt;=适用于可排序的操作数。</p>
+
+<p>定理二：在任何比较中，至少满足一个操作数能赋值给另一个操作数类型的变量。</p>
+
+<p>常见类型的比较
+常见类型的比较大家都懂，在这里笔者就不详细介绍了，仅枚举一下原则加深大家的印象：</p>
+
+<p>布尔值是可比较的，但不可排序，即仅适用于==和!=运算符。</p>
+
+<p>整数和浮点数是可比较的且可排序，适用于所有比较运算符。</p>
+
+<p>字符串的值是可比较的，且按字节排序，即比较时按字节比较大小（不理解字符串和字节切片关系的，请参考深入理解go中字符串这篇文章）。</p>
+
+<p>以上即为常见类型的比较原则，下面我们结合例子逐步理解各种类型之间的比较。</p>
+
+<p>不可比较的类型
+在Go中，切片，map，和func是不可比较的，他们仅可以和预声明表示符nil进行比较。能和nil进行比较的还有指针，管道和interface{}。</p>
+
+<p>复数之间的比较
+复数可比较但不可排序，实部和虚部均相等两个复数才相等。复数仅适用==和!=这两个比较运算符：</p>
+
+<p>var c1 complex128 = complex(1, 2) // 1+2i
+var c2 complex128 = complex(3, 4) // 3+4i
+fmt.Println(c1 == c2)
+上述输出结果为false，证明复数之间可比较。</p>
+
+<p>var c1 complex128 = complex(1, 2) // 1+2i
+var c2 complex128 = complex(3, 4) // 3+4i
+fmt.Println(c1 &gt;= c2)
+此时程序无法运行，在vscode中的错误提醒为cannot compare c1 &gt;= c2 (operator &gt;= not defined for complex128)compiler。由此确认复数不可排序。</p>
+
+<p>结构体之间的比较
+如果结构体的所有字段都是可比较的，则他们所有非匿名字段的值相等，结构体的值才相等。验证如下：</p>
+
+<p>type canC struct {
+	c int
+}
+var st1, st2 canC
+fmt.Println(st1 == st2)
+st1.c = 3
+fmt.Println(st1 == st2)
+上述输出分别为true和false。由此验证非匿名字段的值相等，结构体的值才相等。</p>
+
+<p>fmt.Println(st1 &lt;= st2)
+此行代码在vscode中的错误提醒为cannot compare st1 &lt;= st2 (operator &lt;= not defined for canC)compiler。由此可知，即使结构体满足比较条件也无法适用于&lt;，&lt;=，&gt;和&gt;=运算符。</p>
+
+<p>注：后文中提到不可排序均代表着无法适用于&lt;，&lt;=，&gt;和&gt;=运算符，在后文中不再对不可排序给出例子。</p>
+
+<p>下面看看包含匿名字段的结构体比较时有什么不同：</p>
+
+<p>type blankSt struct {
+  a int
+  _ string
+}
+var (
+  bst1 = blankSt{1, “333”}
+  bst2 = blankSt{1, “44444”}
+)
+fmt.Println(bst1 == bst2)
+上述输出为true，符合非匿名字段的值相等时结构体的值相等这一原则。注意，如果匿名字段是不可比较的类型时，上述代码会编译报错。</p>
+
+<p>最后我们看看包含不可比较类型的结构体：</p>
+
+<p>type canNotC struct {
+	m func() int
+}
+fmt.Println(canNotC{} == canNotC{})
+上述代码在vscode中的错误提醒为cannot compare (canNotC literal) == (canNotC literal) (operator == not defined for canNotC)compiler，由此可知，结构体如果要可比较，则其内部的所有字段必须全为可比较类型。</p>
+
+<p>指针之间的比较
+指针是可比较的，但不可排序。如果两个指针指向同一个变量，或者两个指针值均为nil，则这两个指针相等。相信读者对于这一点应该是没有异议的，但是有一个情况却是十分需要注意的。</p>
+
+<p>zero-size variables：如果结构体没有任何字段或者数组没有任何元素，则其大小为0，即unsafe.Sizeof的计算结果为0。两个不同的zero-size variables在内存中可能具有相同的地址。</p>
+
+<p>指向不同zero-size variables的两个指针可能相等也可能不相等。</p>
+
+<p>var arr1, arr2 [0]int
+parr1 := &amp;arr1
+parr2 := &amp;arr2
+fmt.Println(unsafe.Sizeof(arr1))
+fmt.Println(parr1 == parr2)
+fmt.Println(uintptr(unsafe.Pointer(parr1)), uintptr(unsafe.Pointer(parr2)))
+// 输出如下：
+0
+false
+824634830552 824634830552 // 每次运行输出的地址不一定相同
+笔者多次运行，parr1 == parr2始终输出为false，目前尚未发现输出为true的情况，在https://github.com/golang/go/issues/23440也有人遇到同笔者相同的情况，所以笔者就不再对此问题做更近一步的分析。</p>
+
+<p>Channel之间的比较
+在写这篇文章前，笔者从来都没有想过Channel之间是可以比较的。事实上，管道是可比较类型，golang原文如下：</p>
+
+<p>Channel values are comparable.
+Two channel values are equal if they were created by the same call to make or if both have value nil
+这里需要注意的是，只有相同调用的管道才是相等的：</p>
+
+<p>var cint1, cint2 chan&lt;- string
+cint3 := make(chan string, 2)
+cint4 := make(chan string, 2)
+cint5 := make(chan string)
+fmt.Println(cint1 == cint2, cint3 == cint4, cint5 == cint1) // true false false
+cint1 = cint4
+fmt.Println(cint1 == cint4) //true
+上述中，cint1和cint2初始值均为nil，所以输出true。双向通道cint4赋值给单向通道cint1时，满足相同的make调用这一条件，所以输出也为true。</p>
+
+<p>Interface{}之间比较
+Interface{}是可比较的，但是不可排序。两个Interface{}变量的动态类型和动态value均一致它们才相等，两个变量均为nil也是相等的。针对这一原则笔者对其分以下几种情况讨论。</p>
+
+<p>一、interface{}不为nil，且动态类型均为可比较类型时：</p>
+
+<p>var (
+  i1 interface{} = uint(1)
+  i2 interface{} = uint(1)
+  i3 interface{} = uint(3)
+  i4 interface{} = int(3)
+  i5 interface{} = []int{}
+  i6 interface{} = map[int]string{}
+  i7 interface{} = map[int]string{}
+)
+fmt.Println(i1 == i2, i1 == i3，i3 == i4)
+上述输出结果为true false false，这符合动态类型和动态value均一致时才相等的原则。</p>
+
+<p>二、如果比较双方动态类型一致且为不可比较类型时会panic：</p>
+
+<p>这种情况可正常编译，但是会造成运行时崩溃，所以一定要注意！！！</p>
+
+<p>fmt.Println(i5 == i6)
+fmt.Println(i7 == i6)
+上述比较i5和i6时能够正常输出，但是i6和i7比较时出现如下错误：</p>
+
+<p>所以，笔者在这里再次强调，如果项目中有不小心直接使用了interface{}进行比较的，请一定要注意⚠️。</p>
+
+<p>三、动态value为nil的interface{}不一定等于nil：</p>
+
+<p>func t() interface{} {
+	var err *error
+	return err
+}</p>
+
+<p>func t1() interface{} {
+	return nil
+}
+fmt.Println(t() == nil, t1() == nil) // 输出false, true
+由上述代码知，如果不是直接返回nil的interface{}和nil进行比较时是不相等的。相信很多人在平时的开发中都有可能会忽略这个问题。下面我们对它为什么不相等进行简单的分析。</p>
+
+<p>在Go中，interface{}的实现为两个元素，类型t和值v。v是一个具体的值，如int、struct、或指针等。</p>
+
+<p>如果，我们在接口中存储int值3，则接口中的值为(t=int，v=3)。</p>
+
+<p>值v也称为接口的动态值，因为在程序执行期间，给定的接口变量可能包含不同的值v（以及相应的类型t）。</p>
+
+<p>只有当v和t都未设置时，接口值才是nil（t=nil，未设置v）。</p>
+
+<p>如果，我们在接口中存储一个类型为int的nil指针， 那么不管指针的值是什么，内部类型都会是int：（t=*int，v=nil）。因此，即使内部的指针v为nil，这样的接口值也是非nil的。</p>
+
+<p>本部分内容翻译整理自https://golang.org/doc/faq#nil_error</p>
+
+<p>非接口类型X实现了接口T，则X的变量x能和T的变量t进行比较
+原则：非接口类型X实现了接口T，则X的变量x能和T的变量t进行比较。只有当t的动态变量类型为X且t的动态value和x相等时，t才等于x。</p>
+
+<p>推论：又因为go中任意类型都默认实现了interface{}，则意味着interface{}变量能和任意的非interface{}类型的可比较类型进行比较。</p>
+
+<p>验证原则：</p>
+
+<p>type it interface {
+	f()
+}
+type ix1 int
+func (x ix1) f() {}
+type ix2 map[int]int
+func (x ix2) f() {}</p>
+
+<p>x1 := ix1(2)
+var t1 it = ix2{}
+// 类型不一致时
+fmt.Println(x1 == t1) // fasle
+// 类型一致时
+t1 = ix1(2)
+fmt.Println(t1 == x1) // true
+上面的输出分别为false和true，符合原则。</p>
+
+<p>验证推论：</p>
+
+<p>var it1 interface{} = “111”
+fmt.Println(it1 == 1)
+上面能够正常比较，说明推论正确，且输出为false，符合原则。</p>
+
+<p>注意：下面情况会panic</p>
+
+<p>var t2 it = ix2{}
+var t3 it = ix2{}
+fmt.Println(t2 == t3)
+上述代码发生panic，符和Interface{}之间比较的原则。</p>
+
+<p>数组之间的比较
+两个数组的元素类型相同且是可比较类型，并且数组的长度相同，则这两个数组可比较。当两个可比较的数组对应元素均相等时，则这两个数组相等。即使两个数组可比较，但依旧不可排序。</p>
+
+<p>类型相同但元素不可比较时：</p>
+
+<p>var array1 [3][]int
+var array2 [3][]int
+fmt.Println(array1 == array2)
+上述代码在vscode中的错误为cannot compare array1 == array2 (operator == not defined for [3][]int)compiler，所以如果数组元素为不可比较类型，则数组也不可比较。</p>
+
+<p>数组元素可比较但数组长度不一致时：</p>
+
+<p>var array3 [3]int
+var array4 [2]int
+fmt.Println(array3 == array4)
+上述代码在vscode中的错误为cannot compare array3 == array4 (mismatched types [3]int and [2]int)compiler，所以如果数组长度不一致时，则两个数组不可比较。</p>
+
+<p>满足数组长度相等且元素类型可比较时：</p>
+
+<p>var array5, array6 [3]int
+fmt.Println(array5 == array6)
+array5 = […]int{3, 2, 1}
+array6 = […]int{1, 2, 3}
+fmt.Println(array5 == array6)
+上述输出分别为true和false，符合可比较数组一一判断对应元素是否相等这一原则。所以，我们平时在开发中可以利用该原则快速比较数组是否相等。</p>
+
+<p>最后，衷心希望本文能够对各位读者有一定的帮助。</p>
+
+<p>https://mp.weixin.qq.com/s/xDV3yM-vPqWOEiks6mxKEw</p>
+:ET

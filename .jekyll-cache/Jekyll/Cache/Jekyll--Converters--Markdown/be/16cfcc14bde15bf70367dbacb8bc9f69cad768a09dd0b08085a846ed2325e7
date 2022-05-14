@@ -1,0 +1,319 @@
+I"+<p>使用etcd报如下错误怎么解决的？</p>
+
+<p>invalid case “go.etcd.io/etcd/mvcc/mvccpb”.PUT in switch on event.Type (mismatched types “go.etcd.io/etcd/mvcc/mvccpb”.Event_EventType and “github.com/coreos/etcd/mvcc/mvccpb”.Event_EventType)</p>
+
+<p>导入的包不对。</p>
+
+<p>你 import 的 go.etcd.io/etcd/clientv3 引用的是 go.etcd.io/etcd/mvcc/mvccpb, 
+改成
+github.com/coreos/etcd/mvcc/mvccpb</p>
+
+<p>服务注册：同一service的所有节点注册到相同目录下，节点启动后将自己的信息注册到所属服务的目录中。
+健康检查：服务节点定时发送心跳，注册到服务目录中的信息设置一个较短的TTL，运行正常的服务节点每隔一段时间会去更新信息的TTL。
+服务发现：通过名称能查询到服务提供外部访问的 IP 和端口号。比如网关代理服务时能够及时的发现服务中新增节点、丢弃不可用的服务节点，同时各个服务间也能感知对方的存在。
+https://github.com/xiazemin/etcd_discovery/tree/master/discover
+<!-- more --></p>
+
+<p>在分布式系统中，如何管理节点间的状态一直是一个难题，etcd 是由开发并维护的，它使用 Go 语言编写，并通过Raft 一致性算法处理日志复制以保证强一致性。etcd像是专门为集群环境的服务发现和注册而设计，它提供了数据 TTL 失效、数据改变监视、多值、目录监听、分布式锁原子操作等功能，可以方便的跟踪并管理集群节点的状态。</p>
+
+<p>https://segmentfault.com/a/1190000020944777</p>
+
+<p>https://bingjian-zhu.github.io/2020/05/14/etcd%E5%AE%9E%E7%8E%B0%E6%9C%8D%E5%8A%A1%E5%8F%91%E7%8E%B0/</p>
+
+<p>https://blog.huoding.com/2020/11/17/873</p>
+
+<p>https://juejin.cn/post/6887388610367553549</p>
+
+<p>https://www.infoq.cn/article/etcd-interpretation-application-scenario-implement-principle</p>
+
+<p>etcd实现服务发现和注册，使用的是kv存储、租约、watch.</p>
+
+<p>向etcd 注册 该服务（其实就是 存一个值）然后向etcd 发送心跳，当etcd 没有检测到心跳就会 把这个键值对 删了(这整个动作是etcd里的租约模式)，网关那边 就只需要 watch 这个 key ，就能够知道 所有服务的所有动态了. 注册的时候可以使用前缀这样在watch的时候可以watch所有的服务器.</p>
+
+<p>服务注册
+租约模式，客户端申请一个租约设置过期时间,keepalive没个固定时间进行租约续期，通过租约存储key.过期不续租则etcd会删除租约上的所有key
+相同服务存储的key的前缀可以设置成一样
+注册服务就是向服务端使用租约模式写入一个key
+package main</p>
+
+<p>import (
+    “context”
+    “fmt”
+    “time”
+    “go.etcd.io/etcd/clientv3”
+)</p>
+
+<p>//创建租约注册服务
+type ServiceRegister struct {
+    etcdClient    *clientv3.Client //etcd client
+    lease         clientv3.Lease //租约
+    leaseResp     *clientv3.LeaseGrantResponse //设置租约时间返回
+    canclefunc    func() //租约撤销
+    //租约keepalieve相应chan
+    keepAliveChan &lt;-chan  *clientv3.LeaseKeepAliveResponse
+    key           string //注册的key
+}</p>
+
+<p>func NewServiceRegister(addr []string, timeNum int64) (*ServiceReg, error) {
+    conf := clientv3.Config{
+        Endpoints:   addr,
+        DialTimeout: 5 * time.Second,
+    }</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>var (
+    client *clientv3.Client
+)
+
+//连接etcd
+if clientTem, err := clientv3.New(conf); err == nil {
+    etcdClient = clientTem
+} else {
+    return nil, err
+}
+
+ser := &amp;ServiceRegister{
+    etcdClient: client,
+}
+
+//申请租约设置时间keepalive
+if err := ser.setLease(timeNum); err != nil {
+    return nil, err
+}
+
+//监听续租相应chan
+go ser.ListenLeaseRespChan()
+return ser, nil }
+</code></pre></div></div>
+
+<p>//设置租约
+func (this *ServiceRegister) setLease(timeNum int64) error {
+    //申请租约
+    lease := clientv3.NewLease(this.etcdClient)</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>//设置租约时间
+leaseResp, err := lease.Grant(context.TODO(), timeNum)
+if err != nil {
+    return err
+}
+
+//设置续租 定期发送需求请求
+ctx, cancelFunc := context.WithCancel(context.TODO())
+leaseRespChan, err := lease.KeepAlive(ctx, leaseResp.ID)
+
+if err != nil {
+    return err
+}
+
+this.lease = lease
+this.leaseResp = leaseResp
+this.canclefunc = cancelFunc
+this.keepAliveChan = leaseRespChan
+return nil }
+</code></pre></div></div>
+
+<p>//监听 续租情况
+func (this *ServiceRegister) ListenLeaseRespChan() {
+    for {
+        select {
+        case leaseKeepResp := &lt;-this.keepAliveChan:
+            if leaseKeepResp == nil {
+                fmt.Printf(“已经关闭续租功能\n”)
+                return
+            } else {
+                fmt.Printf(“续租成功\n”)
+            }
+        }
+    }
+}</p>
+
+<p>//通过租约 注册服务
+func (this *ServiceRegister) PutService(key, val string) error {
+    //带租约的模式写入数据即注册服务
+    kv := clientv3.NewKV(this.etcdClient)
+    _, err := kv.Put(context.TODO(), key, val, clientv3.WithLease(this.leaseResp.ID))
+    return err
+}</p>
+
+<p>//撤销租约
+func (this *ServiceRegister) RevokeLease() error {
+    this.canclefunc()
+    time.Sleep(2 * time.Second)
+    _, err := this.lease.Revoke(context.TODO(), this.leaseResp.ID)
+    return err
+}</p>
+
+<p>func main() {
+    ser,_ := NewServiceRegister([]string{“127.0.0.1:2379”}, 5)
+    ser.PutService(“/server/node1”, “node1”)
+    select{}
+}
+服务发现
+创建一个client 连到etcd.
+匹配到所有相同前缀的 key. 存储信息到本地
+watch这个key前缀，当有增加或者删除的时候就修改本地
+本地维护server的列表</p>
+
+<p>import (
+    “go.etcd.io/etcd/clientv3”
+    “time”
+    “context”
+    “go.etcd.io/etcd/mvcc/mvccpb”
+    “sync”
+    “log”
+)</p>
+
+<p>type ServiceDiscovery struct {
+    client        *clientv3.Client
+    serverList    map[string]string
+    lock          sync.Mutex
+}</p>
+
+<p>func NewServiceDiscovery (addr []string)( *ServiceDiscovery, error){
+    conf := clientv3.Config{
+        Endpoints:   addr,
+        DialTimeout: 5 * time.Second,
+    }
+    if client, err := clientv3.New(conf); err == nil {
+        return &amp;ClientDis{
+            client:client,
+            serverList:make(map[string]string),
+        }, nil
+    } else {
+        return nil ,err
+    }
+}</p>
+
+<p>func (this * ServiceDiscovery) GetService(prefix string) ([]string ,error){
+    //使用key前桌获取所有的etcd上所有的server
+    resp, err := this.client.Get(context.Background(), prefix, clientv3.WithPrefix())
+    if err != nil {
+        return nil, err
+    }
+    //解析出所有的server放入本地
+    addrs := this.extractAddrs(resp)</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>//warch server前缀 将变更写入本地
+go this.watcher(prefix)
+return addrs ,nil }
+</code></pre></div></div>
+
+<p>// 监听key前缀
+func (this *ServiceDiscovery) watcher(prefix string) {
+    //监听 返回监听事件chan
+    rch := this.client.Watch(context.Background(), prefix, clientv3.WithPrefix())
+    for wresp := range rch {
+        for _, ev := range wresp.Events {
+            switch ev.Type {
+            case mvccpb.PUT: //修改或者新增
+                this.SetServiceList(string(ev.Kv.Key),string(ev.Kv.Value))
+            case mvccpb.DELETE: //删除
+                this.DelServiceList(string(ev.Kv.Key))
+            }
+        }
+    }
+}</p>
+
+<p>func (this *ServiceDiscovery) extractAddrs(resp *clientv3.GetResponse) []string {
+    addrs := make([]string,0)
+    if resp == nil || resp.Kvs == nil {
+        return addrs
+    }
+    for i := range resp.Kvs {
+        if v := resp.Kvs[i].Value; v != nil {
+            this.SetServiceList(string(resp.Kvs[i].Key),string(resp.Kvs[i].Value))
+            addrs = append(addrs, string(v))
+        }
+    }
+    return addrs
+}</p>
+
+<p>func (this *ServiceDiscovery) SetServiceList(key,val string) {
+    this.lock.Lock()
+    defer this.lock.Unlock()
+    this.serverList[key] = string(val)
+    log.Println(“set data key :”,key,”val:”,val)
+}</p>
+
+<p>func (this *ServiceDiscovery) DelServiceList(key string) {
+    this.lock.Lock()
+    defer this.lock.Unlock()
+    delete(this.serverList,key)
+    log.Println(“del data key:”, key)
+}</p>
+
+<p>func (this *ServiceDiscovery) SerList2Array()[]string {
+    this.lock.Lock()
+    defer this.lock.Unlock()
+    addrs := make([]string,0)</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>for _, v := range this.serverList {
+    addrs = append(addrs,v)
+}
+return addrs }
+</code></pre></div></div>
+
+<p>func main () {
+    cli,_ := NewServiceDiscovery([]string{“127.0.0.1:2379”})
+    cli.GetService(“/server”)
+    select {}
+}</p>
+
+<p>https://studygolang.com/articles/24456</p>
+
+<p>brew install etcd</p>
+
+<h1 id="启动某个应用这里用-etcd-做演示">启动某个应用，这里用 etcd 做演示</h1>
+<p>brew services start etcd</p>
+
+<h1 id="停止某个应用">停止某个应用</h1>
+<p>brew services stop etcd</p>
+
+<h1 id="查看当前应用列表">查看当前应用列表</h1>
+<p>brew services list</p>
+
+<p>安装etcd webui
+在安装etcd webui之前，请确保已安装node工具。使用brew search node命令，可以查看候选安装包；使用brew install node命令，即可安装node工具。</p>
+
+<p>使用git命令下载etcd webui代码，并修改配置文件：</p>
+
+<p>$ git clone https://github.com/henszey/etcd-browser.git
+$ cd etcd-browser/
+$ vim server.js</p>
+
+<h1 id="放入一个-键值对">放入一个 键值对</h1>
+<p>~  etcdctl put “name” “zyq1”
+OK
+#取出一个 键值对
+~  etcdctl get  “name”
+name
+zyq1</p>
+<h1 id="删除一个-键值对">删除一个 键值对</h1>
+<p>~  etcdctl del  “name”
+1</p>
+<h1 id="放入一个-键值对-1">放入一个 键值对</h1>
+
+<p>watch
+watch命令用来监测key的变化，会建立长连接，一直监听。</p>
+
+<p>~  etcdctl watch “name”
+PUT
+name</p>
+
+<p>租约是一段时间，可以为etcd的key授予租约。当key被附加到租约时，它的生存时间被绑定到租约的生存时间，一旦租约的TTL到期，租约就过期并且所有附带的key都将被删除。</p>
+
+<p>一个租约可以绑定不止一个key。</p>
+
+<h1 id="创建一个20s的租约">创建一个20s的租约</h1>
+<p>$ ./etcdctl lease grant 20
+lease 694d673115905e37 granted with TTL(20s)</p>
+
+<h1 id="使用租约的-id-进行-put-操作">使用租约的 id 进行 put 操作</h1>
+<p>$ ./etcdctl put –lease=694d673115905e37 “name” “zyq”</p>
+
+<h1 id="20s后get发现-key被删除了">20s后get发现 key被删除了</h1>
+<p>$ ./etcdctl get “name”</p>
+<h1 id="空应答">空应答</h1>
+
+<p>https://www.jianshu.com/p/ede84d7d3cc0</p>
+
+:ET

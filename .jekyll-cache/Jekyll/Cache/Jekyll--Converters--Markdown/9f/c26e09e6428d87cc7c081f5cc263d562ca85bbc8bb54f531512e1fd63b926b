@@ -1,0 +1,81 @@
+I"�<p>https://book-consul-guide.vnzmi.com/
+服务发现 Consul的客户端可用提供一个服务,比如 api 或者mysql ,另外一些客户端可用使用Consul去发现一个指定服务的提供者.通过DNS或者HTTP应用程序可用很容易的找到他所依赖的服务.
+健康检查 Consul客户端可用提供任意数量的健康检查,指定一个服务(比如:webserver是否返回了200 OK 状态码)或者使用本地节点(比如:内存使用是否大于90%). 这个信息可由operator用来监视集群的健康.被服务发现组件用来避免将流量发送到不健康的主机.
+Key/Value存储 应用程序可用根据自己的需要使用Consul的层级的Key/Value存储.比如动态配置,功能标记,协调,领袖选举等等,简单的HTTP API让他更易于使用.
+多数据中心: Consul支持开箱即用的多数据中心.这意味着用户不需要担心需要建立额外的抽象层让业务扩展到多个区域.
+<!-- more -->
+在利用go micro来实现服务发现便利很多，micro中默认支持使用 Consul 来做服务发现，当然它使用插件机制（go-plugins）还支持 Etcd, Gossip, NATS等其他的第三方服务注册发现工具。在每个服务启动的时候，都将自己注册到registry上，退出时也自动解注册</p>
+
+<p>func (s *service) run(exit chan bool) {
+    if s.opts.RegisterInterval &lt;= time.Duration(0) {
+        return
+    }</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>//定时注册自己
+t := time.NewTicker(s.opts.RegisterInterval)
+
+for {
+    select {
+    case &lt;-t.C:
+        err := s.opts.Server.Register()
+        if err != nil {
+            log.Log("service run Server.Register error: ", err)
+        }
+    case &lt;-exit:
+        t.Stop()
+        return
+    }
+} }
+</code></pre></div></div>
+
+<p>……</p>
+
+<p>func (s *service) Start() error {
+    for _, fn := range s.opts.BeforeStart {
+        if err := fn(); err != nil {
+            return err
+        }
+    }</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>if err := s.opts.Server.Start(); err != nil {
+    return err
+}
+// Run() 调用中也会结果run来调到这里来注册
+if err := s.opts.Server.Register(); err != nil {
+    return err
+}
+
+for _, fn := range s.opts.AfterStart {
+    if err := fn(); err != nil {
+        return err
+    }
+}
+
+return nil }
+</code></pre></div></div>
+
+<p>func (s *service) Stop() error {
+    var gerr error</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>for _, fn := range s.opts.BeforeStop {
+    if err := fn(); err != nil {
+        gerr = err
+    }
+}    // 退出时自动解除注册
+if err := s.opts.Server.Deregister(); err != nil {
+    return err
+}
+
+if err := s.opts.Server.Stop(); err != nil {
+    return err
+}
+
+for _, fn := range s.opts.AfterStop {
+    if err := fn(); err != nil {
+        gerr = err
+    }
+}
+
+return gerr }
+</code></pre></div></div>
+:ET

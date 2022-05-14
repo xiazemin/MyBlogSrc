@@ -1,0 +1,360 @@
+I"�\<p>在net/http里打印http.Request的context会出现panic。具体的错误error， fatal error: concurrent map read and map write 。
+我们知道golang的map不是线程安全的，多个协程不加锁对map并发读写会触发data race，然后panic异常退出。
+<!-- more -->
+下面是出现net/http context panic的问题代码，代码的逻辑很简单，就是定义一个api，然后打印context而已。把服务运行起来后，我们可以用ab, wrk来进行压测，来制造data race竞争的场景。</p>
+
+<p>// xiaorui.cc</p>
+
+<p>package main</p>
+
+<p>import (
+	“fmt”
+	“net/http”
+)</p>
+
+<p>func panic(w http.ResponseWriter, r *http.Request) {
+	fmt.Printf(“%+v”, r.Context())
+}</p>
+
+<p>func main() {
+	http.HandleFunc(“/”, panic)
+	err := http.ListenAndServe(“:9090”, nil)
+	if err != nil {
+		fmt.Println(err)
+	}
+}</p>
+
+<p>package main</p>
+
+<p>import (
+	“fmt”
+	“net/http”
+)</p>
+
+<p>func panic(w http.ResponseWriter, r *http.Request) {
+	fmt.Printf(“%+v”, r.Context())
+}</p>
+
+<p>func main() {
+	http.HandleFunc(“/”, panic)
+	err := http.ListenAndServe(“:9090”, nil)
+	if err != nil {
+		fmt.Println(err)
+	}
+}
+下面是wrk压测时，net/http服务的异常信息。</p>
+
+<p>// xiaorui.cc</p>
+
+<p>fatal error: concurrent map read and map write</p>
+
+<p>context.Background.WithValue(&amp;http.contextKey{name:”http-server”}, &amp;http.Server{Addr:”:9090”, Handler:http.Handler(nil), TLSConfig:(<em>tls.Config)(0xc000062780), ReadTimeout:0, ReadHeaderTimeout:0, WriteTimeout:0, IdleTimeout:0, MaxHeaderBytes:0, TLSNextProto:map[string]func(</em>http.Server, <em>tls.Conn, http.Handler){“h2”:(func(</em>http.Server, <em>tls.Conn, http.Handler))(0x120b620)}, ConnState:(func(net.Conn, http.ConnState))(nil), ErrorLog:(</em>log.Logger)(nil), disableKeepAlives:0, inShutdown:0, nextProtoOnce:sync.Once{m:sync.Mutex{state:0, sema:0x0}, done:0x1}, nextProtoErr:error(nil), mu:sync.Mutex{state:0, sema:0x0}, listeners:map[<em>net.Listener]struct {}{(</em>net.Listener)(0xc00007ccb0):struct {}{}}, activeConn:map[<em>http.conn]struct {}{(</em>http.conn)(0xc00009cb40):struct {}{}, (<em>http.conn)(0xc00009d2c0):struct {}{}, (</em>http.conn)(0xc00009d540):struct {}{}, (<em>http.conn)(0xc00009dcc0):struct {}{}, (</em>http.conn)(0xc00009cd20):struct {}{}, (<em>http.conn)(0xc00009d5e0):struct {}…
+xiaorui.cc
+goroutine 32 [running]:
+runtime.throw(0x12b35e3, 0x21)
+        /usr/local/go/src/runtime/panic.go:608 +0x72 fp=0xc00018a858 sp=0xc00018a828 pc=0x102b892
+runtime.mapaccess2(0x1255800, 0xc000080ea0, 0xc00018a978, 0x14bf328, 0xc0000ac868)
+        /usr/local/go/src/runtime/map.go:453 +0x223 fp=0xc00018a8a0 sp=0xc00018a858 pc=0x100ed93
+reflect.mapaccess(0x1255800, 0xc000080ea0, 0xc00018a978, 0x12afece)
+        /usr/local/go/src/runtime/map.go:1249 +0x3f fp=0xc00018a8d8 sp=0xc00018a8a0 pc=0x1010adf
+reflect.Value.MapIndex(0x1255800, 0xc000083280, 0x1b5, 0x1288180, 0xc00009da40, 0x36, 0x1257ae0, 0x14bf328, 0xb9)
+        /usr/local/go/src/reflect/value.go:1111 +0x11d fp=0xc00018a958 sp=0xc00018a8d8 pc=0x1099b7d
+fmt.(</em>pp).printValue(0xc000188180, 0x1255800, 0xc000083280, 0x1b5, 0x76, 0x2)
+        /usr/local/go/src/fmt/print.go:757 +0xf43 fp=0xc00018ab38 sp=0xc00018a958 pc=0x10aa853
+fmt.(<em>pp).printValue(0xc000188180, 0x12a0720, 0xc0000831e0, 0x199, 0xc000000076, 0x1)
+        /usr/local/go/src/fmt/print.go:783 +0x1ce9 fp=0xc00018ad18 sp=0xc00018ab38 pc=0x10ab5f9
+fmt.(</em>pp).printValue(0xc000188180, 0x129ed00, 0xc0000831e0, 0x16, 0x76, 0x0)
+        /usr/local/go/src/fmt/print.go:853 +0x1b2c fp=0xc00018aef8 sp=0xc00018ad18 pc=0x10ab43c
+fmt.(<em>pp).printArg(0xc000188180, 0x129ed00, 0xc0000831e0, 0x76)
+        /usr/local/go/src/fmt/print.go:689 +0x2b7 fp=0xc00018af90 sp=0xc00018aef8 pc=0x10a91a7
+fmt.(</em>pp).doPrintf(0xc000188180, 0x12afaf0, 0x16, 0xc00018b108, 0x3, 0x3)
+        /usr/local/go/src/fmt/print.go:1003 +0x166 fp=0xc00018b078 sp=0xc00018af90 pc=0x10acde6
+fmt.Sprintf(0x12afaf0, 0x16, 0xc00018b108, 0x3, 0x3, 0x0, 0x0)
+        /usr/local/go/src/fmt/print.go:203 +0x66 fp=0xc00018b0d0 sp=0xc00018b078 pc=0x10a5b26
+context.(<em>valueCtx).String(0xc000080e10, 0x12be400, 0xc0001880c0)
+        /usr/local/go/src/context/context.go:486 +0xab fp=0xc00018b148 sp=0xc00018b0d0 pc=0x11121bb
+fmt.(</em>pp).handleMethods(0xc0001880c0, 0x76, 0x1)
+        /usr/local/go/src/fmt/print.go:603 +0x27c fp=0xc00018b1d8 sp=0xc00018b148 pc=0x10a8cac
+fmt.(<em>pp).printArg(0xc0001880c0, 0x1274ce0, 0xc000080e10, 0x76)
+        /usr/local/go/src/fmt/print.go:686 +0x203 fp=0xc00018b270 sp=0xc00018b1d8 pc=0x10a90f3
+fmt.(</em>pp).doPrintf(0xc0001880c0, 0x12afaf0, 0x16, 0xc00018b3e8, 0x3, 0x3)
+…
+fmt.(<em>pp).printArg(0xc000188000, 0x1274ce0, 0xc000114480, 0xc000000076)
+        /usr/local/go/src/fmt/print.go:1003 +0x166 fp=0xc00018b638 sp=0xc00018b550 pc=0x10acde6
+fmt.Sprintf(0x12ad1be, 0xd, 0xc0001106c8, 0x1, 0x1, 0xc00011e080, 0xc0001106f8)
+        /usr/local/go/src/fmt/print.go:203 +0x66 fp=0xc00018b690 sp=0xc00018b638 pc=0x10a5b26
+context.(</em>cancelCtx).String(0xc000116640, 0x12be400, 0xc000188300)
+        /usr/local/go/src/context/context.go:343 +0x7d fp=0xc00018b6e8 sp=0xc00018b690 pc=0x111158d
+fmt.(<em>pp).handleMethods(0xc000188300, 0xc000000076, 0x1034601)
+        /usr/local/go/src/fmt/print.go:603 +0x27c fp=0xc00018b778 sp=0xc00018b6e8 pc=0x10a8cac
+fmt.(</em>pp).printArg(0xc000188300, 0x12785e0, 0xc000116640, 0xc000000076)
+        /usr/local/go/src/fmt/print.go:686 +0x203 fp=0xc00018b810 sp=0xc00018b778 pc=0x10a90f3
+fmt.(<em>pp).doPrintf(0xc000188300, 0x12ad1be, 0xd, 0xc00018b988, 0x1, 0x1)
+        /usr/local/go/src/fmt/print.go:1003 +0x166 fp=0xc00018b8f8 sp=0xc00018b810 pc=0x10acde6
+fmt.Sprintf(0x12ad1be, 0xd, 0xc000110988, 0x1, 0x1, 0xc00011e030, 0xc0001109b8)
+        /usr/local/go/src/fmt/print.go:203 +0x66 fp=0xc00018b950 sp=0xc00018b8f8 pc=0x10a5b26
+context.(</em>cancelCtx).String(0xc000116740, 0x12be400, 0xc000188240)
+        /usr/local/go/src/context/context.go:343 +0x7d fp=0xc00018b9a8 sp=0xc00018b950 pc=0x111158d
+fmt.(<em>pp).handleMethods(0xc000188240, 0x76, 0xc000080c01)
+        /usr/local/go/src/fmt/print.go:603 +0x27c fp=0xc00018ba38 sp=0xc00018b9a8 pc=0x10a8cac
+fmt.(</em>pp).printArg(0xc000188240, 0x12785e0, 0xc000116740, 0x76)
+        /usr/local/go/src/fmt/print.go:686 +0x203 fp=0xc00018bad0 sp=0xc00018ba38 pc=0x10a90f3
+fmt.(<em>pp).doPrintf(0xc000188240, 0x12ab4df, 0x3, 0xc00018bcc0, 0x1, 0x1)
+ …
+fmt.Printf(0x12ab4df, 0x3, 0xc000110cc0, 0x1, 0x1, 0xc0000fa780, 0x3, 0xc000022a70)
+        /usr/local/go/src/fmt/print.go:197 +0x72 fp=0xc00018bc80 sp=0xc00018bc20 pc=0x10a5a82
+main.panic(0x12f10c0, 0xc0001821c0, 0xc000120600)
+        /Users/ruifengyun/test/k.go:9 +0x89 fp=0xc00018bce0 sp=0xc00018bc80 pc=0x121bb79
+net/http.HandlerFunc.ServeHTTP(0x12be4e0, 0x12f10c0, 0xc0001821c0, 0xc000120600)
+        /usr/local/go/src/net/http/server.go:1964 +0x44 fp=0xc00018bd08 sp=0xc00018bce0 pc=0x11f1b14
+net/http.(</em>ServeMux).ServeHTTP(0x14a17a0, 0x12f10c0, 0xc0001821c0, 0xc000120600)
+        /usr/local/go/src/net/http/server.go:2361 +0x127 fp=0xc00018bd48 sp=0xc00018bd08 pc=0x11f37c7
+net/http.serverHandler.ServeHTTP(0xc0000831e0, 0x12f10c0, 0xc0001821c0, 0xc000120600)
+        /usr/local/go/src/net/http/server.go:2741 +0xab fp=0xc00018bd78 sp=0xc00018bd48 pc=0x11f427b
+net/http.(<em>conn).serve(0xc00009d180, 0x12f12c0, 0xc000116640)
+        /usr/local/go/src/net/http/server.go:1847 +0x646 fp=0xc00018bfc8 sp=0xc00018bd78 pc=0x11f0d66
+runtime.goexit()
+        /usr/local/go/src/runtime/asm_amd64.s:1333 +0x1 fp=0xc00018bfd0 sp=0xc00018bfc8 pc=0x1057f81
+created by net/http.(</em>Server).Serve
+        /usr/local/go/src/net/http/server.go:2851 +0x2f5</p>
+
+<p>fatal error: concurrent map read and map write</p>
+
+<p>context.Background.WithValue(&amp;http.contextKey{name:”http-server”}, &amp;http.Server{Addr:”:9090”, Handler:http.Handler(nil), TLSConfig:(<em>tls.Config)(0xc000062780), ReadTimeout:0, ReadHeaderTimeout:0, WriteTimeout:0, IdleTimeout:0, MaxHeaderBytes:0, TLSNextProto:map[string]func(</em>http.Server, <em>tls.Conn, http.Handler){“h2”:(func(</em>http.Server, <em>tls.Conn, http.Handler))(0x120b620)}, ConnState:(func(net.Conn, http.ConnState))(nil), ErrorLog:(</em>log.Logger)(nil), disableKeepAlives:0, inShutdown:0, nextProtoOnce:sync.Once{m:sync.Mutex{state:0, sema:0x0}, done:0x1}, nextProtoErr:error(nil), mu:sync.Mutex{state:0, sema:0x0}, listeners:map[<em>net.Listener]struct {}{(</em>net.Listener)(0xc00007ccb0):struct {}{}}, activeConn:map[<em>http.conn]struct {}{(</em>http.conn)(0xc00009cb40):struct {}{}, (<em>http.conn)(0xc00009d2c0):struct {}{}, (</em>http.conn)(0xc00009d540):struct {}{}, (<em>http.conn)(0xc00009dcc0):struct {}{}, (</em>http.conn)(0xc00009cd20):struct {}{}, (<em>http.conn)(0xc00009d5e0):struct {}…
+xiaorui.cc
+goroutine 32 [running]:
+runtime.throw(0x12b35e3, 0x21)
+        /usr/local/go/src/runtime/panic.go:608 +0x72 fp=0xc00018a858 sp=0xc00018a828 pc=0x102b892
+runtime.mapaccess2(0x1255800, 0xc000080ea0, 0xc00018a978, 0x14bf328, 0xc0000ac868)
+        /usr/local/go/src/runtime/map.go:453 +0x223 fp=0xc00018a8a0 sp=0xc00018a858 pc=0x100ed93
+reflect.mapaccess(0x1255800, 0xc000080ea0, 0xc00018a978, 0x12afece)
+        /usr/local/go/src/runtime/map.go:1249 +0x3f fp=0xc00018a8d8 sp=0xc00018a8a0 pc=0x1010adf
+reflect.Value.MapIndex(0x1255800, 0xc000083280, 0x1b5, 0x1288180, 0xc00009da40, 0x36, 0x1257ae0, 0x14bf328, 0xb9)
+        /usr/local/go/src/reflect/value.go:1111 +0x11d fp=0xc00018a958 sp=0xc00018a8d8 pc=0x1099b7d
+fmt.(</em>pp).printValue(0xc000188180, 0x1255800, 0xc000083280, 0x1b5, 0x76, 0x2)
+        /usr/local/go/src/fmt/print.go:757 +0xf43 fp=0xc00018ab38 sp=0xc00018a958 pc=0x10aa853
+fmt.(<em>pp).printValue(0xc000188180, 0x12a0720, 0xc0000831e0, 0x199, 0xc000000076, 0x1)
+        /usr/local/go/src/fmt/print.go:783 +0x1ce9 fp=0xc00018ad18 sp=0xc00018ab38 pc=0x10ab5f9
+fmt.(</em>pp).printValue(0xc000188180, 0x129ed00, 0xc0000831e0, 0x16, 0x76, 0x0)
+        /usr/local/go/src/fmt/print.go:853 +0x1b2c fp=0xc00018aef8 sp=0xc00018ad18 pc=0x10ab43c
+fmt.(<em>pp).printArg(0xc000188180, 0x129ed00, 0xc0000831e0, 0x76)
+        /usr/local/go/src/fmt/print.go:689 +0x2b7 fp=0xc00018af90 sp=0xc00018aef8 pc=0x10a91a7
+fmt.(</em>pp).doPrintf(0xc000188180, 0x12afaf0, 0x16, 0xc00018b108, 0x3, 0x3)
+        /usr/local/go/src/fmt/print.go:1003 +0x166 fp=0xc00018b078 sp=0xc00018af90 pc=0x10acde6
+fmt.Sprintf(0x12afaf0, 0x16, 0xc00018b108, 0x3, 0x3, 0x0, 0x0)
+        /usr/local/go/src/fmt/print.go:203 +0x66 fp=0xc00018b0d0 sp=0xc00018b078 pc=0x10a5b26
+context.(<em>valueCtx).String(0xc000080e10, 0x12be400, 0xc0001880c0)
+        /usr/local/go/src/context/context.go:486 +0xab fp=0xc00018b148 sp=0xc00018b0d0 pc=0x11121bb
+fmt.(</em>pp).handleMethods(0xc0001880c0, 0x76, 0x1)
+        /usr/local/go/src/fmt/print.go:603 +0x27c fp=0xc00018b1d8 sp=0xc00018b148 pc=0x10a8cac
+fmt.(<em>pp).printArg(0xc0001880c0, 0x1274ce0, 0xc000080e10, 0x76)
+        /usr/local/go/src/fmt/print.go:686 +0x203 fp=0xc00018b270 sp=0xc00018b1d8 pc=0x10a90f3
+fmt.(</em>pp).doPrintf(0xc0001880c0, 0x12afaf0, 0x16, 0xc00018b3e8, 0x3, 0x3)
+…
+fmt.(<em>pp).printArg(0xc000188000, 0x1274ce0, 0xc000114480, 0xc000000076)
+        /usr/local/go/src/fmt/print.go:1003 +0x166 fp=0xc00018b638 sp=0xc00018b550 pc=0x10acde6
+fmt.Sprintf(0x12ad1be, 0xd, 0xc0001106c8, 0x1, 0x1, 0xc00011e080, 0xc0001106f8)
+        /usr/local/go/src/fmt/print.go:203 +0x66 fp=0xc00018b690 sp=0xc00018b638 pc=0x10a5b26
+context.(</em>cancelCtx).String(0xc000116640, 0x12be400, 0xc000188300)
+        /usr/local/go/src/context/context.go:343 +0x7d fp=0xc00018b6e8 sp=0xc00018b690 pc=0x111158d
+fmt.(<em>pp).handleMethods(0xc000188300, 0xc000000076, 0x1034601)
+        /usr/local/go/src/fmt/print.go:603 +0x27c fp=0xc00018b778 sp=0xc00018b6e8 pc=0x10a8cac
+fmt.(</em>pp).printArg(0xc000188300, 0x12785e0, 0xc000116640, 0xc000000076)
+        /usr/local/go/src/fmt/print.go:686 +0x203 fp=0xc00018b810 sp=0xc00018b778 pc=0x10a90f3
+fmt.(<em>pp).doPrintf(0xc000188300, 0x12ad1be, 0xd, 0xc00018b988, 0x1, 0x1)
+        /usr/local/go/src/fmt/print.go:1003 +0x166 fp=0xc00018b8f8 sp=0xc00018b810 pc=0x10acde6
+fmt.Sprintf(0x12ad1be, 0xd, 0xc000110988, 0x1, 0x1, 0xc00011e030, 0xc0001109b8)
+        /usr/local/go/src/fmt/print.go:203 +0x66 fp=0xc00018b950 sp=0xc00018b8f8 pc=0x10a5b26
+context.(</em>cancelCtx).String(0xc000116740, 0x12be400, 0xc000188240)
+        /usr/local/go/src/context/context.go:343 +0x7d fp=0xc00018b9a8 sp=0xc00018b950 pc=0x111158d
+fmt.(<em>pp).handleMethods(0xc000188240, 0x76, 0xc000080c01)
+        /usr/local/go/src/fmt/print.go:603 +0x27c fp=0xc00018ba38 sp=0xc00018b9a8 pc=0x10a8cac
+fmt.(</em>pp).printArg(0xc000188240, 0x12785e0, 0xc000116740, 0x76)
+        /usr/local/go/src/fmt/print.go:686 +0x203 fp=0xc00018bad0 sp=0xc00018ba38 pc=0x10a90f3
+fmt.(<em>pp).doPrintf(0xc000188240, 0x12ab4df, 0x3, 0xc00018bcc0, 0x1, 0x1)
+ …
+fmt.Printf(0x12ab4df, 0x3, 0xc000110cc0, 0x1, 0x1, 0xc0000fa780, 0x3, 0xc000022a70)
+        /usr/local/go/src/fmt/print.go:197 +0x72 fp=0xc00018bc80 sp=0xc00018bc20 pc=0x10a5a82
+main.panic(0x12f10c0, 0xc0001821c0, 0xc000120600)
+        /Users/ruifengyun/test/k.go:9 +0x89 fp=0xc00018bce0 sp=0xc00018bc80 pc=0x121bb79
+net/http.HandlerFunc.ServeHTTP(0x12be4e0, 0x12f10c0, 0xc0001821c0, 0xc000120600)
+        /usr/local/go/src/net/http/server.go:1964 +0x44 fp=0xc00018bd08 sp=0xc00018bce0 pc=0x11f1b14
+net/http.(</em>ServeMux).ServeHTTP(0x14a17a0, 0x12f10c0, 0xc0001821c0, 0xc000120600)
+        /usr/local/go/src/net/http/server.go:2361 +0x127 fp=0xc00018bd48 sp=0xc00018bd08 pc=0x11f37c7
+net/http.serverHandler.ServeHTTP(0xc0000831e0, 0x12f10c0, 0xc0001821c0, 0xc000120600)
+        /usr/local/go/src/net/http/server.go:2741 +0xab fp=0xc00018bd78 sp=0xc00018bd48 pc=0x11f427b
+net/http.(<em>conn).serve(0xc00009d180, 0x12f12c0, 0xc000116640)
+        /usr/local/go/src/net/http/server.go:1847 +0x646 fp=0xc00018bfc8 sp=0xc00018bd78 pc=0x11f0d66
+runtime.goexit()
+        /usr/local/go/src/runtime/asm_amd64.s:1333 +0x1 fp=0xc00018bfd0 sp=0xc00018bfc8 pc=0x1057f81
+created by net/http.(</em>Server).Serve
+        /usr/local/go/src/net/http/server.go:2851 +0x2f5
+通过panic出来的协程调用栈信息可以分析出，fmt print会不断的递归反射及遍历解析context里的数据。 通过上面的panic信息我们可以得知根本问题是由于map的并发读写造成的，这也就说 context 内部是有map的。
+我们在正常情况下打印http.Request context，可以看到两个map，一个是listeners，一个是activeConn。另外在activeConn这个结构里还能看到很多的conn。说明这个context不单单是含有这个请求本身需要的上下文信息了，而且还包含了该server对象。</p>
+
+<p>// xiaorui.cc</p>
+
+<p>context.Background.WithValue(&amp;http.contextKey{name:”http-server”}, &amp;http.Server{Addr:”:9090”, Handler:http.Handler(nil), TLSConfig:(<em>tls.Config)(0xc000062780), ReadTimeout:0, ReadHeaderTimeout:0, WriteTimeout:0, IdleTimeout:0, MaxHeaderBytes:0, TLSNextProto:map[string]func(</em>http.Server, <em>tls.Conn, http.Handler){“h2”:(func(</em>http.Server, <em>tls.Conn, http.Handler))(0x120b620)}, ConnState:(func(net.Conn, http.ConnState))(nil), ErrorLog:(</em>log.Logger)(nil), disableKeepAlives:0, inShutdown:0, nextProtoOnce:sync.Once{m:sync.Mutex{state:0, sema:0x0}, done:0x1}, nextProtoErr:error(nil), mu:sync.Mutex{state:0, sema:0x0}, listeners:map[<em>net.Listener]struct {}{(</em>net.Listener)(0xc00007ccb0):struct {}{}}, activeConn:map[<em>http.conn]struct {}{(</em>http.conn)(0xc00009cb40):struct {}{}, (<em>http.conn)(0xc00009d2c0):struct {}{}, (</em>http.conn)(0xc00009d540):struct {}{}, (<em>http.conn)(0xc00009dcc0):struct {}{}, (</em>http.conn)(0xc00009cd20):struct {}{}, (<em>http.conn)(0xc00009d5e0):struct {}{}, (</em>http.conn)(0xc00009d860):struct {}{}, (<em>http.conn)(0xc00009d9a0):struct {}{}, (</em>http.conn)(0xc0001940a0):struct {}{}, (<em>http.conn)(0xc00009cfa0):struct {}{}, (</em>http.conn)(0xc00009d400):struct {}{}, (<em>http.conn)(0xc00009dd60):struct {}{}, (</em>http.conn)(0xc000194140):struct {}{}, (<em>http.conn)(0xc0001941e0):struct {}{}, (</em>http.conn)(0xc00009caa0):struct {}{}, (<em>http.conn)(0xc00009d180):struct {}{}, (</em>http.conn)(0xc00009d220):struct {}{}, (<em>http.conn)(0xc00009d680):struct {}{}, (</em>http.conn)(0xc00009d900):struct {}{}, (<em>http.conn)(0xc00009cc80):struct {}{}, (</em>http.conn)(0xc00009ce60):struct {}{}, (<em>http.conn)(0xc00009d040):struct {}{}, (</em>http.conn)(0xc00009dc20):struct {}{}, (<em>http.conn)(0xc00009dea0):struct {}{}, (</em>http.conn)(0xc00009ca00):struct {}{}, (<em>http.conn)(0xc00009cdc0):struct {}{}, (</em>http.conn)(0xc00009d0e0):struct {}{}, (<em>http.conn)(0xc00009d360):struct {}{}, (</em>http.conn)(0xc00009da40):struct {}{}, (<em>http.conn)(0xc00009dae0):struct {}{}, (</em>http.conn)(0xc00009cbe0):struct {}{}, (<em>http.conn)(0xc00009d4a0):struct {}{}, (</em>http.conn)(0x
+1
+2
+3
+// xiaorui.cc</p>
+
+<p>context.Background.WithValue(&amp;http.contextKey{name:”http-server”}, &amp;http.Server{Addr:”:9090”, Handler:http.Handler(nil), TLSConfig:(<em>tls.Config)(0xc000062780), ReadTimeout:0, ReadHeaderTimeout:0, WriteTimeout:0, IdleTimeout:0, MaxHeaderBytes:0, TLSNextProto:map[string]func(</em>http.Server, <em>tls.Conn, http.Handler){“h2”:(func(</em>http.Server, <em>tls.Conn, http.Handler))(0x120b620)}, ConnState:(func(net.Conn, http.ConnState))(nil), ErrorLog:(</em>log.Logger)(nil), disableKeepAlives:0, inShutdown:0, nextProtoOnce:sync.Once{m:sync.Mutex{state:0, sema:0x0}, done:0x1}, nextProtoErr:error(nil), mu:sync.Mutex{state:0, sema:0x0}, listeners:map[<em>net.Listener]struct {}{(</em>net.Listener)(0xc00007ccb0):struct {}{}}, activeConn:map[<em>http.conn]struct {}{(</em>http.conn)(0xc00009cb40):struct {}{}, (<em>http.conn)(0xc00009d2c0):struct {}{}, (</em>http.conn)(0xc00009d540):struct {}{}, (<em>http.conn)(0xc00009dcc0):struct {}{}, (</em>http.conn)(0xc00009cd20):struct {}{}, (<em>http.conn)(0xc00009d5e0):struct {}{}, (</em>http.conn)(0xc00009d860):struct {}{}, (<em>http.conn)(0xc00009d9a0):struct {}{}, (</em>http.conn)(0xc0001940a0):struct {}{}, (<em>http.conn)(0xc00009cfa0):struct {}{}, (</em>http.conn)(0xc00009d400):struct {}{}, (<em>http.conn)(0xc00009dd60):struct {}{}, (</em>http.conn)(0xc000194140):struct {}{}, (<em>http.conn)(0xc0001941e0):struct {}{}, (</em>http.conn)(0xc00009caa0):struct {}{}, (<em>http.conn)(0xc00009d180):struct {}{}, (</em>http.conn)(0xc00009d220):struct {}{}, (<em>http.conn)(0xc00009d680):struct {}{}, (</em>http.conn)(0xc00009d900):struct {}{}, (<em>http.conn)(0xc00009cc80):struct {}{}, (</em>http.conn)(0xc00009ce60):struct {}{}, (<em>http.conn)(0xc00009d040):struct {}{}, (</em>http.conn)(0xc00009dc20):struct {}{}, (<em>http.conn)(0xc00009dea0):struct {}{}, (</em>http.conn)(0xc00009ca00):struct {}{}, (<em>http.conn)(0xc00009cdc0):struct {}{}, (</em>http.conn)(0xc00009d0e0):struct {}{}, (<em>http.conn)(0xc00009d360):struct {}{}, (</em>http.conn)(0xc00009da40):struct {}{}, (<em>http.conn)(0xc00009dae0):struct {}{}, (</em>http.conn)(0xc00009cbe0):struct {}{}, (<em>http.conn)(0xc00009d4a0):struct {}{}, (</em>http.conn)(0x
+我们再来分析下 net/http的代码里对activeConn map的修改逻辑。不管是初始化，新增，删除都有加锁。但是他的锁的范围只是 net/http server的锁。fmt.Printf里对server对象的activeConn map遍历打印自然不受影响。
+那么，自然就会有造成 map 的panic。</p>
+
+<p>// xiaorui.cc</p>
+
+<p>// 创建先的活动连接
+func (s <em>Server) trackConn(c *conn, add bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.activeConn == nil {
+		s.activeConn = make(map[</em>conn]struct{})
+	}
+	if add {
+		s.activeConn[c] = struct{}{}
+	} else {
+		delete(s.activeConn, c)
+	}
+}</p>
+
+<p>// 关闭空闲连接
+func (s *Server) closeIdleConns() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for c := range s.activeConn {
+		st, unixSec := c.getState()
+                …
+		delete(s.activeConn, c)
+	}
+	return quiescent
+}</p>
+
+<p>// 创建先的活动连接
+func (s <em>Server) trackConn(c *conn, add bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.activeConn == nil {
+		s.activeConn = make(map[</em>conn]struct{})
+	}
+	if add {
+		s.activeConn[c] = struct{}{}
+	} else {
+		delete(s.activeConn, c)
+	}
+}</p>
+
+<p>// 关闭空闲连接
+func (s *Server) closeIdleConns() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for c := range s.activeConn {
+		st, unixSec := c.getState()
+                …
+		delete(s.activeConn, c)
+	}
+	return quiescent
+}
+这里还有个问题，这个server是从哪里传给每个请求的handler的。</p>
+
+<p>// xiaorui.cc</p>
+
+<p>func (srv *Server) Serve(l net.Listener) error {
+	baseCtx := context.Background()
+        …</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    // 把他自身通过withValue生成一个ctx，并传递下去
+ctx := context.WithValue(baseCtx, ServerContextKey, srv)
+for {
+	rw, e := l.Accept()
+    ...
+	go c.serve(ctx)
+} }
+</code></pre></div></div>
+
+<p>// Serve a new connection.
+func (c *conn) serve(ctx context.Context) {
+	c.remoteAddr = c.rwc.RemoteAddr().String()
+	ctx = context.WithValue(ctx, LocalAddrContextKey, c.rwc.LocalAddr())
+    …
+	for {
+		w, err := c.readRequest(ctx)
+		if c.r.remain != c.server.initialReadLimitSize() {
+			// If we read any bytes off the wire, we’re active.
+			c.setState(c.rwc, StateActive)
+		}
+        …</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>	req := w.req
+	serverHandler{c.server}.ServeHTTP(w, w.req)
+    }
+} }
+</code></pre></div></div>
+
+<p>func (srv *Server) Serve(l net.Listener) error {
+	baseCtx := context.Background()
+        …</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    // 把他自身通过withValue生成一个ctx，并传递下去
+ctx := context.WithValue(baseCtx, ServerContextKey, srv)
+for {
+	rw, e := l.Accept()
+    ...
+	go c.serve(ctx)
+} }
+</code></pre></div></div>
+
+<p>// Serve a new connection.
+func (c *conn) serve(ctx context.Context) {
+	c.remoteAddr = c.rwc.RemoteAddr().String()
+	ctx = context.WithValue(ctx, LocalAddrContextKey, c.rwc.LocalAddr())
+    …
+	for {
+		w, err := c.readRequest(ctx)
+		if c.r.remain != c.server.initialReadLimitSize() {
+			// If we read any bytes off the wire, we’re active.
+			c.setState(c.rwc, StateActive)
+		}
+        …</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>	req := w.req
+	serverHandler{c.server}.ServeHTTP(w, w.req)
+    }
+} } 如何解决？ 或者说安全打印
+</code></pre></div></div>
+
+<p>别直接把context都输出打印就可以了</p>
+
+<p>// fmt包 interface 参数转字符串公共方法
+func (p *pp) printArg(arg interface{}, verb rune) {
+default:
+        // 判断结构体有没有 String() 方法
+        if !p.handleMethods(verb) {
+            // 运用反射打印全部成员
+            p.printValue(reflect.ValueOf(f), verb, 0)</p>
+
+<p>type Stringer interface {
+    String() string
+}</p>
+
+<p>// 判断参数结构体是否实现了 Stringer 接口
+func (p *pp) handleMethods(verb rune) (handled bool) {
+ case Stringer:
+        handled = true
+        defer p.catchPanic(p.arg, verb)
+        p.fmtString(v.String(), verb)</p>
+
+<p>// 遍历结构体内所有成员，全部打印（不区分公有私有）
+func (p *pp) printValue(value reflect.Value, verb rune, depth int) {</p>
+
+<p>case reflect.Struct:
+        …. 省略 …  <br />
+        for i := 0; i &lt; f.NumField(); i++ {
+            … 省略 …
+            if name := f.Type().Field(i).Name; name != “” {
+                p.buf.WriteString(name)
+                p.buf.WriteByte(‘:’)</p>
+
+:ET

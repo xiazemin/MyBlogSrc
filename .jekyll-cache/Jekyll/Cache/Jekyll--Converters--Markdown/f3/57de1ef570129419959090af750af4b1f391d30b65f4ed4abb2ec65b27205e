@@ -1,0 +1,261 @@
+I"w <p>OPCODE 进行了分析，解释了其深层原因</p>
+
+<p>intval()
+0 ASSIGN
+1 SEND_VAR
+2 DO_FCALL
+3 ASSIGN
+4 RETURN
+5* ZEND_HANDLE_EXCEPTION</p>
+
+<p>int
+0 ASSIGN
+1 CAST
+2 ASSIGN
+3 RETURN
+4* ZEND_HANDLE_EXCEPTION
+SEND_VAR 和 DO_FCALL 操作，是导致 int 比 intval() 快很多的原因。</p>
+
+<p>ps: 还有另一个类型转换的 settype 就不用试了，它的性能比 intval 和 int 都差。
+<!-- more -->
+早在Sql注入横行的前几年，字符串转化为整数就已经被列为每个web程序必备的操作了。web程序将get或post来的id、整数等值强制经过转化函数转化为整数，过滤掉危险字符，尽可能降低系统本身被Sql注入的可能性。
+　　现如今，虽然Sql注入已经逐渐淡出历史舞台，但是，为了保证web程序的正常运行，减少出错概率，更好的保证用的满意度，我们同样需要将用户的不正确输入转化为我们所需要的。</p>
+
+<p>转化方式</p>
+
+<p>　　在PHP中，我们可以使用3种方式将字符串转化为整数。</p>
+
+<p>1.强制类型转换方式</p>
+
+<p>　　强制类型转换方式，就是“在要转换的变量之前加上用括号括起来的目标类型”（摘自PHP手册“类型戏法”节）的方式。</p>
+
+<p>&lt;?php 
+$foo = “1”; // $foo 是字符串类型 
+$bar = (int)$foo; // $bar 是整型 
+?&gt;
+　　对于整型来说，强制转换类型名称为int或者integer。</p>
+
+<p>2.内置函数方式</p>
+
+<p>　　内置函数方式，就是使用PHP的内置函数intval进行变量的转换操作。
+&lt;?php 
+$foo = “1”; // $foo 是字符串类型 
+$bar = intval($foo); // $bar 是整型 
+?&gt;
+intval函数的格式为：</p>
+
+<p>　　int intval(mixed $var [, int $base]); （摘自PHP手册）</p>
+
+<p>　　虽然PHP手册中明确指出，intval()不能用于array和object的转换。但是经过我测试，转换array的时候不会出任何问题，转换值为1，而不是想象中的0。恐怕是因为在PHP内部，array类型的变量也被认为是非零值得缘故吧。转换object的时候，PHP会给出如下的 notice：</p>
+
+<p>　　Object of class xxxx could not be converted to int in xxxxx.php on line xx</p>
+
+<p>转换值同样为1。</p>
+
+<p>3.格式化字符串方式</p>
+
+<p>　　格式化字符串方式，是利用sprintf的%d格式化指定的变量，以达到类型转换的目的。</p>
+
+<p>&lt;?php 
+$foo = “1”; // $foo 是字符串类型 
+$bar = sprintf(“%d”, $foo); // $bar 是字符串类型 
+?&gt; 
+　　严格意义上讲sprintf的转换结果还是string型，因此它不应该算是字符串转化为整数的方式。但是经过他处理之后的字符串值确实已经成为了“被强制转化为字符串类型的整数”。</p>
+
+<p>实际测试</p>
+
+<p>　　上面介绍了PHP中，将字符串转化为整数的3种方式。对于一般的程序员来说，看到这里就算结束了，下面的部分是针对变态程序员的。</p>
+
+<p>1.基本功能测试</p>
+
+<p>　　设定以下数组：
+&lt;?php 
+$a[] = “1”; 
+$a[] = “a1”; 
+$a[] = “1a”; 
+$a[] = “1a2”; 
+$a[] = “0”; 
+$a[] = array(‘4’,2); 
+$a[] = “2.3”; 
+$a[] = “-1”; 
+$a[] = new Directory(); 
+?&gt;
+使用三种方式依次转化上面给出的数组中的元素，查看转换情况。程序源代
+&lt;?php 
+$a[] = “1”; 
+$a[] = “a1”; 
+$a[] = “1a”; 
+$a[] = “1a2”; 
+$a[] = “0”; 
+$a[] = array(‘4’,2); 
+$a[] = “2.3”; 
+$a[] = “-1”; 
+$a[] = new Directory(); 
+// int 
+print “(int)<br />”; 
+foreach($a as $v) 
+{ 
+var_dump((int)$v); 
+print “<br />”; 
+} 
+// intval 
+print “intval();<br />”; 
+foreach($a as $v) 
+{ 
+var_dump(intval($v)); 
+print “<br />”; 
+} 
+// sprintf 
+print “sprintf();<br />”; 
+foreach($a as $v) 
+{ 
+var_dump(sprintf(“%d”, $v)); 
+print “<br />”; 
+} 
+?&gt;
+程序的最终运行结果如下（已经去掉转换object时出现的notice）：</p>
+
+<p>(int)
+int(1)
+int(0)
+int(1)
+int(1)
+int(0)
+int(1)
+int(2)
+int(-1)
+int(1)
+intval();
+int(1)
+int(0)
+int(1)
+int(1)
+int(0)
+int(1)
+int(2)
+int(-1)
+int(1)
+sprintf();
+string(1) “1”
+string(1) “0”
+string(1) “1”
+string(1) “1”
+string(1) “0”
+string(1) “1”
+string(1) “2”
+string(2) “-1”
+string(1) “1”</p>
+
+<p>　　由此可以看出，三种转换的结果是完全一样的。那么从功能上讲，3种方式都可以胜任转换工作，那么接下来的工作就是看哪一种效率更高了。</p>
+
+<p>2.性能测试</p>
+
+<p>　　被测试字符串是我们在注入工作中可能会使用到的一种：
+&lt;?php 
+$foo = “1’;Select * …”; 
+?&gt;
+获取时间点的函数如下（用于获取测试起始点和结束点，以计算消耗时间）：</p>
+
+<p>&lt;?php 
+**</p>
+<ul>
+  <li>Simple function to replicate PHP 5 behaviour 
+*/ 
+function microtime_float() 
+{ 
+list($usec, $sec) = explode(“ “, microtime()); 
+return ((float)$usec + (float)$sec); 
+} 
+?&gt; 
+　　（摘自PHP手册microtime()函数节）
+　　测试过程是使用每种方式转换变量$foo 1000000次（100万次），并将各自的消耗时间输出，总共进行三组测试，尽可能降低误差。测试程序如下：
+&lt;?php 
+function microtime_float() 
+{ 
+list($usec, $sec) = explode(“ “, microtime()); 
+return ((float)$usec + (float)$sec); 
+} 
+$foo = “1’;Select * …”;</li>
+</ul>
+
+<p>// (int) 
+$fStart = microtime_float(); 
+for($i=0;$i&lt;1000000;$i++) 
+{ 
+$bar = (int)$foo; 
+} 
+$fEnd = microtime_float(); 
+print “(int):” . ($fEnd - $fStart) . “s<br />”; 
+// intval() 
+$fStart = microtime_float(); 
+for($i=0;$i&lt;1000000;$i++) 
+{ 
+$bar = intval($foo); 
+} 
+$fEnd = microtime_float(); 
+print “intval():” . ($fEnd - $fStart) . “s<br />”; 
+// sprintf() 
+$fStart = microtime_float(); 
+for($i=0;$i&lt;1000000;$i++) 
+{ 
+$bar = sprintf(“%d”, $foo); 
+} 
+$fEnd = microtime_float(); 
+print “sprintf():” . ($fEnd - $fStart) . “s<br />”; 
+?&gt;
+最终的测试结果：</p>
+
+<p>(int):0.67205619812012s
+intval():1.1603000164032s
+sprintf():2.1068270206451s
+(int):0.66051411628723s
+intval():1.1493890285492s
+sprintf():2.1008238792419s
+(int):0.66878795623779s
+intval():1.1613430976868s
+sprintf():2.0976209640503s</p>
+
+<p>　　虽然这个测试有点变态（谁会连续转换100w次的整数？），但是由此可以看出，使用强制类型转换将字符串转化为整数速度是最快的。</p>
+
+<p>PHP中将字符串转换为整数的最快方法
+起步</p>
+
+<p>这是个旧贴，在 SO 上偶然看到的：https://stackoverflow.com/questions/239136/fastest-way-to-convert-string-to-integer-in-php</p>
+
+<p>对于 “123” =&gt; 123 最快的方法是什么，如果是 “hello” =&gt; ? 转为整型又会有什么问题。</p>
+
+<p>intval vs int</p>
+
+<p>我以前是混着用的，有时用 intval($var) 有时用 (int) $var ,纯看哪个顺手。看了 SO 上才知道，显式的类型转换的性能大约是 intval 4 倍。这就可以是性能调优的小 Tip 了。</p>
+
+<p>我测了不同的 $val 值，发现两者得到的结果完全一样，发出的警告也是相同的。</p>
+
+<p>因此在不考虑 intval 需要第二个参数的情况下，就可以放心的使用 int 来做转换了。</p>
+
+<p>深层原因</p>
+
+<p>网友 Joseph Scott 对 OPCODE 进行了分析，解释了其深层原因
+intval()
+0 ASSIGN
+1 SEND_VAR
+2 DO_FCALL
+3 ASSIGN
+4 RETURN
+5* ZEND_HANDLE_EXCEPTION</p>
+
+<p>int
+0 ASSIGN
+1 CAST
+2 ASSIGN
+3 RETURN
+4* ZEND_HANDLE_EXCEPTION
+SEND_VAR 和 DO_FCALL 操作，是导致 int 比 intval() 快很多的原因。</p>
+
+<p>ps: 还有另一个类型转换的 settype 就不用试了，它的性能比 intval 和 int 都差。</p>
+
+<p>总结</p>
+
+<p>使用强制类型转换方式将字符串转化为整数是最直接的转化方式之一（可以直接获得整型的变量值）。从代码可读性角度上讲，sprintf方式代码比较长，而且其结果有可能还需要再次进行强制类型转换，而intval函数是典型的面向过程式转换，强制类型转换则比较直接的将“我要转化”这个思想传递给阅读者。从效率上讲，强制类型转换方式也是最快速的转化方式。因此，对于经常进行转化工作的程序员，我推荐使用这种方式。</p>
+
+<p>https://www.jb51.net/article/29844.htm</p>
+:ET

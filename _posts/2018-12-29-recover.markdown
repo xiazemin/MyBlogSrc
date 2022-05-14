@@ -1,0 +1,134 @@
+---
+title: recover panic defer
+layout: post
+category: golang
+author: 夏泽民
+---
+defer　　
+
+　　defer是go提供的一种资源处理的方式。defer的用法遵循3个原则
+
+在defer表达式被运算的同时，defer函数的参数也会被运算。如下defer的表达式println运算的同时，其入参i也会被运算，结果为初始化值0，故defer调用中会打印“0”
+func a() {
+     i := 0
+     defer fmt.Println(i)
+     i++
+     return
+ }
+defer函数在一个函数return之后遵循后进先出的调用原则，如下打印结果为3210
+func b() {
+    for i := 0; i < 4; i++ {
+        defer fmt.Print(i)
+    }
+}
+defer函数可能会读取并赋值给所在函数的返回值，如下返回值为2
+func c() (i int) {
+    defer func() { i++ }()
+    return 1
+}
+　　
+
+针对上述的第三点有如下三种情况：
+例1：func f() (result int) {
+    defer func() {
+        result++
+    }()
+    return 0
+}
+
+例2：func f() (r int) {
+     t := 5
+     defer func() {
+       t = t + 5
+     }()
+     return t
+}
+
+例3：<br>func f() (r int) {
+    defer func(r int) {
+          r = r + 5
+    }(r)
+    return 1
+}
+函数返回的过程是这样的：先给返回值赋值，然后再调用defer表达式，最后才是返回到调用函数中
+
+先看例1，它可以改写成这样：
+
+func f() (result int) {
+     result = 0  //return语句不是一条原子调用，return xxx其实是赋值＋ret指令
+     func() {    //defer被插入到return之前执行，也就是赋返回值和ret指令之间
+         result++
+     }()
+     return
+}
+所以这个返回值是1。
+
+再看例2，它可以改写成这样：
+
+func f() (r int) {
+     t := 5
+     r = t     //赋值指令
+     func() {  //defer被插入到赋值与返回之间执行，这个例子中返回值r没被修改过
+         t = t + 5
+     }
+     return    //空的return指令
+}
+所以这个的结果是5。
+
+最后看例3，它改写后变成：
+func f() (r int) {
+     r = 1         //给返回值赋值
+     func(r int) { //这里改的r是传值传进去的r，不会改变要返回的那个r值
+          r = r + 5
+     }(r)
+     return        //空的return
+}
+　　所以这个例子的结果是1。
+
+ 
+
+panic和recover
+
+panic和recover的使用需要遵循以下原则：
+
+defer 需要放在 panic 之前定义，另外recover只有在 defer 调用的函数中才有效。
+recover处理异常后，逻辑并不会恢复到 panic 那个点去，函数跑到 defer 之后的那个点.
+多个 defer 会形成 defer 栈，后定义的 defer 语句会被最先调用
+使用recover捕获程序中的错误的用法如下
+package main
+  
+import (
+    "fmt"
+    "time"
+)
+  
+func main() {
+    f()
+    fmt.Println("end")
+}
+  
+func f() {
+　　defer func() { 　　　　　//必须要先声明defer，否则不能捕获到panic异常
+　　　　fmt.Println("defer start")
+　　　　if err := recover(); err != nil {
+　　　　　　fmt.Println(err) //这里的err其实就是panic传入的内容，"bug"
+　　　　}
+　　　　fmt.Println("defer end")
+　　}()
+　　for {
+　　　　fmt.Println("func begin")
+　　　　a := []string{"a", "b"}
+　　　　fmt.Println(a[3]) 　　   // 越界访问，肯定出现异常
+　　　　panic("bug")  　　　     // 上面已经出现异常了,所以肯定走不到这里了。
+　　　　fmt.Println("func end") // 不会运行的.
+　　　　time.Sleep(1 * time.Second)
+　　}
+}
+输出结果如下
+
+1 func begin
+2 defer start
+3 runtime error: index out of range
+4 defer end
+5 end
+<!-- more -->

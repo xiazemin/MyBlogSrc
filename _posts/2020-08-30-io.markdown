@@ -1,0 +1,165 @@
+---
+title: io 
+layout: post
+category: golang
+author: 夏泽民
+---
+Golang的IO读写提供了很多种方式，目前本人知道的有io库、os库、ioutil库、bufio库、bytes/strings库等。
+虽然库多是一件好事，意味着选择性多，但让我困惑的一点是：什么场景下该用哪个库？ 为什么？
+在给出结论前，我先想给出Golang内置IO库的项目结构，主要方便理解和引用：
+# 只列举了核心的目录及文件
+src:
+  - bufio
+    - bufio.go
+  - bytes
+    - buffer.go
+    - reader.go
+  - io
+    - ioutil
+      - ioutil.go
+    - io.go
+  - os
+    - file.go
+  - strings  
+    - reader.go
+
+复制代码
+1.io库属于底层接口定义库，其作用是是定义一些基本接口和一些基本常量，并对这些接口的作用给出说明，常见的接口有Reader、Writer等。一般用这个库只是为了调用它的一些常量，比如io.EOF。
+2.ioutil库包含在io目录下，它的主要作用是作为一个工具包，里面有一些比较实用的函数，比如 ReadAll(从某个源读取数据)、ReadFile（读取文件内容）、WriteFile（将数据写入文件）、ReadDir（获取目录）
+3.os库主要是跟操作系统打交道，所以文件操作基本都会跟os库挂钩，比如创建文件、打开一个文件等。这个库往往会和ioutil库、bufio库等配合使用
+4.bufio库可以理解为在io库上再封装一层，加上了缓存功能。它可能会和ioutil库和bytes.Buffer搞混。
+4.1 bufio VS ioutil库：两者都提供了对文件的读写功能，唯一的不同就是bufio多了一层缓存的功能，这个优势主要体现读取大文件的时候（ioutil.ReadFile是一次性将内容加载到内存，如果内容过大，很容易爆内存）  
+4.2 bufio VS bytes.Buffer：两者都提供一层缓存功能，它们的不同主要在于 bufio 针对的是文件到内存的缓存，而 bytes.Buffer 的针对的是内存到内存的缓存（个人感觉有点像channel，你也可以发现 bytes.Buffer 并没有提供接口将数据写到文件）。
+5.bytes和strings库：这两个库有点迷，首先它们都实现了Reader接口，所以它们的不同主要在于针对的对象不同，bytes针对的是字节，strings针对的是字符串（它们的方法实现原理很相似）。另一个区别就是 bytes还带有Buffer的功能，但是 strings没提供。
+注：关于Reader和Writer接口，可以简单理解为读取源和写入源，即只要实现Reader里面的Read方法，这个东西就可以作为一个读取源，里面可以包含数据并被我们读取；Writer亦是如此。
+以上就是个人的一些结论，下面会针对以上结论做进一步说明，如果有错误的地方麻烦请留言指正，比心❤️！
+窥探 io 库
+io库比较常用的接口有三个，分别是Reader，Writer和Close。
+// Read方法会接收一个字节数组p，并将读取到的数据存进该数组，最后返回读取的字节数n。
+// 注意n不一定等于读取的数据长度，比如字节数组p的容量太小，n会等于数组的长度
+type Reader interface {
+    Read(p []byte) (n int, err error)
+}
+
+// Write 方法同样接收一个字节数组p，并将接收的数据保存至文件或者标准输出等，返回的n表示写入的数据长度。
+// 当n不等于len(p)时，返回一个错误。
+type Writer interface {
+    Write(p []byte) (n int, err error)
+}
+
+// 关闭操作
+type Closer interface {
+    Close() error
+}
+
+复制代码
+关于 Read 方法的具体实现，可以在strings库中看到：
+// 定义一个Reader接口体
+type Reader struct {
+    s        string
+    i        int64 // current reading index
+    prevRune int   // index of previous rune; or < 0
+}
+
+// 通过NewReader方法得到 reader 对象，这里有个关键的地方是传入的字符串被赋值到 s 变量中
+func NewReader(s string) *Reader { 
+  return &Reader{s, 0, -1} 
+}
+
+// Read方法： 核心是 copy 方法，参数b虽然是切片，但是copy方法会影响到它的底层数组
+func (r *Reader) Read(b []byte) (n int, err error) {
+    if r.i >= int64(len(r.s)) {
+        return 0, io.EOF
+    }
+  r.prevRune = -1
+  // 核心方法
+    n = copy(b, r.s[r.i:])
+    r.i += int64(n)
+    return
+}
+
+复制代码
+窥探 ioutil 库
+上面提到，ioutil 库就是一个工具包，里面主要是比较实用的函数，比如ReadFile、WriteFile等，唯一需要注意的是它们都是一次性读取和一次性写入，所以当读取的时候注意文件不能过大。
+从文件读取数据：
+func readByFile()  {
+    data, err := ioutil.ReadFile( "./lab8_io/file/test.txt")
+    if err != nil {
+        log.Fatal("err:", err)
+        return
+    }
+    fmt.Println("data", string(data)) // hello world！
+}
+
+复制代码
+把数据写入到文件：
+func writeFile() {
+    err := ioutil.WriteFile("./lab8_io/file/write_test.txt", []byte("hello world!"), 0644)
+    if err != nil {
+        panic(err)
+        return
+    }
+}
+复制代码
+遍历目录：遍历目录有一个需要注意的是它的排序并不是自然排序方式。
+窥探bufio库
+bufio 库在上面也提到过，它主要是在io库上加了一层缓存的功能，以下是bufio读取大文件的例子：
+func readBigFile(filePath string) error {
+    f, err := os.Open(filePath)
+    defer f.Close()
+
+    if err != nil {
+        log.Fatal(err)
+        return err
+    }
+
+    buf := bufio.NewReader(f)
+    count := 0
+    for {
+        count += 1
+        line, err := buf.ReadString('\n')
+        line = strings.TrimSpace(line)
+        if err != nil {
+            return err
+        }
+    fmt.Println("line", line)
+    // 这里是避免全部打印
+        if count > 100 {
+            break
+        }
+    }
+    return nil
+}
+
+复制代码
+注：
+1.bufio 的ReadLine/ReadBytes/ReadString/ReadSlice：    ReadString和ReadBytes等同，ReadBytes和ReadLine都调用了ReadSlice
+窥探bytes/strings库
+前面提过，就单纯实现Reader接口，bytes和strings底层函数的实现方式是差不多的，可以查看其源码得证：
+// bytes/reader.go
+// Read implements the io.Reader interface.
+func (r *Reader) Read(b []byte) (n int, err error) {
+    if r.i >= int64(len(r.s)) {
+        return 0, io.EOF
+    }
+    r.prevRune = -1
+    n = copy(b, r.s[r.i:])
+    r.i += int64(n)
+    return
+}
+
+// strings/reader.go
+func (r *Reader) Read(b []byte) (n int, err error) {
+    if r.i >= int64(len(r.s)) {
+        return 0, io.EOF
+    }
+    r.prevRune = -1
+    n = copy(b, r.s[r.i:])
+    r.i += int64(n)
+    return
+}
+
+<!-- more -->
+https://juejin.im/post/6864886461746855949
+https://gocn.vip/topics/10877
+https://gocn.vip/topics/10878

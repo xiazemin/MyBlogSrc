@@ -1,0 +1,392 @@
+I"�K<p>有些场景，如需要以插件形式加载，方便动态更新，热重启等情况。这些场景的需求，就带来了plugin库，动态库加载。</p>
+
+<p>fabric 1.2版本的新特性，其中有一个是实现了交易背书和区块结果验证这两个原本由系统链码escc和vscc负责的模块的可插拔。它们的可插拔用到了Go的plugin技术，这也是我第一次知道Go Plugin的概念(虽然在Go 1.8版本就有了)</p>
+
+<p>什么是Go Plugin
+Golang是静态编译型语言，在编译时就将所有引用的包（库）全部加载打包到最终的可执行程序（或库文件）中，因此并不能在运行时动态加载其他共享库。Go Plugin提供了这样一种方式，能够让你在运行时动态加载外部功能。</p>
+
+<p>为什么用Go Plugin
+其实应该问为什么要用Plugin，我觉得原因有很多，比如：</p>
+
+<p>可插拔：有了Plugin，我的程序可以根据需要随时替换其中某些部件而不用修改我的程序；
+动态加载的需要：有些模块只有在运行时才能确定，需要动态加载外部的功能模块；
+独立开发：Plugin 可以和主程序独立建设，主程序只需要制定好框架，实现默认（模版）功能。Plugin 可根据用户需求随时自行扩展开发，运行时随意替换，提高了程序的可定制性；
+怎么用Go plugin
+Golang 对 Plugin 的实现在标准库plugin中。整个接口可以说相当简洁了。</p>
+
+<p>type Plugin struct{ … }
+    func Open(path string) (*Plugin, error)
+    func (p *Plugin) Lookup(symName string) (Symbol, error)
+type Symbol interface{}</p>
+
+<p>是的，你没有看错，就只有两个type和两个方法。</p>
+
+<p>Plugin
+type Plugin即Golang加载的插件，与之有关的两个方法：</p>
+
+<p>Open: 根据参数path提供的插件路径加载这个插件，并返回插件这个插件结构的指针*Glugin
+Lookup: *Plugin的惟一方法，通过名称symName在插件中寻找对应的变量或方法，以Symbol的形式返回
+Symbol
+根据定义type Symbol interface{}，Symbol是interface的别名，也就是说，我们可以从插件里面拿到任何类型的可导出元素。</p>
+
+<p>注意几点问题：</p>
+
+<p>插件中定义的 struct 无法暴露出来，可以让主程序和插件程序import公共的 package 来解决
+私有方法、变量不会被暴露出来</p>
+
+<p>官方文档在此：https://golang.org/pkg/plugin/
+编写一个 Plugin 基本有以下几步:</p>
+
+<p>1.Plguin 需要有自己的 main package
+2.编译的时候，使用 go build -buildmode=plugin file.go 来编译
+3.使用 plugin.Open(path string) 来打开.so文件，同一插件只能打开一次，重复打开会报错
+4.使用 plugin.LookUp(name string) 来获取插件中对外暴露的方法或者类型
+5.使用类型断言，断言后执行相应的方法</p>
+
+<p>https://tip.golang.org/pkg/plugin/
+https://github.com/golang/go/commit/0cbb12f0bbaeb3893b3d011fdb1a270291747ab0</p>
+
+<p>plugin链接进golang程序会大量增加占用的内存。所以在使用plugin热更新的时候，当发现程序占用内存陡增的时候</p>
+
+<p>https://github.com/hashicorp/go-plugin</p>
+
+<p>https://www.php.cn/manual/view/35282.html
+<!-- more --></p>
+
+<p>了解了plugin包的基本功能，按照惯例，我们要用hello world检验下。
+准备plugin源码pluginhello.go：</p>
+
+<p>package main</p>
+
+<p>import (
+    “fmt”
+)</p>
+
+<p>func Hello() {
+    fmt.Println(“Hello World From Plugin!”)
+}</p>
+
+<p>这里在插件中，定义了一个可导出方法Hello打印Hello World From Plugin!。
+有了源码，怎样将他编译成一个插件呢？</p>
+
+<p>➜  plugin go1.10 build –buildmode=plugin -o pluginhello.so pluginhello.go
+➜  plugin ls
+invokeplugin.go pluginhello.go  pluginhello.so
+用go build命令，同时制定buildmode为plugin即可。So Easy!
+注意：这里尤其要注意的是，plugin的源码需要在main包中，否则无法编译。</p>
+
+<p>下面该调用这个插件了:</p>
+
+<p>package main</p>
+
+<p>import (
+    “fmt”
+    “os”
+    “plugin”
+)</p>
+
+<p>func main() {
+    p, err := plugin.Open(“./pluginhello.so”)
+    if err != nil {
+        fmt.Println(“error open plugin: “, err)
+        os.Exit(-1)
+    }
+    s, err := p.Lookup(“Hello”)
+    if err != nil {
+        fmt.Println(“error lookup Hello: “, err)
+        os.Exit(-1)
+    }
+    if hello, ok := s.(func()); ok {
+        hello()
+    }
+}</p>
+
+<p>首先通过Open方法打开插件，然后通过名称Hello找到插件中的func Hello方法。
+注意，由于从插件中找到的任何元素都是以Symbol形式(即interface{})返回,我们需要通过断言的形式对结果进行判断和转换，得到我们需要的类型。
+让我们看看效果吧：</p>
+
+<p>➜  plugin go1.10 run invokeplugin.go
+Hello World From Plugin!
+完美调用了插件！</p>
+
+<p>说明: Go 1.8时 Plugin 支持Linux和macOS，但是因为bug在1.9取消了对macOS的支持，1.10时又恢复了对macOS的支持。
+我的机器上因为装了多个版本，而开发需要常用的是go 1.9，所以这里使用go 1.10时，命令用的go1.10这个软连接</p>
+
+<p>编译命令和普通的编译不一样，增加了参数-buildmode=plugin</p>
+
+<p>另外plugin第一次加载时候，init函数会调用。（后面的源码分析中会分析）</p>
+
+<p>注意：</p>
+
+<p>1、plugin只init一次，并且不能closed。</p>
+
+<p>2、目前只实现了linux平台和macos平台</p>
+
+<p>文件很少，就只有两个（其实源码里有三个文件）</p>
+
+<p>只提供了两个接口</p>
+
+<p>Open：加载so库文件</p>
+
+<p>Lookup：查找对应符号（包括func，var等）</p>
+
+<p>其中值得注意的是package是main</p>
+
+<p>下面看下plugin的源码，包含了4个文件
+plugin.go
+plugin_dlopen.go
+plugin_stubs.go
+plugin_test.go</p>
+
+<p>#1,plugin.go
+// Plugin is a loaded Go plugin.
+type Plugin struct {
+	pluginpath string
+	err        string        // set if plugin failed to load
+	loaded     chan struct{} // closed when loaded
+	syms       map[string]interface{}
+}</p>
+
+<p>pluginpath：库的path</p>
+
+<p>err：用于记录过程中的err</p>
+
+<p>loaded：这个用于防止并发加载同一个库时候用</p>
+
+<p>syms：这个记录的是库中所有的符号和其对应的值（可能是var、func等）</p>
+
+<p>Open函数，封装了open函数
+Lookup函数封装了lookup函数</p>
+
+<p>#2,plugin_stubs.go
+// +build !linux,!darwin !cgo
+这里是针对不支持平台的空实现，!linux,!darwin !cgo。可以看出，和文档中说的一样，非Linux，非darwin平台的时候编译成空实现。当然还有一个cgo，如果不支持cgo的话，也是无法实现plugin的。</p>
+
+<p>#3,plugin_dlopen.go
+编译命令中，显示支持linux 和 darwin平台，当然要求是要支持cgo。
+然后就是一个cgo的代码。其中封装了两个函数dlopen，dlsym。</p>
+
+<p>#cgo linux LDFLAGS: -ldl
+static uintptr_t pluginOpen(const char* path, char** err) {
+	void* h = dlopen(path, RTLD_NOW|RTLD_GLOBAL);</p>
+
+<p>static void* pluginLookup(uintptr_t h, const char* name, char** err) {
+	void* r = dlsym((void*)h, name);</p>
+
+<p>这个是linux种标准的动态链接加载接口。
+当然plugin只实现了封装了dlopen，dlsym，两个函数。这个和文档中所提供的接口和描述是符合的。
+只提供了加载，并没有提供关闭</p>
+
+<p>全局变量
+var (
+	pluginsMu sync.Mutex
+	plugins   map[string]*Plugin
+)
+pluginsMu：全局锁
+plugins：保存加载的动态库</p>
+
+<p>进入函数，一开始是一些字符串的转换。</p>
+
+<p>重点是加锁后，会判断是否已经在加载，或者已经加载过的plugin。</p>
+
+<p>这个时候，如果刚好plugin还在加载中，</p>
+
+<p>&lt;- p.loaded 会等待plugin加载完毕后，close掉p.loaded。</p>
+
+<p>这种方式就是合并加载</p>
+
+<p>这里就是调用了cgo代码pluginOpen，加载so库</p>
+
+<p>初始化plugin结构体，并将其放入到全局的plugins这个map中。然后unlock全局锁。</p>
+
+<p>继续，调用了cgo代码pluginLookup，查找init函数，并执行。</p>
+
+<p>接着就是循环读取所有的符号，并将符号与其对应的值保存下来。保存在p.syms中。</p>
+
+<p>最后close p.loaded，表示加载过程结束了。
+所有的符号都保存在p.syms中，这个时候的查找，就只需要直接查找syms就可以了。</p>
+
+<p>通过使用插件在运行时扩展程序的功能，以不同语言显示问候语，而无需重新编译程序。</p>
+
+<p>模块化程序设计</p>
+
+<p>使用Go插件创建模块化程序需要遵循与常规Go软件包一样严格的软件实践。然而，插件引入了新的设计问题，因为它们的解耦性质被放大了。</p>
+
+<p>清晰的负担</p>
+
+<p>构建可插拔软件系统时，建立清晰的组件可用性很重要。系统必须为插件集成提供一个简单的封装层。另一方面，插件开发人员应将系统视为黑盒，不作为所提供的合约以外的假设。</p>
+
+<p>插件独立</p>
+
+<p>应该将插件视为与其他组件分离的独立组件。这允许插件独立于他们的消费者，并拥有自己的开发和部署生命周期。</p>
+
+<p>应用Unix模块化原则</p>
+
+<p>插件代码应该设计成只关注一个功能点。</p>
+
+<p>清楚记录</p>
+
+<p>由于插件是在运行时加载的独立组件，因此它们必须有很好的文档。例如，导出的函数和变量的名称应该清楚地文档化，以避免符号查找错误。</p>
+
+<p>使用接口类型作为边界</p>
+
+<p>Go插件可以导出任何类型的包函数和变量。您可以设计插件来将其功能解耦为一组松散的函数。缺点是您必须单独查找和绑定每个函数符号。</p>
+
+<p>然而，更为简单的方法是使用接口类型。创建导出功能的接口提供了统一简洁的交互，并具有清晰的功能划分。解析到接口的符号将提供对该功能的整个方法集的访问，而不仅仅是一个方法。</p>
+
+<p>新部署范式</p>
+
+<p>插件有可能影响软件在Go中的构建和分发。例如，库作者可以将其代码作为可在运行时链接的预构建组件来分发。这将偏离传统的go get，build和链接循环。</p>
+
+<p>信任和安全</p>
+
+<p>如果Go社区习惯使用预构建的插件（二进制文件）作为分发库的一种方法，信任和安全自然会成为一个问题。幸运的是我们有已经建立起来的社区，还有信誉良好的分发基础设施，可以在这里提供帮助。</p>
+
+<p>版本</p>
+
+<p>插件是不透明而独立的实体，应该进行版本控制，以向用户提示其支持的功能。这里的一个建议是在命名共享对象文件时使用语义版本控制。例如，上面的文件编译插件可以命名为eng.so.1.0.0。</p>
+
+<p>Gosh：一个可插拔命令shell</p>
+
+<p>自插件系统发布以来，我想创建一个可插拔的框架来创建交互式命令shell程序，其中使用Go插件实现命令。 所以我创建了Gosh（Go shell）。</p>
+
+<p>Gosh使用shell在运行时加载命令插件。 当用户在提示符下键入命令时，驱动程序将分派已注册的插件来处理该命令。 这是一个早期的尝试，但它已经展示了Go插件系统的潜力。</p>
+
+<p>当我们在使用php开发的时候，基本不需要关心热更新这件事的，因为PHP本身已经帮我处理好了，只需要提交代码，PHP重新解释一遍即可。而go则是静态语言，编译后得到的是直接被机器执行的，所有代码已经翻译成相对应的机器指令并且在运行时已经加载到内存，不能动态更新。那么如果想热更新就成了件麻烦的事，但是作为后端开发人员，很渴望支持这种功能，毕竟在线上能新增功能、修复bug客户端完全无感知是多么完美的事。
+本文暂不讨论http这种无状态服务更新，网上能搜索到很多文章关于如何利用fd继承实现优雅重启。这里主要讨论使用golang 1.8新增的plugin来实现业务的更新，并且业务是类似游戏的有状态服务。官方文档中对plugin的描述比较简单，他可以动态的加载so和执行导出的方法，并且仅仅提供了两个方法：打开模块和提取符号，甚至连关闭都没有(-_-)。</p>
+
+<p>一个程序包含两部分：数据和算法，那么既然是有状态服务，数据部分肯定不能动，那么热更就只能动算法部分了。这时我们需要一个容器，将这两部分隔离开，一方面是存储数据，另一方面要动态加载so。隔离了数据和算法，只要数据存在，我们就可以随意更新算法了。在开始编码之前，要先解决几个问题：</p>
+
+<p>1、同一个so文件只会被打开一次</p>
+
+<p>2、每个so有一个pluginpath用来标识是否重复，如果两个so文件不一样，但pluginpath一样还是会报错</p>
+
+<p>3、不同so文件定义的结构体不能使用类型断言进行转换</p>
+
+<p>对于上面的问题，有如下解决方案:</p>
+
+<p>1、每次生成的so带一个版本号比如game.1001.so</p>
+
+<p>2、编译的时候新增–ldflags=”-pluginpath=xxx”参数</p>
+
+<p>3、使用unsafe进行转换(下面还会有注意事项)</p>
+
+<p>代码地址：https://github.com/scgywx/myplugin</p>
+
+<p>1、编译engine，这就是我们上面说的容器，他负责数据存储和so的加载与执行。</p>
+
+<p>1
+sh build.sh
+2、编译第1个版本so(注意后面有个参数）</p>
+
+<p>1
+sh build_so.sh 1
+3、将src/logic/main.go里面的modelVersion和modelName分别改成1002和game2（这里主要是测试两个版本的内容区别)</p>
+
+<p>4、编译第2个版本so</p>
+
+<p>1
+sh build_so.sh 2
+5、运行容器</p>
+
+<p>1
+./engine
+6、浏览器输入127.0.0.1:12345/hello，会看到如下显示（这是使用的第一个版本so)</p>
+
+<p>复制代码代码如下:
+hello test, this is golang plugin test!, version=1001, name=game1, oldversion=0, oldName=</p>
+
+<p>7、浏览器输入127.0.0.1:12345/load?name=plugin2.so（这里输出done,就说明加载so成功了)</p>
+
+<p>8、再次输入127.0.0.1:12345/hello，会看到如下显示。</p>
+
+<p>复制代码代码如下:
+hello test, this is golang plugin test!, version=1002, name=game2, oldversion=1001, oldName=game1</p>
+
+<p>到这里，我们的热更新效果已经达成，但是还是有一些限制</p>
+
+<p>1、每个so不能单独保存数据，因为当另一个so加载后，前面so的数据是没办法访问到，并且由于so不能被关闭，可能会出现多个so引用同一个变量，gc没办法释放，所以需要透过容器来共享数据，那么我们就不能在模块内使用全局变量来保存数据。</p>
+
+<p>2、go里面两个类型即使一样，也不能直接转换，所以两个so内定义的结构体也不能直接转换，要使用unsafe.Pointer来进行强转(见src/logic/main.go)，既然是强转，那么两个版本的so使用的结构体定义就不能有区别，否则转换后数据可能会出现异常，也就是说热更新不能修改结构体。</p>
+
+<p>1、什么是插件（也叫动态库）
+在写C++程序时，时常需要将一个class写成DLL(动态链接库)，供客户端程序调用。这样的DLL可以导出整个class,也可以导出这个class的某个方法。</p>
+
+<p>通过DLL调用和把代码写在程序里调用的区别：看这个函数是否提供给别的程序调用；</p>
+
+<p>别的程序肯定没法调用这个程序的某个函数，总不能把代码拷给他把，且不说可不可以拷，就算可以也麻烦阿，直接写成DLL让他自己调用去；</p>
+
+<p>插件就类似dll;</p>
+
+<p>通过使用插件在运行时扩展程序的功能, 而无需重新编译程序；</p>
+
+<p>启动启程之后不用停止就能添加新的功能（函数）；</p>
+
+<p>优点：</p>
+
+<p>动态加载, 也称热加载, 每次升级时不用重新编译整个工程，重新部署服务, 而是添加插件时进行动态更新。这对于很多比较重型的服务来说非常重要。
+缺点：</p>
+
+<p>带来一定的安全风险, 如果一些非法模块被注入如何防范；
+给系统带来一定的不稳定的因素, 如果模块有问题, 没有经过良好的测试, 容易导致服务崩溃
+2、Go的插件系统:Plugin
+Go插件是使用-buildmode = plugin标记编译的一个包, 用于生成一个共享对象(.so)库文件。</p>
+
+<p>Go包中的导出的函数和变量被公开为ELF符号，可以使用plugin包在运行时查找并绑定ELF符号。这样就可以查询并调用插件里的函数；</p>
+
+<p>3、插件设计原则
+插件独立
+使用接口类型作为边界
+Unix模块化原则
+版本控制
+4、go使用插件
+用plugin.Open()打开插件文件</p>
+
+<p>用plguin.Lookup(“Export-Variable-Name”)查找导出的符号”Car”或者”Phone”(就是函数名)</p>
+
+<p>请注意，符号名称与插件模块中定义的变量名称相匹配</p>
+
+<p>类型断言，然后就可以进行调用了</p>
+
+<p>go build -buildmode=plugin file.go，编译生成插件</p>
+
+<p>==go中的插件不是进程隔离的，是单进程的；==</p>
+
+<p>golang的插件很不完善，只能加载不能卸载。如何需要卸载需要自己实现一套重载机制。</p>
+
+<p>5、使用plugin注意
+Go plugin判断两个插件是否相同是通过比较pluginpath实现的，如果没有指定pluginpath，则由内部的算法生成, 生成的格式为plugin/unnamed-“ + root.Package.Internal.BuildID 。</p>
+
+<p>在开始编码之前，要先解决几个问题：
+1、同一个so文件只会被打开一次
+2、每个so有一个pluginpath用来标识是否重复，如果两个so文件不一样，但pluginpath一样还是会报错。会被识别成是同一个文件，同时加载这两个插件时，会报错；
+3、不同so文件定义的结构体不能使用类型断言进行转换</p>
+
+<p>对于上面的问题，有如下解决方案:
+编译的时候新增–ldflags=”-pluginpath=xxx”参数，自己指定pluginpath参数，避免重复。
+复制代码
+6、关于插件内存
+加载.so文件的时候，就会为全局变量申请内存空间，同时执行init()初始化函数；</p>
+
+<p>同一进程空间内的线程：
+堆：是大家共有的空间
+栈：是个线程独有的</p>
+
+<p>同一进程空间，函数可以直接相互调用；
+复制代码
+思考：我在插件中调用项目的其他部分，如models，编译插件的时候不会报错吗？我插件都还没加载？</p>
+
+<p>首先插件又叫动态库，和静态库没什么区别。静态库就是程序编译完了之后，再来修改静态库就程序不起作用，要重新编译才行。</p>
+
+<p>而动态库就不同了，在程序编译运行之后，动态库可以照样更改，改完之后程序重新加载一遍就完事了；</p>
+
+<p>至于插件中调用了models，毛问题都没有，插件编译的时候都没调用到models，而且插件只是编译而已，就算调用有问题，那也是等插件被加载之后的事情了；</p>
+
+<p>https://www.jb51.net/article/138627.htm
+https://blog.csdn.net/screscent/article/details/79959894
+https://www.sohu.com/a/156507964_657921
+http://www.361way.com/go-plugin/5925.html
+https://www.imooc.com/article/48340?block_id=tuijian_wz
+https://www.jianshu.com/p/185e36ac44a3</p>
+
+:ET

@@ -1,0 +1,50 @@
+---
+title: 实现字段之间进行比对
+layout: post
+category: elasticsearch
+author: 夏泽民
+---
+ES中Date型字段不能直接用>,<,+,-进行比较和计算，会报错。
+可以先把Date类型取得getMillis()，取得时间戳，然后就可以进行比较了。
+
+使用TransportClient代码如下,param是传入的参数，可以在script中使用  
+
+Map<String, Object> params = Maps.newHashMap();
+        params.put("datesub", 5);
+        QueryBuilder qb = QueryBuilders.boolQuery()
+                .must(QueryBuilders.scriptQuery(
+                        new Script(Script.DEFAULT_SCRIPT_TYPE, 
+                                Script.DEFAULT_SCRIPT_LANG, 
+                                "doc['updated_time'].value.getMillis() - doc['create_time'].value.getMillis() < params.datesub", 
+                                params)));
+
+
+脚本化度量标准聚合在其执行的4个阶段使用脚本：
+
+init_script
+
+在任何文件集合之前执行。允许聚合设置任何初始状态。
+
+在上面的示例中，在对象中init_script创建一个数组。transactions_agg
+
+map_script
+
+每个收集的文件执行一次。这是唯一必需的脚本。如果未指定combine_script，则生成的状态需要存储在名为的对象中_agg。
+
+在上面的示例中，map_script检查type字段的值。如果值为sale，则amount字段的值将添加到transactions数组中。如果类型字段的值不是销售，则金额字段的否定值将添加到交易中。
+
+combine_script
+
+文档收集完成后，在每个分片上执行一次。允许聚合合并从每个分片返回的状态。如果未提供combine_script，则组合阶段将返回聚合变量。
+
+在上面的示例中，combine_script迭代遍历所有存储的事务，对profit变量中的值求和并最终返回profit。
+
+reduce_script
+
+在所有分片返回结果后，在协调节点上执行一次。该脚本提供对变量的访问，该变量_aggs是每个分片上combine_script结果的数组。如果未提供reduce_script，则reduce阶段将返回_aggs变量。
+
+在上面的示例中，reduce_script迭代通过profit每个分片返回的值，在返回最终组合利润之前对值进行求和，该最终组合利润将在聚合的响应中返回。
+<!-- more -->
+https://blog.csdn.net/weixin_38409915/article/details/117651121
+https://blog.csdn.net/ZYC88888/article/details/103605428
+https://blog.csdn.net/tiansheng1225/article/details/82499085

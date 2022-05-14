@@ -1,0 +1,121 @@
+---
+title: matrix
+layout: post
+category: web
+author: 夏泽民
+---
+Java 目前最为流行的 metrics 库是来自 Coda Hale 的 dropwizard/metrics，该库被广泛地应用于各个知名的开源项目中。例如 Hadoop，Kafka，Spark，JStorm 中。
+
+https://github.com/dropwizard/metrics
+<!-- more -->
+Maven 配置
+我们需要在pom.xml中依赖 metrics-core 包：
+
+<dependencies>
+    <dependency>
+        <groupId>io.dropwizard.metrics</groupId>
+        <artifactId>metrics-core</artifactId>
+        <version>${metrics.version}</version>
+    </dependency>
+</dependencies>
+注：在POM文件中需要声明 ${metrics.version} 的具体版本号，如 3.1.0
+
+Metric Registries
+MetricRegistry类是Metrics的核心，它是存放应用中所有metrics的容器。也是我们使用 Metrics 库的起点。
+
+MetricRegistry registry = new MetricRegistry();
+每一个 metric 都有它独一无二的名字，Metrics 中使用句点名字，如 com.example.Queue.size。当你在 com.example.Queue 下有两个 metric 实例，可以指定地更具体：com.example.Queue.requests.size 和 com.example.Queue.response.size 。使用MetricRegistry类，可以非常方便地生成名字。
+
+MetricRegistry.name(Queue.class, "requests", "size")
+MetricRegistry.name(Queue.class, "responses", "size")
+Metrics 数据展示
+Metircs 提供了 Report 接口，用于展示 metrics 获取到的统计数据。metrics-core中主要实现了四种 reporter： JMX, console, SLF4J, 和 CSV。 在本文的例子中，我们使用 ConsoleReporter 。
+
+五种 Metrics 类型Gauges, Counters, Histograms, Meters和 Timers
+
+Gauge
+Gauge是最简单的度量类型，只有一个简单的返回值，他用来记录一些对象或者事物的瞬时值。
+
+比如，我们类型为Gauge的计数器来记录某个服务目前开通的城市个数
+
+Metric.Gauge("Service Cities Count", () => Cities.Count, new Unit("个"));
+Counters
+Counter是一个简单64位的计数器，他可以增加和减少。
+
+比如我们可以定义两个Counter类型的计数器，用来统计所有服务请求数目，和目前正在处理的请求总数。
+
+/// <summary>
+/// keep the total count of the requests
+/// </summary>
+private readonly Counter totalRequestsCounter = Metric.Counter("Requests", Unit.Requests);
+
+/// <summary>
+/// count the current concurrent requests
+/// </summary>
+private readonly Counter concurrentRequestsCounter = Metric.Counter("SampleMetrics.ConcurrentRequests", Unit.Requests);
+这样，在我们请求处理开始的时候，同时将这两个计数器自增。
+
+this.concurrentRequestsCounter.Increment(); // increment concurrent requests counter
+this.totalRequestsCounter.Increment(); // increment total requests counter 
+当某一个请求处理完成之后，将目前正在处理的请求减一
+
+this.concurrentRequestsCounter.Decrement(); // decrement number of concurrent requests
+这种计数器也可以用来统计诸如当前有多少人在线，或者服务器中有多少处于有效期内的session
+
+Meters
+Meter是一种只能自增的计数器，通常用来度量一系列事件发生的比率。他提供了平均速率，以及指数平滑平均速率，以及采样后的1分钟，5分钟，15分钟速率。
+
+比如需要统计请求的速率，比如统计平均每分钟内有多少次请求进来。只需要定义一个metric
+
+/// <summary>
+/// measure the rate at which requests come in
+/// </summary>
+private readonly Meter meter = Metric.Meter("Requests", Unit.Requests,TimeUnit.Seconds);
+在处理请求的地方，调用Mark方法即可。
+
+this.meter.Mark(); // signal a new request to the meter
+再比如，要测量服务出错的概率，比如每小时出错多少次。可以定义一个metric。
+
+/// <summary>
+/// measure the rate of service exception
+/// </summary>
+private readonly Meter errorMeter = Metric.Meter("Error", Unit.Errors, TimeUnit.Hours);
+这样，在处理请求的时候，如果出现异常了，调用一下errorMeter的Mark方法即可。
+
+this.errorMeter.Mark();// signal a new error to the meter
+Histograms
+Histrogram是用来度量流数据中Value的分布情况，Histrogram可以计算最大/小值、平均值，方差，分位数（如中位数，或者95th分位数），如75%,90%,98%,99%的数据在哪个范围内。
+
+比如，我们想度量，所有传进来服务的请求参数的长度分布。那么，可以定义一个histogram。
+
+/// <summary>
+/// keep a histogram of the input data of our request method 
+/// </summary>
+private readonly Histogram histogramOfData = Metric.Histogram("ResultsExample", Unit.Items);
+然后在请求的地方，调用其Update方法来更新值。
+
+this.histogramOfData.Update(request.length, methodName); // update the histogram with the input data
+Timer
+Timer是Histogram跟Meter的一个组合，比如要统计当前请求的速率和处理时间。
+
+就可以定义一个Timer:
+
+/// <summary>
+/// measure the time rate and duration of requests
+/// </summary>
+private readonly Timer timer = Metric.Timer("Requests", Unit.Requests);
+在使用的时候，调用timer的NewContext即可。
+
+using (this.timer.NewContext(i.ToString())) // measure until disposed
+{
+    ...
+}
+
+输出到专业的系统监控Graphite，输出到开源，分布式，时间序列的中InfluxDB，或者输出到ElasticSearch中。配置起来也非常简单。比如如果要直接在http页面上展现，只需要在初始化的时候，设置合适的EndPoint即可:
+
+Metric.Config
+    .WithHttpEndpoint("http://localhost:1234/metrics/")
+    .WithAllCounters()
+    .WithInternalMetrics()
+    .WithReporting(config => config
+        .WithConsoleReport(TimeSpan.FromSeconds(30))

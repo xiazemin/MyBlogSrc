@@ -1,0 +1,520 @@
+I"�W<p>2.1 Node 与 Cluster
+Elastic 本质上是一个分布式数据库，允许多台服务器协同工作，每台服务器可以运行多个 Elastic 实例。</p>
+
+<p>单个 Elastic 实例称为一个节点（node）。一组节点构成一个集群（cluster）。</p>
+
+<p>2.2 Index
+Elastic 会索引所有字段，经过处理后写入一个反向索引（Inverted Index）。查找数据的时候，直接查找该索引。</p>
+
+<p>所以，Elastic 数据管理的顶层单位就叫做 Index（索引）。它是单个数据库的同义词。每个 Index （即数据库）的名字必须是小写。</p>
+
+<p>下面的命令可以查看当前节点的所有 Index。</p>
+
+<p>$ curl -X GET ‘http://localhost:9200/_cat/indices?v’
+2.3 Document
+Index 里面单条的记录称为 Document（文档）。许多条 Document 构成了一个 Index。</p>
+
+<p>Document 使用 JSON 格式表示，下面是一个例子。</p>
+
+<p>{
+  “user”: “张三”,
+  “title”: “工程师”,
+  “desc”: “数据库管理”
+}
+同一个 Index 里面的 Document，不要求有相同的结构（scheme），但是最好保持相同，这样有利于提高搜索效率。</p>
+
+<p>索引和类型是必需的，而id部分是可选的。如果不指定ID，ElasticSearch会为我们生成一个ID。 但是，如果不指定id，应该使用HTTP的POST而不是PUT请求。</p>
+
+<p>索引名称是任意的。如果服务器上没有此名称的索引，则将使用默认配置来创建一个索引。</p>
+
+<p>至于类型名称，它也是任意的。 它有几个用途，包括：</p>
+
+<p>每种类型都有自己的ID空间。
+不同类型具有不同的映射(“模式”，定义属性/字段应如何编制索引)。
+搜索多种类型是可以的，并且也很常见，但很容易搜索一种或多种指定类型。</p>
+
+<p>2.4 Type
+Document 可以分组，比如weather这个 Index 里面，可以按城市分组（北京和上海），也可以按气候分组（晴天和雨天）。这种分组就叫做 Type，它是虚拟的逻辑分组，用来过滤 Document。</p>
+
+<p>不同的 Type 应该有相似的结构（schema），举例来说，id字段不能在这个组是字符串，在另一个组是数值。这是与关系型数据库的表的一个区别。性质完全不同的数据（比如products和logs）应该存成两个 Index，而不是一个 Index 里面的两个 Type（虽然可以做到）。</p>
+
+<p>下面的命令可以列出每个 Index 所包含的 Type。
+$ curl ‘localhost:9200/_mapping?pretty=true’
+根据规划，Elastic 6.x 版只允许每个 Index 包含一个 Type，7.x 版将会彻底移除 Type。
+<!-- more -->
+新建和删除 Index
+新建 Index，可以直接向 Elastic 服务器发出 PUT 请求。下面的例子是新建一个名叫weather的 Index。
+$ curl -X PUT ‘localhost:9200/weather’
+服务器返回一个 JSON 对象，里面的acknowledged字段表示操作成功。
+{
+  “acknowledged”:true,
+  “shards_acknowledged”:true,
+  “index”:”weather”
+}
+然后，我们发出 DELETE 请求，删除这个 Index。
+$ curl -X DELETE ‘localhost:9200/weather’
+{“acknowledged”:true}</p>
+
+<p>新建一个 Index
+ curl -X PUT ‘localhost:9200/accounts’ -d ‘{}’
+ 出现错误
+ {“error”:”Content-Type header [application/x-www-form-urlencoded] is not supported”,”status”:406}</p>
+
+<p>$curl  -H “Content-Type: application/json” -X PUT ‘localhost:9200/accounts’ -d ‘
+{
+  “mappings”: {
+    “person”: {
+      “properties”: {
+        “user”: {
+          “type”: “text”,
+          “analyzer”: “ik_max_word”,
+          “search_analyzer”: “ik_max_word”
+        },
+        “title”: {
+          “type”: “text”,
+          “analyzer”: “ik_max_word”,
+          “search_analyzer”: “ik_max_word”
+        },
+        “desc”: {
+          “type”: “text”,
+          “analyzer”: “ik_max_word”,
+          “search_analyzer”: “ik_max_word”
+        }
+      }
+    }
+  }
+}’</p>
+
+<p>{“acknowledged”:true,”shards_acknowledged”:true,”index”:”accounts”}</p>
+
+<p>上面代码中，首先新建一个名称为accounts的 Index，里面有一个名称为person的 Type。person有三个字段。</p>
+
+<p>user
+title
+desc
+这三个字段都是中文，而且类型都是文本（text），所以需要指定中文分词器，不能使用默认的英文分词器。</p>
+
+<p>Elastic 的分词器称为 analyzer。我们对每个字段指定分词器。</p>
+
+<p>“user”: {
+  “type”: “text”,
+  “analyzer”: “ik_max_word”,
+  “search_analyzer”: “ik_max_word”
+}</p>
+
+<p>上面代码中，analyzer是字段文本的分词器，search_analyzer是搜索词的分词器。ik_max_word分词器是插件ik提供的，可以对文本进行最大数量的分词。
+5.1 新增记录
+向指定的 /Index/Type 发送 PUT 请求，就可以在 Index 里面新增一条记录。比如，向/accounts/person发送请求，就可以新增一条人员记录。
+$curl  -H “Content-Type: application/json” -X PUT ‘localhost:9200/accounts/person/1’ -d ‘{
+  “user”: “张三”,
+  “title”: “工程师”,
+  “desc”: “数据库管理”
+}’
+服务器返回的 JSON 对象，会给出 Index、Type、Id、Version 等信息。
+{“_index”:”accounts”,”_type”:”person”,”_id”:”1”,”_version”:1,”result”:”created”,”_shards”:{“total”:2,”successful”:1,”failed”:0},”_seq_no”:0,”_primary_term”:1}
+如果你仔细看，会发现请求路径是/accounts/person/1，最后的1是该条记录的 Id。它不一定是数字，任意字符串（比如abc）都可以。</p>
+
+<p>新增记录的时候，也可以不指定 Id，这时要改成 POST 请求。
+$curl  -H “Content-Type: application/json” -X POST ‘localhost:9200/accounts/person’ -d ‘
+{
+  “user”: “李四”,
+  “title”: “工程师”,
+  “desc”: “系统管理”
+}’
+上面代码中，向/accounts/person发出一个 POST 请求，添加一个记录。这时，服务器返回的 JSON 对象里面，_id字段就是一个随机字符串。
+{“_index”:”accounts”,”_type”:”person”,”_id”:”D1utSmQBrKXW5KZI8JWE”,”_version”:1,”result”:”created”,”_shards”:{“total”:2,”successful”:1,”failed”:0},”_seq_no”:0,”_primary_term”:1}
+注意，如果没有先创建 Index（这个例子是accounts），直接执行上面的命令，Elastic 也不会报错，而是直接生成指定的 Index。所以，打字的时候要小心，不要写错 Index 的名称。
+5.2 查看记录
+向/Index/Type/Id发出 GET 请求，就可以查看这条记录。</p>
+
+<p>$ curl ‘localhost:9200/accounts/person/1?pretty=true’
+上面代码请求查看/accounts/person/1这条记录，URL 的参数pretty=true表示以易读的格式返回。</p>
+
+<p>返回的数据中，found字段表示查询成功，_source字段返回原始记录。</p>
+
+<p>{
+  “_index” : “accounts”,
+  “_type” : “person”,
+  “_id” : “1”,
+  “_version” : 1,
+  “found” : true,
+  “_source” : {
+    “user” : “张三”,
+    “title” : “工程师”,
+    “desc” : “数据库管理”
+  }
+}
+如果 Id 不正确，就查不到数据，found字段就是false。</p>
+
+<p>$ curl ‘localhost:9200/weather/beijing/abc?pretty=true’</p>
+
+<p>{
+  “_index” : “accounts”,
+  “_type” : “person”,
+  “_id” : “abc”,
+  “found” : false
+}
+5.3 删除记录
+删除记录就是发出 DELETE 请求。
+$ curl -X DELETE ‘localhost:9200/accounts/person/1’
+{“_index”:”accounts”,”_type”:”person”,”_id”:”1”,”_version”:2,”result”:”deleted”,”_shards”:{“total”:2,”successful”:1,”failed”:0},”_seq_no”:1,”_primary_term”:1}
+5.4 更新记录
+更新记录就是使用 PUT 请求，重新发送一次数据。</p>
+
+<p>$curl  -H “Content-Type: application/json” -X PUT ‘localhost:9200/accounts/person/1’ -d ‘{
+  “user”: “张三”,
+  “title”: “工程师”,
+  “desc”: “数据库管理,软件开发”
+}’</p>
+
+<p>{
+  “_index”:”accounts”,
+  “_type”:”person”,
+  “_id”:”1”,
+  “_version”:2,
+  “result”:”updated”,
+  “_shards”:{“total”:2,”successful”:1,”failed”:0},
+  “created”:false
+}
+上面代码中，我们将原始数据从”数据库管理”改成”数据库管理，软件开发”。 返回结果里面，有几个字段发生了变化。</p>
+
+<p>“_version” : 2,
+“result” : “updated”,
+“created” : false
+可以看到，记录的 Id 没变，但是版本（version）从1变成2，操作类型（result）从created变成updated，created字段变成false，因为这次不是新建记录。</p>
+
+<p>数据查询
+6.1 返回所有记录
+使用 GET 方法，直接请求/Index/Type/_search，就会返回所有记录。</p>
+
+<p>$ curl ‘localhost:9200/accounts/person/_search’</p>
+
+<p>{
+  “took”:2,
+  “timed_out”:false,
+  “_shards”:{“total”:5,”successful”:5,”failed”:0},
+  “hits”:{
+    “total”:2,
+    “max_score”:1.0,
+    “hits”:[
+      {
+        “_index”:”accounts”,
+        “_type”:”person”,
+        “_id”:”AV3qGfrC6jMbsbXb6k1p”,
+        “_score”:1.0,
+        “_source”: {
+          “user”: “李四”,
+          “title”: “工程师”,
+          “desc”: “系统管理”
+        }
+      },
+      {
+        “_index”:”accounts”,
+        “_type”:”person”,
+        “_id”:”1”,
+        “_score”:1.0,
+        “_source”: {
+          “user” : “张三”,
+          “title” : “工程师”,
+          “desc” : “数据库管理，软件开发”
+        }
+      }
+    ]
+  }
+}
+上面代码中，返回结果的 took字段表示该操作的耗时（单位为毫秒），timed_out字段表示是否超时，hits字段表示命中的记录，里面子字段的含义如下。</p>
+
+<p>total：返回记录数，本例是2条。
+max_score：最高的匹配程度，本例是1.0。
+hits：返回的记录组成的数组。
+返回的记录中，每条记录都有一个_score字段，表示匹配的程序，默认是按照这个字段降序排列。</p>
+
+<p>6.2 全文搜索
+Elastic 的查询非常特别，使用自己的查询语法，要求 GET 请求带有数据体。
+$curl  -H “Content-Type: application/json”  ‘localhost:9200/accounts/person/_search’  -d ‘
+{
+  “query” : { “match” : { “desc” : “软件” }}
+}’
+{“took”:16,”timed_out”:false,”_shards”:{“total”:5,”successful”:5,”skipped”:0,”failed”:0},”hits”:{“total”:1,”max_score”:0.2876821,”hits”:[{“_index”:”accounts”,”_type”:”person”,”_id”:”1”,”_score”:0.2876821,”_source”:{
+  “user”: “张三”,
+  “title”: “工程师”,
+  “desc”: “数据库管理,软件开发”
+}}]}}
+Elastic 默认一次返回10条结果，可以通过size字段改变这个设置。
+$curl  -H “Content-Type: application/json”  ‘localhost:9200/accounts/person/_search’  -d ‘
+{
+  “query” : { “match” : { “desc” : “软件” }}
+,”size”:1}’</p>
+
+<p>上面代码指定，每次只返回一条结果。</p>
+
+<p>还可以通过from字段，指定位移。</p>
+
+<p>$ curl ‘localhost:9200/accounts/person/_search’  -d ‘
+{
+  “query” : { “match” : { “desc” : “管理” }},
+  “from”: 1,
+  “size”: 1
+}’
+上面代码指定，从位置1开始（默认是从位置0开始），只返回一条结果。</p>
+
+<p>6.3 逻辑运算
+如果有多个搜索关键字， Elastic 认为它们是or关系。
+$ curl  -H “Content-Type: application/json” ‘localhost:9200/accounts/person/_search’  -d ‘
+{
+  “query” : { “match” : { “desc” : “软件 系统” }}
+}’
+{“took”:2,”timed_out”:false,”_shards”:{“total”:5,”successful”:5,”skipped”:0,”failed”:0},”hits”:{“total”:2,”max_score”:0.2876821,”hits”:[{“_index”:”accounts”,”_type”:”person”,”_id”:”1”,”_score”:0.2876821,”_source”:{
+  “user”: “张三”,
+  “title”: “工程师”,
+  “desc”: “数据库管理,软件开发”
+}},{“_index”:”accounts”,”_type”:”person”,”_id”:”D1utSmQBrKXW5KZI8JWE”,”_score”:0.2876821,”_source”:
+{
+  “user”: “李四”,
+  “title”: “工程师”,
+  “desc”: “系统管理”
+  }}]}}</p>
+
+<p>上面代码搜索的是软件 or 系统。</p>
+
+<p>如果要执行多个关键词的and搜索，必须使用布尔查询。
+$curl   -H “Content-Type: application/json” ‘localhost:9200/accounts/person/_search’  -d ‘
+{
+  “query”: {
+    “bool”: {
+      “must”: [
+        { “match”: { “desc”: “软件” } },
+        { “match”: { “desc”: “系统” } }
+      ]
+    }
+  }
+}’
+{“took”:2,”timed_out”:false,”_shards”:{“total”:5,”successful”:5,”skipped”:0,”failed”:0},”hits”:{“total”:0,”max_score”:null,”hits”:[]}}</p>
+
+<p>自动索引创建
+当请求将JSON对象添加到特定索引时，如果该索引不存在，那么此API会自动创建该索引以及该特定JSON对象的基础映射。 可以通过将以下参数的值更改为false来禁用此功能，这个值是存在于elasticsearch.yml文件中，打开elasticsearch.yml文件设置如下 。</p>
+
+<p>action.auto_create_index:false
+index.mapper.dynamic:false
+还可以限制自动创建索引，其中通过更改以下参数的值只允许指定模式的索引名称 -</p>
+
+<p>action.auto_create_index:+acc<em>,-bank</em>
+(其中+表示允许， - 表示不允许)</p>
+
+<p>版本控制
+Elasticsearch还提供版本控制功能。我们可以使用版本查询参数指定特定文档的版本。 例如，</p>
+
+<p>POST http://localhost:9200/schools/school/1?version = 1
+请求正文</p>
+
+<p>{
+   “name”:”Central School”, “description”:”CBSE Affiliation”, “street”:”Nagan”,
+   “city”:”paprola”, “state”:”HP”, “zip”:”176115”, “location”:[31.8955385, 76.8380405],
+   “fees”:2200, “tags”:[“Senior Secondary”, “beautiful campus”], “rating”:”3.3”
+}
+JSON
+响应内容</p>
+
+<p>{
+   “_index”:”schools”, “_type”:”school”, “_id”:”1”, “_version”:2,
+   “_shards”:{“total”:2, “successful”:1,”failed”:0}, “created”:false
+}
+JSON
+有两种最重要的版本控制类型： 内部版本控制是以1开头的默认版本，每次更新都会增加，包括删除。版本号可以在外部设置。要启用此功能，我们需要将version_type设置为external。</p>
+
+<p>版本控制是一个实时过程，它不受实时搜索操作的影响。</p>
+
+<p>操作类型
+操作类型用于强制创建操作，这有助于避免覆盖现有文档。</p>
+
+<p>POST http://localhost:9200/tutorials/chapter/1?op_type = create
+请求正文</p>
+
+<p>{
+   “Text”:”this is chapter one”
+}
+JSON
+响应内容</p>
+
+<p>{
+   “_index”:”tutorials”, “_type”:”chapter”, “_id”:”1”, “_version”:1,
+   “_shards”:{“total”:2, “successful”:1, “failed”:0}, “created”:true
+}
+JSON
+自动生成ID
+当在索引操作中未指定ID时，Elasticsearch自动为文档生成ID。</p>
+
+<p>父级和子级
+可以通过在父URL查询参数中传递父文档的ID来定义任何文档的父级。</p>
+
+<p>POST http://localhost:9200/tutorials/article/1?parent = 1
+请求正文</p>
+
+<p>{
+   “Text”:”This is article 1 of chapter 1”
+}
+JSON
+注意 - 如果在执行此示例时遇到异常，请通过在索引中添加以下内容来重新创建索引。</p>
+
+<p>{
+   “mappings”: {
+      “chapter”: {},
+      “article”: {
+         “_parent”: {
+            “type”: “chapter”
+         }
+      }
+   }
+}
+JSON
+超时
+默认情况下，索引操作将在主分片上最多等待1分钟，超过后就会失败并响应错误。 可以通过将值传递给timeout参数来显式更改这个超时值。</p>
+
+<p>POST http://localhost:9200/tutorials/chapter/2?timeout = 3m
+请求正文</p>
+
+<p>{
+   “Text”:”This is chapter 2 waiting for primary shard for 3 minutes”
+}
+JSON
+获取API
+API通过对特定文档执行get请求来帮助提取JSON对象。 例如，</p>
+
+<p>GET http://localhost:9200/schools/school/1
+响应</p>
+
+<p>{
+   “_index”:”schools”, “_type”:”school”, “_id”:”1”, “_version”:2,
+   “found”:true, “_source”:{
+      “name”:”Central School”, “description”:”CBSE Affiliation”, 
+      “street”:”Nagan”, “city”:”paprola”, “state”:”HP”, “zip”:”176115”,
+      “location”:[31.8955385,76.8380405], “fees”:2200, 
+      “tags”:[“Senior Secondary”, “beautiful campus”], “rating”:”3.3”
+   }
+}
+这个操作是实时的，不受索引刷新率的影响。
+还可以指定版本，然后Elasticsearch将仅提取该版本的文档。
+还可以在请求中指定_all，以便Elasticsearch可以在每种类型中搜索该文档ID，并且它将返回第一个匹配的文档。
+还可以从该特定文档的结果中指定所需的字段。
+GET http://localhost:9200/schools/school/1?fields = name,fees
+响应</p>
+
+<p>……………………..
+“fields”:{
+   “name”:[“Central School”], “fees”:[2200]
+}
+……………………..
+JSON
+还可以通过在get请求中添加_source字段来获取结果中的源部分。</p>
+
+<p>GET http://localhost:9200/schools/school/1/_source
+响应</p>
+
+<p>{
+   “name”:”Central School”, “description”:”CBSE Afiliation”, “street”:”Nagan”,
+   “city”:”paprola”, “state”:”HP”, “zip”:”176115”, “location”:[31.8955385, 76.8380405],
+   “fees”:2200, “tags”:[“Senior Secondary”, “beatiful campus”], “rating”:”3.3”
+}
+JSON
+还可以在通过将 refresh 参数设置为true进行get操作之前刷新碎片。</p>
+
+<p>删除API
+可以通过向Elasticsearch发送HTTP DELETE请求来删除指定的索引，映射或文档。 例如，
+DELETE http://localhost:9200/schools/school/4
+响应</p>
+
+<p>{
+   “found”:true, “_index”:”schools”, “_type”:”school”, “_id”:”4”, “_version”:2,
+   “_shards”:{“total”:2, “successful”:1, “failed”:0}
+}
+JSON
+可以指定文档的版本以删除指定的版本。
+可以指定路由参数以删除指定用户的文档，如果文档不属于该特定用户，则操作将失败。
+在此操作中，可以像GET API那样指定刷新(refresh)和超时(timeout)选项。
+更新API
+脚本用于执行此操作，版本控制用于确保在获取和重建索引期间没有发生更新。 例如，使用下面脚本更新学校的费用 -</p>
+
+<p>POST http://localhost:9200/schools_gov/school/1/_update
+请求正文</p>
+
+<p>{
+   “script”:{
+      “inline”: “ctx._source.fees+ = inc”, “params”:{
+         “inc”: 500
+      }
+   }
+}
+JSON
+响应结果</p>
+
+<p>{
+   “_index”:”schools_gov”, “_type”:”school”, “_id”:”1”, “_version”:2,
+   “_shards”:{“total”:2, “successful”:1, “failed”:0}
+}
+JSON
+注意 - 如果获取脚本异常，建议在elastcisearch.yml中添加以下行</p>
+
+<p>script.inline: on
+script.indexed: on
+可以通过向更新的文档发送获取请求来检查更新。</p>
+
+<p>GET http://localhost:9200/schools_gov/school/1
+多获取API
+它具有相同的功能，如GET API，但此get请求可以返回多个文档。使用doc数组来指定需要提取的所有文档的索引，类型和ID。</p>
+
+<p>POST http://localhost:9200/_mget
+请求正文</p>
+
+<p>{
+   “docs”:[
+      {
+         “_index”: “schools”, “_type”: “school”, “_id”: “1”
+      },</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>  {
+     "_index":"schools_gev", "_type":"school", "_id": "2"
+  }    ] } 响应结果
+</code></pre></div></div>
+
+<p>{
+   “docs”:[
+      {
+         “_index”:”schools”, “_type”:”school”, “_id”:”1”,
+         “_version”:1, “found”:true, “_source”:{
+            “name”:”Central School”, “description”:”CBSE Afiliation”,
+            “street”:”Nagan”, “city”:”paprola”, “state”:”HP”, “zip”:”176115”,
+            “location”:[31.8955385,76.8380405], “fees”:2000, 
+            “tags”:[“Senior Secondary”, “beatiful campus”], “rating”:”3.5”
+         }
+      },</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>  {
+     "_index":"schools_gev", "_type":"school", "_id":"2", "error":{
+
+        "root_cause":[{
+           "type":"index_not_found_exception", "reason":"no such index", 
+           "index":"schools_gev"
+        }],
+
+        "type":"index_not_found_exception", "reason":"no such index", 
+        "index":"schools_gev"
+     }
+  }    ] } JSON 批量API 此API用于通过在单个请求中进行多个索引/删除操作来批量上传或删除JSON对象。 需要添加“_bulk”关键字来调用此API。此API的示例已在Elasticsearch填充文章中执行。所有其他功能与GET API相同。
+</code></pre></div></div>
+
+<p>URI搜索
+如下这些参数可以使用统一资源标识符在搜索操作中传递 -</p>
+
+<p>编号  参数  说明
+1 Q 此参数用于指定查询字符串。
+2 lenient 基于格式的错误可以通过将此参数设置为true来忽略。默认情况下为false。
+3 fields  此参数用于在响应中选择返回字段。
+4 sort  可以通过使用这个参数获得排序结果，这个参数的可能值是fieldName，fieldName:asc和fieldname:desc
+5 timeout 使用此参数限定搜索时间，响应只包含指定时间内的匹配。默认情况下，无超时。
+6 terminate_after 可以将响应限制为每个分片的指定数量的文档，当到达这个数量以后，查询将提前终止。 默认情况下不设置terminate_after。
+7   从命中的索引开始返回。默认值为0。
+8 size  它表示要返回的命中数。默认值为10。
+请求正文搜索
+还可以在请求正文中使用查询DSL来指定查询，并且在前面的章节中已经给出了很多示例，</p>
+
+:ET

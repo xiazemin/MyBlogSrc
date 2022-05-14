@@ -1,0 +1,329 @@
+---
+title: recover
+layout: post
+category: golang
+author: 夏泽民
+---
+https://draveness.me/golang/keyword/golang-panic-recover.html
+
+https://blog.golang.org/defer-panic-and-recover
+panic 和 recover 两个关键字其实都是 Go 语言中的内置函数，panic 能够改变程序的控制流，当一个函数调用执行 panic 时，它会立刻停止执行函数中其他的代码，而是会运行其中的 defer 函数，执行成功后会返回到调用方。
+对于上层调用方来说，调用导致 panic 的函数其实与直接调用 panic 类似，所以也会执行所有的 defer 函数并返回到它的调用方，这个过程会一直进行直到当前 Goroutine 的调用栈中不包含任何的函数，这时整个程序才会崩溃，这个『恐慌过程』不仅会被显式的调用触发，还会由于运行期间发生错误而触发。
+
+然而 panic 导致的『恐慌』状态其实可以被 defer 中的 recover 中止，recover 是一个只在 defer 中能够发挥作用的函数，在正常的控制流程中，调用 recover 会直接返回 nil 并且没有任何的作用，但是如果当前的 Goroutine 发生了『恐慌』，recover 其实就能够捕获到 panic 抛出的错误并阻止『恐慌』的继续传播。
+
+注意一个问题不要在defer中painc
+因为recover只会捕获最近的一个panic，不论有几个recover
+package main
+
+func main() {
+	defer func() {
+		panic("panic 0")
+	}()
+	defer func() {
+		if err:=recover();err!=nil{
+			panic(err)
+		}
+	}()
+	defer func() {
+	  if err:=recover();err!=nil{
+		  panic(err)
+	  }
+	}()
+	defer func() {
+		if err:=recover();err!=nil{
+			panic(err)
+		}
+	}()
+	defer func() {
+		panic("panic")
+	}()
+
+	defer func() {
+		panic("panic2")
+	}()
+	panic("panic 1")
+}
+
+/*
+panic: panic 1
+	panic: panic2
+	panic: panic [recovered]
+        panic: panic [recovered]
+	panic: panic [recovered]
+	panic: panic
+		panic: panic 0
+*/
+
+<!-- more -->
+func main() {
+    defer println("in main")
+    go func() {
+        defer println("in goroutine")
+        panic("")
+    }()
+
+    time.Sleep(1 * time.Second)
+}
+
+// in goroutine
+// panic:
+// ...
+当我们运行这段代码时，其实会发现 main 函数中的 defer 语句并没有执行，执行的其实只有 Goroutine 中的 defer，这其实就印证了 Go 语言在发生 panic 时只会执行当前协程中的 defer 函数
+
+recover 函数其实只是阻止了当前程序的崩溃，但是当前控制流中的其他 defer 函数还会正常执行。
+
+可以在 defer 中连续多次调用 panic 函数，这是一个 Go 语言中 panic 比较有意思的现象：
+
+func main() {
+    defer fmt.Println("in main")
+    defer func() {
+        panic("panic again")
+    }()
+
+    panic("panic once")
+}
+
+// in main
+// panic: unknown err
+//     panic: again
+// 
+// goroutine 1 [running]:
+// main.main.func1()
+// ...
+当我们运行上述代码时，从打印出的结果中可以看到当前的函数确实经历了两次 panic，并且最外层的 defer 函数也能够正常执行
+
+package main
+
+func main() {
+	defer func() {
+		panic("panic")
+	}()
+
+	defer func() {
+		panic("panic2")
+	}()
+	panic("panic 1")
+}
+
+/*
+   panic: panic 1
+	panic: panic2
+	panic: panic
+*/
+
+package main
+
+func main() {
+panic("panic")
+panic("panic 1")
+}
+
+/*
+	panic: panic
+*/
+
+函数中只会执行一个panic， defer中可以执行多个
+
+package main
+
+func main() {
+	defer func() {
+		panic("panic 0")
+	}()
+	
+	defer func() {
+	  if err:=recover();err!=nil{
+		  panic(err)
+	  }
+	}()
+
+	defer func() {
+		panic("panic")
+	}()
+
+	defer func() {
+		panic("panic2")
+	}()
+	panic("panic 1")
+}
+
+/*
+panic: panic 1
+	panic: panic2
+	panic: panic [recovered]
+	panic: panic
+	panic: panic 0
+*/
+
+多个panic 只会recover 最近的一个
+
+
+panic 和 recover 关键字会在 编译期间 被 Go 语言的编译器转换成 OPANIC 和 ORECOVER 类型的节点并进一步转换成 gopanic 和 gorecover 两个运行时的函数调用。
+
+2.1. 数据结构
+panic 在 Golang 中其实是由一个数据结构表示的，每当我们调用一次 panic 函数都会创建一个如下所示的数据结构存储相关的信息：
+
+type _panic struct {
+    argp      unsafe.Pointer
+    arg       interface{}
+    link      *_panic
+    recovered bool
+    aborted   bool
+}
+argp 是指向 defer 调用时参数的指针；
+arg 是调用 panic 时传入的参数；
+link 指向了更早调用的 _panic 结构；
+recovered 表示当前 _panic 是否被 recover 恢复；
+aborted 表示当前的 panic 是否被强行终止；
+从数据结构中的 link 字段我们就可以推测出以下的结论 — panic 函数可以被连续多次调用，它们之间通过 link 的关联形成一个链表。
+
+panic和recover是golang的两个内置函数。
+当函数F调用panic，函数F会停止运行，F包裹着的defer函数会全部正常运行，然后返回调用F的函数。如果没有recover，F对于调用方，就像panic。Process继续执行堆栈，直到发生panic的goroutine所有方法返回。panic可以被runtime errors,或者直接调用 panic()函数触发
+
+recover只在defer函数中有效
+这一部分内容来自Defer, Panic, and Recover翻译
+
+panic例子
+
+func main() {
+    defer println("defer in main")
+    go func() {
+        defer println("defer in goroutine")
+        panic("panic in goroutine")
+    }()
+
+}
+//输出panic test， defer，程序crash
+//main函数里面的defer不会执行，在发生panic时只会执行当前协程中的defer函数，从后续的源码讲解中也可以看到
+panic，recover例子
+
+func main() {
+    defer println("in main")
+    go func() {
+        defer func() {
+        if r := recover(); r != nil {
+            fmt.Println("Recovered in f", r)
+        }
+        panic("panic test")
+        }()
+    }()
+
+}
+//输出panic test，Recovered in f， in main
+//程序正常
+panic的源码是在go源码 runtime/panic.go文件中，这篇讲解主要从panic和recover函数的源码讲解panic是怎么运行
+
+Panic数据结构
+
+type _panic struct {
+    argp      unsafe.Pointer // pointer to arguments of deferred call run during panic; cannot move - known to liblink
+    //panic的参数
+    arg       interface{}    // argument to panic
+    //指向更早的panic
+    link      *_panic        // link to earlier panic
+    //是否被recover的标识
+    recovered bool           // whether this panic is over
+    //panic是否被强制终止
+    aborted   bool           // the panic was aborted
+}  
+
+panic的实现主要是两个函数：panic, recover, 他们分别对应两个实现：gopanic、gorecover，都是在runtime/panic.go文件中实现
+gopanic函数
+
+func gopanic(e interface{}) {
+    gp := getg()
+
+    var p _panic
+    p.arg = e
+    p.link = gp._panic //p指向更早的panic
+    gp._panic = (*_panic)(noescape(unsafe.Pointer(&p)))
+
+    atomic.Xadd(&runningPanicDefers, 1)
+    //遍历defer链表
+    for {
+        d := gp._defer
+        if d == nil {
+            break
+        }
+
+        // 如果defer已经启动，跳过
+        if d.started {
+            gp._defer = d.link
+            freedefer(d)  //释放defer
+            continue
+        }
+
+        // 标识defer已经启动
+        d.started = true
+
+        // 记录是当前Panic运行这个defer。如果在defer运行期间，有新的Panic，将会标记这个Panic abort=true(强制终止)
+        d._panic = (*_panic)(noescape(unsafe.Pointer(&p)))
+
+        p.argp = unsafe.Pointer(getargp(0))
+        // 调用 defer
+        reflectcall(nil, unsafe.Pointer(d.fn), deferArgs(d), uint32(d.siz), uint32(d.siz))
+        p.argp = nil
+
+        // reflectcall did not panic. Remove d.
+        if gp._defer != d {
+            throw("bad defer entry in panic")
+        }
+        d._panic = nil
+        d.fn = nil
+        gp._defer = d.link //遍历到下一个defer
+        pc := d.pc
+        sp := unsafe.Pointer(d.sp) // must be pointer so it gets adjusted during stack copy
+        freedefer(d)
+        //已经有recover被调用
+        if p.recovered {
+            //调用recovery函数
+            mcall(recovery)
+            throw("recovery failed") // mcall should not return
+        }
+    }
+    //defer遍历完，终止程序
+    fatalpanic(gp._panic) // should not return
+    *(*int)(nil) = 0      // not reached
+}
+
+//panic没有被recover，会运行fatalpanic
+func fatalpanic(msgs *_panic) {
+
+    systemstack(func() {
+        if startpanic_m() && msgs != nil {
+            //打印panic messages
+            printpanics(msgs)
+        }
+        //打印panic messages
+        docrash = dopanic_m(gp, pc, sp)
+    })
+
+    //终止整个程序，所以需要注意：如果goroutine的Panic没有 recover，会终止整个程序
+    systemstack(func() {
+        exit(2)
+    })
+
+    *(*int)(nil) = 0 // not reached
+}
+gorecover函数
+
+//defer有recover时，调用；置p的recovered标识位为true
+func gorecover(argp uintptr) interface{} {
+    // 在panic期间，作为defer的一部分被运行
+    gp := getg()
+    p := gp._panic
+    if p != nil && !p.recovered && argp ==  uintptr(p.argp) {
+        p.recovered = true
+        return p.arg
+    }
+    return nil
+}
+recovery函数
+
+//安排defer函数的调用者正常返回
+func recovery(gp *g) {
+    //跳转到deferreturn
+    gogo(&gp.sched)
+}
+总结：当发生panic时，会遍历G的defer链表，如发现defer函数包含recover, 则会运行recovery函数，recovery会跳转到deferreturn,否则会退出整个程序。

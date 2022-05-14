@@ -1,0 +1,232 @@
+I"S$<p>github.com/olivere/elastic</p>
+
+<!-- more -->
+<p>连接es:
+var host  = “http://xxx.com:9201”
+func es_init() {
+   client, err := elastic.NewClient(
+      elastic.SetURL(host),
+      elastic.SetSniff(false),
+      elastic.SetHealthcheckInterval(10*time.Second),
+      elastic.SetGzip(true),
+      elastic.SetErrorLog(log.New(os.Stderr, “ELASTIC “, log.LstdFlags)),
+      elastic.SetInfoLog(log.New(os.Stdout, “”, log.LstdFlags)))
+   if err!= nil{
+      panic(err)
+   }
+   fmt.Println(“conn es succ”,client)
+}
+　　</p>
+
+<p>连接参数详解：
+ 1、SetHttpClient(*http.Client)允许您配置自己的http.Client和/或http.Transport（默认为http.DefaultClient）；在许多弹性实例中使用相同的http.Client（即使使用http.DefaultClient）是一个好主意，以便有效地使用打开的TCP连接。</p>
+
+<p>2、Seturl（…字符串）允许您指定要连接的URL（默认值是http://127.0.0.1:9200）。
+3、StasBaseCuthe（用户名，密码字符串）允许您指定HTTP基本身份验证详细信息。使用这个，例如用盾牌。
+4、SETSNIFF（BOOL）允许您指定弹性是否应该定期检查集群（默认为真）。
+5、StSnIFFEffTimeOUT（时间。持续时间）是嗅探节点弹出时间之前的时间（默认为2秒）。
+6、StnSnFiffer-TimeOutExpLoT（时间。持续时间）是创建新客户端时使用的嗅探超时。它通常比嗅探器超时大，并且证明对慢启动有帮助（默认为5秒）。
+7、StnSnIFFER间隔（时间。持续时间）允许您指定两个嗅探器进程之间的间隔（默认为15分钟）。
+8、SetHealthcheck（bool）允许您通过尝试定期连接到它的节点（默认为true）来指定Elastic是否将执行健康检查。
+9、SethalthCuffTimeExt（时间。持续时间）是健康检查的超时时间（默认值为1秒）。
+10、SethalthCuffTimeOutExtudio（时间。持续时间）是创建新客户端时使用的健康检查超时。它通常大于健康检查超时，并可能有助于慢启动（默认为5秒）。
+11、sethealthcheckinterval（time.duration）指定间隔之间的两个健康检查（默认是60秒）。
+12、SetDecoder（.ic.Decoder）允许您为来自Elasticsearch的JSON消息设置自己的解码器（默认为&amp;.ic.DefaultDecoder{}）。
+13、StError日志（<em>Log.LoggER）将日志记录器设置为用于错误消息（默认为NIL）。错误日志将包含例如关于加入群集的节点或标记为“死亡”的消息。
+14、SETIN FLUOG（</em>Log.LoggER）将记录器设置为用于信息性消息（默认为NIL）。信息日志将包含例如请求和它们的响应时间。
+15、StReTraceLoG（*Log.LoggER）设置用于打印HTTP请求和响应（默认为NIL）的记录器。这有助于调试有线上正在发生的事情
+16、StestRealdPuelin（插件…字符串）设置需要注册的插件列表。弹性将设法在启动时找到它们。如果没有找到其中一个，则在启动时会发现一个类型的弹性错误。
+17、StReReTrice（…）设置用于处理失败请求的重试策略。详情请参阅重试和退避
+18、SETGZIP（BOOL）启用或禁用请求端的压缩。默认情况下禁用。</p>
+
+<p>打印queryLog
+ 我们在写代码调试的时候，有时候需要打印es的query log 看下请求json到底长什么样。在new的时候我们需要传一个 实现了 elasticsearch 这个包  Logger 接口的结构体进来。 下面看代码：
+type Dao struct {
+    *elastic.Client
+}
+//tracelog 实现 elastic.Logger 接口
+type tracelog struct{}
+//实现输出
+func (tracelog) Printf(format string, v …interface{}) {
+    fmt.Printf(format, v…)
+}
+func NewDao(cfg *elasticsearch.ElasticConfig) (d *Dao) {
+    var (
+        err error
+    )
+    //实例化 es client
+    instance, err := elasticsearch.New(cfg,elastic.SetTraceLog(new(tracelog)))
+    if err != nil {
+        panic(err)
+    }</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>d = &amp;Dao{
+    instance,
+}
+return } 　　
+</code></pre></div></div>
+
+<p>创建个Mapping:
+client := es_init()
+mapping := <code class="language-plaintext highlighter-rouge">{
+   "settings":{
+      "number_of_shards":1,
+      "number_of_replicas":0
+   },
+   "mappings":{
+      "tweet":{
+         "properties":{
+            "tags":{
+               "type":"string"
+            },
+            "location":{
+               "type":"geo_point"
+            }
+         }
+      }
+   }
+}</code>
+ctx := context.Background()
+createIndex,err := client.CreateIndex(“twitter”).BodyString(mapping).Do(ctx)
+if err != nil {
+   panic(err)
+}
+if !createIndex.Acknowledged {
+   fmt.Println(“!createIndex.Acknowledged”)
+} else {
+   fmt.Println(“createIndex.Acknowledged”)
+}
+　　</p>
+
+<p>简单搜索
+client := es_init()
+ctx := context.Background()
+var res <em>elastic.SearchResult
+var err error
+//实例化一个bool搜索器
+boolQ := elastic.NewBoolQuery()
+boolQ.Must(elastic.NewMatchQuery(“rootCategory”,”鞋类”))  //一级类目必须是鞋类
+boolQ.Filter(elastic.NewRangeQuery(“sellPoint”).Gt(“0”)) //销量大于0
+//打印查询语句
+q,_ := boolQ.Source()
+PrintQuery(q)
+//组装查询，查2条，对应的index 和 type
+res,err = client.Search(“shihuo_goods”).Type(“goods_v4”).Query(boolQ).From(0).Size(2).Do(ctx)
+if err != nil {
+   panic(err)
+}
+//循环查到的数据并且以json方式输出
+for _,item := range res.Hits.Hits {
+   //fmt.Printf(“%+v”,</em>item.Source)
+   fmt.Println(string(*item.Source))
+}</p>
+
+<p>//自定义打印函数
+func PrintQuery(src interface{}) {
+   fmt.Println(“*****”)
+   data, err := json.MarshalIndent(src, “”, “  “)
+   if err != nil {
+      panic(err)
+   }
+   fmt.Println(string(data))
+}
+　　</p>
+
+<p>批量操作bulk:
+数据库都要支持批量执行的操作，如批量写入。否则设想有一亿条数据，如果一个一个插入并发满了效率太低，并发高了数据库负载扛不住。作为开发者好的习惯是在需要的时候应该一次性的写入一批数据，减少对数据库写入频率。在es里面也支持批量操作：这个「批量」定义要更泛化，不止是指一次多写，还可以删除更新等！
+subjects := []Subject{
+    Subject{
+        ID:     1,
+        Title:  “肖恩克的救赎”,
+        Genres: []string{“犯罪”, “剧情”},
+    },
+    Subject{
+        ID:     2,
+        Title:  “千与千寻”,
+        Genres: []string{“剧情”, “喜剧”, “爱情”, “战争”},
+    },
+}</p>
+
+<p>bulkRequest := client.Bulk()
+for _, subject := range subjects {
+    doc := elastic.NewBulkIndexRequest().Index(indexName).Id(strconv.Itoa(subject.ID)).Doc(subject)
+    bulkRequest = bulkRequest.Add(doc)
+}</p>
+
+<p>response, err := bulkRequest.Do(ctx)
+if err != nil {
+    panic(err)
+}
+failed := response.Failed()
+l := len(failed)
+if l &gt; 0 {
+    fmt.Printf(“Error(%d)”, l, response.Errors)
+}
+　　</p>
+
+<p>这样就可以一次性的把2个记录写到es里面。再看一个复杂的例子：
+subject3 := Subject{
+    ID:     3,
+    Title:  “这个杀手太冷”,
+    Genres: []string{“剧情”, “动作”, “犯罪”},
+}
+subject4 := Subject{
+    ID:     4,
+    Title:  “阿甘正传”,
+    Genres: []string{“剧情”, “爱情”},
+}</p>
+
+<p>subject5 := subject3
+subject5.Title = “这个杀手不太冷”</p>
+
+<p>index1Req := elastic.NewBulkIndexRequest().Index(indexName).Id(“3”).Doc(subject3)
+index2Req := elastic.NewBulkIndexRequest().OpType(“create”).Index(indexName).Id(“4”).Doc(subject4)
+delete1Req := elastic.NewBulkDeleteRequest().Index(indexName).Id(“1”)
+update2Req := elastic.NewBulkUpdateRequest().Index(indexName).Id(“3”).
+            Doc(subject5)</p>
+
+<p>bulkRequest = client.Bulk()
+bulkRequest = bulkRequest.Add(index1Req)
+bulkRequest = bulkRequest.Add(index2Req)
+bulkRequest = bulkRequest.Add(delete1Req)
+bulkRequest = bulkRequest.Add(update2Req)</p>
+
+<p>_, err = bulkRequest.Refresh(“wait_for”).Do(ctx)
+if err != nil {
+    panic(err)
+}</p>
+
+<p>if bulkRequest.NumberOfActions() == 0 {
+    fmt.Println(“Actions all clear!”)
+}</p>
+
+<p>searchResult, err := client.Search().
+    Index(indexName).
+    Sort(“id”, false). // 按id升序排序
+    Pretty(true).
+    Do(ctx) // 执行
+if err != nil {
+    panic(err)
+}
+var subject Subject
+for _, item := range searchResult.Each(reflect.TypeOf(subject)) {
+    if t, ok := item.(Subject); ok {
+        fmt.Printf(“Found: Subject(id=%d, title=%s)\n”, t.ID, t.Title)
+    }
+}
+　　</p>
+
+<p>这个批量操作里面做了4件事：添加subject3(ID为3)、添加subject4(ID为4)、删除ID为1的记录、更新ID为三的记录(subject5，在原来的subject3中Title故意写错了)。完成bulk操作之后通过搜索(无term条件，表示全部)验证下当前es里面的全部文档：
+❯ go run bulk.go
+Actions all clear!
+Found: Subject(id=4, title=阿甘正传)
+Found: Subject(id=3, title=这个杀手不太冷)
+Found: Subject(id=2, title=千与千寻)
+　　
+　　
+　　</p>
+
+<p>可以看到ID3和ID4这2个文档插入了，而ID3的条目标题被更新成正确的，ID1的条目被删除了：这就是批量操作的效果</p>
+
+<p>https://www.cnblogs.com/gwyy/p/13356345.html</p>
+:ET

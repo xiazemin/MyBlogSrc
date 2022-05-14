@@ -1,0 +1,92 @@
+---
+title: page compression
+layout: post
+category: mysql
+author: 夏泽民
+---
+https://blog.koehntopp.info/2021/09/09/mysql-two-kinds-of-compression.html
+
+
+https://github.com/percona/tokudb-engine/wiki/Compression
+https://github.com/zhangjaycee/real_tech/wiki/db_008
+
+https://github.com/zhangjaycee/real_tech/wiki/db_004
+
+在MySQL中支持3种类型的表压缩，依次为：传统压缩、TPC压缩、字典压缩。
+
+第一种：传统压缩
+
+传统的表压缩方式是在MySQL5.0.7之前使用的，现在已经废弃了，因为这种方式不但没有提升数据库的效率，反而降低了效率，导致buffer pool的使用率降低了。
+
+create table时指定压缩后表的大小，即 KEY_BLOCK_SIZE 的大小，page默认大小为16KB。压缩是按page为单位进行压缩的。
+<!-- more -->
+http://blog.jcix.top/2017-04-06/innodb_page_compression/
+http://blog.jcix.top/2017-04-06/innodb_table_compression/
+http://blog.jcix.top/2017-03-16/optimizing_disk_io/
+第二种：TPC压缩
+
+TPC是Transparent page compression的简称，也就是 透明页压缩。这种方式是主流的压缩方式。
+
+压缩是按page为单位进行压缩的，一个page的大小默认是16KB，也就是innodb page的默认大小，用于可以通过SQL : select @@innodb_page_size;查询page的大小；下面都采用一个page为16KB为单位。
+
+
+第三种：字典压缩
+
+基于字典的列压缩又叫压缩字典，但只适用于Percona分支。
+优点是压缩率高, 每个列的数据类型都相同；
+
+https://blog.csdn.net/zgaoq/article/details/120522590
+
+一、表压缩概述：
+
+表压缩可以在创建表时开启，压缩表能够使表中的数据以压缩格式存储，压缩能够显著提高原生性能和可伸缩性。压缩意味着在硬盘和内存之间传输的数据更小且占用相对少的内存及硬盘，对于辅助索引，这种压缩带来更加明显的好处，因为索引数据也被压缩了。压缩对于硬盘是SSD的存储设备尤为重要，因为它们相对普通的HDD硬盘比较贵且容量有限。
+
+https://blog.csdn.net/weixin_39640762/article/details/113121355
+
+c、压缩算法
+
+innodb 压缩借助的是著名的 zlib 库，采用 L777 压缩算法，这种算法在减少数据大小和 CPU 利用方面很成熟高效。同时这种算法是无损的，因此原生的未压缩的数据总是能够从压缩文件中重构，LZ777 实现原理是查找重复数据的序列号然后进行压缩，所以数据模式决定了压缩效率，一般而言，用户的数据能够被压缩 50%以上。
+
+d、压缩表在 buffer_pool 中如何处理
+
+在 buffer_pool 缓冲池中，压缩的数据通过 KEY_BLOCK_SIZE 的大小的页来保存，如果要提取压缩的数据或者要更新压缩数据对应的列，则会创建一个未压缩页来解压缩数据，然后在数据更新完成后，会将为压缩页的数据重新写入到压缩页中。内存不足的时候，MySQL 会讲对应的未压缩页踢出去。因此如果你启用了压缩功能，你的 buffer_pool 缓冲池中可能会存在压缩页和未压缩页，也可能只存在压缩页。不过可能仍然需要将你的 buffer_pool 缓冲池调大，以便能同时能保存压缩页和未压缩页。
+
+MySQL 采用最少使用（LRU）算法来确定将哪些页保留在内存中，哪些页剔除出去，因此热数据会更多地保留在内存中。当压缩表被访问的时候，MySQL 使用自适应的 LRU 算法来维持内存中压缩页和非压缩页的平衡。当系统 IO 负载比较高的时候，这种算法倾向于讲未压缩的页剔除，一面腾出更多的空间来存放更多的压缩页。当系统 CPU 负载比较高的时候，MySQL 倾向于将压缩页和未压缩页都剔除出去，这个时候更多的内存用来保留热的数据，从而减少解压的操作。
+
+https://www.cnblogs.com/q1359720840/p/15717597.html
+
+1、何时用压缩表
+一般而言，对于读远远大于写的应用以及拥有合理数量的字符串列的表，使用压缩效果会更好。
+
+
+2、数据特性及压缩率
+影响数据文件压缩效率的一个关键因素是数据本身的结构，在块数据中，压缩是通过识别重复字符进行压缩的，对于完全随机的数据是一个糟糕的情况，一般而言，有重复数据的压缩更好。对于字符串的列压缩就不错，无论是string还是blob、text等类型的。另一方面，如果表中的数据是二进制类型，如整形、浮点型等或者之前别压缩过的如jpg、png类型的，压缩效果一般不好，但也不是绝对的。
+
+https://www.jb51.net/article/235249.htm
+https://baijiahao.baidu.com/s?id=1677775314096811837&wfr=spider&for=pc
+
+1.3 压缩表的优势
+压缩表的优点非常明显，占用磁盘空间小！由于占用空间小，从磁盘置换到内存以及之后经过网络传输都非常节省资源。
+
+简单来讲：节省磁盘 IO，减少网络 IO。
+
+1.4 压缩表的缺陷
+当然压缩表也有缺点，压缩表的写入（INSERT,UPDATE,DELETE）比普通表要消耗更多的 CPU 资源。
+
+压缩表的写入涉及到解压数据，更新数据，再压缩数据，比普通表多了解压和再压缩两个步骤，压缩和解压缩需要消耗一定的 CPU 资源。所以需要选择一个比较优化的压缩算法。
+
+1.5 MySQL 支持的压缩算法
+这块是 MySQL 所有涉及到压缩的基础，不仅仅用于压缩表，也用于其它地方。比如客户端请求到 MySQL 服务端的数据压缩；主从之间的压缩传输；利用克隆插件来复制数据库操作的压缩传输等等。
+
+从下面结果可以看到 MySQL 支持的压缩算法为 zlib 和 zstd，MySQL 默认压缩算法为 zlib，当然你也可以选择非 zlib 算法，比如 zstd。至于哪种压缩算法最优，暂时没办法简单量化，依赖表中的数据分布或者业务请求。
+
+3.2 压缩表和 InnoDB Buffer Pool
+每个压缩页在 InnoDB Buffer Pool 里存放的是压缩页和非压缩并存的形式。
+
+比如说，读取一张压缩表的一行记录，如果 Buffer Pool 里没有，就需要回表找到包含这行记录的压缩页（1k,2k,4k,8k)，放入 Buffer Pool，同时放入包含这行的非压缩页（16K）
+
+这么做的目的减少不必要的页解压。如果 Buffer Pool 满了，把原始页面踢出，保留压缩页；极端情形，Buffer Pool 里两者都不包含。
+
+https://www.cnblogs.com/gered/p/15251301.html
+
+

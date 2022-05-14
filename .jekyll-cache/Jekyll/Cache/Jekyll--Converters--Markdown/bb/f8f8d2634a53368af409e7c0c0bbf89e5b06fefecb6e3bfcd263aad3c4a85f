@@ -1,0 +1,99 @@
+I"	<p>1.有or必全有索引;</p>
+
+<p>如果条件中有or，即使其中有部分条件带索引也不会使用(这也是为什么尽量少用or的原因)。
+注意：要想使用or，又想让索引生效，只能将or条件中的每个列都加上索引
+2.复合索引未用左列字段;（索引的最左前缀原则）</p>
+
+<p>B+ 树这种索引结构，可以利用索引的“最左前缀”，来定位记录。假设我们有（name，age）这样一个联合索引。
+在这里插入图片描述
+可以看到，索引项是按照索引定义里面出现的字段顺序排序的。
+     因为可以支持最左前缀，所以当已经有了 (a,b) 这个联合索引后，一般就不需要单独在 a 上建立索引了。因此，第一原则是，如果通过调整顺序，可以少维护一个索引，那么这个顺序往往就是需要优先考虑采用的。那么，如果既有联合查询，又有基于 a、b 各自的查询呢？查询条件里面只有 b 的语句，是无法使用 (a,b) 这个联合索引的，这时候就不得不维护另外一个索引，也就是说你需要同时维护 (a,b)、(b) 这两个索引。</p>
+
+<p>3.like以%开头;</p>
+
+<p>如果like查询是以%开头，那么索引将失效。如果是 ‘查询内容%‘ ，这种形式，索引不会失效。</p>
+
+<p>4.产生了隐式类型转换;</p>
+
+<p>select * from test where userId=123456;</p>
+
+<p>userId的字段类型是 varchar(16)，而输入的参数却是整型，所以需要做类型转换。此时就会需要走全表扫描，用不上索引。因为MySQL 中，字符串和数字做比较的话，是将字符串转换成数字。所以语句会变成下面这样，相当于给了索引上加了函数。</p>
+
+<p>select * from test where  CAST(userIdAS signed int) = 123456;
+1
+5.where中索引列有运算;</p>
+
+<p>修改前：
+ select *
+  from app a
+ where 
+   (a.END_DATE - sysdate) &lt; 7
+   and (a.END_DATE - sysdate) &gt;= 0</p>
+
+<p>修改后：</p>
+
+<p>select *
+  from app a
+ where 
+   a.END_DATE &lt; sysdate + 7
+   and a.END_DATE &gt;= sysdate</p>
+
+<p>6.where中索引列使用了函数;</p>
+
+<p>select * from t_user where ABS(account) = 1;</p>
+
+<p>可以考虑修改为</p>
+
+<p>select * from t_user where (account = 1 or account = -1);</p>
+
+<p>7.产生了隐式字符编码转换;</p>
+
+<p>a 表的编码是 utf8mb4， b 表是utf8。</p>
+
+<p>select b.* from a, b where a.userId = b.userId and a.id=2; 
+1
+因为这两个表的字符集不同，一个是 utf8，一个是 utf8mb4，所以做表连接查询的时候用不上关联字段的索引。</p>
+
+<p>MySQL 内部的操作是，先把 utf8 字符串转成 utf8mb4 字符集，再做比较。这个设定很好理解，utf8mb4 是 utf8 的超集。连接过程中要求在被驱动表的索引字段上加函数操作，是直接导致对被驱动表做全表扫描的原因。</p>
+
+<p>8.如果mysql觉得全表扫描更快时（数据少）;</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>选择索引是优化器的工作。而优化器选择索引的目的，是找到一个最优的执行方案，并用最小的代价去执行语句。在数据库里面，扫描行数是影响执行代价的因素之一。扫描的行数越少，意味着访问磁盘数据的次数越少，消耗的 CPU 资源越少。MySQL 在真正开始执行语句之前，并不能精确地知道满足这个条件的记录有多少条，而只能根据统计信息来估算记录数。在频繁修改表数据的场景下，可能会出现扫描行数估计不准确的情况，可以使用analyze table t 命令，可以用来重新统计索引信息。在实践中，如果发现 explain 的结果预估的 rows 值跟实际情况差距比较大，可以采用这个方法来处理。 &lt;!-- more --&gt; 索引可能失效的情况： 1.唯一性差; 2.频繁更新的字段不用（更新索引消耗）; 3.where中不用的字段; 4.索引使用&lt;&gt;时，效果一般;
+</code></pre></div></div>
+
+<p>什么情况下不推荐使用索引？
+数据唯一性差（一个字段的取值只有几种时）的字段不要使用索引
+比如性别，只有两种可能数据。意味着索引的二叉树级别少，多是平级。这样的二叉树查找无异于全表扫描。</p>
+
+<p>频繁更新的字段仔细考虑使用索引
+表中数据的频繁变化导致索引也频繁变化，增大数据库工作量，降低效率。.</p>
+
+<p>字段不在where语句出现时不要添加索引,如果where后含IS NULL /IS NOT NULL/ like ‘%输入符%’等条件，不建议使用索引
+只有在where语句出现，mysql才会去使用索引。</p>
+
+<p>where 子句里对索引列使用不等于（&lt;&gt;），使用索引效果一般</p>
+
+<p>https://blog.csdn.net/weixin_34384681/article/details/89807371</p>
+
+<p>增加索引可以提高查询效率。
+增加索引就是增加一个索引文件，存放的是数据的地址，类似与我们文档的目录，在查找过程中可以不用从书的内容查找，直接根据目录对应的页码查找。索引是根据地址查找。
+创建索引，索引使用的数据结构也有很多种。常见的是B-tree,哈希等。mysql默认使用的数据库索引是innerDB,innerDB的索引结构是B-tree。
+但是在使用过程中哪些情况增加索引无法达到预期的效果呢？下面列举几种常见情况：
+假设name age address 都已经加了索引。索引名字分别为 index_name,index_age,index_address。</p>
+
+<p>用explain查看SQL的执行计划
+执行计划的 type
+表示MySQL在表中找到所需行的方式，又称“访问类型”，常见类型如下:</p>
+
+<p>ALL, index,  range, ref, eq_ref, const, system, NULL
+ALL：Full Table Scan， MySQL将遍历全表以找到匹配的行
+index：Full Index Scan，index与ALL区别为index类型只遍历索引树
+range:索引范围扫描，对索引的扫描开始于某一点，返回匹配值域的行。显而易见的索引范围扫描是带有between或者where子句里带有&lt;, &gt;查询。当mysql使用索引去查找一系列值时，例如IN()和OR列表，也会显示range（范围扫描）,当然性能上面是有差异的。
+ref：使用非唯一索引扫描或者唯一索引的前缀扫描，返回匹配某个单独值的记录行
+eq_ref：类似ref，区别就在使用的索引是唯一索引，对于每个索引键值，表中只有一条记录匹配，简单来说，就是多表连接中使用primary key或者 unique key作为关联条件。</p>
+
+<p>https://blog.csdn.net/miyatang/article/details/79622082</p>
+
+<p>https://blog.csdn.net/qq_39397165/article/details/104311552</p>
+
+:ET

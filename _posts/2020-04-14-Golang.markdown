@@ -1,0 +1,62 @@
+---
+title: Reflections on 2 Years of Golang
+layout: post
+category: golang
+author: 夏泽民
+---
+https://wgyn.github.io/2020/04/12/reflections-on-2-years-of-golang.html
+Go was clearly designed with production code in mind. Most strikingly, Assembled had a period of serious performance issues (knock on wood) that we were able to debug with net/pprof and runtime/pprof. These were super powerful and easy to enable via HTTP handlers, as below. My one nit would be that the best guide I found to interpret the output was buried in a blog post.
+
+  superAdminMux.HandleFunc("/debug/pprof/heap", pprof.Handler("heap").ServeHTTP)
+  superAdminMux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+Fast, easy builds affect everything
+The best part of Go is that you can easily run go build and reliably expect a working executable with very little wait. Java still makes compilation painful without IntelliJ or Eclipse, and let’s not even start with Ruby or Python.
+
+Fast, easy builds experience have made a number of downstream tasks easy:
+
+Our deploy command is essentially git pull followed by go install
+Continuous integration (CI), well… let’s just say Go is not the problem
+The main difficulty has been local development with a file watch and rebuild loop. We have multiple build targets (e.g. application backend and API) and use https://github.com/cespare/reflex, which required some work to play nice with Mac OS X.
+
+Standard formatting and documentation
+Have I mentioned yet that Go was clearly built for professionals?
+
+gofmt handles indentation and alignment; I use the vim-go plugin, which automatically applies it when you save a .go file
+Here’s an eloquent explanation of how Go documentation is different; I most enjoy the standard look, the public repository at https://godoc.org/, and the fact that it runs locally and extracts project-specific code (quickly)
+Gopher ❤️
+So cute in all its incarnations. Here’s a fun read on the Go gopher’s origins: https://blog.golang.org/gopher.
+<!-- more -->
+Pain points
+Go is not without its annoying quirks. Many of these have already been well documented elsewhere, but I include them just for the sake of completeness and to vent a little.
+
+No official package manager story (until recently)
+As of Go 1.14 (Feb 2020), Go modules have been anointed ready for production use. Before then it was a wild west—we landed on dep but haven’t had a chance to migrate to modules. dep is/was an admirable effort but it’s also very slow. A common suggestion is to check dependencies into your repository (in e.g. a /vendor folder), which is perhaps not crazy in a production setting.
+
+GOPATH is confusing
+The GOPATH directory is supposed to magically contain all code. I think (speculation based on the wiki) it had something to do with making it easy to fetch from remote repositories e.g. go get github.com/my/repo. That’s elegant in theory but really confusing in practice, because if you don’t put your code in the right place, nothing works. This left me with a really negative first impression of Go.
+
+Now I just have the below in my .profile on my work machine:
+
+  export GOPATH=$HOME/go
+  export PATH="$GOPATH/bin:$PATH"
+
+  cd $GOPATH/src/github.com/assembledhq/assembled
+Errors are hard to introspect
+Most people hammer Go on the verbosity of error handling, but it’s also difficult to work with. In Go 1.13 (Oct. 2019), great methods for wrapping, unwrapping, and comparing were added, but we’re unfortunately behind the curve on adoption.
+
+There’s also a specific pain in working with pre-1.13 code that doesn’t wrap errors. For example, in Google’s own API bindings, the underlying HTTP error for a request does not wrapped and is thus not inspectable as a googleapi.RetrieveError, the public error interface, or even the low-level url.Error. The only option is to string match, which we do to catch like invalid_grant for an OAuth error.
+
+Compare, for example, to how error handling follows from pattern matching in Scala.
+
+Nil versus zero values
+It’s tedious to model values that are empty or omitted versus intentionally set to a zero value. See, for example, this migration in Stripe’s Go bindings. In our code, we often return a pointer and error e.g. (*string, error). This kind of breaks type safety by introducing the possibility of dereferencing nil pointers. You can check if res == nil as well as if err != nil but the compiler can’t save you from forgetfulness or laziness.
+
+Lack of object-oriented expressiveness
+Go suggests interfaces and type embedding to replicate useful object-oriented behavior that comes naturally in other languages. These tools turn out to be super limiting and, in various cases, we’ve accidentally worked around the type system. This leads to a temptatio
+
+This one’s been covered at length in the Go community. Here’s a really good summary: https://blog.golang.org/why-generics.
+
+Conclusion
+Initially it took me a bit of time to warm up to Go. There were some confusing parts to getting started, as I described with GOPATH. Coming from languages like Ruby and Scala also meant that a shift (or two) in mindset was required. In two years of working in the language, though, I’ve come to really enjoy its simplicity and philosophy of explicitness.
+
+At Assembled the company, the language is really well suited for our use case, a mostly standard web application. I think highly of the ecosystem—it feels like we’re working with thoughtfully designed and well maintained tools. As a result, there’s baseline less effort required to provide a stable service while rapidly making changes to the codebase.

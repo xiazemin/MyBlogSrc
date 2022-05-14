@@ -1,0 +1,220 @@
+I"�&<p>https://segmentfault.com/a/1190000022545889
+在并发编程中同步原语也就是我们通常说的锁的主要作用是保证多个线程或者 goroutine在访问同一片内存时不会出现混乱的问题。Go语言的sync包提供了常见的并发编程同步原语，上一期转载的文章《Golang 并发编程之同步原语》中也详述了 Mutex、RWMutex、WaitGroup、Once 和 Cond 这些同步原语的实现原理。今天的文章里让我们回到应用层，聚焦sync包里这些同步原语的应用场景，同时也会介绍sync包中的Pool和Map的应用场景和使用方法。话不多说，让我们开始吧。</p>
+
+<!-- more -->
+<p>sync.Mutex
+sync.Mutex可能是sync包中使用最广泛的原语。它允许在共享资源上互斥访问（不能同时访问）：</p>
+
+<p>mutex := &amp;sync.Mutex{}</p>
+
+<p>mutex.Lock()
+// Update共享变量 (比如切片，结构体指针等)
+mutex.Unlock()
+必须指出的是，在第一次被使用后，不能再对sync.Mutex进行复制。（sync包的所有原语都一样）。如果结构体具有同步原语字段，则必须通过指针传递它。</p>
+
+<p>sync.RWMutex
+sync.RWMutex是一个读写互斥锁，它提供了我们上面的刚刚看到的sync.Mutex的Lock和UnLock方法（因为这两个结构都实现了sync.Locker接口）。但是，它还允许使用RLock和RUnlock方法进行并发读取：</p>
+
+<p>mutex := &amp;sync.RWMutex{}</p>
+
+<p>mutex.Lock()
+// Update 共享变量
+mutex.Unlock()</p>
+
+<p>mutex.RLock()
+// Read 共享变量
+mutex.RUnlock()
+sync.RWMutex允许至少一个读锁或一个写锁存在，而sync.Mutex允许一个读锁或一个写锁存在。</p>
+
+<p>通过基准测试来比较这几个方法的性能：</p>
+
+<p>BenchmarkMutexLock-4       83497579         17.7 ns/op
+BenchmarkRWMutexLock-4     35286374         44.3 ns/op
+BenchmarkRWMutexRLock-4    89403342         15.3 ns/op
+可以看到锁定/解锁sync.RWMutex读锁的速度比锁定/解锁sync.Mutex更快，另一方面，在sync.RWMutex上调用Lock()/ Unlock()是最慢的操作。</p>
+
+<p>因此，只有在频繁读取和不频繁写入的场景里，才应该使用sync.RWMutex。</p>
+
+<p>sync.WaitGroup
+sync.WaitGroup也是一个经常会用到的同步原语，它的使用场景是在一个goroutine等待一组goroutine执行完成。</p>
+
+<p>sync.WaitGroup拥有一个内部计数器。当计数器等于0时，则Wait()方法会立即返回。否则它将阻塞执行Wait()方法的goroutine直到计数器等于0时为止。</p>
+
+<p>要增加计数器，我们必须使用Add(int)方法。要减少它，我们可以使用Done()（将计数器减1），也可以传递负数给Add方法把计数器减少指定大小，Done()方法底层就是通过Add(-1)实现的。</p>
+
+<p>在以下示例中，我们将启动八个goroutine，并等待他们完成：</p>
+
+<p>wg := &amp;sync.WaitGroup{}</p>
+
+<p>for i := 0; i &lt; 8; i++ {
+  wg.Add(1)
+  go func() {
+    // Do something
+    wg.Done()
+  }()
+}</p>
+
+<p>wg.Wait()
+// 继续往下执行…
+每次创建goroutine时，我们都会使用wg.Add(1)来增加wg的内部计数器。我们也可以在for循环之前调用wg.Add(8)。</p>
+
+<p>与此同时，每个goroutine完成时，都会使用wg.Done()减少wg的内部计数器。</p>
+
+<p>main goroutine会在八个goroutine都执行wg.Done()将计数器变为0后才能继续执行。</p>
+
+<p>sync.Map
+sync.Map是一个并发版本的Go语言的map，我们可以：</p>
+
+<p>使用Store(interface {}，interface {})添加元素。
+使用Load(interface {}) interface {}检索元素。
+使用Delete(interface {})删除元素。
+使用LoadOrStore(interface {}，interface {}) (interface {}，bool)检索或添加之前不存在的元素。如果键之前在map中存在，则返回的布尔值为true。
+使用Range遍历元素。
+m := &amp;sync.Map{}</p>
+
+<p>// 添加元素
+m.Store(1, “one”)
+m.Store(2, “two”)</p>
+
+<p>// 获取元素1
+value, contains := m.Load(1)
+if contains {
+  fmt.Printf(“%s\n”, value.(string))
+}</p>
+
+<p>// 返回已存value，否则把指定的键值存储到map中
+value, loaded := m.LoadOrStore(3, “three”)
+if !loaded {
+  fmt.Printf(“%s\n”, value.(string))
+}</p>
+
+<p>m.Delete(3)</p>
+
+<p>// 迭代所有元素
+m.Range(func(key, value interface{}) bool {
+  fmt.Printf(“%d: %s\n”, key.(int), value.(string))
+  return true
+})
+上面的程序会输出：</p>
+
+<p>one
+three
+1: one
+2: two
+如你所见，Range方法接收一个类型为func(key，value interface {})bool的函数参数。如果函数返回了false，则停止迭代。有趣的事实是，即使我们在恒定时间后返回false，最坏情况下的时间复杂度仍为O(n)。</p>
+
+<p>我们应该在什么时候使用sync.Map而不是在普通的map上使用sync.Mutex？</p>
+
+<p>当我们对map有频繁的读取和不频繁的写入时。
+当多个goroutine读取，写入和覆盖不相交的键时。具体是什么意思呢？例如，如果我们有一个分片实现，其中包含一组4个goroutine，每个goroutine负责25％的键（每个负责的键不冲突）。在这种情况下，sync.Map是首选。
+sync.Pool
+sync.Pool是一个并发池，负责安全地保存一组对象。它有两个导出方法：</p>
+
+<p>Get() interface{} 用来从并发池中取出元素。
+Put(interface{}) 将一个对象加入并发池。
+pool := &amp;sync.Pool{}</p>
+
+<p>pool.Put(NewConnection(1))
+pool.Put(NewConnection(2))
+pool.Put(NewConnection(3))</p>
+
+<p>connection := pool.Get().(<em>Connection)
+fmt.Printf(“%d\n”, connection.id)
+connection = pool.Get().(</em>Connection)
+fmt.Printf(“%d\n”, connection.id)
+connection = pool.Get().(*Connection)
+fmt.Printf(“%d\n”, connection.id)
+输出：</p>
+
+<p>1
+3
+2
+需要注意的是Get()方法会从并发池中随机取出对象，无法保证以固定的顺序获取并发池中存储的对象。</p>
+
+<p>还可以为sync.Pool指定一个创建者方法：</p>
+
+<p>pool := &amp;sync.Pool{
+  New: func() interface{} {
+    return NewConnection()
+  },
+}</p>
+
+<p>connection := pool.Get().(*Connection)
+这样每次调用Get()时，将返回由在pool.New中指定的函数创建的对象（在本例中为指针）。</p>
+
+<p>那么什么时候使用sync.Pool？有两个用例：</p>
+
+<p>第一个是当我们必须重用共享的和长期存在的对象（例如，数据库连接）时。第二个是用于优化内存分配。</p>
+
+<p>让我们考虑一个写入缓冲区并将结果持久保存到文件中的函数示例。使用sync.Pool，我们可以通过在不同的函数调用之间重用同一对象来重用为缓冲区分配的空间。
+第一步是检索先前分配的缓冲区（如果是第一个调用，则创建一个缓冲区，但这是抽象的）。然后，defer操作是将缓冲区放回sync.Pool中。</p>
+
+<p>func writeFile(pool <em>sync.Pool, filename string) error {
+    buf := pool.Get().(</em>bytes.Buffer)</p>
+
+<p>defer pool.Put(buf)</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>// Reset 缓存区，不然会连接上次调用时保存在缓存区里的字符串foo
+// 编程foofoo 以此类推
+buf.Reset()
+
+buf.WriteString("foo")
+
+return ioutil.WriteFile(filename, buf.Bytes(), 0644) } sync.Once sync.Once是一个简单而强大的原语，可确保一个函数仅执行一次。在下面的示例中，只有一个goroutine会显示输出消息：
+</code></pre></div></div>
+
+<p>once := &amp;sync.Once{}
+for i := 0; i &lt; 4; i++ {
+    i := i
+    go func() {
+        once.Do(func() {
+            fmt.Printf(“first %d\n”, i)
+        })
+    }()
+}
+我们使用了Do(func ())方法来指定只能被调用一次的部分。</p>
+
+<p>sync.Cond
+sync.Cond可能是sync包提供的同步原语中最不常用的一个，它用于发出信号（一对一）或广播信号（一对多）到goroutine。让我们考虑一个场景，我们必须向一个goroutine指示共享切片的第一个元素已更新。创建sync.Cond需要sync.Locker对象（sync.Mutex或sync.RWMutex）：</p>
+
+<p>cond := sync.NewCond(&amp;sync.Mutex{})
+然后，让我们编写负责显示切片的第一个元素的函数：</p>
+
+<p>func printFirstElement(s []int, cond *sync.Cond) {
+    cond.L.Lock()
+    cond.Wait()
+    fmt.Printf(“%d\n”, s[0])
+    cond.L.Unlock()
+}
+我们可以使用cond.L访问内部的互斥锁。一旦获得了锁，我们将调用cond.Wait()，这会让当前goroutine在收到信号前一直处于阻塞状态。</p>
+
+<p>让我们回到main goroutine。我们将通过传递共享切片和先前创建的sync.Cond来创建printFirstElement池。然后我们调用get()函数，将结果存储在s[0]中并发出信号：</p>
+
+<p>s := make([]int, 1)
+for i := 0; i &lt; runtime.NumCPU(); i++ {
+    go printFirstElement(s, cond)
+}</p>
+
+<p>i := get()
+cond.L.Lock()
+s[0] = i
+cond.Signal()
+cond.L.Unlock()
+这个信号会解除一个goroutine的阻塞状态，解除阻塞的goroutine将会显示s[0]中存储的值。</p>
+
+<p>但是，有的人可能会争辩说我们的代码破坏了Go的最基本原则之一：</p>
+
+<p>不要通过共享内存进行通信；而是通过通信共享内存。
+确实，在这个示例中，最好使用channel来传递get()返回的值。但是我们也提到了sync.Cond也可以用于广播信号。我们修改一下上面的示例，把Signal()调用改为调用Broadcast()。</p>
+
+<p>i := get()
+cond.L.Lock()
+s[0] = i
+cond.Broadcast()
+cond.L.Unlock()
+在这种情况下，所有goroutine都将被触发。
+众所周知，channel里的元素只会由一个goroutine接收到。通过channel模拟广播的唯一方法是关闭channel。</p>
+
+<p>当一个channel被关闭后，channel中已经发送的数据都被成功接收后，后续的接收操作将不再阻塞，它们会立即返回一个零值。
+但是这种方式只能广播一次。因此，尽管存在很大争议，但这无疑是sync.Cond的一个有趣的功能。</p>
+:ET

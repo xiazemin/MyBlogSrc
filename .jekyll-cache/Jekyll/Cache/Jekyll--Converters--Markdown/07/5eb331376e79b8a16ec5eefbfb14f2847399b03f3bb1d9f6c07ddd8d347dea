@@ -1,0 +1,153 @@
+I"�<p>当你在扩展中使用 HashTable 时候，大部分情况下是要存储用户端的变量，就像 PHP 语言中数组那样。为此，内核中已经准备好了相应的工具，来让我们更加的方便的操作 HashTable 存储 zval*，也就是 PHP 语言中的数组，即 IS_ARRAY 常量代表的 zval，以下用 {数组} 来代替 PHP 语言中的数组这个词。
+<!-- more --></p>
+
+<p>创建数组
+创建 HashTable 有些繁琐，虽然有辅助的宏但还是不能一步完成，而创建{数组}便简单多了，直接使用array_init(zval *arrval) 函数即可，注意它的参数是 zval 类型的。这样，我们向用户端返回数组便简单多了：
+ZEND_FUNCTION(sample_array)
+{
+    array_init(return_value);
+}
+1
+ZEND_FUNCTION(sample_array)
+2
+{
+3
+    array_init(return_value);
+4
+}</p>
+
+<p>返回值是 zval* 类型的，所以我们直接对它调用 array_init() 函数即可，即把它初始化成了一个空数组。
+添加元素
+将{数组}初始化后，接下来就要向其添加元素了。因为 PHP 语言中有多种类型的变量，所以也对应的有多种类型的 add_assoc_<em>、add_index_</em>、add_next_index_* 函数。如：
+1
+array_init(arrval);
+2
+​
+3
+add_assoc_long(zval <em>arrval, char *key, long lval);
+4
+add_index_long(zval *arrval, ulong idx, long lval);
+5
+add_next_index_long(zval *arrval, long lval);
+这三个函数的第一个参数都要被操作的 {数组} 指针，然后是索引值，最后是变量，唯一不同的是add_next_index_long() 函数的索引值是其自己计算出来的。根据上一节的内容我们可以知道，这三个函数分别在内部使用了 zend_hash_update()、zend_hash_index_update()与zend_hash_next_index_insert() 函数。
+zval *value
+1
+// add_assoc_</em>系列函数：
+2
+add_assoc_null(zval <em>aval, char *key);
+3
+add_assoc_bool(zval *aval, char *key, zend_bool bval);
+4
+add_assoc_long(zval *aval, char *key, long lval);
+5
+add_assoc_double(zval *aval, char *key, double dval);
+6
+add_assoc_string(zval *aval, char *key, char *strval, int dup);
+7
+add_assoc_stringl(zval *aval, char *key,char *strval, uint strlen, int dup);
+8
+add_assoc_zval(zval *aval, char *key, zval *value);
+9
+​
+10
+//备注：其实这些函数都是宏，都是对add_assoc_</em><em>ex函数的封装。
+11
+​
+12
+// add_index</em><em>系列函数：
+13
+ZEND_API int add_index_long(zval *arg, ulong idx, long n);
+14
+ZEND_API int add_index_null(zval *arg, ulong idx);
+15
+ZEND_API int add_index_bool(zval *arg, ulong idx, int b);
+16
+ZEND_API int add_index_resource(zval *arg, ulong idx, int r);
+17
+ZEND_API int add_index_double(zval *arg, ulong idx, double d);
+18
+ZEND_API int add_index_string(zval *arg, ulong idx, const char *str, int duplicate);
+19
+ZEND_API int add_index_stringl(zval *arg, ulong idx, const char *str, uint length, int duplicate);
+20
+ZEND_API int add_index_zval(zval *arg, ulong index, zval *value);
+21
+​
+22
+// add_next_index_</em>函数：
+23
+ZEND_API int add_next_index_long(zval *arg, long n);
+24
+ZEND_API int add_next_index_null(zval *arg);
+25
+ZEND_API int add_next_index_bool(zval *arg, int b   );
+26
+ZEND_API int add_next_index_resource(zval *arg, int r   );
+27
+ZEND_API int add_next_index_double(zval *arg, double d);
+28
+ZEND_API int add_next_index_string(zval *arg, const char *str, int duplicate);
+29
+ZEND_API int add_next_index_stringl(zval *arg, const char *str, uint length, int duplicate);
+30
+ZEND_API int add_next_index_zval(zval *arg, zval *value);
+每组函数最后的一个，即 zend…_zval() 函数，允许我们向这个{数组}中添加资源、对象、{数组} 等复合类型的 PHP 变量。
+演示示例
+下面让我们通过一个例子来演示下它们的用法：
+ZEND_FUNCTION(academy_sample_array)
+{
+    zval *subarray;</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>array_init(return_value);
+
+// 添加标量
+add_assoc_long(return_value, "laravel", 55);
+add_index_bool(return_value, 100, 1);
+add_next_index_double(return_value, 3.1415926);
+
+// 静态字符串
+add_next_index_string(return_value, "Laravel", 1);
+
+// 动态字符串
+add_next_index_string(return_value, estrdup("Academy"), 0);
+
+// 创建一个子数组
+MAKE_STD_ZVAL(subarray);
+array_init(subarray);
+
+// 使用数值填充数组
+add_next_index_long(subarray, 1);
+add_next_index_long(subarray, 10);
+add_next_index_long(subarray, 100);
+
+// 将子数组附加到父级数组
+add_index_zval(return_value, 200, subarray); } 1 ZEND_FUNCTION(academy_sample_array) 2 { 3
+zval *subarray; 4 ​ 5
+array_init(return_value); 6 ​ 7
+// 添加标量 8
+add_assoc_long(return_value, "laravel", 55); 9
+add_index_bool(return_value, 100, 1); 10
+add_next_index_double(return_value, 3.1415926); 11 ​ 12
+// 静态字符串 13
+add_next_index_string(return_value, "Laravel", 1); 14 ​ 15
+// 动态字符串 16
+add_next_index_string(return_value, estrdup("Academy"), 0); 17 ​ 18
+// 创建一个子数组 19
+MAKE_STD_ZVAL(subarray); 20
+array_init(subarray); 21 ​ 22
+// 使用数值填充数组 23
+add_next_index_long(subarray, 1); 24
+add_next_index_long(subarray, 10); 25
+add_next_index_long(subarray, 100); 26 ​ 27
+// 将子数组附加到父级数组 28
+add_index_zval(return_value, 200, subarray); 29 } 重新编译扩展后，这时如果我们调用用户端 var_dump 这个函数： &lt;?php var_dump(academy_sample_array()); 1 &lt;?php 2 var_dump(academy_sample_array()); 输出如下： ￼ 我们用了很长的篇幅在这一章描述内核中的 HashTable 结构以及 PHP 中的数组实现。在接下来的章节中，我们会在它的基础上学习一下内核是怎样实现与管理 PHP 语言中的资源与类的。
+</code></pre></div></div>
+
+<p>https://xueyuanjun.com/post/7261
+https://blog.csdn.net/xing_____/article/details/79154053
+https://www.jianshu.com/p/0de2c303ee6f
+https://www.jianshu.com/p/32fdad9be6c8
+https://yaoguais.github.io/article/php/extension-php5to7.html
+https://toutiao.io/posts/47pyrd/preview
+https://www.bo56.com/php%E6%89%A9%E5%B1%95%E8%BF%81%E7%A7%BB%E4%B8%BA%E5%85%BC%E5%AE%B9php7%E8%AE%B0%E5%BD%95/</p>
+:ET

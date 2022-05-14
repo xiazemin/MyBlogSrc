@@ -1,0 +1,109 @@
+I"�<p>PHP接口调用超过5s的请求直接返回如下信息：</p>
+
+<p>Response</p>
+
+<html> <head><title>502 Bad Gateway</title></head> <body bgcolor="white"> <center><h1>502 Bad Gateway</h1></center> <hr /><center>nginx</center> </body> </html>
+<p><!-- a padding to disable MSIE and Chrome friendly error page --> <!-- a padding to disable MSIE and Chrome friendly error page --> <!-- a padding to disable MSIE and Chrome friendly error page --> <!-- a padding to disable MSIE and Chrome friendly error page --> <!-- a padding to disable MSIE and Chrome friendly error page --> <!-- a padding to disable MSIE and Chrome friendly error page -->
+查了Nginx的错误日志如下:
+2019/01/22 16:40:45 [error] 14291#0: *296842388 recv() failed (104: Connection reset by peer) while reading response header from upstream, client: 113.96.219.247, server: , request: “POST XXX HTTP/1.1”, upstream: “fastcgi://unix:/dev/shm/php7-cgi.sock:”, …
+1
+原因是由于php_fpm的执行时间受request_terminate_timeout这个参数的配置影响，这个参数我配置的是5s，那么5s后，这个php-fpm处理进程会被直接杀掉，导致返回502
+<!-- more -->
+官方备注：
+request_terminate_timeout mixed
+设置单个请求的超时中止时间。该选项可能会对 php.ini 设置中的 ‘max_execution_time’ 因为某些特殊原因没有中止运行的脚本有用。设置为 ‘0’ 表示 ‘Off’。可用单位：s（秒），m（分），h（小时）或者 d（天）。默认单位：s（秒）。默认值：0（关闭）。</p>
+
+<p>首先上一段为关于fast_cgi的配置代码</p>
+
+<p>location ~* .php$ {
+        fastcgi_index   index.php;
+        fastcgi_pass    127.0.0.1:9000;</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    include           fastcgi_params;
+    fastcgi_param   SCRIPT_FILENAME    $document_root$fastcgi_script_name;
+    fastcgi_param   SCRIPT_NAME        $fastcgi_script_name;
+}
+</code></pre></div></div>
+
+<table>
+  <tbody>
+    <tr>
+      <td>乍看是没什么毛病毕竟网上千篇一律的都是这样的配置，接下我使用netstat -tlnp</td>
+      <td>grep 9000 筛选了一下监听9000的程序然而结果却出乎意料，并没有监听9000的程序，结果如下</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>(Not all processes could be identified, non-owned process info
+1
+到这里几乎已经很大几率是出现在配置上了，查询了一下NGINX 相关的配置资料发现
+Nginx和PHP-FPM的进程间通信有两种方式,一种是TCP,一种是UNIX Domain Socket.
+其中TCP是IP加端口,可以跨服务器.而UNIX Domain Socket不经过网络,只能用于Nginx跟PHP-FPM都在同一服务器的场景.用哪种取决于你的PHP-FPM配置:
+方式1:
+php-fpm.conf: listen = 127.0.0.1:9000
+nginx.conf: fastcgi_pass 127.0.0.1:9000;
+方式2:
+php-fpm.conf: listen = /tmp/php-fpm.sock
+nginx.conf: fastcgi_pass unix:/tmp/php-fpm.sock;
+其中php-fpm.sock是一个文件,由php-fpm生成,类型是srw-rw—-.</p>
+
+<p>UNIX Domain Socket可用于两个没有亲缘关系的进程,是目前广泛使用的IPC机制,比如X Window服务器和GUI程序之间就是通过UNIX Domain Socket通讯的.这种通信方式是发生在系统内核里而不会在网络里传播.UNIX Domain Socket和长连接都能避免频繁创建TCP短连接而导致TIME_WAIT连接过多的问题.对于进程间通讯的两个程序,UNIX Domain Socket的流程不会走到TCP那层,直接以文件形式,以stream socket通讯.如果是TCP Socket,则需要走到IP层,对于非同一台服务器上,TCP Socket走的就更多了.</p>
+
+<p>UNIX Domain Socket:
+Nginx &lt;=&gt; socket &lt;=&gt; PHP-FPM
+TCP Socket(本地回环):
+Nginx &lt;=&gt; socket &lt;=&gt; TCP/IP &lt;=&gt; socket &lt;=&gt; PHP-FPM
+TCP Socket(Nginx和PHP-FPM位于不同服务器):
+Nginx &lt;=&gt; socket &lt;=&gt; TCP/IP &lt;=&gt; 物理层 &lt;=&gt; 路由器 &lt;=&gt; 物理层 &lt;=&gt; TCP/IP &lt;=&gt; socket &lt;=&gt; PHP-FPM
+而此次出现问题的原因在于，我使用的是UNIX Domain Socket而nginx配置的确实tcp方式，既然知道症结所在，修改起来也就方便很多了修改代码如下</p>
+
+<p>location ~* .php$ {
+        fastcgi_index   index.php;
+        #fastcgi_pass    127.0.0.1:9000; 注释掉tcp方式
+        fastcgi_pass    unix:/dev/shm/php-cgi.sock;#使用UNIX Domain Socket
+        include           fastcgi_params;
+        fastcgi_param   SCRIPT_FILENAME    $document_root$fastcgi_script_name;
+        fastcgi_param   SCRIPT_NAME        $fastcgi_script_name;
+    }
+修改完配置之后，重启服务器，问题果然就解决了.</p>
+
+<p>目前lnmp一键安装包比较多的问题就是502 Bad Gateway，大部分情况下原因是在安装php前，脚本中某些lib包可能没有安装上，造成php没有编译安装成功。</p>
+
+<p>解决办法：可以尝试根据lnmp一键安装包中的脚本手动安装一下，看看是什么错误导致的。</p>
+
+<p>在php.ini里，eaccelerator配置项一定要放在Zend Optimizer配置之前，否则也可能引起502 Bad Gateway</p>
+
+<p>在安装好使用过程中出现502问题，一般是因为默认php-cgi进程是5个，可能因为phpcgi进程不够用而造成502，需要修改/usr/local/php/etc/php-fpm.conf 将其中的max_children值适当增加。</p>
+
+<p>php执行超时，修改/usr/local/php/etc/php.ini 将max_execution_time 改为300</p>
+
+<p>磁盘空间不足，如mysql日志占用大量空间</p>
+
+<p>查看php-cgi进程是否在运行</p>
+
+<p>Nginx 502 Bad Gateway的含义是请求的PHP-CGI已经执行，但是由于某种原因（一般是读取资源的问题）没有执行完毕而导致PHP-CGI进程终止，一般来说Nginx 502 Bad Gateway和php-fpm.conf的设置有关。</p>
+
+<p>php-fpm.conf有两个至关重要的参数，一个是max_children，另一个是request_terminate_timeout，但是这个值不是通用的，而是需要自己计算的。</p>
+
+<p>在安装好使用过程中出现502问题，一般是因为默认php-cgi进程是5个，可能因为phpcgi进程不够用而造成502，需要修改/usr/local/php/etc/php-fpm.conf 将其中的max_children值适当增加。</p>
+
+<p>502：nginx在这里充当的是反向代理服务器的角色，是把http协议请求转成fastcgi协议的请求，通过fastcgi_pass指令传递给php-fpm进程，当php-fpm进程响应的内容是nginx无法理解的响应，就会返回502 bad gateway
+503：一个http请求占用一个php-fpm进程，瞬时请求量过大时，没有足够的php-fpm进程去处理请求，就会返回503 service unavailable
+504:单个php-fpm进程阻塞超过nginx的时间阈值返回504 gateway timeout</p>
+
+<p>解释：出现502错误，通常意味着一两个机器已经不正确，简单点说，就是机器挂掉了。理论点儿说，nginx执行请求的时候，却收到了上游服务器的无效响应</p>
+
+<p>503
+灾难事件：临时的服务器维护/过载，服务器当前无法处理请求，报503
+问题原因：请求用户量太多，服务器为了保护自己不挂掉，机智的拒绝某些用户的访问，这些用户就会收到503这个错误
+解决办法： 等一会儿仔访问该网站或者尝试强刷新页面，问题一般就能够解决了。
+504
+事件描述：dns查询过程超时，返回504；摸不着头脑，不管访问什么网站，都报504这个错误
+问题原因：nginx或者后端配置不正确
+解决办法：上网查nginx或后端的配置参数是否正确或者合理
+解释： 实际上504很少会遇到，通常这个错误是由于nginx配置不当引起的，比如你将你的nginx的超时时间设置为300，那么如果此次请求的响应时间超过了300，你就会看到504这个报错。明白了吧。官方说法：请求超时</p>
+
+<p>https://mp.weixin.qq.com/s?__biz=MzA4MjkxMzMyNg==&amp;mid=2654068952&amp;idx=1&amp;sn=1bd63a71610d73fcd563888d6f93398d&amp;scene=24&amp;srcid=0804843QrwLCsKWGYxfPum2H#wechat_redirect</p>
+
+<p>https://segmentfault.com/q/1010000006656545?_ea=1086572</p>
+:ET

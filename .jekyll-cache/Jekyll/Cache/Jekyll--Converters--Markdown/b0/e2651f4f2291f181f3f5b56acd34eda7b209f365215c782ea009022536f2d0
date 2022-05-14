@@ -1,0 +1,226 @@
+I"�&<p>当go语言开发的server应用已经在运行时，如果更新了代码，直接编译并运行，那么不好意思，端口已经在使用中：</p>
+
+<p>listen tcp :8000: bind: address already in use</p>
+
+<p>看到这样的错误信息，我们通常都是一通下意识的操作：</p>
+
+<p>lsof -i:8000
+kill -9 …</p>
+
+<p>这样做端口被占用的问题是解决了，go程序也成功更新了。但是这里面还隐藏着两个问题：</p>
+
+<p>kill程序时可能把正在处理的用户请求给中断了
+从kill到重新运行程序这段时间里没有应用在处理用户请求
+关于如何解决这两个问题，网上有多种解决方案，今天我们谈谈endless的解决方案。
+endless
+endless的github地址为：https://github.com/fvbock/endless
+她的解决方案是fork一个进程运行新编译的应用，该子进程接收从父进程传来的相关文件描述符，直接复用socket，同时父进程关闭socket。父进程留在后台处理未处理完的用户请求，这样一来问题1解决了。且复用soket也直接解决了问题2，实现0切换时间差。复用socket可以说是endless方案的核心。
+<!-- more -->
+endless可以很方便的接入已经写好的程序，对于原生api，直接替换ListenAndServe为endless的方法，如下。并在编译完新的程序后，执行kill -1 旧进程id，旧进程便会fork一个进程运行新编译的程序。注：此处需要保证新编译的程序的路径和程序名和旧程序的一致。</p>
+
+<p>func handler(w http.ResponseWriter, r *http.Request) {
+	w.Write([]byte(“WORLD!”))
+}</p>
+
+<p>func main() {
+	mux1 := mux.NewRouter()
+	mux1.HandleFunc(“/hello”, handler).
+		Methods(“GET”)</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>err := endless.ListenAndServe("localhost:4242", mux1)
+if err != nil {
+	log.Println(err)
+}
+log.Println("Server on 4242 stopped")
+
+os.Exit(0) } 对于使用gin框架的程序，可以以下面的方式接入：
+
+r := gin.New()
+r.GET("/", func(c *gin.Context) {
+	c.String(200, config.Config.Server.AppId)
+})
+s := endless.NewServer(":8080", r)
+err := s.ListenAndServe()
+if err != nil {
+	log.Printf("server err: %v", err)
+} 原理 其使用非常简单，实现代码也很少，但是很强大，下面我们看看她的实现：
+</code></pre></div></div>
+
+<p>kill -1
+endless的使用方法是先编译新程序，并执行”kill -1 旧进程id”，我们看看旧程序接收到-1信号之后作了什么：
+func (srv *endlessServer) handleSignals() {
+	…
+	for {
+		sig = &lt;-srv.sigChan
+		srv.signalHooks(PRE_SIGNAL, sig)
+		switch sig {
+		case syscall.SIGHUP:	//接收到-1信号之后，fork一个进程，并运行新编译的程序
+			log.Println(pid, “Received SIGHUP. forking.”)
+			err := srv.fork()
+			if err != nil {
+				log.Println(“Fork err:”, err)
+			}
+		…
+		default:
+			log.Printf(“Received %v: nothing i care about…\n”, sig)
+		}
+		srv.signalHooks(POST_SIGNAL, sig)
+	}
+}</p>
+
+<p>func (srv *endlessServer) fork() (err error) {
+	…
+	path := os.Args[0]	//获取当前程序的路径，在子进程执行。所以要保证新编译的程序路径和旧程序的一致。
+	var args []string
+	if len(os.Args) &gt; 1 {
+		args = os.Args[1:]
+	}</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>cmd := exec.Command(path, args...)
+cmd.Stdout = os.Stdout
+cmd.Stderr = os.Stderr
+cmd.ExtraFiles = files	//socket在此处传给子进程，windows系统不支持获取socket文件，所以endless无法在windows上用。windows获取socket文件时报错：file tcp [::]:9999: not supported by windows。
+cmd.Env = env	//env有一个ENDLESS_SOCKET_ORDER变量存储了socket传递的顺序（如果有多个socket）
+...
+
+err = cmd.Start()	//运行新程序
+if err != nil {
+	log.Fatalf("Restart: Failed to launch, error: %v", err)
+}
+
+return } 接下来我们看看程序启动之后做了什么。 ListenAndServe 新进程启动之后会执行ListenAndServe这个方法，这个方法主要做了系统信号监听，并且判断自己所在进程是否是子进程，如果是，则发送中断信号给父进程，让其退出。最后调用Serve方法给socket提供新的服务。
+</code></pre></div></div>
+
+<p>func (srv *endlessServer) ListenAndServe() (err error) {
+    …
+	go srv.handleSignals()
+	l, err := srv.getListener(addr)
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	srv.EndlessListener = newEndlessListener(l, srv)
+	if srv.isChild {
+		syscall.Kill(syscall.Getppid(), syscall.SIGTERM)		//给父进程发出中断信号
+	}
+	…
+	return srv.Serve()	//为socket提供新的服务
+}
+复用socket
+前面提到复用socket是endless的核心，必须在Serve前准备好，否则会导致端口已使用的异常。复用socket的实现在上面的getListener方法中：</p>
+
+<p>func (srv *endlessServer) getListener(laddr string) (l net.Listener, err error) {
+	if srv.isChild {//如果此方法运行在子进程中，则复用socket
+		var ptrOffset uint = 0
+		runningServerReg.RLock()
+		defer runningServerReg.RUnlock()
+		if len(socketPtrOffsetMap) &gt; 0 {
+			ptrOffset = socketPtrOffsetMap[laddr]//获取和addr相对应的socket的位置
+		}</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>	f := os.NewFile(uintptr(3+ptrOffset), "")//创建socket文件描述符
+	l, err = net.FileListener(f)//创建socket文件监听器
+	if err != nil {
+		err = fmt.Errorf("net.FileListener error: %v", err)
+		return
+	}
+} else {//如果此方法不是运行在子进程中，则新建一个socket
+	l, err = net.Listen("tcp", laddr)
+	if err != nil {
+		err = fmt.Errorf("net.Listen error: %v", err)
+		return
+	}
+}
+return 但是父进程关闭socket和子进程绑定socket并不可能同时进行，如果这段时间有请求进来，这个请求会到哪里去呢？关于这个问题，我做了个实验，实验代码如下：
+</code></pre></div></div>
+
+<p>func main() {
+	isChild := os.Getenv(“child”) != “”</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>http.HandleFunc("/", func(writer http.ResponseWriter, request *http.Request) {
+	writer.Write([]byte(fmt.Sprintf("hello world from child?  %v", isChild)))
+})
+
+var ln net.Listener
+var err error
+
+if isChild {
+	f := os.NewFile(uintptr(3+0), "")//由于只传一个文件，所以此处直接为3
+	ln, err = net.FileListener(f)
+} else {
+	ln, err = net.Listen("tcp", ":9999")
+}
+if err != nil {
+	fmt.Println("listener create", err)
+	os.Exit(1)
+}
+
+go func() {
+	c := make(chan os.Signal)
+	signal.Notify(c, os.Interrupt)
+	&lt;-c
+
+	path := os.Args[0]
+	var args []string
+	if len(os.Args) &gt; 1 {
+		args = os.Args[1:]
+	}
+
+	f, err := ln.(*net.TCPListener).File()
+	if err != nil {
+		fmt.Println("get socket file", err)
+		os.Exit(1)
+	}
+
+	cmd := exec.Command(path, args...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.ExtraFiles = []*os.File{f}
+	cmd.Env = []string{"child=1"}
+
+	err = cmd.Start()
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+}()
+
+http.Serve(ln, nil) } 在centos7上试验结果如下：
+</code></pre></div></div>
+
+<p>第一种情况：如果某个终端跟服务器建立了长连接（应该是设置了keepalive属性），那么该终端的所有请求都会发到建立长连接的进程去，如下信息，所有computerName的请求都会被转发到父进程去（父进程id为13603）：
+[root@localhost care_watch_deploy]# lsof -i:9999
+COMMAND PID USER FD TYPE DEVICE SIZE/OFF NODE NAME
+care_watc 13603 root 3u IPv6 17537280 0t0 TCP *:distinct (LISTEN)
+care_watc 13603 root 5u IPv6 17528589 0t0 TCP 10.100.21.105:distinct-&gt;computerName:58776 (ESTABLISHED)
+care_watc 13603 root 6u IPv6 17528593 0t0 TCP 10.100.21.105:distinct-&gt;computerName:58780 (ESTABLISHED)
+care_watc 13603 root 7u IPv6 17537280 0t0 TCP *:distinct (LISTEN)
+care_watc 13617 root 3u IPv6 17537280 0t0 TCP *:distinct (LISTEN)
+care_watc 13617 root 4u IPv6 17537280 0t0 TCP *:distinct (LISTEN)</p>
+
+<p>第二种情况：如果有新的请求进来，会随机分配到父进程或者子进程，不知道为什么，我多次试验的结果是，20%的请求会被转发到子进程，80%的请求会被转发到父进程。测试的python代码如下，不管运行几次count_child的值永远都是100左右：
+import requests</p>
+
+<p>count_child = 0</p>
+
+<p>for i in range(500):
+    resp = requests.get(“http://10.100.21.105:9999/”)
+    result = resp.content.decode(“utf8”)
+    if result == “hello world from child?  true”:
+        count_child += 1</p>
+
+<p>print(count_child)
+第三种情况，父进程或者子进程任意一个退出之后，所有请求都会转发到另一个进程进行处理。
+从以上三种情况看，endless的做法不会落下任何请求，因为请求不是被父进程处理了就是被子进程处理了，所以endless是个可放心使用的热更新方案。</p>
+
+<p>最终endless的整个执行过程如其日志：</p>
+
+<p>2015/03/22 20:04:10 2710 Received SIGHUP. forking.	//接收到kill -1信号，fork进程运行新程序
+2015/03/22 20:04:10 2710 Received SIGTERM.	//父进程接收到子进程发出的中断信号，关闭socket监听器
+2015/03/22 20:04:10 2710 Waiting for connections to finish…	//父进程等待请求处理完成
+2015/03/22 20:04:10 PID: 2726 localhost:4242	//新进程启动服务
+2015/03/22 20:04:10 accept tcp 127.0.0.1:4242: use of closed network connection	//新的用户请求进入到新程序
+2015/03/22 20:04:10 Server on 4242 stopped	//父进程处理完所有请求并退出
+总结
+其实linux kernel 3.9开始socket是支持SO_REUSEPORT设置项的，即多个进程可通知绑定一个socket端口，由内核分发请求，但是目前的Go（1.12版本）不支持socket设置项。所以在目前的条件下，endless确实如作者描述，是一个0 down time的非常好的方案。</p>
+:ET

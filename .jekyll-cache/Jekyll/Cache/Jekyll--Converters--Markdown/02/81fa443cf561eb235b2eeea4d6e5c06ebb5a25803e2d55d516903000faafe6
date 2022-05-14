@@ -1,0 +1,1348 @@
+I"��<p>This article is going to have a different tone from what I’ve been posting the past year - it’s a proper rant. And I always feel bad writing those, because, inevitably, it discusses things a lot of people have been working very hard on.</p>
+
+<p>In spite of that, here we are.</p>
+
+<p>Having invested thousands of hours into the language, and implemented several critical (to my employer) pieces of infrastructure with it, I wish I hadn’t.</p>
+
+<p>If you’re already heavily invested in Go, you probably shouldn’t read this, it’ll probably just twist the knife. If you work on Go, you definitely shouldn’t read this.</p>
+
+<p>I’ve been suffering Go’s idiosyncracies in relative silence for too long, there’s a few things I really need to get off my chest.</p>
+
+<p>https://fasterthanli.me/blog/2020/i-want-off-mr-golangs-wild-ride
+<!-- more -->
+Garden-variety takes on Go
+By now, everybody knows Go doesn’t have generics, which makes a lot of problems impossible to model accurately (instead, you have to fall back to reflection, which is extremely unsafe, and the API is very error-prone), error handling is wonky (even with your pick of the third-party libraries that add context or stack traces), package management took a while to arrive, etc.</p>
+
+<p>But everybody also knows Go’s strengths: static linking makes binaries easy to deploy (although, Go binaries get very large, even if you strip DWARF tables - stack trace annotations still remain, and are costly).</p>
+
+<p>Compile times are short (unless you need cgo), there’s an interactive runtime profiler (pprof) at arm’s reach, it’s relatively cross-platform (there’s even a tiny variant for embedded), it’s easy to syntax-highlight, and there’s now an official LSP server for it.</p>
+
+<p>I’ve accepted all of these - the good and the bad.</p>
+
+<p>We’re here to talk about the ugly.</p>
+
+<p>Simple is a lie
+Over and over, every piece of documentation for the Go language markets it as “simple”.</p>
+
+<p>This is a lie.</p>
+
+<p>Or rather, it’s a half-truth that conveniently covers up the fact that, when you make something simple, you move complexity elsewhere.</p>
+
+<p>Computers, operating systems, networks are a hot mess. They’re barely manageable, even if you know a decent amount about what you’re doing. Nine out of ten software engineers agree: it’s a miracle anything works at all.</p>
+
+<p>So all the complexity is swept under the rug. Hidden from view, but not solved.</p>
+
+<p>Here’s a simple example.</p>
+
+<p>Cool bear’s hot tip
+This example does go on for a while, actually - but don’t let the specifics distract you. While it goes rather in-depth, it illustrates a larger point.</p>
+
+<p>Most of Go’s APIs (much like NodeJS’s APIs) are designed for Unix-like operating systems. This is not surprising, as Rob &amp; Ken are from the Plan 9 gang.</p>
+
+<p>So, the file API in Go looks like this:</p>
+
+<p>// File represents an open file descriptor.
+type File struct {
+    *file // os specific
+}</p>
+
+<p>func (f *File) Stat() (FileInfo, error) {
+    // omitted
+}</p>
+
+<p>// A FileInfo describes a file and is returned by Stat and Lstat.
+type FileInfo interface {
+	Name() string       // base name of the file
+	Size() int64        // length in bytes for regular files; system-dependent for others
+	Mode() FileMode     // file mode bits
+	ModTime() time.Time // modification time
+	IsDir() bool        // abbreviation for Mode().IsDir()
+	Sys() interface{}   // underlying data source (can return nil)
+}</p>
+
+<p>// A FileMode represents a file’s mode and permission bits.
+// The bits have the same definition on all systems, so that
+// information about files can be moved from one system
+// to another portably. Not all bits apply to all systems.
+// The only required bit is ModeDir for directories.
+type FileMode uint32</p>
+
+<p>// The defined file mode bits are the most significant bits of the FileMode.
+// The nine least-significant bits are the standard Unix rwxrwxrwx permissions.
+// The values of these bits should be considered part of the public API and
+// may be used in wire protocols or disk representations: they must not be
+// changed, although new bits might be added.
+const (
+	// The single letters are the abbreviations
+	// used by the String method’s formatting.
+	ModeDir        FileMode = 1 « (32 - 1 - iota) // d: is a directory
+	ModeAppend                                     // a: append-only
+	ModeExclusive                                  // l: exclusive use
+	ModeTemporary                                  // T: temporary file; Plan 9 only
+	ModeSymlink                                    // L: symbolic link
+	ModeDevice                                     // D: device file
+	ModeNamedPipe                                  // p: named pipe (FIFO)
+	ModeSocket                                     // S: Unix domain socket
+	ModeSetuid                                     // u: setuid
+	ModeSetgid                                     // g: setgid
+	ModeCharDevice                                 // c: Unix character device, when ModeDevice is set
+	ModeSticky                                     // t: sticky
+	ModeIrregular                                  // ?: non-regular file; nothing else is known about this file</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>// Mask for the type bits. For regular files, none will be set.
+ModeType = ModeDir | ModeSymlink | ModeNamedPipe | ModeSocket | ModeDevice | ModeCharDevice | ModeIrregular
+
+ModePerm FileMode = 0777 // Unix permission bits ) Makes sense for a Unix, right?
+</code></pre></div></div>
+
+<p>Every file has a mode, there’s even a command that lets you dump it as hex:</p>
+
+<p>$ stat -c ‘%f’ /etc/hosts
+81a4
+$ stat -c ‘%f’ /usr/bin/man
+81ed
+And so, a simple Go program can easily grab those “Unix permission bits”:</p>
+
+<p>package main</p>
+
+<p>import (
+        “fmt”
+        “os”
+)</p>
+
+<p>func main() {
+        arg := os.Args[1]
+        fi, _ := os.Stat(arg)
+        fmt.Printf(“(%s) mode = %o\n”, arg, fi.Mode() &amp; os.ModePerm)
+}
+$ go run main.go /etc/hosts
+(/etc/hosts) mode = 644
+$ go run main.go /usr/bin/man
+(/etc/hosts) mode = 755
+On Windows, files don’t have modes. It doesn’t have stat, lstat, fstat syscalls - it has a FindFirstFile family of functions (alternatively, CreateFile to open, then GetFileAttributes, alternatively, GetFileInformationByHandle), which takes a pointer to a WIN32_FIND_DATA structure, which contains file attributes.</p>
+
+<p>So, what happens if you run that program on Windows?</p>
+
+<blockquote>
+  <p>go run main.go C:\Windows\notepad.exe
+(C:\Windows\notepad.exe) mode = 666
+It makes up a mode.</p>
+</blockquote>
+
+<p>// src/os/types_windows.go</p>
+
+<p>func (fs *fileStat) Mode() (m FileMode) {
+	if fs == &amp;devNullStat {
+		return ModeDevice | ModeCharDevice | 0666
+	}
+	if fs.FileAttributes&amp;syscall.FILE_ATTRIBUTE_READONLY != 0 {
+		m |= 0444
+	} else {
+		m |= 0666
+	}
+	if fs.isSymlink() {
+		return m | ModeSymlink
+	}
+	if fs.FileAttributes&amp;syscall.FILE_ATTRIBUTE_DIRECTORY != 0 {
+		m |= ModeDir | 0111
+	}
+	switch fs.filetype {
+	case syscall.FILE_TYPE_PIPE:
+		m |= ModeNamedPipe
+	case syscall.FILE_TYPE_CHAR:
+		m |= ModeDevice | ModeCharDevice
+	}
+	return m
+}
+Node.js does the same. There’s a single fs.Stats “type” for all platforms.</p>
+
+<p>Using “whatever Unix has” as the lowest common denominator is extremely common in open-source codebases, so it’s not surprising.</p>
+
+<p>Let’s go a little bit further. On Unix systems, you can change the modes of files, to make them read-only, or flip the executable bit.</p>
+
+<p>package main</p>
+
+<p>import (
+	“fmt”
+	“os”
+)</p>
+
+<p>func main() {
+	arg := os.Args[1]</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>fi, err := os.Stat(arg)
+must(err)
+fmt.Printf("(%s) old mode = %o\n", arg, fi.Mode()&amp;os.ModePerm)
+
+must(os.Chmod(arg, 0755))
+
+fi, err = os.Stat(arg)
+must(err)
+fmt.Printf("(%s) new mode = %o\n", arg, fi.Mode()&amp;os.ModePerm) }
+</code></pre></div></div>
+
+<p>func must(err error) {
+	if err != nil {
+		panic(err)
+	}
+}
+Let’s run this on Linux:</p>
+
+<p>$ touch test.txt
+$ go run main.go test.txt
+(test.txt) old mode = 644
+(test.txt) new mode = 755
+And now on Windows:</p>
+
+<blockquote>
+  <p>go run main.go test.txt
+(test.txt) old mode = 666
+(test.txt) new mode = 666
+So, no errors. Chmod just silently does… nothing. Which is reasonably - there’s no equivalent to the “executable bit” for files on Windows.</p>
+</blockquote>
+
+<p>What does Chmod even do on Windows?</p>
+
+<p>// src/syscall/syscall_windows.go</p>
+
+<p>func Chmod(path string, mode uint32) (err error) {
+	p, e := UTF16PtrFromString(path)
+	if e != nil {
+		return e
+	}
+	attrs, e := GetFileAttributes(p)
+	if e != nil {
+		return e
+	}
+	if mode&amp;S_IWRITE != 0 {
+		attrs &amp;^= FILE_ATTRIBUTE_READONLY
+	} else {
+		attrs |= FILE_ATTRIBUTE_READONLY
+	}
+	return SetFileAttributes(p, attrs)
+}
+It sets or clears the read-only bit. That’s it.</p>
+
+<p>We have an uint32 argument, with four billion two hundred ninety-four million nine hundred sixty-seven thousand two hundred ninety-five possible values, to encode… one bit of information.</p>
+
+<p>That’s a pretty innocent lie. The assumption that files have modes was baked into the API design from the start, and now, everyone has to live with it. Just like in Node.JS, and probably tons of other languages.</p>
+
+<p>But it doesn’t have to be like that.</p>
+
+<p>A language with a more involved type system, and better designed libraries could avoid that pitfall.</p>
+
+<p>Out of curiosity, what does Rust do?</p>
+
+<p>Cool bear’s hot tip
+Oh, here we go again - Rust, Rust, and Rust again.</p>
+
+<p>Why always Rust?</p>
+
+<p>Well, I tried real hard to keep Rust out of all of this. Among other things, because people are going to dismiss this article as coming from “a typical rustacean”.</p>
+
+<p>But for all the problems I raise in this article… Rust gets it right. If I had another good example, I’d use it. But I don’t, so, here goes.</p>
+
+<p>There’s no stat-like function in the Rust standard library. There’s std::fs::metadata:</p>
+
+<p>pub fn metadata&lt;P: AsRef<Path>&gt;(path: P) -&gt; Result<Metadata>
+This function signatures tells us a lot already. It returns a Result, which means, not only do we know this can fail, we have to handle it. Either by panicking on error, with .unwrap() or .expect(), or by matching it against Result::Ok / Result::Err, or by bubbling it up with the ? operator.</Metadata></Path></p>
+
+<p>The point is, this function signature makes it impossible for us to access an invalid/uninitialized/null Metadata. With a Go function, if you ignore the returned error, you still get the result - most probably a null pointer.</p>
+
+<p>Also, the argument is not a string - it’s a path. Or rather, it’s something that can be turned into a path.</p>
+
+<p>And String does implement AsRef<Path>, so, for simple use cases, it's not troublesome:</Path></p>
+
+<p>fn main() {
+    let metadata = std::fs::metadata(“Cargo.toml”).unwrap();
+    println!(“is dir? {:?}”, metadata.is_dir());
+    println!(“is file? {:?}”, metadata.is_file());
+}
+But paths are not necessarily strings. On Unix (!), paths can be any sequence of bytes, except null bytes.</p>
+
+<p>$ cd rustfun/
+$ touch “$(printf “\xbd\xb2\x3d\xbc\x20\xe2\x8c\x98”)”
+$ ls
+ls: cannot compare file names ‘Cargo.lock’ and ‘\275\262=\274 ⌘’: Invalid or incomplete multibyte or wide character
+ src   target   Cargo.lock   Cargo.toml  ‘’$’\275\262’’=’$’\274’’ ⌘’
+We’ve just made a file with a very naughty name - but it’s a perfectly valid file, even if ls struggles with it.</p>
+
+<p>$ stat “$(printf “\xbd\xb2\x3d\xbc\x20\xe2\x8c\x98”)”
+  File: = ⌘
+  Size: 0               Blocks: 0          IO Block: 65536  regular empty file
+Device: 8c70d496h/2356204694d   Inode: 72620543991375285  Links: 1
+Access: (0644/-rw-r–r–)  Uid: (197611/    amos)   Gid: (197611/    amos)
+Access: 2020-02-28 13:12:12.783734000 +0100
+Modify: 2020-02-28 13:12:12.783734000 +0100
+Change: 2020-02-28 13:12:12.783329400 +0100
+ Birth: 2020-02-28 13:12:12.783329400 +0100
+That’s not something we can represent with a String in Rust, because Rust Strings are valid utf-8, and this isn’t.</p>
+
+<p>Rust Paths, however, are… arbitrary byte sequences.</p>
+
+<p>And so, if we use std::fs::read_dir, we have no problem listing it and getting its metadata:</p>
+
+<p>use std::fs;</p>
+
+<p>fn main() {
+    let entries = fs::read_dir(“.”).unwrap();
+    for entry in entries {
+        let path = entry.unwrap().path();
+        let meta = fs::metadata(&amp;path).unwrap();
+        if meta.is_dir() {
+            println!(“(dir) {:?}”, path);
+        } else {
+            println!(“      {:?}”, path);
+        }
+    }
+}
+$ cargo run –quiet
+(dir) “./src”
+      “./Cargo.toml”
+      “./.gitignore”
+      “./\xBD\xB2=\xBC ⌘”
+(dir) “./.git”
+      “./Cargo.lock”
+(dir) “./target”
+What about Go?</p>
+
+<p>package main</p>
+
+<p>import (
+        “fmt”
+        “os”
+)</p>
+
+<p>func main() {
+        arg := os.Args[1]
+        f, err := os.Open(arg)
+        must(err)</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    entries, err := f.Readdir(-1)
+    must(err)
+
+    for _, e := range entries {
+            if e.IsDir() {
+                    fmt.Printf("(dir) %s\n", e.Name())
+            } else {
+                    fmt.Printf("      %s\n", e.Name())
+            }
+    } }
+</code></pre></div></div>
+
+<p>func must(err error) {
+        if err != nil {
+                panic(err)
+        }
+}
+$ go build
+$ ./gofun ../rustfun
+(dir) src
+      Cargo.toml
+      .gitignore
+      = ⌘
+(dir) .git
+      Cargo.lock
+(dir) target
+It… silently prints a wrong version of the path.</p>
+
+<p>See, there’s no “path” type in Go. Just “string”. And Go strings are just byte slices, with no guarantees what’s inside.</p>
+
+<p>So it prints garbage, whereas in Rust, Path does not implement Display, so we couldn’t do this:</p>
+
+<p>println!(“(dir) {}”, path);
+We had to do this:</p>
+
+<p>println!(“(dir) {:?}”, path);
+And if we wanted a friendlier output, we could handle both cases: when the path happens to be a valid utf-8 string, and when it doesn’t:</p>
+
+<p>use std::fs;</p>
+
+<p>fn main() {
+    let entries = fs::read_dir(“.”).unwrap();
+    for entry in entries {
+        let path = entry.unwrap().path();
+        let meta = fs::metadata(&amp;path).unwrap();
+        let prefix = if meta.is_dir() {
+            “(dir)”
+        } else {
+            “     “
+        };
+        match path.to_str() {
+            Some(s) =&gt; println!(“{} {}”, prefix, s),
+            None =&gt; println!(“{} {:?} (invalid utf-8)”, prefix, path),
+        }
+    }
+}
+$ cargo run –quiet
+(dir) ./src
+      ./Cargo.toml
+      ./.gitignore
+      “./\xBD\xB2=\xBC ⌘” (invalid utf-8)
+(dir) ./.git
+      ./Cargo.lock
+(dir) ./target
+Go says “don’t worry about encodings! things are probably utf-8”.</p>
+
+<p>Except when they aren’t. And paths aren’t. So, in Go, all path manipulation routines operate on string, let’s take a look at the path/filepath package.</p>
+
+<p>Package filepath implements utility routines for manipulating filename paths in a way compatible with the target operating system-defined file paths.</p>
+
+<p>The filepath package uses either forward slashes or backslashes, depending on the operating system. To process paths such as URLs that always use forward slashes regardless of the operating system, see the path package.</p>
+
+<p>What does this package give us?</p>
+
+<p>func Abs(path string) (string, error)
+func Base(path string) string
+func Clean(path string) string
+func Dir(path string) string
+func EvalSymlinks(path string) (string, error)
+func Ext(path string) string
+func FromSlash(path string) string
+func Glob(pattern string) (matches []string, err error)
+func HasPrefix(p, prefix string) bool
+func IsAbs(path string) bool
+func Join(elem …string) string
+func Match(pattern, name string) (matched bool, err error)
+func Rel(basepath, targpath string) (string, error)
+func Split(path string) (dir, file string)
+func SplitList(path string) []string
+func ToSlash(path string) string
+func VolumeName(path string) string
+func Walk(root string, walkFn WalkFunc) error
+Strings. Lots and lots of strings. Well, byte slices.</p>
+
+<p>Speaking of bad design decisions - what’s that Ext function I see?</p>
+
+<p>// Ext returns the file name extension used by path. The extension is the suffix
+// beginning at the final dot in the final element of path; it is empty if there
+// is no dot.
+func Ext(path string) string
+Interesting! Let’s try it out.</p>
+
+<p>package main</p>
+
+<p>import (
+        “fmt”
+        “path/filepath”
+)</p>
+
+<p>func main() {
+        inputs := []string{
+                “/”,
+                “/.”,
+                “/.foo”,
+                “/foo”,
+                “/foo.txt”,
+                “/foo.txt/bar”,
+                “C:\”,
+                “C:\.”,
+                “C:\foo.txt”,
+                “C:\foo.txt\bar”,
+        }
+        for _, i := range inputs {
+                fmt.Printf(“%24q =&gt; %q\n”, i, filepath.Ext(i))
+        }
+}</p>
+
+<p>func must(err error) {
+        if err != nil {
+                panic(err)
+        }
+}
+$ go run main.go
+                     “/” =&gt; “”
+                    “/.” =&gt; “.”
+                 “/.foo” =&gt; “.foo”
+                  “/foo” =&gt; “”
+              “/foo.txt” =&gt; “.txt”
+          “/foo.txt/bar” =&gt; “”
+                  “C:\” =&gt; “”
+                 “C:\.” =&gt; “.”
+           “C:\foo.txt” =&gt; “.txt”
+      “C:\foo.txt\bar” =&gt; “.txt\bar”
+Right away, I’m in debating mood - is .foo’s extension really .foo? But let’s move on.</p>
+
+<p>This example was run on Linux, so C:\foo.txt\bar’s extension, according to filepath.Ext, is.. .txt\bar.</p>
+
+<p>Why? Because the Go standard library makes the assumption that a platform has a single path separator - on Unix and BSD-likes, it’s /, and on Windows it’s \.</p>
+
+<p>Except… that’s not the whole truth. I was curious, so I checked:</p>
+
+<p>// in <code class="language-plaintext highlighter-rouge">fun.c</code></p>
+
+<p>void main() {
+  HANDLE hFile = CreateFile(“C:/Users/amos/test.txt”, GENERIC_WRITE, 0, NULL,
+                            CREATE_NEW, FILE_ATTRIBUTE_NORMAL, NULL);</p>
+
+<p>char *data = “Hello from the Win32 API”;
+  DWORD dwToWrite = (DWORD) strlen(data);
+  DWORD dwWritten = 0;
+  WriteFile(hFile, data, dwToWrite, &amp;dwWritten, NULL);
+  CloseHandle(hFile);
+}</p>
+<blockquote>
+  <p>cl fun.c
+Microsoft (R) C/C++ Optimizing Compiler Version 19.23.28107 for x64
+Copyright (C) Microsoft Corporation.  All rights reserved.</p>
+</blockquote>
+
+<p>fun.c
+Microsoft (R) Incremental Linker Version 14.23.28107.0
+Copyright (C) Microsoft Corporation.  All rights reserved.</p>
+
+<p>/out:fun.exe
+fun.obj</p>
+<blockquote>
+  <p>.\fun.exe
+type C:\Users\amos\test.txt
+Hello from the Win32 API
+No funny Unix emulation business going on - just regular old Windows 10.</p>
+</blockquote>
+
+<p>And yet, in Go’s standard library, the path/filepath package exports those constants:</p>
+
+<p>const (
+    Separator     = os.PathSeparator
+    ListSeparator = os.PathListSeparator
+)
+os, in turn, exports:</p>
+
+<p>// src/os/path_windows.go
+const (
+	PathSeparator     = ‘\’ // OS-specific path separator
+	PathListSeparator = ‘;’  // OS-specific path list separator
+)
+So how comes filepath.Ext works with both separators on Windows?</p>
+
+<p>$ go run main.go
+                     “/” =&gt; “”
+                    “/.” =&gt; “.”
+                 “/.foo” =&gt; “.foo”
+                  “/foo” =&gt; “”
+              “/foo.txt” =&gt; “.txt”
+          “/foo.txt/bar” =&gt; “”
+                  “C:\” =&gt; “”
+                 “C:\.” =&gt; “.”
+           “C:\foo.txt” =&gt; “.txt”
+      “C:\foo.txt\bar” =&gt; “”
+Let’s look at its implementation:</p>
+
+<p>// src/path/filepath/path.go</p>
+
+<p>func Ext(path string) string {
+	for i := len(path) - 1; i &gt;= 0 &amp;&amp; !os.IsPathSeparator(path[i]); i– {
+		if path[i] == ‘.’ {
+			return path[i:]
+		}
+	}
+	return “”
+}
+Ah. An IsPathSeparator function.</p>
+
+<p>Sure enough:</p>
+
+<p>// src/os/path_windows.go</p>
+
+<p>// IsPathSeparator reports whether c is a directory separator character.
+func IsPathSeparator(c uint8) bool {
+	// NOTE: Windows accept / as path separator.
+	return c == ‘\’ || c == ‘/’
+}
+(Can I just point out how hilarious that “Extension” was deemed long enough to abbreviate to “Ext”, but “IsPathSeparator” wasn’t?)</p>
+
+<p>How does Rust handle this?</p>
+
+<p>It has std::path::is_separator:</p>
+
+<p>/// Determines whether the character is one of the permitted
+// path separators for the current platform.
+pub fn is_separator(c: char) -&gt; bool
+And it has std::path::MAIN_SEPARATOR - emphasis on main separator:</p>
+
+<p>/// The primary separator of path components for the current platform.
+/// 
+/// For example, / on Unix and \ on Windows.
+pub const MAIN_SEPARATOR: char
+The naming along makes it much clearer that there might be secondary path separators, and the rich Path manipulation API makes it much less likely to find this kind of code, for example:</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>DefaultScripts = "downloads" + string(os.PathSeparator) + "defaultScripts" Or this kind:
+
+if os.PathSeparator == '/' {
+	projname = strings.Replace(name, "\\", "/", -1)
+} else if os.PathSeparator == '\\' {
+	projname = strings.Replace(name, "/", "\\", -1)
+} Or this… kind:
+</code></pre></div></div>
+
+<p>filefullpath = fmt.Sprintf(“%s%c%s%c%s%c%s%c%s%s”,
+		a.DataDir, os.PathSeparator,
+		m[0:1], os.PathSeparator,
+		m[1:2], os.PathSeparator,
+		m[2:3], os.PathSeparator,
+		m, ext)
+It turns out Rust also has a “get a path’s extension” function, but it’s a lot more conservative in the promises it makes:</p>
+
+<p>// Extracts the extension of self.file_name, if possible.
+// 
+// The extension is:
+// 
+//   * None, if there is no file name;
+//   * None, if there is no embedded .;
+//   * None, if the file name begins with . and has no other .s within;
+//   * Otherwise, the portion of the file name after the final .
+pub fn extension(&amp;self) -&gt; Option&lt;&amp;OsStr&gt;
+Let’s submit it to the same test:</p>
+
+<p>fn main() {
+    let inputs = [
+        r”/”,
+        r”/.”,
+        r”/.foo”,
+        r”/foo”,
+        r”/foo.txt”,
+        r”/foo.txt/bar”,
+        r”C:",
+        r”C:.”,
+        r”C:\foo.txt”,
+        r”C:\foo.txt\bar”,
+    ];
+    for input in &amp;inputs {
+        use std::path::Path;
+        println!(“ =&gt; {:?}”, input, Path::new(input).extension());
+    }
+}
+On Linux:</p>
+
+<p>$ cargo run –quiet
+                   / =&gt; None
+                  /. =&gt; None
+               /.foo =&gt; None
+               /foo. =&gt; Some(“”)
+                /foo =&gt; None
+            /foo.txt =&gt; Some(“txt”)
+        /foo.txt/bar =&gt; None
+                 C:\ =&gt; None
+                C:. =&gt; Some(“”)
+          C:\foo.txt =&gt; Some(“txt”)
+      C:\foo.txt\bar =&gt; Some(“txt\bar”)
+On Windows:</p>
+
+<p>$ cargo run –quiet
+                   / =&gt; None
+                  /. =&gt; None
+               /.foo =&gt; None
+               /foo. =&gt; Some(“”)
+                /foo =&gt; None
+            /foo.txt =&gt; Some(“txt”)
+        /foo.txt/bar =&gt; None
+                 C:\ =&gt; None
+                C:. =&gt; None
+          C:\foo.txt =&gt; Some(“txt”)
+      C:\foo.txt\bar =&gt; None
+Like Go, it gives a txt\bar extension for a Windows path on Linux.</p>
+
+<p>Unlike Go, it:</p>
+
+<p>Doesn’t think “/.foo” has a file extension
+Distinguishes between the “/foo.” case (Some(“”)) and the “/foo” case (None)
+Let’s also look at the Rust implementation of std::path::extension:</p>
+
+<p>pub fn extension(&amp;self) -&gt; Option&lt;&amp;OsStr&gt; {
+	self.file_name().map(split_file_at_dot).and_then(|(before, after)| before.and(after))
+}
+Let’s dissect that: first it calls file_name(). How does that work? Is it where it searches for path separators backwards from the end of the path?</p>
+
+<p>pub fn file_name(&amp;self) -&gt; Option&lt;&amp;OsStr&gt; {
+	self.components().next_back().and_then(|p| match p {
+		Component::Normal(p) =&gt; Some(p.as_ref()),
+		_ =&gt; None,
+	})
+}
+No! It calls components which returns a type that implements DoubleEndedIterator - an iterator you can navigate from the front or the back. Then it grabs the first item from the back - if any - and returns that.</p>
+
+<p>The iterator does look for path separators - lazily, in a re-usable way. There is no code duplication, like in the Go library:</p>
+
+<p>// src/os/path_windows.go</p>
+
+<p>func dirname(path string) string {
+	vol := volumeName(path)
+	i := len(path) - 1
+	for i &gt;= len(vol) &amp;&amp; !IsPathSeparator(path[i]) {
+		i–
+	}
+	dir := path[len(vol) : i+1]
+	last := len(dir) - 1
+	if last &gt; 0 &amp;&amp; IsPathSeparator(dir[last]) {
+		dir = dir[:last]
+	}
+	if dir == “” {
+		dir = “.”
+	}
+	return vol + dir
+}
+So, now we have only the file name. If we had /foo/bar/baz.txt, we’re now only dealing with baz.txt - as an OsStr, not a utf-8 String. We can still have random bytes.</p>
+
+<p>We then map this result through split_file_at_dot, which behaves like so:</p>
+
+<p>For “foo”, return (Some(“foo”), None)
+For “foo.bar”, return (Some(“foo”), Some(“bar”))
+For “foo.bar.baz”, return (Some(“foo.bar”), Some(“baz”))
+and_then, we only return after if before wasn’t None.</p>
+
+<p>If we spelled out everything, we’d have:</p>
+
+<p>pub fn extension(&amp;self) -&gt; Option&lt;&amp;OsStr&gt; {
+	if let Some(file_name) = self.file_name() {
+		let (before, after) = split_file_at_dot(file_name);
+		if let Some(before) {
+			// note: <code class="language-plaintext highlighter-rouge">after</code> is already an <code class="language-plaintext highlighter-rouge">Option&lt;&amp;OsStr&gt;</code> - it
+			// might still be <code class="language-plaintext highlighter-rouge">None</code>.
+			return after
+		}
+	}
+	None
+}
+The problem is carefully modelled. We can look at what we’re manipulating just by looking at its type. If it might not exist, it’s an Option<T>! If it's a path with multiple components, it's a &amp;Path (or its owned counterpart, PathBuf). If it's just part of a path, it's an &amp;OsStr.</T></p>
+
+<p>Of course there’s a learning curve. Of course there’s more concepts involved than just throwing for loops at byte slices and seeing what sticks, like the Go library does.</p>
+
+<p>But the result is a high-performance, reliable and type-safe library.</p>
+
+<p>It’s worth it.</p>
+
+<p>Speaking of Rust, we haven’t seen how it handles the whole “mode” thing yet.</p>
+
+<p>So std::fs::Metadata has is_dir() and is_file(), which return booleans. It also has len(), which returns an u64 (unsigned 64-bit integer).</p>
+
+<p>It has created(), modified(), and accessed(), all of which return an Option<SystemTime>. Again - the types inform us on what scenarios are possible. Access timestamps might not exist at all.</SystemTime></p>
+
+<p>The returned time is not an std::time::Instant - it’s an std::time::SystemTime - the documentation tells us the difference:</p>
+
+<p>A measurement of the system clock, useful for talking to external entities like the file system or other processes.</p>
+
+<p>Distinct from the Instant type, this time measurement is not monotonic. This means that you can save a file to the file system, then save another file to the file system, and the second file has a SystemTime measurement earlier than the first. In other words, an operation that happens after another operation in real time may have an earlier SystemTime!</p>
+
+<p>Consequently, comparing two SystemTime instances to learn about the duration between them returns a Result instead of an infallible Duration to indicate that this sort of time drift may happen and needs to be handled.</p>
+
+<p>Although a SystemTime cannot be directly inspected, the UNIX_EPOCH constant is provided in this module as an anchor in time to learn information about a SystemTime. By calculating the duration from this fixed point in time, a SystemTime can be converted to a human-readable time, or perhaps some other string representation.</p>
+
+<p>The size of a SystemTime struct may vary depending on the target operating system.</p>
+
+<p>Source: https://doc.rust-lang.org/std/time/struct.SystemTime.html</p>
+
+<p>Cool bear’s hot tip
+In fairness to everyone, monotonic time is really hard.</p>
+
+<p>What about permissions? Well, there it is:</p>
+
+<p>pub fn permissions(&amp;self) -&gt; Permissions
+A Permissions type! Just for that! And we can afford it, too - because types don’t cost anything at runtime. Everything probably ends up inlined anyway.</p>
+
+<p>What does it expose?</p>
+
+<p>pub fn readonly(&amp;self) -&gt; bool {}
+pub fn set_readonly(&amp;mut self, readonly: bool) {}
+Well! It exposes only what all supported operating systems have in common.</p>
+
+<p>Can we still get Unix permission? Of course! But only on Unix:</p>
+
+<p>Representation of the various permissions on a file.</p>
+
+<p>This module only currently provides one bit of information, readonly, which is exposed on all currently supported platforms. Unix-specific functionality, such as mode bits, is available through the PermissionsExt trait.</p>
+
+<p>Source: https://doc.rust-lang.org/std/fs/struct.Permissions.html</p>
+
+<p>std::os::unix::fs::PermissionsExt is only compiled in on Unix, and exposes the following functions:</p>
+
+<p>fn mode(&amp;self) -&gt; u32 {}
+fn set_mode(&amp;mut self, mode: u32) {}
+fn from_mode(mode: u32) -&gt; Self {}
+The documentation makes it really clear it’s Unix-only:</p>
+
+<p>But it’s not just documentation. This sample program will compile and run on Linux (and macOS, etc.)</p>
+
+<p>use std::fs::File;
+use std::os::unix::fs::PermissionsExt;</p>
+
+<p>fn main() -&gt; std::io::Result&lt;()&gt; {
+    let f = File::open(“/usr/bin/man”)?;
+    let metadata = f.metadata()?;
+    let permissions = metadata.permissions();</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>println!("permissions: {:o}", permissions.mode());
+Ok(()) } $ cargo run --quiet permissions: 100755 But will fail to compile on Windows:
+</code></pre></div></div>
+
+<p>$ cargo run –quiet
+error[E0433]: failed to resolve: could not find <code class="language-plaintext highlighter-rouge">unix</code> in <code class="language-plaintext highlighter-rouge">os</code>
+ –&gt; src\main.rs:2:14
+  |
+2 | use std::os::unix::fs::PermissionsExt;
+  |              ^^^^ could not find <code class="language-plaintext highlighter-rouge">unix</code> in <code class="language-plaintext highlighter-rouge">os</code></p>
+
+<p>error[E0599]: no method named <code class="language-plaintext highlighter-rouge">mode</code> found for type <code class="language-plaintext highlighter-rouge">std::fs::Permissions</code> in the current scope
+ –&gt; src\main.rs:9:47
+  |
+9 |     println!(“permissions: {:o}”, permissions.mode());
+  |                                               ^^^^ method not found in <code class="language-plaintext highlighter-rouge">std::fs::Permissions</code></p>
+
+<p>error: aborting due to 2 previous errors</p>
+
+<p>Some errors have detailed explanations: E0433, E0599.
+For more information about an error, try <code class="language-plaintext highlighter-rouge">rustc --explain E0433</code>.
+error: could not compile <code class="language-plaintext highlighter-rouge">rustfun</code>.</p>
+
+<p>To learn more, run the command again with –verbose.
+How can we make a program that runs on Windows too? The same way the standard library only exposes PermissionsExt on Unix: with attributes.</p>
+
+<p>use std::fs::File;
+#[cfg(target_family = “unix”)]
+use std::os::unix::fs::PermissionsExt;</p>
+
+<p>fn main() -&gt; std::io::Result&lt;()&gt; {
+    let arg = std::env::args().nth(1).unwrap();
+    let f = File::open(&amp;arg)?;
+    let metadata = f.metadata()?;
+    let permissions = metadata.permissions();</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>#[cfg(target_family = "unix")]
+{
+    println!("permissions: {:o}", permissions.mode());
+}
+
+#[cfg(target_family = "windows")]
+{
+    println!("readonly? {:?}", permissions.readonly());
+}
+
+Ok(()) } Those aren't #ifdef - they're not preprocessor directives. There's no risk of forgetting an #endif. And if you miss if/else chains, there's a crate for that.
+</code></pre></div></div>
+
+<p>Here’s that sample program on Linux:</p>
+
+<p>$ cargo run –quiet – /usr/bin/man
+permissions: 100755
+And on Windows:</p>
+
+<p>$ cargo run –quiet – Cargo.toml
+readonly? false
+Can you do that in Go? Sure! Kind of!</p>
+
+<p>There’s two ways to do something similar, and both involve multiple files.</p>
+
+<p>Here’s one:</p>
+
+<p>$ go mod init github.com/fasterthanlime/gofun
+In main.go, we need:</p>
+
+<p>package main</p>
+
+<p>import “os”</p>
+
+<p>func main() {
+        poke(os.Args[1])
+}
+In poke_windows.go, we need:</p>
+
+<p>package main</p>
+
+<p>import (
+        “fmt”
+        “os”
+)</p>
+
+<p>func poke(path string) {
+        stats, _ := os.Stat(path)
+        fmt.Printf(“readonly? %v\n”, (stats.Mode() &amp; 0o600) == 0);
+}
+And in poke_unix.go, we need:</p>
+
+<p>// +build !windows</p>
+
+<p>package main</p>
+
+<p>import (
+        “fmt”
+        “os”
+)</p>
+
+<p>func poke(path string) {
+		stats, _ := os.Stat(path)
+		fmt.Printf(“permissions: %o\n”, stats.Mode() &amp; os.ModePerm);
+}
+Note how the _windows.go suffix is magic - it’ll get automatically excluded on non-Windows platforms. There’s no magic suffix for Unix systems though!</p>
+
+<p>So we have to add a build constraint, which is:</p>
+
+<p>A comment
+That must be “near the top of the file”
+That can only be preceded by blank space
+That must appear before the package clause
+That has its own language
+From the docs:</p>
+
+<p>A build constraint is evaluated as the OR of space-separated options. Each option evaluates as the AND of its comma-separated terms. Each term consists of letters, digits, underscores, and dots. A term may be negated with a preceding !. For example, the build constraint:</p>
+
+<p>// +build linux,386 darwin,!cgo</p>
+
+<p>corresponds to the boolean formula:</p>
+
+<p>(linux AND 386) OR (darwin AND (NOT cgo))</p>
+
+<p>A file may have multiple build constraints. The overall constraint is the AND of the individual constraints. That is, the build constraints:</p>
+
+<p>// +build linux darwin
+// +build 386</p>
+
+<p>corresponds to the boolean formula:</p>
+
+<p>(linux OR darwin) AND 386</p>
+
+<p>Fun! Fun fun fun. So, on Linux, we get:</p>
+
+<p>$ go build
+$ ./gofun /usr/bin/man
+permissions: 755
+$ ./gofun /etc/hosts
+permissions: 644
+And on Windows, we get:</p>
+
+<blockquote>
+  <p>go build
+.\gofun.exe .\main.go
+readonly? false
+Now, at least there’s a way to write platform-specific code in Go.</p>
+</blockquote>
+
+<p>In practice, it gets old very quickly. You now have related code split across multiple files, even if only one of the functions is platform-specific.</p>
+
+<p>Build constraints override the magic suffixes, so it’s never obvious exactly which files are compiled in. You also have to duplicate (and keep in sync!) function signatures all over the place.</p>
+
+<p>It’s… a hack. A shortcut. And an annoying one, at that.</p>
+
+<p>So what happens when you make it hard for users to do things the right way? (The right way being, in this case, to not compile in code that isn’t relevant for a given platform). They take shortcuts, too.</p>
+
+<p>Even in the official Go distribution, a lot of code just switches on the value of runtime.GOOS at, well, run-time:</p>
+
+<p>// src/net/file_test.go</p>
+
+<p>func TestFileConn(t *testing.T) {
+	switch runtime.GOOS {
+	case “plan9”, “windows”:
+		t.Skipf(“not supported on %s”, runtime.GOOS)
+	}</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>for _, tt := range fileConnTests {
+	if !testableNetwork(tt.network) {
+		t.Logf("skipping %s test", tt.network)
+		continue
+	} “But these are little things!”
+</code></pre></div></div>
+
+<p>They’re all little things. They add up. Quickly.</p>
+
+<p>And they’re symptomatic of the problems with “the Go way” in general. The Go way is to half-ass things.</p>
+
+<p>The Go way is to patch things up until they sorta kinda work, in the name of simplicity.</p>
+
+<p>Lots of little things
+Speaking of little things, let’s consider what pushed me over the edge and provoked me to write this whole rant in the first place.</p>
+
+<p>It was this package.</p>
+
+<p>What does it do?</p>
+
+<p>Provides mechanisms for adding idle timeouts to net.Conn and net.Listener.</p>
+
+<p>Why do we need it?</p>
+
+<p>Because the real-world is messy.</p>
+
+<p>If you do a naive HTTP request in Go:</p>
+
+<p>package main</p>
+
+<p>import (
+	“fmt”
+	“io/ioutil”
+	“net/http”
+)</p>
+
+<p>func main() {
+	res, err := http.Get(“http://perdu.com”)
+	must(err)
+	defer res.Body.Close() // this is a <em>very</em> common gotcha</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>body, err := ioutil.ReadAll(res.Body)
+must(err)
+fmt.Printf("%s", string(body)) }
+</code></pre></div></div>
+
+<p>func must(err error) {
+	if err != nil {
+		panic(err)
+	}
+}
+$ go run main.go</p>
+<html><head><title>Vous Etes Perdu ?</title></head><body><h1>Perdu sur l'Internet ?</h1><h2>Pas de panique, on va vous aider</h2><strong><pre>    * &lt;----- vous &ecirc;tes ici</pre></strong></body></html>
+<p>Then it works. When it works.</p>
+
+<p>If the server never accepts your connection - which might definitely happen if it’s dropping all the traffic to the relevant port, then you’ll just hang forever.</p>
+
+<p>If you don’t want to hang forever, you have to do something else.</p>
+
+<p>Like this:</p>
+
+<p>package main</p>
+
+<p>import (
+	“fmt”
+	“io/ioutil”
+	“net”
+	“net/http”
+	“time”
+)</p>
+
+<p>func main() {
+	client := &amp;http.Client{
+		Transport: &amp;http.Transport{
+			DialContext: (&amp;net.Dialer{
+				Timeout: 5 * time.Second,
+			}).DialContext,
+		},
+	}</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>req, err := http.NewRequest("GET", "http://perdu.com", nil)
+must(err)
+
+res, err := client.Do(req)
+must(err)
+defer res.Body.Close()
+
+body, err := ioutil.ReadAll(res.Body)
+must(err)
+fmt.Printf("%s", string(body)) }
+</code></pre></div></div>
+
+<p>func must(err error) {
+	if err != nil {
+		panic(err)
+	}
+}
+Not so simple, but, eh, whatever, it works.</p>
+
+<p>Unless the server accepts your connection, says it’s going to send a bunch of bytes, and then never sends you anything.</p>
+
+<p>Which definitely, 100%, for-sure, if-it-can-happen-it-does-happen, happens.</p>
+
+<p>And then you hang forever.</p>
+
+<p>To avoid that, you can set a timeout on the whole request, like so:</p>
+
+<p>package main</p>
+
+<p>import (
+	“context”
+	“fmt”
+	“io/ioutil”
+	“net/http”
+	“time”
+)</p>
+
+<p>func main() {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, “GET”, “http://perdu.com”, nil)
+	must(err)</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>res, err := http.DefaultClient.Do(req)
+must(err)
+defer res.Body.Close()
+
+body, err := ioutil.ReadAll(res.Body)
+must(err)
+fmt.Printf("%s", string(body)) }
+</code></pre></div></div>
+
+<p>func must(err error) {
+	if err != nil {
+		panic(err)
+	}
+}
+But that doesn’t work if you’re planning on uploading something large, for example. How many seconds is enough to upload a large file? Is 30 seconds enough? And how do you know you’re spending those seconds uploading, and not waiting for the server to accept your request?</p>
+
+<p>So, getlantern/idletiming adds a mechanism for timing out if there hasn’t been any data transmitted in a while, which is distinct from a dial timeout, and doesn’t force you to set a timeout on the whole request, so that it works for arbitrarily large uploads.</p>
+
+<p>The repository looks innocent enough:</p>
+
+<p>Just a couple files! And even some tests. Also - it works. I’m using it in production. I’m happy with it.</p>
+
+<p>There’s just.. one thing.</p>
+
+<p>$ git clone https://github.com/getlantern/idletiming
+Cloning into ‘idletiming’…
+(cut)
+$ cd idletiming
+$ go mod graph | wc -l
+196
+I’m sorry?</p>
+
+<p>One hundred and ninety-six packages?</p>
+
+<p>Well, I mean… lots of small, well-maintained libraries isn’t necessarily a bad idea - I never really agreed that the takeaway from the left-pad disaster was “small libraries are bad”.</p>
+
+<p>Let’s look at what we’ve got there:</p>
+
+<p>$ go mod graph
+github.com/getlantern/idletiming github.com/aristanetworks/goarista@v0.0.0-20200131140622-c6473e3ed183
+github.com/getlantern/idletiming github.com/getlantern/fdcount@v0.0.0-20190912142506-f89afd7367c4
+github.com/getlantern/idletiming github.com/getlantern/golog@v0.0.0-20190830074920-4ef2e798c2d7
+github.com/getlantern/idletiming github.com/getlantern/grtrack@v0.0.0-20160824195228-cbf67d3fa0fd
+github.com/getlantern/idletiming github.com/getlantern/mtime@v0.0.0-20170117193331-ba114e4a82b0
+github.com/getlantern/idletiming github.com/getlantern/netx@v0.0.0-20190110220209-9912de6f94fd
+github.com/getlantern/idletiming github.com/stretchr/testify@v1.4.0
+I’m sure all of these are reasonable. Lantern is a “site unblock” product, so it has to deal with networking a lot, it makes sense that they’d have their own libraries for a bunch of things, including logging (golog) and some network extensions (netx). testify is a well-known set of testing helpers, I use it too!</p>
+
+<p>Let’s keep going:</p>
+
+<p>github.com/aristanetworks/goarista@v0.0.0-20200131140622-c6473e3ed183 github.com/Shopify/sarama@v1.23.1
+Uhh….</p>
+
+<p>github.com/aristanetworks/goarista@v0.0.0-20200131140622-c6473e3ed183 github.com/aristanetworks/fsnotify@v1.4.2
+github.com/aristanetworks/goarista@v0.0.0-20200131140622-c6473e3ed183 github.com/aristanetworks/glog@v0.0.0-20180419172825&gt;
+github.com/aristanetworks/goarista@v0.0.0-20200131140622-c6473e3ed183 github.com/aristanetworks/splunk-hec-go@v0.3.3
+github.com/aristanetworks/goarista@v0.0.0-20200131140622-c6473e3ed183 github.com/garyburd/redigo@v1.6.0
+github.com/aristanetworks/goarista@v0.0.0-20200131140622-c6473e3ed183 github.com/golang/protobuf@v1.3.2
+Wait, I think we..</p>
+
+<p>github.com/aristanetworks/goarista@v0.0.0-20200131140622-c6473e3ed183 github.com/influxdata/influxdb1-client@v0.0.0-201908&gt;
+github.com/aristanetworks/goarista@v0.0.0-20200131140622-c6473e3ed183 github.com/klauspost/cpuid@v1.2.1
+github.com/aristanetworks/goarista@v0.0.0-20200131140622-c6473e3ed183 github.com/klauspost/reedsolomon@v1.9.2
+github.com/aristanetworks/goarista@v0.0.0-20200131140622-c6473e3ed183 github.com/kylelemons/godebug@v1.1.0
+github.com/aristanetworks/goarista@v0.0.0-20200131140622-c6473e3ed183 github.com/onsi/ginkgo@v1.10.1
+github.com/aristanetworks/goarista@v0.0.0-20200131140622-c6473e3ed183 github.com/onsi/gomega@v1.7.0
+github.com/aristanetworks/goarista@v0.0.0-20200131140622-c6473e3ed183 github.com/openconfig/gnmi@v0.0.0-20190823184014-89b&gt;
+github.com/aristanetworks/goarista@v0.0.0-20200131140622-c6473e3ed183 github.com/openconfig/reference@v0.0.0-2019072701583&gt;
+github.com/aristanetworks/goarista@v0.0.0-20200131140622-c6473e3ed183 github.com/prometheus/client_golang@v1.1.0
+I can understand some of these but…</p>
+
+<p>github.com/aristanetworks/goarista@v0.0.0-20200131140622-c6473e3ed183 github.com/satori/go.uuid@v1.2.0
+github.com/aristanetworks/goarista@v0.0.0-20200131140622-c6473e3ed183 github.com/stretchr/testify@v1.3.0
+github.com/aristanetworks/goarista@v0.0.0-20200131140622-c6473e3ed183 github.com/templexxx/cpufeat@v0.0.0-20180724012125-c&gt;
+github.com/aristanetworks/goarista@v0.0.0-20200131140622-c6473e3ed183 github.com/templexxx/xor@v0.0.0-20181023030647-4e92f&gt;
+github.com/aristanetworks/goarista@v0.0.0-20200131140622-c6473e3ed183 github.com/tjfoc/gmsm@v1.0.1
+github.com/aristanetworks/goarista@v0.0.0-20200131140622-c6473e3ed183 github.com/xtaci/kcp-go@v5.4.5+incompatible
+github.com/aristanetworks/goarista@v0.0.0-20200131140622-c6473e3ed183 github.com/xtaci/lossyconn@v0.0.0-20190602105132-8df&gt;
+github.com/aristanetworks/goarista@v0.0.0-20200131140622-c6473e3ed183 golang.org/x/net@v0.0.0-20190912160710-24e19bdeb0f2
+github.com/aristanetworks/goarista@v0.0.0-20200131140622-c6473e3ed183 golang.org/x/sys@v0.0.0-20190912141932-bc967efca4b8
+github.com/aristanetworks/goarista@v0.0.0-20200131140622-c6473e3ed183 golang.org/x/time@v0.0.0-20190308202827-9d24e82272b4
+github.com/aristanetworks/goarista@v0.0.0-20200131140622-c6473e3ed183 golang.org/x/tools@v0.0.0-20190912185636-87d9f09c5d89
+github.com/aristanetworks/goarista@v0.0.0-20200131140622-c6473e3ed183 google.golang.org/grpc@v1.23.1
+github.com/aristanetworks/goarista@v0.0.0-20200131140622-c6473e3ed183 gopkg.in/bsm/ratelimit.v1@v1.0.0-20160220154919-db14&gt;
+github.com/aristanetworks/goarista@v0.0.0-20200131140622-c6473e3ed183 gopkg.in/jcmturner/goidentity.v3@v3.0.0
+github.com/aristanetworks/goarista@v0.0.0-20200131140622-c6473e3ed183 gopkg.in/redis.v4@v4.2.4
+github.com/aristanetworks/goarista@v0.0.0-20200131140622-c6473e3ed183 gopkg.in/yaml.v2@v2.2.2
+STOP! Just stop. Stop it already.</p>
+
+<p>It keeps going on, and on. There’s everything.</p>
+
+<p>YAML, Redis, GRPC, which in turns needs protobuf, InfluxDB, an Apache Kafka client, a Prometheus client, Snappy, Zstandard, LZ4, a chaos-testing TCP proxy, three other logging packages, and client libraries for various Google Cloud services.</p>
+
+<p>What could possibly justify all this?</p>
+
+<p>Let’s review:</p>
+
+<p>// <code class="language-plaintext highlighter-rouge">idletiming_listener.go</code></p>
+
+<p>package idletiming</p>
+
+<p>import (
+	“net”
+	“time”
+)
+Only built-in imports. Good.</p>
+
+<p>// <code class="language-plaintext highlighter-rouge">idletiming_conn.go</code></p>
+
+<p>// package idletiming provides mechanisms for adding idle timeouts to net.Conn
+// and net.Listener.
+package idletiming</p>
+
+<p>import (
+	“errors”
+	“io”
+	“net”
+	“sync”
+	“sync/atomic”
+	“time”</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>"github.com/getlantern/golog"
+"github.com/getlantern/mtime"
+"github.com/getlantern/netx" ) This one is the meat of the library, so to say, and it requires a few of the getlantern packages we've seen:
+</code></pre></div></div>
+
+<p>It does end up importing golang.org/x/net/http2/hpack - but that’s just because of net/http. These are built-ins, so let’s ignore them for now.</p>
+
+<p>getlantern/hex is self-contained, so, moving on to getlantern/mtime:</p>
+
+<p>That’s it? What’s why Go ends up fetching the entire github.com/aristanetworks/goarista repository, and all its transitive dependencies?</p>
+
+<p>What does aristanetworks/goariasta/monotime even do?</p>
+
+<p>Mh. Let’s look inside issue15006.s</p>
+
+<p>// Copyright (c) 2016 Arista Networks, Inc.
+// Use of this source code is governed by the Apache License 2.0
+// that can be found in the COPYING file.</p>
+
+<p>// This file is intentionally empty.
+// It’s a workaround for https://github.com/golang/go/issues/15006
+I uh… okay.</p>
+
+<p>What does that issue say?</p>
+
+<p>This is known and I think the empty assembly file is the accepted fix.</p>
+
+<p>It’s a rarely used feature and having an assembly file also make it standout.</p>
+
+<p>I don’t think we should make this unsafe feature easy to use.</p>
+
+<p>And later (emphasis mine):</p>
+
+<p>I agree with Minux. If you’re looking at a Go package to import, you might want to know if it does any unsafe trickery. Currently you have to grep for an import of unsafe and look for non-.go files. If we got rid of the requirement for the empty .s file, then you’d have to grep for //go:linkname also.</p>
+
+<p>That’s… that’s certainly a stance.</p>
+
+<p>But which unsafe feature exactly?</p>
+
+<p>Let’s look at nanotime.go:</p>
+
+<p>// Copyright (c) 2016 Arista Networks, Inc.
+// Use of this source code is governed by the Apache License 2.0
+// that can be found in the COPYING file.</p>
+
+<p>// Package monotime provides a fast monotonic clock source.
+package monotime</p>
+
+<p>import (
+	“time”
+	_ “unsafe” // required to use //go:linkname
+)</p>
+
+<p>//go:noescape
+//go:linkname nanotime runtime.nanotime
+func nanotime() int64</p>
+
+<p>// Now returns the current time in nanoseconds from a monotonic clock.
+// The time returned is based on some arbitrary platform-specific point in the
+// past.  The time returned is guaranteed to increase monotonically at a
+// constant rate, unlike time.Now() from the Go standard library, which may
+// slow down, speed up, jump forward or backward, due to NTP activity or leap
+// seconds.
+func Now() uint64 {
+	return uint64(nanotime())
+}</p>
+
+<p>// Since returns the amount of time that has elapsed since t. t should be
+// the result of a call to Now() on the same machine.
+func Since(t uint64) time.Duration {
+	return time.Duration(Now() - t)
+}
+That’s it. That’s the whole package.</p>
+
+<p>The unsafe feature in question is being able to access unexported (read: lowercase, sigh) symbols from the Go standard library.</p>
+
+<p>Why is that even needed?</p>
+
+<p>If you remember from earlier, Rust has two types for time: SystemTime, which corresponds to your… system’s… time, which can be adjusted via NTP. It can go back, so subtraction can fail.</p>
+
+<p>And it has Instant, which is weakly monotonically increasing - at worse, it’ll give the same value twice, but never less than the previous value. This is useful to measure elapsed time within a process.</p>
+
+<p>How did Go solve that problem?</p>
+
+<p>At first, it didn’t. Monotonic time measurement is a hard problem, so it was only available internally, in the standard library, not for regular Go developers (a common theme):</p>
+
+<p>And then, it did.</p>
+
+<p>Sort of. In the most “Go way” possible.</p>
+
+<p>I thought some more about the suggestion above to reuse time.Time with a special location. The special location still seems wrong, but what if we reuse time.Time by storing inside it both a wall time and a monotonic time, fetched one after the other?</p>
+
+<p>Then there are two kinds of time.Times: those with wall and monotonic stored inside (let’s call those “wall+monotonic Times”) and those with only wall stored inside (let’s call those “wall-only Times”).</p>
+
+<p>Suppose further that:</p>
+
+<p>time.Now returns a wall+monotonic Time.
+for t.Add(d), if t is a wall+monotonic Time, so is the result; if t is wall-only, so is the result.
+all other functions that return Times return wall-only Times. These include: time.Date, time.Unix, t.AddDate, t.In, t.Local, t.Round, t.Truncate, t.UTC
+for t.Sub(u), if t and u are both wall+monotonic, the result is computed by subtracting monotonics; otherwise the result is computed by subtracting wall times. - t.After(u), t.Before(u), t.Equal(u) compare monotonics if available (just like t.Sub(u)), otherwise walls.
+all the other functions that operate on time.Times use the wall time only. These include: t.Day, t.Format, t.Month, t.Unix, t.UnixNano, t.Year, and so on.
+Doing this returns a kind of hybrid time from time.Now: it works as a wall time but also works as a monotonic time, and future operations use the right one.</p>
+
+<p>So, as of Go 1.9 - problem solved!</p>
+
+<p>If you’re confused by the proposal, no worries, let’s check out the release notes:</p>
+
+<p>Transparent Monotonic Time support
+The time package now transparently tracks monotonic time in each Time value, making computing durations between two Time values a safe operation in the presence of wall clock adjustments. See the package docs and design document for details.</p>
+
+<p>This changed the behavior of a number of Go packages, but, the core team knows best:</p>
+
+<p>This is a breaking change, but more importantly, it wasn’t before the introduction of Go modules (declared “stable” as of Go 1.14) that you could require a certain Go version for a package.</p>
+
+<p>So, if you have a package without a minimum required Go version, you can’t be sure you have the “transparent monotonic time support” of Go 1.9, and it’s better to rely on aristanetworks/goarista/monotime, which pulls 100+ packages, because Go packages are “simple” and they’re just folders in a git repository.</p>
+
+<p>Cool bear’s hot tip
+It’s not just idletiming that depends on monotime.</p>
+
+<p>As of the time of this writing, 266 publicly-avilable Go packages import it</p>
+
+<p>and the pull in the hundred plus dependencies with it.
+The change raised other questions: since time.Time now sometimes packs two types of time, two calls are needed. This concern was dismissed.</p>
+
+<p>In order for time.Time not to grow, both values were packed inside it, which restricted the range of times that could be represented with it:</p>
+
+<p>This issue was raised early on in the design process:</p>
+
+<p>You can check out the complete thread for a full history.</p>
+
+<p>Parting words
+This is just one issue. But there are many like it - this one is as good an example as any.</p>
+
+<p>Over and over, Go is a victim of its own mantra - “simplicity”.</p>
+
+<p>It constantly takes power away from its users, reserving it for itself.</p>
+
+<p>It constantly lies about how complicated real-world systems are, and optimize for the 90% case, ignoring correctness.</p>
+
+<p>It is a minefield of subtle gotchas that have very real implications - everything looks simple on the surface, but nothing is.</p>
+
+<p>The Channel Axioms are a good example. There is nothing explicit about them. They are invented truths, that were convenient to implement, and who everyone must now work around.</p>
+
+<p>Here’s a fun gotcha I haven’t mentioned yet:</p>
+
+<p>// IdleTimingConn is a net.Conn that wraps another net.Conn and that times out
+// if idle for more than idleTimeout.
+type IdleTimingConn struct {
+	// Keep 64-bit words at the top to make sure 64-bit alignment, see
+	// https://golang.org/pkg/sync/atomic/#pkg-note-BUG
+	lastActivityTime uint64</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>// (cut) } The documentation reads:
+</code></pre></div></div>
+
+<p>BUGS</p>
+
+<p>On ARM, x86-32, and 32-bit MIPS, it is the caller’s responsibility to arrange for 64-bit alignment of 64-bit words accessed atomically. The first word in a variable or in an allocated struct, array, or slice can be relied upon to be 64-bit aligned.</p>
+
+<p>If the condition isn’t satisfied, it panics at run-time. Only on 32-bit platforms. I didn’t have to go far to hit this one - I got bit by this bug multiple times in the last few years.</p>
+
+<p>It’s a footnote. Not a compile-time check. There’s an in-progress lint, for very simple cases, because Go’s simplicity made it extremely hard to check for.</p>
+
+<p>This fake “simplicity” runs deep in the Go ecosystem. Rust has the opposite problem - things look scary at first, but it’s for a good reason. The problems tackled have inherent complexity, and it takes some effort to model them appropriately.</p>
+
+<p>At this point in time, I deeply regret investing in Go.</p>
+
+<p>Go is a Bell Labs fantasy, and not a very good one at that.</p>
+:ET

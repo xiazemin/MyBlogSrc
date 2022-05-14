@@ -1,0 +1,278 @@
+I"})<p>prctl（PR_SET_PDEATHSIG，SIGNAL）在父线程退出时调用，而不是父进程退出(prctl(PR_SET_PDEATHSIG, SIGNAL) is called on parent thread exit, not parent process exit)</p>
+
+<p>Linux下修改进程名称
+catalog</p>
+
+<ol>
+  <li>应用场景</li>
+  <li>通过Linux prctl修改进程名</li>
+  <li>通过修改进程argv[0]修改进程名</li>
+  <li>
+    <p>通过bash exec命令修改一个进程的cmdline信息</p>
+  </li>
+  <li>
+    <p>应用场景</p>
+  </li>
+  <li>标识父子进程名称，防止被误杀</li>
+  <li>构造假的进程名及参数，引导非法进入人员到蜜罐系统，取证</li>
+  <li>恶意程序、木马会通过”檫除”自己的进程名，使ps的时候显示的是一个无名字的进程，同时删除进程对应磁盘上的文件
+<!-- more -->
+通过Linux prctl修改进程名</li>
+</ol>
+
+<p>虽然Linux将所有资源对象都抽象为了文件，但是对一些特殊作用的文件特别定制了一些特别的API集合，对其进行特殊操作，prctl就是其中一个例子</p>
+
+<p>prctl - operations on a process
+#include &lt;sys/prctl.h&gt;
+int prctl(int option, unsigned long arg2, unsigned long arg3,unsigned long arg4, unsigned long arg5);
+prctl() is called with a first argument describing what to do (with values defined in &lt;linux/prctl.h&gt;), and further arguments with a significance depending on the first one. The first argument can be:</p>
+
+<ol>
+  <li>PR_CAPBSET_READ</li>
+  <li>PR_CAPBSET_DROP</li>
+  <li>PR_SET_CHILD_SUBREAPER</li>
+  <li>PR_GET_CHILD_SUBREAPER</li>
+  <li>PR_SET_DUMPABLE</li>
+  <li>PR_SET_ENDIAN</li>
+  <li>PR_GET_ENDIAN</li>
+  <li>PR_SET_FPEMU</li>
+  <li>PR_GET_FPEMU</li>
+  <li>PR_SET_FPEXC</li>
+  <li>PR_GET_FPEXC</li>
+  <li>PR_SET_KEEPCAPS</li>
+  <li>PR_GET_KEEPCAPS</li>
+  <li>PR_SET_NAME 
+1) Set the name of the calling thread, using the value in the location pointed to by (char *) arg2.<br />
+2) The name can be up to 16 bytes long, including the terminating null byte. (If the length of the string, including the terminating null byte, exceeds 16 bytes, the string is silently truncated.) 
+3) This is the same attribute that can be set via pthread_setname_np and retrieved using pthread_getname_np.<br />
+4) The attribute is likewise accessible via /proc/self/task/[tid]/comm, where tid is the name of the calling thread.</li>
+  <li>PR_GET_NAME</li>
+  <li>PR_SET_NO_NEW_PRIVS</li>
+  <li>PR_GET_NO_NEW_PRIVS</li>
+  <li>PR_SET_PDEATHSIG</li>
+  <li>PR_GET_PDEATHSIG</li>
+  <li>PR_SET_PTRACER</li>
+  <li>PR_SET_SECCOMP</li>
+  <li>PR_GET_SECCOMP</li>
+  <li>PR_SET_SECUREBITS</li>
+  <li>PR_GET_SECUREBITS</li>
+  <li>PR_SET_THP_DISABLE</li>
+  <li>PR_GET_THP_DISABLE</li>
+  <li>PR_GET_TID_ADDRESS</li>
+  <li>PR_SET_TIMERSLACK</li>
+  <li>PR_GET_TIMERSLACK</li>
+  <li>PR_SET_TIMING</li>
+  <li>PR_GET_TIMING</li>
+  <li>PR_TASK_PERF_EVENTS_DISABLE</li>
+  <li>PR_TASK_PERF_EVENTS_ENABLE</li>
+  <li>PR_SET_TSC</li>
+  <li>PR_GET_TSC</li>
+  <li>PR_SET_UNALIGN</li>
+  <li>PR_GET_UNALIGN</li>
+  <li>PR_MCE_KILL</li>
+  <li>PR_MCE_KILL_GET</li>
+  <li>PR_SET_MM</li>
+  <li>PR_MPX_ENABLE_MANAGEMENT, PR_MPX_DISABLE_MANAGEMENT</li>
+</ol>
+
+<p>#include <stdio.h>
+#include &lt;sys/prctl.h&gt;</stdio.h></p>
+
+<p>int main(int argc, char *argv[], char *envp[])
+{
+    char *new_name = “littlehann-program”;</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>getchar();
+prctl(PR_SET_NAME, new_name);
+getchar();
+
+return 0; }
+</code></pre></div></div>
+
+<p>但是prctl修改的进程名，只能是16个字节(包括’\0’)，同时，过ps -aux 查看，进程名称并没有改变，改变的只是/prco/(PID)/stat和/prco/(PID)/status的值，而/prco/$(PID)/cmdline并没有改变</p>
+
+<p>#include <stdio.h>
+#include <string.h></string.h></stdio.h></p>
+
+<p>extern char **environ;
+int main(int argc , char *argv[])
+{
+    int i;</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>printf("argc:%d\n" , argc);
+
+for (i = 0; i &lt; argc; ++i)
+{
+    printf("argv[%d](0x%x):%s\n" , i , (unsigned int)argv[i], argv[i]);
+}
+
+printf("evriron=0x%x\n" , (unsigned int)environ[0]);
+
+return 0; }
+</code></pre></div></div>
+
+<p>通过代码运行结果可以看出，我们只需要在进程启动时修改argv[0]所指向的内存空间的内容，就可以修改进程名</p>
+
+<ol>
+  <li>如果新名称比argv[0]的长度小，我们可以直接修改，并把多余的部分请0</li>
+  <li>如果新名称比argv[0]长我们需要两步 
+ 1) 申请新内存保存环境变量信息和argv[1…argc-1]参数信息
+ 2) 修改argv[0]，将新名称往后到environ的最后一项清0</li>
+</ol>
+
+<p>通过bash exec命令修改一个进程的cmdline信息</p>
+
+<p>exec -l -a “littlehann-prog” bash
+ps
+ps -l 29116</p>
+
+<p>在编写网络服务器程序时，为了响应客户端的请求，我们经常需要新建进程来处理业务流程；而且又是为了关闭某个非法请求或者关闭长连接的客户端，这时就需要杀死进程 killall  proc_name。 但是在新建进程时，子进程名与父进程名相同。因此需要由进程名及参数来区分客户端连接。
+   在linux中prctl可以满足这个要求，下满是man手册：
+      PR_SET_NAME (since Linux 2.6.9)
+              Set the process name for the calling process, using the value in
+              the location pointed to by (char *) arg2.  The name can be up to
+              16  bytes  long,  and  should  be null terminated if it contains
+              fewer bytes.
+    但是prctl修改的进程名，只能是16个字节(包括’\0’)。下面是修改的代码（changetitle.c）：
+点击(此处)折叠或打开</p>
+
+<p>#include <stdio.h>
+#include &lt;sys/prctl.h&gt;</stdio.h></p>
+
+<p>int main(int argc, char *argv[], char *envp[])
+{
+    char *new_name = “abcdefghijklmnopqrstuvwxyz”;</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>getchar();
+prctl(PR_SET_NAME, new_name);
+getchar();
+
+return 0; }
+当新名称长度大于16时就会截断，上面的新名字截断后是abcdefghijklmno。这对于我们来说是有缺陷的。而且通过ps -aux 查看，进程名称并没有改变，改变的只是/prco/$(PID)/stat和 /prco/$(PID)/status的值，而/prco/$(PID)/cmdline并没有改变。这种方式使用起来也是不方便的。    下面介绍另一种方式，可以与上面的方式互补。
+首先看一下main函数的原型:int main(int argc, char *argv[]);
+    argv[0]存放的是终端执行的程序名称也就是进程名。argv[1...argc-1]存放的是命令行参数。
+    linux中main()还有一个隐藏参数就是环境变量信息，存放了运行时所需要的环境变量。
+    我们可以通过以下来访问这个变量 点击(此处)折叠或打开
+</code></pre></div></div>
+
+<p>extern char **environ;
+      argv与environ是连续存放在栈区的。下面代码可以查看参数信息：
+点击(此处)折叠或打开</p>
+
+<p>#include <stdio.h>
+#include <string.h></string.h></stdio.h></p>
+
+<p>extern char **environ;
+int main(int argc , char *argv[])
+{
+    int i;</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>printf("argc:%d\n" , argc);
+
+for (i = 0; i &lt; argc; ++i)
+{
+    printf("argv[%d](0x%x):%s\n" , i , (unsigned int)argv[i], argv[i]);
+}
+
+printf("evriron=0x%x\n" , (unsigned int)environ[0]);
+
+return 0; }
+    通过上面可以看出，我们只需要修改argv[0]所指向的内存空间的内容，就可以修改进程名。但是如果新名称比argv[0]的长度小，我们可以直接修改，并把多余的部分请0，如果新名称 比argv[0]长我们需要两步：
+        1、申请新内存保存环境变量信息和argv[1...argc-1]参数信息
+        2、修改argv[0]，将新名称往后到environ的最后一项清0
+    以下是参考代码： 点击(此处)折叠或打开
+</code></pre></div></div>
+
+<p>#include <unistd.h>
+#include <stdio.h>
+#include <stdarg.h>
+#include <string.h>
+#include <stdlib.h>
+#include &lt;sys/prctl.h&gt;</stdlib.h></string.h></stdarg.h></stdio.h></unistd.h></p>
+
+<h1 id="define-maxline-2048">define MAXLINE 2048</h1>
+
+<p>extern char **environ;</p>
+
+<p>static char <em>*g_main_Argv = NULL; /</em> pointer to argument vector <em>/
+static char *g_main_LastArgv = NULL; /</em> end of argv */</p>
+
+<p>void setproctitle_init(int argc, char **argv, char **envp)
+{
+    int i;</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>for (i = 0; envp[i] != NULL; i++) // calc envp num
+    continue;
+environ = (char **) malloc(sizeof (char *) * (i + 1)); // malloc envp pointer
+
+for (i = 0; envp[i] != NULL; i++)
+{
+    environ[i] = malloc(sizeof(char) * strlen(envp[i]));
+    strcpy(environ[i], envp[i]);
+}
+environ[i] = NULL;
+
+g_main_Argv = argv;
+if (i &gt; 0)
+  g_main_LastArgv = envp[i - 1] + strlen(envp[i - 1]);
+else
+  g_main_LastArgv = argv[argc - 1] + strlen(argv[argc - 1]); }
+</code></pre></div></div>
+
+<p>void setproctitle(const char *fmt, …)
+{
+    char *p;
+    int i;
+    char buf[MAXLINE];</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>extern char **g_main_Argv;
+extern char *g_main_LastArgv;
+va_list ap;
+p = buf;
+
+va_start(ap, fmt);
+vsprintf(p, fmt, ap);
+va_end(ap);
+
+i = strlen(buf);
+
+if (i &gt; g_main_LastArgv - g_main_Argv[0] - 2)
+{
+    i = g_main_LastArgv - g_main_Argv[0] - 2;
+    buf[i] = '\0';
+}
+(void) strcpy(g_main_Argv[0], buf);
+
+p = &amp;g_main_Argv[0][i];
+while (p &lt; g_main_LastArgv)
+    *p++ = '\0';
+g_main_Argv[1] = NULL;
+
+prctl(PR_SET_NAME,buf); }
+</code></pre></div></div>
+
+<p>int main(int argc, char *argv[])
+{
+    char argv_buf[MAXLINE] = {0}; // save argv paramters</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>for(int i = 1; i &lt; argc; i++)
+{
+    strcat(argv_buf, argv[i]);
+    strcat(argv_buf, " ");
+}
+
+setproctitle_init(argc, argv, environ);
+
+setproctitle("%s@%s %s", "new_name", "ip", argv_buf);
+
+for (int i = 0; environ[i] != NULL; i++)
+    free(environ[i]);
+getchar();
+
+return 0; }
+  上面的代码使用了prctl和修改argv[0]两种修改方法的结合，通过ps -a 、 ps -ef  、ps -aux、 top 等等命令都只能查询到新进程名，/proc/$PID/ 下的文件也显示了新进程名的信息。
+  应用场景：
+     1、标识父子进程名称，防止被误杀
+     2、构造假的进程名及参数，引导非法进入人员到蜜罐系统，取证
+</code></pre></div></div>
+:ET

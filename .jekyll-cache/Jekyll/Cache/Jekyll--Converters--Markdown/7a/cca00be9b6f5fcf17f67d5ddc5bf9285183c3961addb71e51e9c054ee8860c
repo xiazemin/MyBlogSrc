@@ -1,0 +1,56 @@
+I"�<p>设置合适的资源requests和limits对充分利用Kubernetes集群资源来说十分重要。如果requests设置得太高，集群节点利用率就会比较低，这样就白白浪费了金钱。如果设置得太低，应用就会处于CPU饥饿状态，甚至很容易被OOM Killer杀死。所以如何才能找到requests和limits的最佳配置呢？</p>
+
+<p>可以通过对容器在期望负载下的资源实际使用率进行监控来找到这个最佳配置。当然一旦应用暴露于公网，都应该保持监控并且在需要时对其资源的requests和limits进行调节。</p>
+
+<p>那么如何监控一个在Kubernetes中运行的应用呢？幸运的是，Kubelet自身就包含了一个名为cAdvisor的agent，它会收集整个节点和节点上运行的所有单独容器的资源消耗情况。集中统计整个集群的监控信息需要运行一个叫作Heapster的附加组件。</p>
+
+<p>Heapster以pod的方式运行在某个节点上，它通过普通的Kubernetes Service暴露服务，使外部可以通过一个稳定的IP地址访问。它从集群中所有的cAdvisor收集数据，然后通过一个单独的地址暴露
+<!-- more --></p>
+
+<p>pod（或者pod中运行的容器）感知不到cAdvisor的存在，cAdvisor也感知不到Heapster的存在。Heapster主动请求所有的cAdvisor，同时cAdvisor无须通过与pod容器内进程通信就可以收集到容器和节点的资源使用数据。</p>
+
+<p>启用Heapster</p>
+
+<p>如果你的集群运行在Google Container Engine上，Heapster默认已经启用。如果你使用的是Minikube，它可以作为插件使用，通过以下命令开启：</p>
+
+<p>$ minikube addons enable heapster</p>
+
+<p>代码清单14.18 节点实际CPU和内存使用量</p>
+
+<p>$ kubectl top node</p>
+
+<p>14.6.2 保存并分析历史资源的使用统计信息
+top 命令仅仅展示了当前的资源使用量 —— 它并不会显示比如从一小时、一天或者一周前到现在pod的CPU和内存使用了多少。事实上，cAdvisor和Heapster都只保存一个很短时间窗的资源使用量数据。如果需要分析一段时间的pod的资源使用情况，必须使用额外的工具。如果使用Google Container Engine，可以通过Google Cloud Monitoring来对集群进行监控，但是如果是本地Kubernetes集群（通过Minikube或其他方式创建），人们往往使用InfiuxDB来存储统计数据，然后使用Grafana对数据进行可视化和分析。</p>
+
+<p>https://zhuanlan.zhihu.com/p/359855080
+https://github.com/kubernetes-retired/heapster
+Kubernetes 和 KVM 的区别在不同组件存在区别：</p>
+
+<p>CPU 区别最大，这是 Kubernetes 技术本质决定的
+内存有一定区别，但是基本可以和 KVM 技术栈统一
+网络、磁盘区别不大，基本没有额外的理解成本
+CPU：
+长话短说，在 KVM 场景下，用户需要关注的指标是 CPU 使用率 和 CPU load：</p>
+
+<p>CPU load 高，CPU 使用率低，一般表明性能瓶颈出现在磁盘 I/O 上
+CPU 使用率高，CPU load 远高于 CPU 核数，表示当前 CPU 资源严重不足
+在 Kubernetes 场景下，用户需要关注的指标是 CPU 使用率和 CPU 限流时间：</p>
+
+<p>CPU 使用率高（接近甚至稍微超过 100%），CPU 限流时间大，表示当前 CPU 资源严重不足，需要增加 request 或者 limit
+出现这种差异的原因：</p>
+
+<p>Kubernetes 和 KVM 在 CPU 资源隔离机制上存在差别
+Linux 指标暴露 和 Kubernetes 指标暴露存在差别</p>
+
+<p>https://zhuanlan.zhihu.com/p/135420830
+Pod内存使用率的计算
+Pod 内存使用率的计算就简单多了，直接用内存实际使用量除以内存限制使用量即可：</p>
+
+<p>sum(container_memory_rss{image!=””}) by(pod_name, namespace) / sum(container_spec_memory_limit_bytes{image!=””}) by(pod_name, namespace) * 100 != +inf
+Pod 文件系统使用量</p>
+
+<p>sum(container_fs_usage_bytes{image!=””}) by(pod_name, namespace) / 1024 / 1024 / 1024</p>
+
+<p>https://www.jianshu.com/p/8b4cb143d174</p>
+
+:ET

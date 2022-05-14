@@ -1,0 +1,177 @@
+---
+title: Golang HTTP服务平滑重启及升级
+layout: post
+category: golang
+author: 夏泽民
+---
+https://mp.weixin.qq.com/s/F-bmQcRwJEFcRhpWYEm-wg
+Golang HTTP服务在上线时，需要重新编译可执行文件，关闭正在运行的进程，然后再启动新的运行进程。对于访问频率比较高的面向终端用户的产品，关闭、重启的过程中会出现无法访问（nginx表现为502）的情况，影响终端用户的使用体验。
+
+
+实现的一般思路
+一般情况下，要实现平滑重启或升级，需要执行以下几个步骤：
+
+发布新的bin文件覆盖老的bin文件
+
+发送一个信号量(USR2)，告诉正在运行的进程，进行重启
+
+正在运行的进程接受到信号后，以子进程的方式启动新的bin文件
+
+新进程接收并处理新的请求
+
+老进程不再接收新请求，等待所有正在处理的请求处理完成后自动退出
+
+新进程在老进程退出后，继续提供服务
+<!-- more -->
+选型与实践
+重复造平滑重启及升级的轮子比较简单，但测试覆盖无法控制，比较耗时耗力。所以秉着不重复造轮子的思路，使用github中的三方库进行选择：
+
+facebookgo/grace
+
+fvbock/endless
+
+jpillora/overseer
+
+endless与grace的实现方式原理都比较类似，所以在选型初期我们以facebookgo/grace库为例集成到项目中进行测试：
+
+func (h *Server) ListenAndServe(listenAddress string) error {
+    // ....
+    return gracehttp.Serve(&http.Server{
+        Addr: listenAddress,
+        Handler: h.httpServerMux,
+    })
+}
+使用 ab 工具压测 api-publish 服务进行测试，服务启动后，执行以下命令：
+
+ab -c 10 -n 2000 http://127.0.0.1:38272/api/list
+然后给进程发送 USR2 信号 kill -USR2 api-server-pid，可看到以下结果：
+
+
+
+结果中 Failed requests 表示在整个压测请求中没有错误的请求，这可以说明服务重启时没有中断请求的接收和处理。如果使用sleep的方式测试，可以明显的看到新进程替代老进程的过程。
+
+supervisor的问题
+
+
+实际项目中，线上服务是被supervisor启动的。如上所说的我们如果通过grace或者endless的子进程启动后退出父进程这种方式的话，存在的问题就是子进程会被1号进程接管，导致supervisor认为服务挂掉重启服务，为了避免这种问题我们需要使用master-worker的方式。
+
+overseer 这个备选库实现了master-worker的方式。简单集成方式：
+
+return overseer.RunErr(overseer.Config{
+    Address: address,
+    Program: func(state overseer.State) {
+        // ...
+        http.Serve(state.Listener, nil)
+    },
+})
+另外：在更新supervisor时，配置不需要更新，但重启服务的命令不能使用supervisor restart，需要使用supervisor signal sigusr2 api的命令。
+
+还是使用上面的测试方式：
+
+
+
+可以明显的看到，supervisor发送了USR2信号后，主进程的pid没有变化，重新启动了一个新的子进程来处理线上请求。
+
+
+
+其他的问题
+在使用overseer集成到项目中测试时，子进程的运行函数中仅仅加入了http服务的启动，这样导致一个问题。
+
+main函数中任务会被执行两次，如果是cron的初始化，那么cron就会初始化两次，导致有两个cron在执行，这样的方式是不符合预期的。
+
+导致这样的原因是：overseer在启动子进程时是使用和主进程一样的启动命令。所以main函数会执行两次。
+
+func (mp *master) fork() error {
+    mp.debugf("starting %s", mp.binPath)
+    cmd := exec.Command(mp.binPath)
+    //mark this new process as the "active" slave process.
+    //this process is assumed to be holding the socket files.
+    mp.slaveCmd = cmd
+    mp.slaveID++
+    //provide the slave process with some state
+    e := os.Environ()
+    e = append(e, envBinID+"="+hex.EncodeToString(mp.binHash))
+    e = append(e, envBinPath+"="+mp.binPath)
+    e = append(e, envSlaveID+"="+strconv.Itoa(mp.slaveID))
+    e = append(e, envIsSlave+"=1")
+    e = append(e, envNumFDs+"="+strconv.Itoa(len(mp.slaveExtraFiles)))
+    cmd.Env = e
+    //inherit master args/stdfiles
+    cmd.Args = os.Args
+    cmd.Stdin = os.Stdin
+    cmd.Stdout = os.Stdout
+    cmd.Stderr = os.Stderr
+    //include socket files
+    cmd.ExtraFiles = mp.slaveExtraFiles
+    if err := cmd.Start(); err != nil {
+        return fmt.Errorf("Failed to start slave process: %s", err)
+    }
+    // ...
+}
+我们通过调整main函数的内容来解决这个问题：
+
+将之前所有的初始化内容集成在initialization函数中
+
+将http初始化的内容集成在httpServer函数中，返回一个http.Server
+
+func main() {
+  // 配置初始化
+    if err := config.Init(appConf); err != nil {
+        fmt.Println(err)
+        return
+    }
+    cfg := config.GetConfig()
+
+  // 初始化graceful http服务
+    gracefulHTTPServer := microsvr.GracefulHTTPServer{
+        Address:        cfg.HTTPListenAddress,
+        Conf:           cfg,
+        Initialization: initialization,
+        HttpServer:     httpServer,
+    }
+
+  // 启动
+    if err := gracefulHTTPServer.Run(); err != nil {
+        fmt.Println(err)
+        return
+    }
+}
+
+// 初始化日志、数据库链接、定时任务等
+func initialization(cfg *config.Conf) {
+    if err := microsvr.Init(cfg); err != nil {
+        fmt.Println(err)
+        return
+    }
+
+    if err := server.AddConnect(cfg.Databases.String()); err != nil {
+        fmt.Println(err)
+        return
+    }
+    logger.Info("数据库链接成功：" + cfg.Databases.Address)
+    // cron
+    cron.Cron.Init()
+}
+
+// 初始化http服务，但不启动
+func httpServer() *http.Server {
+    server := microsvr.NewHTTPServer()
+    server.SetAllowOrginBack()
+    Routers(server)
+    return server
+}
+实践对比结果：
+
+grace与endless：旧的api都不会断掉，会执行原来的逻辑，但pid会变化；不支持supervisor管理
+
+overseer：旧api不会断掉，会执行原来的逻辑，主进程pid也不会变化，支持supervisor、systemd等管理
+
+grace与endless的原理比较相像，都是类似上述的一般思路的实现原理。overseer的不同，主要有两点：
+
+添加了fetcher：用来支持自动升级bin文件，fetcher运行在一个goroutine中，通过预先设置好的间隔时间来检查bin文件；支持File、Github、S3的方式
+
+添加了主进程管理平滑重启：子进程处理链接，能够保持主进程pid不变
+
+
+
+我们使用了overseer作为最终的选型结果。

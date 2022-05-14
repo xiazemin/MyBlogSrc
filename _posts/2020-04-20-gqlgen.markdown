@@ -1,0 +1,230 @@
+---
+title: 从graphql-go转换到gqlgen
+layout: post
+category: golang
+author: 夏泽民
+---
+https://gocn.vip/topics/10265
+<!-- more -->
+相信各位开发者对于GraphQL带来的好处已经非常清楚，如果对GraphQL很陌生的朋友们，可以直接参考之前作者写的一篇『Go语言实战GraphQL』，内容会讲到用Go语言实战GraphQL架构，教开发者如何撰写GraphQL测试及一些开发小技巧，不过内容都是以graphql-go框架为主。而本篇主题会讲为什么我从graphql-go框架转换到gqlgen。
+
+前言
+我自己用graphql-go写了一些专案，但是碰到的问题其实也不少，很多问题都可以在graphql-go专案的Issue列表内都可以找到，虽然此专案的Star数量是最高，讨论度也是最高，如果刚入门GraphQL，需要练习，用这套见没啥问题，比较资深的开发者，就不建议选这套了，先来看看功能比较图
+
+
+
+其中有几项痛点是让我主要转换的原因:
+
+效能考量
+功能差异
+架构优先
+强型别
+自动产生程式码
+底下一一介绍上述特性
+
+效能考量
+我自己建立效能Benchamrk来比较市面上几套GraphQL套件golang-graphql-benchmark
+
+graphql-go / graphql版本： v0.7.9
+playlyfe / go-graphql版本：v0.0.0-20191219091308-23c3f22218ef
+graph-gophers / graphql-go版本：v0.0.0-20200200002002730-8334863f2c8b
+samsarahq / thunder版本：v0.5.0
+99designs / gqlgen版本： v0.11.3
+请求/秒
+graphql-go	19004.92
+图球	44308.44
+雷	40994.33
+Gqlgen	49925.73
+由上面可以看到光是一个Hello World范例，最后的结果由gqlgen胜出，现在讨论度比较高的也只有gqlgen跟grapgql-go，效能上面差异颇大。这算是我转过去的最主要原因之一。
+
+功能差异
+几个重点差异，底下看看比较图:
+
+
+
+类型安全
+类型绑定
+上传文件
+等蛮多细部差异，graphql-go目前不支持档案上传，所以还是需要透过RESTFul API方式上传，但是已经有人提过Issue且发了PR，作者看起来没有想处理这题。就拿上传档案当做例子，在gqlgen写档案上传相当容易，先写schema
+
+"The `Upload` scalar type represents a multipart file upload."
+scalar Upload
+
+"The `File` type, represents the response of uploading a file."
+type File {
+  name: String!
+  contentType: String!
+  size: Int!
+  url: String!
+}
+就可以直接在 resolver 使用:
+
+type File struct {
+    Name        string
+    Size        int
+    Content     []byte
+    ContentType string
+}
+
+func (r *mutationResolver) getFile(file graphql.Upload) (*File, error) {
+    content, err := ioutil.ReadAll(file.File)
+    if err != nil {
+        return nil, errors.EBadRequest(errorUploadFile, err)
+    }
+
+    contentType := ""
+    kind, _ := filetype.Match(content)
+    if kind != filetype.Unknown {
+        contentType = kind.MIME.Value
+    }
+
+    if contentType == "" {
+        contentType = http.DetectContentType(content)
+    }
+
+    return &File{
+        Name:        file.Filename,
+        Size:        int(file.Size),
+        Content:     content,
+        ContentType: contentType,
+    }, nil
+}
+架构优先
+后端设计API时需要针对使用者情境及Database架构来设计GraphQL Schema，详细可以参考Schema Definition Language。底下可以拿使用者注册来当做例子:
+
+enum EnumGender {
+  MAN
+  WOMAN
+}
+
+# Input Types
+input createUserInput {
+  email: String!
+  password: String!
+  doctorCode: String
+}
+
+type createUserPayload {
+  user: User
+  actCode: String
+  digitalCode: String
+}
+
+# Types
+type User {
+  id: ID
+  email: String!
+  nickname: String
+  isActive: Boolean
+  isFirstLogin: Boolean
+  avatarURL: String
+  gender: EnumGender
+}
+
+type Mutation {
+  createUser(input: createUserInput!): createUserPayload
+}
+除了可以先写Schema 之外，还可以根据不同情境的做分类，将一个完整的Schema 拆成不同模组，这个在gqlgen 都可以很容易做到。
+
+resolver:
+  layout: follow-schema
+  dir: graph
+之后gqlgen 会将目录结构产生如下
+
+user.graphql
+user.resolver.go
+cart.graphql
+cart.resolver.go
+开发者只要将相对应的resolver method 实现出来就可以了。
+
+强型别
+如果有在写graphql-go就可以知道该如何取得使用者input参数，在graphql-go使用的是map[string]interface{}型态，要正确拿到参数值，就必须要转换型态
+
+username := strings.ToLower(p.Args["username"].(string))
+password := p.Args["password"].(string)
+多了一层转换相当复杂，而gqlgen 则是直接帮忙转成struct 强型别
+
+CreateUser(ctx context.Context, input model.CreateUserInput)
+其中model.CreateUserInput就是完整的struct，而并非是map[string]interface{}，在传递参数时，就不用多写太多interface转换，完整的注册流程可以参考底下:
+
+func (r *mutationResolver) CreateUser(ctx context.Context, input model.CreateUserInput) (*model.CreateUserPayload, error) {
+    resp, err := api.CreateUser(r.Config, api.ReqCreateUser{
+        Email:      input.Email,
+        Password:   input.Password,
+    })
+
+    if err != nil {
+        return nil, err
+    }
+
+    return &model.CreateUserPayload{
+        User:        resp.User,
+        DigitalCode: convert.String(resp.DigitalCode),
+        ActCode:     convert.String(resp.ActCode),
+    }, nil
+}
+自动产生代码
+要维护栏位非常多的Schema 相当不容易，在graphql-go 每次改动栏位，都需要开发者自行修改，底下是user type 范例:
+
+var userType = graphql.NewObject(graphql.ObjectConfig{
+    Name:        "UserType",
+    Description: "User Type",
+    Fields: graphql.Fields{
+        "id": &graphql.Field{
+            Type: graphql.ID,
+        },
+        "email": &graphql.Field{
+            Type: graphql.String,
+        },
+        "username": &graphql.Field{
+            Type: graphql.String,
+        },
+        "name": &graphql.Field{
+            Type: graphql.String,
+        },
+        "isAdmin": &graphql.Field{
+            Type: graphql.Boolean,
+            Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+                source := p.Source
+                o, ok := source.(*model.User)
+
+                if !ok {
+                    return false, nil
+                }
+
+                return o.CheckAdmin(), nil
+            },
+        },
+        "isNewcomer": &graphql.Field{
+            Type: graphql.Boolean,
+        },
+        "createdAt": &graphql.Field{
+            Type: graphql.DateTime,
+        },
+        "updatedAt": &graphql.Field{
+            Type: graphql.DateTime,
+        },
+    },
+})
+上面这段程式码是要靠开发者自行维护，只要有任何异动，都需要手动自行修改，但是在gqlgen 就不需要了，你只要把schema 定义完整后，如下:
+
+type User {
+  id: ID
+  email: String!
+  username: String
+  isAdmin: Boolean
+  isNewcomer: Boolean
+  createdAt: Time
+  updatedAt: Time
+}
+在console端下go run github.com/99designs/gqlgen，就会自动将代码生成完毕。你也可以将User绑定在开发者自己定义的Model层级。
+
+models:
+  User:
+    model: pkg/model.User
+之后需要新增任何栏位，只要在pkg/model.User提供相对应的栏位或method，重跑一次gqlgen就完成了。省下超多开发时间。
+
+心得
+其实graphql-go 雷的地方不只有这些，还有很多地方没有列出，但是上面的gqlgen 优势，已经足以让我转换到新的架构上。而在专案新的架构上，也同时具备RESTFul API + GraphQL 设计，如果有时间再跟大家分享这部分。
+
+https://blog.wu-boy.com/2020/04/switch-graphql-go-to-gqlgen-in-golang/

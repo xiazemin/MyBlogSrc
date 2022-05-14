@@ -1,0 +1,57 @@
+I"�<p>两个consumer反复重新加入group中，而他们的group是同一个，猜测是两个consumer使用同一个groupid导致，相互影响。</p>
+
+<p>消费者在zookeeper中注册中，消费者注册标识符（Consumer Identifiers Registry）是保存在zookeeper的/consumers/[group_id]/ids/[consumer_connector_id]的路径下，这些消费者注册节点形成一棵树，当有消费者加入或离开时，树上所有的消费者都会被通知到，从而进行rebanlance。</p>
+
+<p>消费者在zookeeper注册的路径与topic并没有关系，反而与groupid绑定，这是因为同一个consumer可以消费不同的topic。如果不同的consumer使用同一个groupid消费不同的topic，而任何一个topic的consumer出现加入或离开等变化时，所有groupid组里的consumer都会发生rebanlance。从而可能导致上面调试时出现的问题。
+<!-- more -->
+https://www.cnblogs.com/adai-study-1030/p/14793846.html
+https://www.confluent.io/blog/cooperative-rebalancing-in-kafka-streams-consumer-ksqldb/</p>
+
+<p>https://www.confluent.io/blog/kafka-rebalance-protocol-static-membership/</p>
+
+<p>消费者消费消息的offset记录机制
+每个consumer会定期将自己消费分区的offset提交给kafka内部topic：__consumer_offsets，提交过去的时候，key是consumerGroupId+topic+分区号，value就是当前offset的值，kafka会定期清理topic里的消息，最后就保留最新的那条数据，因为__consumer_offsets可能会接收高并发的请求，kafka默认给其分配50个分区(可以通过offsets.topic.num.partitions设置)，这样可以通过加机器的方式抗大并发。</p>
+
+<p>消费者Rebalance机制
+消费者rebalance发生在如果consumer group中某个消费者挂了，此时会自动把分配给他的分区交给其他的消费者，如果他又重启了，那么又会把一些分区重新交还给他如下情况可能会触发消费者rebalance，常见的情况如下：</p>
+
+<p>consumer所在服务重启或宕机了
+动态给topic增加了分区
+消费组订阅了更多的topic
+Rebalance过程
+当有消费者加入消费组时，消费者、消费组及组协调器之间会经历以下几个阶段。</p>
+
+<p>第一阶段：选择组协调器
+组协调器GroupCoordinator：每个consumer group都会选择一个broker作为自己的组协调器coordinator，负责监控这个消费组里的所有消费者的心跳，以及判断是否宕机，然后开启消费者rebalance。consumer group中的每个consumer启动时会向kafka集群中的某个节点发送FindCoordinatorRequest请求来查找对应的组协调器GroupCoordinator，并跟其建立网络连接。</p>
+
+<p>组协调器选择方式：通过如下公式可以选出consumer消费的offset要提交到__consumer_offsets的哪个分区，这个分区leader对应的broker就是这个consumer group的coordinator</p>
+
+<p>公式：hash(consumer group id) % __consumer_offsets主题的分区数</p>
+
+<p>第二阶段：加入消费组JOIN GROUP
+在成功找到消费组所对应的GroupCoordinator之后就进入加入消费组的阶段，在此阶段的消费者会向GroupCoordinator发送JoinGroupRequest请求，并处理响应。然后GroupCoordinator从一个consumer group中选择第一个加入group的consumer作为leader(消费组协调器)，把consumer group情况发送给这个leader，接着这个leader会负责制定分区方案（由于rebalance等策略有客户端配置决定，因此分区方案需要consumer来制定，以消费组协调器的配置为准）。</p>
+
+<p>第三阶段：SYNC GROUP
+consumer leader通过给GroupCoordinator发送SyncGroupRequest，接着GroupCoordinator就把分区方案下发给各个consumer，他们会根据指定分区的leader broker进行网络连接以及消息消费。</p>
+
+<p>消费者Rebalance分区分配策略
+主要有三种rebalance的策略：range、round-robin、sticky。 Kafka提供了消费者客户端参数partition.assignment.strategy来设置消费者与订阅主题之间的分区分配策略。</p>
+
+<p>默认情况为range分配策略，假设一个主题有10个分区(0-9)，现在有三个consumer消费：</p>
+
+<p>range策略：按照分区序号排序，假设 n＝分区数／消费者数量=3，m＝分区数%消费者数量 = 1，那么前m个消费者每个分配n+1个分区，后面的（消费者数量－m）个消费者每个分配n个分区。比如分区0-3给一个consumer，分区4-6给一个consumer，分区7-9给一个consumer。
+round-robin策略：轮询分配，比如分区0、3、6、9给一个consumer，分区1、4、7给一个consumer，分区2、5、8给一个consumer
+sticky策略：在rebalance的时候，需要保证如下两个原则。</p>
+
+<p>分区的分配要尽可能均匀。
+分区的分配尽可能与上次分配的保持相同。
+sticky策略当两者发生冲突时，第一个目标优先于第二个目标。
+这样可以最大程度维持原来的分区分配的策略。比如对于第一种range情况的分配，如果第三个consumer挂了，那么重新用sticky策略分配的结果如下：</p>
+
+<p>consumer1除了原有的0~3，会再分配一个7
+consumer2除了原有的4~6，会再分配8和9</p>
+
+<p>https://segmentfault.com/a/1190000039972124
+https://support.huaweicloud.com/devg-kafka/kafka-go.html</p>
+
+:ET

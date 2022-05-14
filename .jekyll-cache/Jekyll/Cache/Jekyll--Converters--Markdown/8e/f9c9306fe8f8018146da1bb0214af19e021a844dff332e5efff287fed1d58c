@@ -1,0 +1,256 @@
+I"+<p>https://www.cnblogs.com/f-ck-need-u/p/10035768.html</p>
+
+<p>首先看Template结构：
+type Template struct {
+	name string
+	*parse.Tree
+	*common
+	leftDelim  string
+	rightDelim string
+}
+name是这个Template的名称，Tree是解析树，common是另一个结构，稍后解释。leftDelim和rightDelim是左右两边的分隔符，默认为{{和}}。
+这里主要关注name和common两个字段，name字段没什么解释的。common是一个结构：</p>
+
+<p>type common struct {
+	tmpl   map[string]*Template // Map from name to defined templates.
+	option option
+	muFuncs    sync.RWMutex // protects parseFuncs and execFuncs
+	parseFuncs FuncMap
+	execFuncs  map[string]reflect.Value
+}
+这个结构的第一个字段tmpl是一个Template的map结构，key为template的name，value为Template。也就是说，一个common结构中可以包含多个Template，而Template结构中又指向了一个common结构。所以，common是一个模板组，在这个模板组中的(tmpl字段)所有Template都共享一个common(模板组)，模板组中包含parseFuncs和execFuncs。
+<!-- more -->
+New()函数和init()方法
+使用template.New()函数可以创建一个空的、无解析数据的模板，同时还会创建一个common，也就是模板组。</p>
+
+<p>func New(name string) <em>Template {
+	t := &amp;Template{
+		name: name,
+	}
+	t.init()
+	return t
+}
+其中t为模板的关联名称，name为模板的名称，t.init()表示如果模板对象t还没有common结构，就构造一个新的common组：
+func (t *Template) init() {
+	if t.common == nil {
+		c := new(common)
+		c.tmpl = make(map[string]</em>Template)
+		c.parseFuncs = make(FuncMap)
+		c.execFuncs = make(map[string]reflect.Value)
+		t.common = c
+	}
+}
+也就是说，template.New()函数不仅创建了一个模板，还创建了一个空的common结构(模板组)。需要注意，新创建的common是空的，只有进行模板解析(Parse()，ParseFiles()等操作)之后，才会将模板添加到common的tmpl字段(map结构)中。</p>
+
+<p>所以，下面的代码：</p>
+
+<p>tmpl := template.New(“mytmpl1”)
+执行完后将生成如下结构，其中tmpl为模板关联名称，mytmpl1为模板名称。</p>
+
+<p>在template包中，很多涉及到操作Template的函数、方法，都会调用init()方法保证返回的Template都有一个有效的common结构。当然，因为init()方法中进行了判断，对于已存在common的模板，不会新建common结构。</p>
+
+<p>假设现在执行了Parse()方法，将会把模板name添加到common tmpl字段的map结构中，其中模板name为map的key，模板为map的value。</p>
+
+<p>New()方法
+除了template.New()函数，还有一个Template.New()方法：
+// New allocates a new, undefined template associated with the given one and with the same
+// delimiters. The association, which is transitive, allows one template to
+// invoke another with a {{template}} action.
+func (t *Template) New(name string) *Template {
+	t.init()
+	nt := &amp;Template{
+		name:       name,
+		common:     t.common,
+		leftDelim:  t.leftDelim,
+		rightDelim: t.rightDelim,
+	}
+	return nt
+}</p>
+
+<p>首先t.init()保证有一个有效的common结构，然后构造一个新的Template对象nt，这个nt除了name和解析树parse.Tree字段之外，其它所有内容都和t完全一致。换句话说，nt和t共享了common。</p>
+
+<p>也就是说，New()方法使得名为name的nt模板对象加入到了关联组中。更通俗一点，通过调用t.New()方法，可以创建一个新的名为name的模板对象，并将此对象加入到t模板组中。</p>
+
+<p>这和New()函数的作用基本是一致的，只不过New()函数是构建新的模板对象并构建一个新的common结构，而New()方法则是构建一个新的模板对象，并加入到已有的common结构中。</p>
+
+<p>只是还是要说明，因为New()出来的新对象在执行解析之前(如Parse())，它们暂时都还不会加入到common组中，在New()出来之后，仅仅只是让它指向已有的一个common结构。</p>
+
+<p>Parse(string)方法用于解析给定的文本内容string。
+当创建了一个模板对象后，会有一个与之关联的common(如果不存在，template包中的各种函数、方法都会因为调用init()方法而保证common的存在)。只有在Parse()之后，才会将相关的template name放进common中，表示这个模板已经可用了，或者称为已经定义了(defined)，可用被Execute()或ExecuteTemplate()，也表示可用使用Lookup()和DefinedTemplates()来检索模板。另外，调用了Parse()解析后，会将给定的FuncMap中的函数添加到common的FuncMap中，只有添加到common的函数，才可以在模板中使用。</p>
+
+<p>Parse()方法是解析字符串的，且只解析New()出来的模板对象。如果想要解析文件中的内容，见后文ParseFiles()、ParseGlob()。</p>
+
+<p>Lookup()、DefinedTemplates()和Templates()方法
+这三个方法都用于检索已经定义的模板，Lookup()根据template name来检索并返回对应的template，DefinedTemplates()则是返回所有已定义的templates。Templates()和DefinedTemplates()类似，但是它返回的是[]*Template，也就是已定义的template的slice。</p>
+
+<p>前面多次说过，只有在解析之后，模板才加入到common结构中，才算是已经定义，才能被检索或执行。</p>
+
+<p>当检索不存在的templates时，Lookup()将返回nil。当common中没有模板，DefinedTemplates()将返回空字符串”“，Templates()将返回空的slice。</p>
+
+<p>Execute()和ExecuteTemplate()
+这两个方法都可以用来应用已经解析好的模板，应用表示对需要评估的数据进行操作，并和无需评估数据进行合并，然后输出到io.Writer中：
+func (t *Template) Execute(wr io.Writer, data interface{}) error
+func (t *Template) ExecuteTemplate(wr io.Writer, name string, data interface{}) error
+两者的区别在于Execute()是应用整个common中已定义的模板对象，而ExecuteTemplate()可以选择common中某个已定义的模板进行应用。</p>
+
+<p>FuncMap和Funcs()
+template内置了一系列函数，但这些函数毕竟有限，可能无法满足特殊的需求。template允许我们定义自己的函数，添加到common中，然后就可以在待解析的内容中像使用内置函数一样使用自定义的函数。</p>
+
+<p>自定义函数的优先级高于内置的函数优先级，即先检索自定义函数，再检索内置函数。也就是说，如果自定义函数的函数名和内置函数名相同，则内置函数将失效。</p>
+
+<p>https://www.cnblogs.com/f-ck-need-u/p/10035768.html</p>
+
+<p>https://www.cnblogs.com/wanghui-garcia/p/10385062.html</p>
+
+<p>https://my.oschina.net/achun/blog/131558</p>
+
+<p>https://bigpigeon.org/post/go-text-template/</p>
+
+<p>parse.Parse 函数把文本解析成map[string]*parse.Tree的树map对象,然后把它append到当前模板的t.temp中</p>
+
+<p>func (t <em>Tree) Parse(text, leftDelim, rightDelim string, treeSet map[string]</em>Tree, funcs …map[string]interface{}) (tree *Tree, err error) {
+	defer t.recover(&amp;err)
+	t.ParseName = t.Name
+	t.startParse(funcs, lex(t.Name, text, leftDelim, rightDelim), treeSet)
+	t.text = text
+	t.parse()
+	t.add()
+	t.stopParse()
+	return t, nil
+}</p>
+
+<p>// lex creates a new scanner for the input string.
+func lex(name, input, left, right string) *lexer {
+	if left == “” {
+		left = leftDelim
+	}
+	if right == “” {
+		right = rightDelim
+	}
+	l := &amp;lexer{
+		name:       name,
+		input:      input,
+		leftDelim:  left,
+		rightDelim: right,
+		items:      make(chan item),
+		line:       1,
+	}
+	go l.run()
+	return l
+}</p>
+
+<p>lex就是词法解析器，它不断的读取文本中的关键字，传给Tree.parse来解析</p>
+
+<p>Tree.startParse并不是真的开始解析，它只是初始化Tree的词法解析器等字段</p>
+
+<p>Tree.parse会读取从lex中解析的关键词，构建成不同的节点，保存到树中</p>
+
+<p>func lex(name, input, left, right string) *lexer {
+	if left == “” {
+		left = leftDelim
+	}
+	if right == “” {
+		right = rightDelim
+	}
+	l := &amp;lexer{
+		name:       name,
+		input:      input,
+		leftDelim:  left,
+		rightDelim: right,
+		items:      make(chan item),
+		line:       1,
+	}
+	go l.run()
+	return l
+}</p>
+
+<p>// run runs the state machine for the lexer.
+func (l *lexer) run() {
+	for state := lexText; state != nil; {
+		state = state(l)
+	}
+	close(l.items)
+}</p>
+
+<p>// lexText scans until an opening action delimiter, “{{”.
+func lexText(l *lexer) stateFn {
+	l.width = 0
+	if x := strings.Index(l.input[l.pos:], l.leftDelim); x &gt;= 0 {
+		ldn := Pos(len(l.leftDelim))
+		l.pos += Pos(x)
+		trimLength := Pos(0)
+		if strings.HasPrefix(l.input[l.pos+ldn:], leftTrimMarker) {
+			trimLength = rightTrimLength(l.input[l.start:l.pos])
+		}
+		l.pos -= trimLength
+		if l.pos &gt; l.start {
+			l.emit(itemText)
+		}
+		l.pos += trimLength
+		l.ignore()
+		return lexLeftDelim
+	} else {
+		l.pos = Pos(len(l.input))
+	}
+	// Correctly reached EOF.
+	if l.pos &gt; l.start {
+		l.emit(itemText)
+	}
+	l.emit(itemEOF)
+	return nil
+}
+lex函数通过go l.run异步执行单词解析，并通过items chan传给外面</p>
+
+<p>lexer.Run通过不断执行 stateFn直到它返回一个空值</p>
+
+<p>第一个被执行的stateFn是lexText，它负责扫描遇到 {{符号之前的所有字符，也就是模板语法之外的文本</p>
+
+<p>l.emit就是往 l.items发送一个 item，我们看看l.emit是怎么样的</p>
+
+<p>// emit passes an item back to the client.
+func (l <em>lexer) emit(t itemType) {
+	l.items &lt;- item{t, l.start, l.input[l.start:l.pos], l.line}
+	// Some items contain text internally. If so, count their newlines.
+	switch t {
+	case itemText, itemRawString, itemLeftDelim, itemRightDelim:
+		l.line += strings.Count(l.input[l.start:l.pos], “\n”)
+	}
+	l.start = l.pos
+}
+其中 l.input[l.start:l.pos] 表示这次分析的 “词” 对应的位置({{,/</em>,:= 等等也是属于词 )</p>
+
+<p>// Walk functions step through the major pieces of the template structure,
+// generating output as they go.
+func (s *state) walk(dot reflect.Value, node parse.Node) {
+	s.at(node)
+	switch node := node.(type) {
+	case *parse.ActionNode:
+		// Do not pop variables so they persist until next end.
+		// Also, if the action declares variables, don’t print the result.
+		val := s.evalPipeline(dot, node.Pipe)
+		if len(node.Pipe.Decl) == 0 {
+			s.printValue(node, val)
+		}
+	case *parse.IfNode:
+		s.walkIfOrWith(parse.NodeIf, dot, node.Pipe, node.List, node.ElseList)
+	case *parse.ListNode:
+		for _, node := range node.Nodes {
+			s.walk(dot, node)
+		}
+	case *parse.RangeNode:
+		s.walkRange(dot, node)
+	case *parse.TemplateNode:
+		s.walkTemplate(dot, node)
+	case *parse.TextNode:
+		if _, err := s.wr.Write(node.Text); err != nil {
+			s.writeError(err)
+		}
+	case *parse.WithNode:
+		s.walkIfOrWith(parse.NodeWith, dot, node.Pipe, node.List, node.ElseList)
+	default:
+		s.errorf(“unknown node: %s”, node)
+	}
+}</p>
+
+<p>https://github.com/Masterminds/sprig</p>
+:ET

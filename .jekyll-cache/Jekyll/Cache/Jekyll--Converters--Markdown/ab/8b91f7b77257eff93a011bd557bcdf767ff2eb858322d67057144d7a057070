@@ -1,0 +1,343 @@
+I"�6<p>https://segmentfault.com/a/1190000023691973</p>
+
+<p>https://mp.weixin.qq.com/s/KPrzPP797efFUKOTTfY1Ow</p>
+
+<p>https://mp.weixin.qq.com/s/LqV7ODo7QCRykcFSRMRRgA</p>
+
+<p>其实ioutil最好理解，当文件较小时，ioutil使用ReadAll函数将文件中所有内容直接读入内存，只进行了一次io操作，但是os和bufio都是进行了多次读取，才将文件处理完，所以ioutil肯定要快于os和bufio的。
+但是随着文件的增大，达到接近GB级别时，ioutil直接读入内存的弊端就显现出来，要将GB级别的文件内容全部读入内存，也就意味着要开辟一块GB大小的内存用来存放文件数据，这对内存的消耗是非常大的，因此效率就慢了下来。
+如果文件继续增大，达到3GB甚至以上，ioutil这种读取方式就完全无能为力了。（一个单独的进程空间为4GB，真正存放数据的堆区和栈区更是远远小于4GB）。
+而os为什么在面对大文件时，效率会低于bufio？通过查看bufio的NewReader源码不难发现，在NewReader里，默认为我们提供了一个大小为4096的缓冲区，所以系统调用会每次先读取4096字节到缓冲区，然后rd.Read会从缓冲区去读取。</p>
+
+<!-- more -->
+<p>Go语言在进行文件操作的时候，可以有多种方法。最常见的比如直接对文件本身进行Read和Write； 除此之外，还可以使用bufio库的流式处理以及分片式处理；如果文件较小，使用ioutil也不失为一种方法。</p>
+
+<p>面对这么多的文件处理的方式，那么初学者可能就会有困惑：我到底该用那种？它们之间有什么区别？笔者试着从文件读取来对go语言的几种文件处理方式进行分析。</p>
+
+<p>os.File、bufio、ioutil比较
+效率测试
+文件的读取效率是所有开发者都会关心的话题，尤其是当文件特别大的时候。为了尽可能的展示这三者对文件读取的性能，我准备了三个文件，分别为small.txt，midium.txt、large.txt，分别对应KB级别、MB级别和GB级别。
+image.png</p>
+
+<p>这三个文件大小分别为4KB、21MB、1GB。其中内容是比较常规的json格式的文本。
+测试代码如下:</p>
+
+<p>//使用File自带的Read
+func read1(filename string) int {
+    fi, err := os.Open(filename)
+    if err != nil {
+        panic(err)
+    }
+    defer fi.Close()
+    buf := make([]byte, 4096)
+    var nbytes int
+    for {
+        n, err := fi.Read(buf)
+        if err != nil &amp;&amp; err != io.EOF {
+            panic(err)
+        }
+        if n == 0 {
+            break
+        }
+        nbytes += n</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>}
+return nbytes } read1函数使用的是os库对文件进行直接操作，为了确定确实都到了文件内容，并将读到的大小字节数返回。
+</code></pre></div></div>
+
+<p>//使用bufio
+func read2(filename string) int {
+    fi, err := os.Open(filename)
+    if err != nil {
+        panic(err)
+    }
+    defer fi.Close()
+    buf := make([]byte, 4096)
+    var nbytes int
+    rd := bufio.NewReader(fi)
+    for {
+        n, err := rd.Read(buf)
+        if err != nil &amp;&amp; err != io.EOF {
+            panic(err)
+        }
+        if n == 0 {
+            break
+        }
+        nbytes += n
+    }
+    return nbytes
+}
+read2函数使用的是bufio库，操作NewReader对文件进行流式处理，和前面一样，为了确定确实都到了文件内容，并将读到的大小字节数返回。</p>
+
+<p>//使用ioutil
+func read3(filename string) int {
+    fi, err := os.Open(filename)
+    if err != nil {
+        panic(err)
+    }
+    defer fi.Close()
+    fd, err := ioutil.ReadAll(fi)
+    nbytes := len(fd)
+    return nbytes
+}
+read3函数是使用ioutil库进行文件读取，这种方式比较暴力，直接将文件内容一次性全部读到内存中，然后对内存中的文件内容进行相关的操作。
+我们使用如下的测试代码进行测试：</p>
+
+<p>func testfile1(filename string) {
+    fmt.Printf(“============test1 %s ===========\n”, filename)
+    start := time.Now()
+    size1 := read1(filename)
+    t1 := time.Now()
+    fmt.Printf(“Read 1 cost: %v, size: %d\n”, t1.Sub(start), size1)
+    size2 := read2(filename)
+    t2 := time.Now()
+    fmt.Printf(“Read 2 cost: %v, size: %d\n”, t2.Sub(t1), size2)
+    size3 := read3(filename)
+    t3 := time.Now()
+    fmt.Printf(“Read 3 cost: %v, size: %d\n”, t3.Sub(t2), size3)
+}
+在main函数中调用如下：</p>
+
+<p>func main() {
+    testfile1(“small.txt”)
+    testfile1(“midium.txt”)
+    testfile1(“large.txt”)
+    // testfile2(“small.txt”)
+    // testfile2(“midium.txt”)
+    // testfile2(“large.txt”)
+}
+测试结果如下所示：
+image.png</p>
+
+<p>从以上结果可知：</p>
+
+<p>当文件较小（KB级别）时，ioutil &gt; bufio &gt; os。
+当文件大小比较常规（MB级别）时，三者差别不大，但bufio又是已经显现出来。
+当文件较大（GB级别）时，bufio &gt; os &gt; ioutil。
+原因分析
+为什么会出现上面的不同结果？
+其实ioutil最好理解，当文件较小时，ioutil使用ReadAll函数将文件中所有内容直接读入内存，只进行了一次io操作，但是os和bufio都是进行了多次读取，才将文件处理完，所以ioutil肯定要快于os和bufio的。
+但是随着文件的增大，达到接近GB级别时，ioutil直接读入内存的弊端就显现出来，要将GB级别的文件内容全部读入内存，也就意味着要开辟一块GB大小的内存用来存放文件数据，这对内存的消耗是非常大的，因此效率就慢了下来。
+如果文件继续增大，达到3GB甚至以上，ioutil这种读取方式就完全无能为力了。（一个单独的进程空间为4GB，真正存放数据的堆区和栈区更是远远小于4GB）。
+而os为什么在面对大文件时，效率会低于bufio？通过查看bufio的NewReader源码不难发现，在NewReader里，默认为我们提供了一个大小为4096的缓冲区，所以系统调用会每次先读取4096字节到缓冲区，然后rd.Read会从缓冲区去读取。</p>
+
+<p>const (
+    defaultBufSize = 4096
+)</p>
+
+<p>func NewReader(rd io.Reader) *Reader {
+    return NewReaderSize(rd, defaultBufSize)
+}</p>
+
+<p>func NewReaderSize(rd io.Reader, size int) <em>Reader {
+    // Is it already a Reader?
+    b, ok := rd.(</em>Reader)
+    if ok &amp;&amp; len(b.buf) &gt;= size {
+        return b
+    }
+    if size &lt; minReadBufferSize {
+        size = minReadBufferSize
+    }
+    r := new(Reader)
+    r.reset(make([]byte, size), rd)
+    return r
+}
+而os因为少了这一层缓冲区，每次读取，都会执行系统调用，因此内核频繁的在用户态和内核态之间切换，而这种切换，也是需要消耗的，故而会慢于bufio的读取方式。
+笔者翻阅网上资料，关于缓冲，有内核中的缓冲和进程中的缓冲两种，其中，内核中的缓冲是内核提供的，即系统对磁盘提供一个缓冲区，不管有没有提供进程中的缓冲，内核缓冲都是存在的。
+而进程中的缓冲是对输入输出流做了一定的改进，提供的一种流缓冲，它在读写操作发生时，先将数据存入流缓冲中，只有当流缓冲区满了或者刷新（如调用flush函数）时，才将数据取出，送往内核缓冲区，它起到了一定的保护内核的作用。
+因此，我们不难发现，os是典型的内核中的缓冲，而bufio和ioutil都属于进程中的缓冲。</p>
+
+<p>总结
+当读取小文件时，使用ioutil效率明显优于os和bufio，但如果是大文件，bufio读取会更快。</p>
+
+<p>读取一行数据
+前面简要分析了go语言三种不同读取文件方式之间的区别。但实际的开发中，我们对文件的读取往往是以行为单位的，即每次读取一行进行处理。
+go语言并没有像C语言一样给我们提供好了类似于fgets这样的函数可以正好读取一行内容，因此，需要自己去实现。
+从前面的对比分析可以知道，无论是处理大文件还是小文件，bufio始终是最为平滑和高效的，因此我们考虑使用bufio库进行处理。
+翻阅bufio库的源码，发现可以使用如下几种方式进行读取一行文件的处理：</p>
+
+<p>ReadBytes
+ReadString
+ReadSlice
+ReadLine
+效率测试
+在讨论这四种读取一行文件操作的函数之前，仍然做一下效率测试。
+测试代码如下：</p>
+
+<p>func readline1(filename string) {
+    fi, err := os.Open(filename)
+    if err != nil {
+        panic(err)
+    }
+    defer fi.Close()
+    rd := bufio.NewReader(fi)
+    for {
+        _, err := rd.ReadBytes(‘\n’)
+        if err != nil || err == io.EOF {
+            break
+        }
+    }
+}</p>
+
+<p>func readline2(filename string) {
+    fi, err := os.Open(filename)
+    if err != nil {
+        panic(err)
+    }
+    defer fi.Close()
+    rd := bufio.NewReader(fi)
+    for {
+        _, err := rd.ReadString(‘\n’)
+        if err != nil || err == io.EOF {
+            break
+        }
+    }
+}
+func readline3(filename string) {
+    fi, err := os.Open(filename)
+    if err != nil {
+        panic(err)
+    }
+    defer fi.Close()
+    rd := bufio.NewReader(fi)
+    for {
+        _, err := rd.ReadSlice(‘\n’)
+        if err != nil || err == io.EOF {
+            break
+        }
+    }
+}
+func readline4(filename string) {
+    fi, err := os.Open(filename)
+    if err != nil {
+        panic(err)
+    }
+    defer fi.Close()
+    rd := bufio.NewReader(fi)
+    for {
+        _, _, err := rd.ReadLine()
+        if err != nil || err == io.EOF {
+            break
+        }
+    }
+}
+可以看到，这四种操作方式，无论是函数调用，还是函数返回值的处理，其实都是大同小异的。但通过测试效率，则可以看出它们之间的区别。
+我们使用下面的测试代码：</p>
+
+<p>func testfile2(filename string) {
+    fmt.Printf(“============test2 %s ===========\n”, filename)
+    start := time.Now()
+    readline1(filename)
+    t1 := time.Now()
+    fmt.Printf(“Readline 1 cost: %v\n”, t1.Sub(start))
+    readline2(filename)
+    t2 := time.Now()
+    fmt.Printf(“Readline 2 cost: %v\n”, t2.Sub(t1))
+    readline3(filename)
+    t3 := time.Now()
+    fmt.Printf(“Readline 3 cost: %v\n”, t3.Sub(t2))
+    readline4(filename)
+    t4 := time.Now()
+    fmt.Printf(“Readline 4 cost: %v\n”, t4.Sub(t3))
+}
+在main函数中调用如下：</p>
+
+<p>func main() {
+    // testfile1(“small.txt”)
+    // testfile1(“midium.txt”)
+    // testfile1(“large.txt”)
+    testfile2(“small.txt”)
+    testfile2(“midium.txt”)
+    testfile2(“large.txt”)
+}
+运行结果如下所示：
+image.png</p>
+
+<p>通过现象，除了small.txt之外，大致可以分为两组：</p>
+
+<p>ReadBytes对小文件处理效率最差
+在处理大文件时，ReadLine和ReadSlice效率相近，要明显快于ReadString和ReadBytes。
+原因分析
+为什么会出现上面的现象，不防从源码层面进行分析。
+通过阅读源码，我们发现这四个函数之间存在这样一个关系：</p>
+
+<p>ReadLine &lt;- (调用) ReadSlice
+ReadString &lt;- (调用)ReadBytes&lt;-(调用)ReadSlice
+既然如此，那为什么在处理大文件时，ReadLine效率要明显高于ReadBytes呢？</p>
+
+<p>首先，我们要知道，ReadSlice是切片式读取，即根据分隔符去进行切片。
+通过源码发下，ReadLine只是在切片读取的基础上，对换行符\n和\r\n做了一些处理：</p>
+
+<p>func (b *Reader) ReadLine() (line []byte, isPrefix bool, err error) {
+    line, err = b.ReadSlice(‘\n’)
+    if err == ErrBufferFull {
+        // Handle the case where “\r\n” straddles the buffer.
+        if len(line) &gt; 0 &amp;&amp; line[len(line)-1] == ‘\r’ {
+            // Put the ‘\r’ back on buf and drop it from line.
+            // Let the next call to ReadLine check for “\r\n”.
+            if b.r == 0 {
+                // should be unreachable
+                panic(“bufio: tried to rewind past start of buffer”)
+            }
+            b.r–
+            line = line[:len(line)-1]
+        }
+        return line, true, nil
+    }</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>if len(line) == 0 {
+    if err != nil {
+        line = nil
+    }
+    return
+}
+err = nil
+
+if line[len(line)-1] == '\n' {
+    drop := 1
+    if len(line) &gt; 1 &amp;&amp; line[len(line)-2] == '\r' {
+        drop = 2
+    }
+    line = line[:len(line)-drop]
+}
+return } 而ReadBytes则是通过append先将读取的内容暂存到full数组中，最后再copy出来，append和copy都是要消耗内存和io的，因此效率自然就慢了。其源码如下所示：
+</code></pre></div></div>
+
+<p>func (b *Reader) ReadBytes(delim byte) ([]byte, error) {
+    // Use ReadSlice to look for array,
+    // accumulating full buffers.
+    var frag []byte
+    var full [][]byte
+    var err error
+    n := 0
+    for {
+        var e error
+        frag, e = b.ReadSlice(delim)
+        if e == nil { // got final fragment
+            break
+        }
+        if e != ErrBufferFull { // unexpected error
+            err = e
+            break
+        }</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    // Make a copy of the buffer.
+    buf := make([]byte, len(frag))
+    copy(buf, frag)
+    full = append(full, buf)
+    n += len(buf)
+}
+
+n += len(frag)
+
+// Allocate new buffer to hold the full pieces and the fragment.
+buf := make([]byte, n)
+n = 0
+// Copy full pieces and fragment in.
+for i := range full {
+    n += copy(buf[n:], full[i])
+}
+copy(buf[n:], frag)
+return buf, err } 总结 读取文件中一行内容时，ReadSlice和ReadLine性能优于ReadBytes和ReadString，但由于ReadLine对换行的处理更加全面（兼容\n和\r\n换行），因此，实际开发过程中，建议使用ReadLine函数。
+</code></pre></div></div>
+:ET

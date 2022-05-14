@@ -1,0 +1,116 @@
+---
+title: Cmd.start, Cmd.Wait
+layout: post
+category: golang
+author: 夏泽民
+---
+在每个进程退出的时候,内核释放该进程所有的资源,包括打开的文件,占用的内存等。 但是仍然为其保留一定的信息(包括进程号the process ID,退出状态the termination status of the process,运行时间the amount of CPU time taken by the process等)。直到父进程通过wait / waitpid来取时才释放。
+<!-- more -->
+package main
+
+import (
+    "fmt"
+    "log"
+    "os/exec"
+    "encoding/json"
+)
+
+func main() {
+
+    cmd := exec.Command("echo", "-n", `{"Name": "Bob", "Age": 32}`)
+    stdout, err := cmd.StdoutPipe()
+    if err != nil {
+        log.Fatal(err)
+    }
+    if err := cmd.Start(); err != nil {
+        log.Fatal(err)
+    }
+    var person struct {
+        Name string
+        Age  int
+    }
+    if err := json.NewDecoder(stdout).Decode(&person); err != nil {
+        log.Fatal(err)
+    }
+    if err := cmd.Wait(); err != nil {
+        log.Fatal(err)
+    }
+    fmt.Printf("%s is %d years old\n", person.Name, person.Age)
+
+}
+输出结果：
+Bob is 32 years old
+分析：
+cmd.Start 与 cmd.Wait 必须一起使用。
+cmd.Start 不用等命令执行完成，就结束
+cmd.Wait 等待命令结束
+
+
+GO exec.command.Wait 执行后台程序,在重定向输出时卡住
+在GO上发现以下现象
+
+c := exec.Command("sh", "-c", "sleep 100 &")
+var b bytes.Buffer
+c.Stdout = &b
+
+if e := c.Start(); nil != e {
+    fmt.Printf("ERROR: %v\n", e)
+}
+if e := c.Wait(); nil != e {
+    fmt.Printf("ERROR: %v\n", e)
+}
+这个代码会一直等到sleep 100完成后才退出, 与常识不符.
+
+但去掉Stdout重定向后, 代码就不会等待卡住
+
+c := exec.Command("sh", "-c", "sleep 100 &")
+if e := c.Start(); nil != e {
+    fmt.Printf("ERROR: %v\n", e)
+}
+if e := c.Wait(); nil != e {
+    fmt.Printf("ERROR: %v\n", e)
+}
+在运行时打出stacktrace, 再翻翻GO的源代码, 发现GO卡在以下代码
+
+func (c *Cmd) Wait() error {
+    ...
+    state, err := c.Process.Wait()
+    ...
+    var copyError error
+    for _ = range c.goroutine {
+        if err := <-c.errch; err != nil && copyError == nil {
+            copyError = err
+        }
+    }
+    ...
+}
+可以看到Wait()在等待Process结束后, 还等待了所有c.goroutine的c.errch信号. 参看以下代码:
+
+func (c *Cmd) stdout() (f *os.File, err error) {
+    return c.writerDescriptor(c.Stdout)
+}
+
+func (c *Cmd) writerDescriptor(w io.Writer) (f *os.File, err error) {
+    ...
+    c.goroutine = append(c.goroutine, func() error {
+        _, err := io.Copy(w, pr)
+        return err
+    })
+    ...
+}
+重定向stdout时, 会添加一个监听任务到goroutine (stderr也是同理)
+
+结论是由于将sleep 100放到后台执行, 其进程stdout并没有关闭, io.Copy()不会返回, 所以会卡住
+
+临时的解决方法就是将后台进程的stdout和stderr重定向出去, 以下代码不会卡住:
+
+c := exec.Command("sh", "-c", "sleep 100 >/dev/null 2>/dev/null &")
+var b bytes.Buffer
+c.Stdout = &b
+
+if e := c.Start(); nil != e {
+    fmt.Printf("ERROR: %v\n", e)
+}
+if e := c.Wait(); nil != e {
+    fmt.Printf("ERROR: %v\n", e)
+}

@@ -1,0 +1,272 @@
+---
+title: Go写的程序需不需要glibc 
+layout: post
+category: golang
+author: 夏泽民
+---
+go build编译时，CGO_ENABLED=1的，自动添加了一些动态库链接，所以编译时吧CGO_ENABLED=0就OK了
+go 要求的编译工具gcc libc6-dev 一般系统都自带了如果没有自行安装。
+<!-- more -->
+Golang 程序如此大的一个原因是它全是静态链接的。如果能用到动态链接，可以让各个 Golang 程序共用一个标准库，大大减少 RAM 和 ROM 的使用
+我尝试用 OpenWrt buildroot 编译带 Golang 支持的 GCC，在解决几个编译错误后终于编译出 gccgo 和 libgo.so 共享标准库
+结果用 gccgo 编译 helloworld 时，在链接时找不到几个 setcontext 等符号，查了下才发现 musl libc 没有实现 ucontext……
+得，又在 GitHub 上找了个 https://github.com/kaniini/libucontext （暂时没有 MIPS），编译好后在 gccgo 加上参数 -lucontext 终于不报错了，程序大小只有 10kB
+把程序和几个共享库传到我的 ARM 上，ldd 好像没有问题
+
+编译器
+1.原生编译器 gc
+    1.1 如果使用一个有不同指令集的编译器来构建 Go 程序，就需要针对操作系统和处理器架构（32 位操作系统或 64 位操作系统）进行区别对待
+    1.2 使用非分代、无压缩和并行的方式进行编译，它的编译速度要比 gccgo 更快，产生更好的本地代码，但编译后的程序不能够使用 gcc 进行链接
+    1.3 标记（Flags） 是指可以通过命令行设置可选参数来影响编译器或链接器的构建过程或得到一个特殊的目标结果
+        1.3.1 -I 针对包的目录搜索
+        1.3.2 -d 打印声明信息
+        1.3.3 -e 不限制错误打印的个数
+        1.3.4 -f 打印栈结构
+        1.3.5 -h 发生错误时进入恐慌（panic）状态
+        1.3.6 -o 指定输出文件名
+        1.3.7 -S 打印产生的汇编代码
+        1.3.8 -V 打印编译器版本
+        1.3.9 -u 禁止使用 unsafe 包中的代码
+        1.3.10 -w 打印归类后的语法解析树
+        1.3.11 -x 打印 lex tokens
+
+2.非原生编译器 gccgo
+一款相对于 gc 而言更加传统的编译器，使用 GCC 作为后端。GCC 是一款非常流行的 GNU 编译器，它能够构建基于众多处理器架构的应用程序。编译速度相对 gc 较慢，但产生的本地代码运行要稍微快一点。它同时也提供一些与 C 语言之间的互操作性
+
+文件扩展名与包
+    1. 扩展名 .go
+    2. C 文件使用后缀名 .c，汇编文件使用后缀名 .s。所有的源代码文件都是通过包（packages）来组织。包含可执行代码的包文件在被压缩后使用扩展名 .a
+    3. Go 语言的标准库（第 9.1 节）包文件在被安装后就是使用这种格式的文件。
+    4. 注意 当你在创建目录时，文件夹名称永远不应该包含空格，而应该使用下划线 "_" 或者其它一般符号代替
+
+
+环境变量
+     1. $GOROOT 表示 Go 在你的电脑上的安装位置，它的值一般都是 $HOME/go，当然，你也可以安装在别的地方。
+     2. $GOARCH 表示目标机器的处理器架构，它的值可以是 386、amd64 或 arm。
+    3. $GOOS 表示目标机器的操作系统，它的值可以是 darwin、freebsd、linux 或 windows。
+    4. $GOBIN 表示编译器和链接器的安装位置，默认是 $GOROOT/bin，如果你使用的是 Go 1.0.3 及以后的版本，一般情况下你可以将它的值设置为空，Go 将会使用前面提到的默认值。
+    5. $GOPATH 默认采用和 $GOROOT 一样的值，但从 Go 1.1 版本开始，你必须修改为其它路径。
+        5.1 bin（可执行文件）
+        5.2 pkg（包文件）
+        5.3 src（源码文件）
+    6. $GOARM 专门针对基于 arm 架构的处理器，它的值可以是 5 或 6，默认为 6。
+    7. $GOMAXPROCS 用于设置应用程序可使用的处理器个数与核数。
+
+Golang格式化代码
+    1. gofmt –w program.go 会格式化该源文件的代码然后将格式化后的代码覆盖原始内容（如果不加参数 -w 则只会打印格式化后的结果而不重写文件）
+    2. gofmt -w *.go 会格式化并重写所有 Go 源文件
+    3. gofmt map1 会格式化并重写 map1 目录及其子目录下的所有 Go 源文件
+    4. gofmt 也可以通过在参数 -r 后面加入用双引号括起来的替换规则实现代码的简单重构，规则的格式：<原始内容> -> <替换内容>
+        4.1 例1: gofmt -r '(a) -> a' –w *.go
+        4.2例2: gofmt -r 'a[n:len(a)] -> a[n:]' –w *.go
+        4.3 例3: gofmt –r 'A.Func1(a,b) -> A.Func2(b,a)' –w *.go
+
+
+生成代码文档
+    1. go doc package获取包的文档注释，例如：go doc fmt会显示使用godoc生成的fmt包的文档注释。
+    2. go doc package/subpackage获取子包的文档注释，例如：go doc container/list。
+    3. go doc package function获取某个函数在某个包中的文档注释，例如：go doc fmt Printf会显示有关fmt.Printf()的使用说明。
+
+
+其它工具
+    1. go install 是安装Go包的工具，类似Ruby中的rubygems。主要用于安装非标准库的包文件，将源代码编译成对象文件。
+    2. go fix用于将您的Go代码从旧的发行版迁移到最新的发行版，它主要负责简单的，重复的，枯燥无味的修改工作，如果像API等复杂的函数修改，工具可以引用文件名和代码。Go开发团队一般也使用这个工具升级Go内置工具以及谷歌内部项目的代码。go fix之所以能够正常工作是因为Go在标准库就提供生成抽象语法树。该工具会尝试更新当前目录下的所有Go源文件，并在完成代码更新后在控制台输出相关的文件名。
+    3. go test 是一个轻量级的单元测试框架。
+
+什么是跨平台交叉编译
+交叉编译
+通俗地讲就是在一种平台上编译出其他几个平台能够运行的程序（通常指系统和CPU架构的不同）
+
+交叉编译通常使用在分发时，编译出多个平台可用的二进制程序，比如在Linux下编译出可以在Win下可以使用的EXE程序。
+
+本地编译
+本地编译是指当前系统所配置编译器根据当前系统配置编译出在当前系统所适用的执行程序（部分其他语言本地编译时可能会由于扩展包含的问题，无法在同平台其他机器运行）。
+
+所以如果要生成在非本机的其他平台和系统的程序，就需要用到交叉编译（交叉编译工具链）。
+
+交叉编译工具链
+ 交叉编译工具链是一个由编译器、连接器和解释器组成的综合开发环境，交叉编译工具链主要由binutils、gcc和glibc 3个部分组成。
+ 
+
+ 有时出于减小 libc 库大小的考虑，也可以用别的 c 库来代替 glibc，例如 uClibc、dietlibc 和 newlib。
+ 
+
+Golang 的跨平台交叉编译
+Go语言是编译型语言，可以将程序编译后在将其拿到其它操作系统中运行，此过程只需要在编译时增加对其它系统的支持。
+
+交叉编译依赖下面几个环境变量
+GOARCH 目标平台（编译后的目标平台）的处理器架构（386、amd64、arm）
+GOOS 目标平台（编译后的目标平台）的操作系统（darwin、freebsd、linux、windows）
+各平台的GOOS和GOARCH支持情况
+GOOS
+
+GOARCH
+
+OS version
+
+linux
+
+386 / amd64 / arm
+
+>= Linux 2.6
+
+darwin
+
+386 / amd64
+
+OS X (Snow Leopard + Lion)
+
+freebsd
+
+386 / amd64
+
+>= FreeBSD 7
+
+windows
+
+386 / amd64
+
+>= Windows 2000
+
+Golang交叉编译步骤（可跳过）
+ 首先进入$GOROOT/go/src 源码所在目录，执行如下命令创建目标平台所需的包和工具文件
+ 
+
+# 如果你想在Windows 32位系统下运行
+cd $GOROOT/src
+CGO_ENABLED=0 GOOS=windows GOARCH=386 ./make.bash
+# 如果你想在Windows 64位系统下运行
+cd $GOROOT/src
+CGO_ENABLED=0 GOOS=windows GOARCH=amd64 ./make.bash
+
+# 如果你想在Linux 32位系统下运行
+cd $GOROOT/src
+CGO_ENABLED=0 GOOS=linux GOARCH=386 ./make.bash
+# 如果你想在Linux 64位系统下运行
+cd $GOROOT/src
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 ./make.bash
+交叉编译当前项目
+# 如果你想在Windows 32位系统下运行
+CGO_ENABLED=0 GOOS=windows GOARCH=386 go build test.go
+# 如果你想在Windows 64位系统下运行
+CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build test.go
+
+# 如果你想在Linux 32位系统下运行
+CGO_ENABLED=0 GOOS=linux GOARCH=386 go build test.go
+# 如果你想在Linux 64位系统下运行
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build test.go
+上面命令中的 CGO_ENABLED = 0 表示设置CGO工具不可用； GOOS 表示程序构建环境的目标操作系统(Linux、Windows)； GOARCH 表示程序构建环境的目标计算架构(32位、64位)；
+
+现在你可以在相关目标操作系统上运行编译后的程序了。
+
+https://stackoverflow.com/questions/56797659/why-golang-uses-libc-on-linux
+What is libc:
+
+The main C library that contains the well-known POSIX functions such as printf, open, close, read, write, and so on
+
+And see:
+
+What is the role of libc(glibc) in our linux app?
+Is MSVCRT under Windows like glibc (libc) under *nix?
+http://www.etalabs.net/compare_libcs.html
+
+Go:
+For example On Linux, Go runtime uses libc when cgo is enabled.
+
+https://golang.org/doc/install/source#go14
+
+The Go toolchain is written in Go. To build it, you need a Go compiler installed. The scripts that do the initial build of the tools look for an existing Go tool chain in $GOROOT_BOOTSTRAP. If unset, the default value of GOROOT_BOOTSTRAP is $HOME/go1.4.
+
+There are many options for the bootstrap toolchain. After obtaining one, set GOROOT_BOOTSTRAP to the directory containing the unpacked tree. For example, $GOROOT_BOOTSTRAP/bin/go should be the go command binary for the bootstrap toolchain.
+
+To use a binary release as a bootstrap toolchain, see the downloads page or use any other packaged Go distribution.
+
+To build a bootstrap toolchain from source, use either the git branch release-branch.go1.4 or go1.4-bootstrap-20171003.tar.gz, which contains the Go 1.4 source code plus accumulated fixes to keep the tools running on newer operating systems. (Go 1.4 was the last distribution in which the toolchain was written in C.) After unpacking the Go 1.4 source, cd to the src subdirectory, set CGO_ENABLED=0 in the environment, and run make.bash (or, on Windows, make.bat).
+
+To cross-compile a bootstrap toolchain from source, which is necessary on systems Go 1.4 did not target (for example, linux/ppc64le), install Go on a different system and run bootstrap.bash.
+
+
+https://stackoverflow.com/questions/11372872/what-is-the-role-of-libcglibc-in-our-linux-app
+
+Is libc/glibc the standard implementation of some standard C/C++ functions like strcpy,strlen,malloc?
+Or, is it not only of the first usage as described above, but also an wrapper of Unix/Linux system calls like open,close,fctl? If so, why can't we issue syscalls directly, without libc?
+Does libc only consist of one lib (.a or .so) file, or many lib files (in this case, libc is the general name of this set of libs)? Where do these lib file(s) reside?
+What is the difference between libc and glibc?
+
+libc implements both standard C functions like strcpy() and POSIX functions (which may be system calls) like getpid(). Note that not all standard C functions are in libc - most math functions are in libm.
+
+You cannot directly make system calls in the same way that you call normal functions because calls to the kernel aren't normal function calls, so they can't be resolved by the linker. Instead, architecture-specific assembly language thunks are used to call into the kernel - you can of course write these directly in your own program too, but you don't need to because libc provides them for you.
+
+Note that in Linux it is the combination of the kernel and libc that provides the POSIX API. libc adds a decent amount of value - not every POSIX function is necessarily a system call, and for the ones that are, the kernel behaviour isn't always POSIX conforming.
+
+libc is a single library file (both .so and .a versions are available) and in most cases resides in /usr/lib. However, the glibc (GNU libc) project provides more than just libc - it also provides the libm mentioned earlier, and other core libraries like libpthread. So libc is just one of the libraries provided by glibc - and there are other alternate implementations of libc other than glibc.
+
+https://stackoverflow.com/questions/135296/is-msvcrt-under-windows-like-glibc-libc-under-nix
+
+There isn't really a "system-wide libc" in Windows.
+
+In *nix, there's generally one compiler, one linker, and with them a well-defined object file format, calling convention, and name mangling spec. This stuff usually comes with the OS. The compiler's semi-special status (plus an emphasis on portability across different *nixes) means that certain stuff can be expected to be there, and to be named and/or versioned in such a way that programs can easily find and use it.
+
+In Windows, things are more fragmented. A compiler doesn't come with the OS, so people need to get their own. Each compiler provides its own CRT, which may or may not have the same functions in it as MSVCRT. There's also no One True Spec on calling conventions or how names should appear in the libraries, so different compilers (with different ways of doing stuff) might have trouble finding functions in the library.
+
+BTW, the name should be a clue here; MSVCRT is short for "MicroSoft Visual C++ RunTime". It's not really a "system-wide" library in the same way that, say, kernel32 is -- it's just the runtime library used by MS's compilers, which they presumably used when building Windows. Other compilers could conceivably link against it, but (1) there might be licensing issues; and (2) the compilers would be tying their code to MS's -- meaning (2a) they'd no longer have any way to add to the runtime or fix bugs, short of hoping MS will fix them; and (2b) if MS decides to change what's in the RTL (which they can do at will, and probably have in each new version of VC++), or how the names appear, those other programs might break.
+
+http://www.etalabs.net/compare_libcs.html
+
+Do Go binaries built with pure Go code and the go compiler, targeting GNU/Linux, link to glibc, or do they merely use the Go stdlib?
+
+评论：
+
+justinisrael:
+You usually get a static binary unless you use something like the user or net package (?). But you can tell the Go build to use the pure Go implementation via go build -tags netgo or by setting CGO_ENABLED=0 in your env. By default you will also get a dynamic binary if you link against go packages that use cgo, and you don't explicitly static link them. 
+
+pzduniak:
+Depends on what you're trying to achieve. They will depend on it by default, but you can just use the following command to generate a static library (I usually do that with musl on Alpine, the binaries are quite small then):
+
+
+go build --ldflags '-linkmode external -extldflags "-static"'
+
+tv64738:
+Others have explained how to avoid it, here's the reasoning why glibc gets dynamically linked:
+
+
+User/group resolution, and the non-DNS aspects for host resolution, are code that only exists in the libc, and the way glibc implements those is by dynamically loading libraries based on config files. Unless you explicitly opt out (use pure-Go implementations that imitate some of the behavior), if you use either of those facilities, you will get a dynamically linked glibc.
+
+Creshal:
+Depends on the libc you use. musl libc allows fully static compilation, glibc doesn't (since it needs dynamic linking to allow nsswitch to work, a feature musl doesn't have).
+
+rangeCheck:
+No they don't depend on libc (unless they used cgo)
+
+3MuchCaffeine5Me:
+Everything has to link to glibc at some point in traditional GNU/Linux, otherwise it can't run. If you aren't, your runtime or library is.
+
+practical_lem:
+That's not true, you can write pure assembly code that has access to syscalls through int 0x80.
+
+FORGOT123456:
+seems like a comment i'd expect from u/impractical_lem , tbh
+
+3MuchCaffeine5Me:
+This is interesting to me. Could you explain how this works? I was pretty much taught glibc is the main interface programs need to run in Linux
+
+williewillus:
+Pretty much the only interface Linux the kernel exposes to user space is the system call interface, which is kept extremely stable.
+
+
+Glibc is just a (very fancy) wrapper around the system call interface that implements the functions required by the standard. Alternate implementations of these functions exist, such as musl.
+
+
+As another comment suggested, you could have C code that doesn't use libc and solely talks to the OS using assembly to invoke system calls.
+
+epiris:
+So glibc is just another library, albeit a massive one and Linux is just one of the systems it supports. I find myself digging through it every few years for some reason or another, usually to find size / alignment or just general reference for an architecture I don't have access to. Which last I counted it supported something like 45 architectures which is pretty impressive, even for a 30 year old code base.
+
+
+Thinking about it if you ever have some time to kill check it out from git://sourceware.org/git/glibc.git and head to ./sysdeps/unix/sysv/linux from there to get a view of what a fully implemented system call interface interface looks like. It makes it clear why Go only implements the bare minimum system calls it needs because it's a real pain to implement them, and Go only supports a small subset of popular architectures. It's actually not very difficult to make system calls to the Linux kernel, all of the effort comes from the nuances of architecture specific details. POSIX structure padding, alignment, endianness and specific system calls that may have a subtle divergence from POSIX due to some bug being immortalized due to importance of ABI. Maybe glibc had a bug the kernel worked around or maybe vice versa, who knows, but some times it just doesn't make sense why something is the way it is. But it got that way some how and I think it's neat, lol.
+
+
+Go actually piggybacks off all the effort of glibc, even though it doesn't need to link to it directly to run. I discovered this when I wanted some additional structures (posix signal.h) that the Go syscall package actually fires up a docker container and generates all the structures for each platform using clang, which is pretty clever. But it still can leave a good bit of manual hacking to take in a fresh posix header. This is turning into a wall of text considering you asked a simple question, sort of.
+
+
+tldr; System calls to Linux are simple while portability is not, given Go is less portable it has less crusty stuff, making it a great place to observe user<->kernel space interaction.

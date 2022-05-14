@@ -1,0 +1,123 @@
+I"�<p>1、首先添加docker官方的国内镜像
+sudo tee /etc/docker/daemon.json «-‘EOF’
+{
+  “registry-mirrors”: [“https://registry.docker-cn.co”]
+}
+EOF
+2、gcr.io镜像
+根据开源项目：</p>
+
+<p>https://github.com/anjia0532/gcr.io_mirror</p>
+
+<p>作者将gcr.io相关镜像pull下来，然后push到docker官方仓库，相关转换语法如下：</p>
+
+<p>语法
+gcr.io/namespace/image_name:image_tag</p>
+<h1 id="等价于">等价于</h1>
+<p>anjia0532/namespace.image_name:image_tag</p>
+
+<h1 id="特别的">特别的</h1>
+<p>k8s.gcr.io/{image}/{tag} &lt;==&gt; gcr.io/google-containers/{image}/{tag} &lt;==&gt; anjia0532/google-containers.{image}/{tag}
+批量转换</p>
+<h1 id="replace-gcriogoogle-containersfederation-controller-manager-arm64v131-beta1-to-real-image">replace gcr.io/google-containers/federation-controller-manager-arm64:v1.3.1-beta.1 to real image</h1>
+<h1 id="this-will-convert-gcriogoogle-containersfederation-controller-manager-arm64v131-beta1">this will convert gcr.io/google-containers/federation-controller-manager-arm64:v1.3.1-beta.1</h1>
+<h1 id="to-anjia0532google-containersfederation-controller-manager-arm64v131-beta1-and-pull-it">to anjia0532/google-containers.federation-controller-manager-arm64:v1.3.1-beta.1 and pull it</h1>
+<h1 id="k8sgcrioimagetag--gcriogoogle-containersimagetag--anjia0532google-containersimagetag">k8s.gcr.io/{image}/{tag} &lt;==&gt; gcr.io/google-containers/{image}/{tag} &lt;==&gt; anjia0532/google-containers.{image}/{tag}</h1>
+
+<p>images=$(cat img.txt)
+#or 
+#images=$(cat «EOF</p>
+<h1 id="gcriogoogle-containersfederation-controller-manager-arm64v131-beta1">gcr.io/google-containers/federation-controller-manager-arm64:v1.3.1-beta.1</h1>
+<h1 id="gcriogoogle-containersfederation-controller-manager-arm64v131-beta1-1">gcr.io/google-containers/federation-controller-manager-arm64:v1.3.1-beta.1</h1>
+<h1 id="gcriogoogle-containersfederation-controller-manager-arm64v131-beta1-2">gcr.io/google-containers/federation-controller-manager-arm64:v1.3.1-beta.1</h1>
+<p>#EOF
+#)</p>
+
+<p>eval $(echo ${images}|
+        sed ‘s/k8s.gcr.io/anjia0532\/google-containers/g;s/gcr.io/anjia0532/g;s/\//./g;s/ /\n/g;s/anjia0532./anjia0532\//g’ |
+        uniq |
+        awk ‘{print “docker pull “$1”;”}’
+       )</p>
+
+<h1 id="this-code-will-retag-all-of-anjia0532s-image-from-local--eg-anjia0532google-containersfederation-controller-manager-arm64v131-beta1">this code will retag all of anjia0532’s image from local  e.g. anjia0532/google-containers.federation-controller-manager-arm64:v1.3.1-beta.1</h1>
+<h1 id="to-gcriogoogle-containersfederation-controller-manager-arm64v131-beta1">to gcr.io/google-containers/federation-controller-manager-arm64:v1.3.1-beta.1</h1>
+<h1 id="k8sgcrioimagetag--gcriogoogle-containersimagetag--anjia0532google-containersimagetag-1">k8s.gcr.io/{image}/{tag} &lt;==&gt; gcr.io/google-containers/{image}/{tag} &lt;==&gt; anjia0532/google-containers.{image}/{tag}</h1>
+
+<p>for img in $(docker images –format “{{.Repository}}:{{.Tag}}”| grep “anjia0532”); do
+  n=$(echo ${img}| awk -F’[/.:]’ ‘{printf “gcr.io/%s”,$2}’)
+  image=$(echo ${img}| awk -F’[/.:]’ ‘{printf “/%s”,$3}’)
+  tag=$(echo ${img}| awk -F’[:]’ ‘{printf “:%s”,$2}’)
+  docker tag $img “${n}${image}${tag}”
+  [[ ${n} == “gcr.io/google-containers” ]] &amp;&amp; docker tag $img “k8s.gcr.io${image}${tag}”
+done
+3、 pull-google-container 工具脚本
+K8S的exapmle里的yaml默认是k8s.gcr.io的镜像，为了方便运行我们可以预先拉取相关镜像：</p>
+
+<p>vim pull-google.sh:</p>
+
+<p>image=$1
+  echo $1
+  img=<code class="language-plaintext highlighter-rouge">echo $image | sed 's/k8s\.gcr\.io/anjia0532\/google-containers/g;s/gcr\.io/anjia0532/g;s/\//\./g;s/ /\n/g;s/_/-/g;s/anjia0532\./anjia0532\//g' | uniq | awk '{print ""$1""}'</code>
+  echo “docker pull $img”
+  docker pull $img
+  echo  “docker tag $img $image”
+  docker tag $img $image
+~                         <br />
+然后放到/usr/local/bin</p>
+
+<p>chmod +x  pull-google.sh &amp;&amp; cp  pull-google.sh /usr/local/bin/pull-google-container 
+就可以愉快的使用pull-google-container 命令了</p>
+
+<p>pull-google-container gcr.io/google-samples/gb-frontend:v4
+gcr.io/google-samples/gb-frontend:v4
+docker pull anjia0532/google-samples.gb-frontend:v4
+v4: Pulling from anjia0532/google-samples.gb-frontend
+Digest: sha256:aaa5b327ef3b4cb705513ab674fa40df66981616950c7de4912a621f9ee03dd4
+Status: Image is up to date for anjia0532/google-samples.gb-frontend:v4
+docker tag anjia0532/google-samples.gb-frontend:v4 gcr.io/google-samples/gb-frontend:v4</p>
+<ol>
+  <li>替换已有的yaml
+除了预先拉取镜像，我们还可以将k8s.gcr.io 替换为可执行镜像
+ 为了方便替换，我们编写一个repair_yaml 脚本：</li>
+</ol>
+
+<p>vim /usr/local/bin/repair_yaml</p>
+
+<p>cp $1 “$1.bak”
+  cat $1.bak | sed ‘s/k8s.gcr.io\/(.<em>)\//anjia0532\/google-containers.\1./g;s/gcr.io\/(.</em>)\//anjia0532\/\1./g;s/google_/google-/g;’ &gt; $1
+  rm -f “$1.bak”
+保存退出，然后chmod +x /usr/local/bin/repair_yaml
+<!-- more -->
+https://cloud.tencent.com/developer/article/1353088</p>
+
+<p>借助 Travis CI 让其每天自动运行，将所有用得到的 gcr.io 下的镜像同步到了 Docker Hub 使用方法 目前对于一个 gcr.io 下的镜像，可以*直接将 k8s.gcr.io 替换为 gcrxio *用户名，然后从 Docker Hub 直接拉取
+方法二：网友同步方案（推荐，直接使用）</p>
+
+<h1 id="原始命令">原始命令</h1>
+<p>docker pull k8s.gcr.io/kubernetes-dashboard-amd64:v1.10.0</p>
+<h1 id="使用国内第三方网友同步仓库">使用国内第三方（网友）同步仓库</h1>
+<p>docker pull gcrxio/kubernetes-dashboard-amd64:v1.10.0
+docker pull anjia0532/kubernetes-dashboard-amd64:v1.10.0</p>
+
+<p>https://github.com/anjia0532/gcr.io_mirror/tree/master/k8s-minikube/nginx-ingress-controller</p>
+
+<p>https://blog.csdn.net/networken/article/details/84571373</p>
+
+<p>创建个人仓库
+我们也可以在dockerhub或阿里云创建个人仓库，把需要的最新版本镜像从google仓库push到个人仓库,一般有几下几种方法：</p>
+
+<p>1.购买云服务器</p>
+
+<p>购买1台能同时访问国外和国内网络的云服务器，例如阿里云或腾讯云香港轻量服务器。</p>
+
+<p>或者使用google cloudshell：https://console.cloud.google.com/cloudshell
+它类似一个永久免费的拥有5G存储空间的linux服务器，能够执行所有docker命令和bash命令，最重要的是它能够访问全球网络。</p>
+
+<p>2.Github镜像构建功能
+使用github的dockerfile构建功能，将镜像构建到国内仓库。
+参考：https://blog.csdn.net/networken/article/details/85215714</p>
+
+<p>https://blog.csdn.net/networken/article/details/84571373</p>
+
+<p>https://blog.csdn.net/networken/article/details/85215714</p>
+:ET

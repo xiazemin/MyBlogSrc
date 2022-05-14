@@ -1,0 +1,631 @@
+I"�d<p>https://blog.csdn.net/RA681t58CJxsgCkJ31/article/details/104471078/
+https://gocn.vip/topics/9899
+Go 提供了功能完备的标准网络库：net包，net包的实现相当之全面，http\tcp\udp 均有实现且对用户提供了简单友好的使用接口。在 Linux 系统上 Go 使用了 epoll 来实现 net 包的核心部分，本文从用户接口层入手，分析 Go 在 Linux 平台上的 epoll 使用，文中若有不当之处请指出。</p>
+
+<p>对于服务端程序而言，主要流程是 Listen-&gt;Accept-&gt;Send/Write，客户端主要流程 Connect-&gt;Send/Write，本文以这两个流程深入分析net包在 Go 中是如何实现的。
+<!-- more -->
+Listen
+监听方法是在 ListenConfig 结构中的 Listen 方法实现的 (net/dial.go)：</p>
+
+<p>func (lc *ListenConfig) Listen(ctx context.Context, network, address string) (Listener, error) {
+    addrs, err := DefaultResolver.resolveAddrList(ctx, “listen”, network, address, nil)
+    // …
+    switch la := la.(type) {
+    case *TCPAddr:
+        l, err = sl.listenTCP(ctx, la)
+    case *UnixAddr:
+        l, err = sl.listenUnix(ctx, la)
+    }</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>return l, nil } 在Listen函数实现中，两个关键流程是DefaultResolver.resolveAddrList和listenTCP。
+</code></pre></div></div>
+
+<p>DefaultResolver.resolveAddrList是根据协议名称和地址取得 Internet 协议族地址列表，由于resolveAddrList的代码比较固定，在此不做详细解释，感兴趣的童鞋可以去翻阅。</p>
+
+<p>listenTCP和listenUnix从地址列表中取得满足条件的地址进行实际监听操作, 具体根据传入的协议族来确定。接下来看看listenTCP的代码 (net/tcpsock_posix.go)：</p>
+
+<p>func (sl <em>sysListener) listenTCP(ctx context.Context, laddr *TCPAddr) (</em>TCPListener, error) {
+    fd, err := internetSocket(ctx, sl.network, laddr, nil, syscall.SOCK_STREAM, 0, “listen”, sl.ListenConfig.Control)
+    if err != nil {
+        return nil, err
+    }
+    return &amp;TCPListener{fd: fd, lc: sl.ListenConfig}, nil
+}
+创建监听 socket fd 是在 internetSocket 中进行的，而 socket fs 是通过 socket 函数创建的 (net/sock_posix.go)：</p>
+
+<p>func socket(ctx context.Context, net string, family, sotype, proto int, ipv6only bool, laddr, raddr sockaddr, ctrlFn func(string, string, syscall.RawConn) error) (fd *netFD, err error) {
+    // 调用各平台对应的socket api创建socket
+    s, err := sysSocket(family, sotype, proto)
+    if err != nil {
+        return nil, err
+    }
+    // 设置socket选项
+    if err = setDefaultSockopts(s, family, sotype, ipv6only); err != nil {
+        poll.CloseFunc(s)
+        return nil, err
+    }
+    // 创建fd
+    if fd, err = newFD(s, family, sotype, net); err != nil {
+        poll.CloseFunc(s)
+        return nil, err
+    }</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>// 监听
+if laddr != nil &amp;&amp; raddr == nil {
+    switch sotype {
+    case syscall.SOCK_STREAM, syscall.SOCK_SEQPACKET:
+        // TCP
+        if err := fd.listenStream(laddr, listenerBacklog(), ctrlFn); err != nil {
+            fd.Close()
+            return nil, err
+        }
+        return fd, nil
+    case syscall.SOCK_DGRAM:
+        // UDP
+        if err := fd.listenDatagram(laddr, ctrlFn); err != nil {
+            fd.Close()
+            return nil, err
+        }
+        return fd, nil
+    }
+}
+// 发起连接，非listen socket会走到这里来
+if err := fd.dial(ctx, laddr, raddr, ctrlFn); err != nil {
+    fd.Close()
+    return nil, err
+}
+return fd, nil } socket函数主要流程：新建 socket--&gt;设置 socket option--&gt;创建 fd--&gt;进入监听逻辑。sysSocket根据平台有不同实现，windows 实现在socket_windows.go中，linux 实现则在sock_cloexec.go中，本文重点分析在 linux 平台上的实现 (net/sock_cloexec.go):
+</code></pre></div></div>
+
+<p>func sysSocket(family, sotype, proto int) (int, error) {
+    // 系统socket函数
+    s, err := socketFunc(family, sotype|syscall.SOCK_NONBLOCK|syscall.SOCK_CLOEXEC, proto)
+    switch err {
+    case nil:
+        return s, nil
+    default:
+        return -1, os.NewSyscallError(“socket”, err)
+    case syscall.EPROTONOSUPPORT, syscall.EINVAL:
+    }</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>// linux内核版本低于2.6.27时，代码会走到这里，下面的内容主要是防止在fork时候导致描述符泄露
+// 实际上手动实现简易版SOCK_CLOEXEC
+syscall.ForkLock.RLock()
+// do other things... } socketFunc创建了 socket，通知将 socket 设置非阻塞（SOCK_NONBLOCK）以及 fork 时关闭（SOCK_CLOEXEC），这两个标志是在 linux 内核版本 2.6.27 之后添加，在此之前的版本代码将会走到syscall.ForkLock.RLock()，主要是为了防止在 fork 时导致文件描述符泄露。
+</code></pre></div></div>
+
+<p>当 socket 创建之后进入新建 fd 流程，在 Go 的包装层面，fd 均以netFD结构表示，该接口描述原始 socket 的地址信息、协议类型、协议族以及 option，netFD在整个包装结构中居于用户接口的下一层。最后进入监听逻辑，逻辑走向区分 TCP 和 UDP，而监听逻辑比较简单，即调用系统 bind 和 listen 接口 (net/sock_posix.go)：</p>
+
+<p>func (fd *netFD) listenStream(laddr sockaddr, backlog int, ctrlFn func(string, string, syscall.RawConn) error) error {
+    // …</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>if ctrlFn != nil {
+    c, err := newRawConn(fd)
+    if err != nil {
+        return err
+    }
+    if err := ctrlFn(fd.ctrlNetwork(), laddr.String(), c); err != nil {
+        return err
+    }
+}
+if err = syscall.Bind(fd.pfd.Sysfd, lsa); err != nil {
+    return os.NewSyscallError("bind", err)
+}
+if err = listenFunc(fd.pfd.Sysfd, backlog); err != nil {
+    return os.NewSyscallError("listen", err)
+}
+if err = fd.init(); err != nil {
+    return err
+}
+lsa, _ = syscall.Getsockname(fd.pfd.Sysfd)
+fd.setAddr(fd.addrFunc()(lsa), nil)
+return nil } listenStream主要做了以下几件事：
+</code></pre></div></div>
+
+<p>检查未完成连接和已完成连接两个队列是否超出系统预设。</p>
+
+<p>调用 socket bind 接口。</p>
+
+<p>调用 socket listen 接口。</p>
+
+<p>初始化 fd。</p>
+
+<p>调用 socket getsockname 接口。</p>
+
+<p>以上流程和日常写 socket 代码流程并无太大差异，唯有第 4 流程不同，第 4 流程是与底层的netpoll交互。</p>
+
+<p>Linux 平台上，系统提供了五种 IO 模型：阻塞 IO、非阻塞 IO、IO 多路复用、信号驱动 IO 和异步 IO，对应到内核层面提供的用户接口即 select、poll 和 epoll。Go net 包是基于 epoll 进行封装的，基本模型结合了 epoll 和 Go 语言的优势：epoll+goroutine，这样达到异步且高并发。</p>
+
+<p>回到源代码上，fd.init()完成网络轮询器初始化操作，开始与更底层的封装打交道，最底层的封装是 epoll 调用 (runtime/netpoll_epoll.go)：</p>
+
+<p>func netpollinit() {
+    epfd = epollcreate1(_EPOLL_CLOEXEC)
+    if epfd &gt;= 0 {
+        return
+    }
+    epfd = epollcreate(1024)
+    if epfd &gt;= 0 {
+        closeonexec(epfd)
+        return
+    }
+    println(“runtime: epollcreate failed with”, -epfd)
+    throw(“runtime: netpollinit failed”)
+}
+epollcreate创建了 epoll handle 并设置为CLOEXEC属性，此处是 epoll handle 的创建，netpollinit之后调用 (runtime/netpoll_epoll.go)：</p>
+
+<p>func netpollopen(fd uintptr, pd *pollDesc) int32 {
+    var ev epollevent
+    // 可读，可写，对端断开，边缘触发
+    ev.events = _EPOLLIN | _EPOLLOUT | _EPOLLRDHUP | _EPOLLET
+    // 存放user data，后面读写均会用到pollDesc
+    *(**pollDesc)(unsafe.Pointer(&amp;ev.data)) = pd
+    // 注册epoll事件
+    return -epollctl(epfd, _EPOLL_CTL_ADD, int32(fd), &amp;ev)
+}
+由上可见，调用epoll_ctl完成 epoll 监听事件注册，_EPOLLIN | _EPOLLOUT | _EPOLLRDHUP | _EPOLLET为所关心事件，具体含义可以查看 epoll 手册。</p>
+
+<p>Accept
+Listen成功之后返回TCPListener对象，手动调用Accept进入监听状态，最终会走到与 epoll 交互流程： TCPListener.Accept–&gt;TCPListener.accept–&gt;netFD.accept–&gt;FD.Accept</p>
+
+<p>从这里开始，进入到与pollDesc交互的地方 (internal/poll/fd_unix.go)：</p>
+
+<p>func (fd *FD) Accept() (int, syscall.Sockaddr, string, error) {
+    if err := fd.readLock(); err != nil {
+        return -1, nil, “”, err
+    }
+    defer fd.readUnlock()</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>if err := fd.pd.prepareRead(fd.isFile); err != nil {
+    return -1, nil, "", err
+}
+for {
+    s, rsa, errcall, err := accept(fd.Sysfd)
+    if err == nil {
+        return s, rsa, "", err
+    }
+    switch err {
+    case syscall.EAGAIN:
+        if fd.pd.pollable() {
+            if err = fd.pd.waitRead(fd.isFile); err == nil {
+                continue
+            }
+        }
+    case syscall.ECONNABORTED:
+        continue
+    }
+    return -1, nil, errcall, err
+} } fd.pd.prepareRead检查当前 fd 是否允许 accept，实际上是检查更底层的pollDesc是否可读。检查完毕之后，尝试调用accept获取已连接的 socket，注意此代码在 for 循环内，说明Accept是阻塞的，直到有连接进来；当遇到EAGIN和ECONNABORTED错误会重试，其他错误都抛给更上层。
+</code></pre></div></div>
+
+<p>fd.pd.waitRead阻塞等待fd是否可读，即是否有新连接进来，最终进入到runtime.poll_runtime_pollWait里 (runtime/netpoll.go)，在解释poll_runtime_pollWait代码之前，先来看看最重要的结构：</p>
+
+<p>type pollDesc struct {
+    // …
+    rg      uintptr
+    wg      uintptr
+    // …
+}</p>
+
+<p>const (
+    pdReady uintptr = 1
+    pdWait  uintptr = 2
+)
+pollDesc是与 epoll 交互最重要的结构之一，可以理解为与 epoll 之间的桥梁，其中rg和wg为状态信号量，可能的值为pdReady、pdWait、等待文件描述符可读或者可写的 goroutine 地址以及nil（0）。</p>
+
+<p>可能出现的情况：</p>
+
+<p>当值为 pdRead 时，代表网络 IO 就绪，处理完之后应该设置为 nil。</p>
+
+<p>当值为 pdWait 时，即等待被挂起（现在并未被挂起）。后面可能出现的情况是：</p>
+
+<p>goroutine 被挂起并设置为 goroutine 的地址；</p>
+
+<p>收到了 IO 通知就绪；</p>
+
+<p>超时或者被关闭设置为 nil。</p>
+
+<p>接下来看看poll_runtime_pollWait代码：</p>
+
+<p>func poll_runtime_pollWait(pd *pollDesc, mode int) int {
+    // …</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>for !netpollblock(pd, int32(mode), false) {
+    err = netpollcheckerr(pd, int32(mode))
+    if err != 0 {
+        return err
+    }
+}
+return 0 }
+</code></pre></div></div>
+
+<p>func netpollblock(pd *pollDesc, mode int32, waitio bool) bool {
+    gpp := &amp;pd.rg
+    if mode == ‘w’ {
+        gpp = &amp;pd.wg
+    }</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>for {
+    // (1)
+    old := *gpp
+    if old == pdReady {
+        *gpp = 0
+        return true
+    }
+    if old != 0 {
+        throw("runtime: double wait")
+    }
+    // (2)
+    if atomic.Casuintptr(gpp, 0, pdWait) {
+        break
+    }
+}
+ 
+ 
+// (3)
+if waitio || netpollcheckerr(pd, mode) == 0 {
+    gopark(netpollblockcommit, unsafe.Pointer(gpp), waitReasonIOWait, traceEvGoBlockNet, 5)
+}
+ 
+ 
+// (4)
+old := atomic.Xchguintptr(gpp, 0)
+if old &gt; pdWait {
+    throw("runtime: corrupted polldesc")
+}
+return old == pdReady } poll_runtime_pollWait等待 fd 可读，这里最重要的逻辑在netpollblock函数里完成（根据代码中注释序号依次解释）: 
+</code></pre></div></div>
+
+<p>(1) 根据mode获取对应的信号量地址 gpp，判断当前是否pdReady。</p>
+
+<p>(2) 这段代码的逻辑是当gpp的值如果等于 0 时，将gpp的值更替为pdWait，该操作属于原子操作且内部实现了自旋锁。</p>
+
+<p>(3) 当值为pdWait之后，防止此时可能会有其他的并发操作修改 pd 里的内容，所以需要再次检查错误状态。gopark将当前 goroutine 置于等待状态并等待下一次的调度，但gopark仍有可能因为超时或者关闭会立即返回，由于gopark涉及到 goroutine 调度，在此不做赘述。</p>
+
+<p>(4) 通过原子操作将gpp的值设置为 0，返回修改前的值并判断是否pdReady。</p>
+
+<p>至此，FD.Accept结束返回，之后的操作与前面Listen类似，创建 netFD、初始化 netFD、创建 TCPConn 对象。</p>
+
+<p>小结
+通过上面流程化的跟踪，发现netFD、FD、pollDesc在这个过程中占据非常重要的位置，小结内容将会着重分析这几个结构，目的在于解构封装层次。</p>
+
+<p>netFD
+netFD包含在conn结构中，而conn又包含在TCPConn结构中，由此可见netFD处于用户接口层下面。</p>
+
+<p>type netFD struct {
+    pfd poll.FD</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>family      int
+sotype      int
+isConnected bool
+net         string
+laddr       Addr
+raddr       Addr } netFD比较简单，只有一些基本的 socket 信息，pfd是其下一层，用户层接口的调用会进入到pfd中。
+</code></pre></div></div>
+
+<p>FD
+type FD struct {
+    // 读写锁
+    fdmu fdMutex
+    // 系统文件描述符
+    Sysfd int
+    // I/O poller.
+    pd pollDesc
+    // 用于在一次函数调用中读、写多个非连续缓冲区，这里主要是写
+    iovecs *[]syscall.Iovec
+    // 关闭文件时的信号量
+    csema uint32
+    // 如果此文件已设置为阻止模式，则为非零值
+    isBlocking uint32
+    // TCP或UDP
+    IsStream bool
+    // 读取到0字节时是否为错误，对于基于消息的基础socket而言为false
+    ZeroReadIsEOF bool
+    // 是否系统中真实文件还是socket连接
+    isFile bool
+}
+FD是 Go 中通用的文件描述符类型，net 包和 os 包用FD来表示网络连接或者文件，FD提供了用户接口层到 runtime 之间逻辑处理。此处的 pollDesc 是poll.pollDesc而非runtime.pollDesc, poll.pollDesc在internal/poll/fd_poll_runtime.go中实现了与 runtime 交互的接口。</p>
+
+<p>runtime.pollDesc
+type pollDesc struct {
+    // 存放pollDesc，全局
+    link *pollDesc</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>// lock保护pollOpen, pollSetDeadline, pollUnblock and deadlineimpl等并发操作
+// 以上操作包括了seq、rt和wt变量，fd在pollDesc生命周期内恒定，其他变量均以无锁方式
+lock    mutex
+fd      uintptr
+// 关闭标记，一般主动关闭或者超时
+closing bool
+// 是否标记事件扫描错误
+everr   bool    
+user    uint32 
+// fd被重用或者读计时器被重置
+rseq    uintptr 
+// 读信号量，值可能为pdRead、pdWait、goroutine地址或nil(0)
+rg      uintptr 
+// 读的等待过期时间
+rt      timer   
+rd      int64   
+// fd被重用或者写计时器被重置
+wseq    uintptr
+/// 写信号量，值可能为pdRead、pdWait、goroutine地址或nil(0)
+wg      uintptr
+// 写的等待过期时间
+wt      timer  
+wd      int64    } pollDesc是抽象实现，它将 epoll、kqueue、iocp 等方式抽象统一，规定了各个平台实现的接口规范，即netpoll。
+</code></pre></div></div>
+
+<p>现在我们大致清楚了 epoll 在 Go 中的封装结构：netFD将接口逻辑转发到FD，FD提供了用户接口层到 runtime 之间的逻辑处理，且FD是通用抽象逻辑，适用于文件和网络连接；poll.pollDesc抽象了与 runtime 交互的接口和逻辑，而 epoll 的逻辑则被拆分到runtime/netpoll.go和runtime/netpoll_epoll.go中，整个结构渐渐式，分工责任明确，大致层次结构如下：</p>
+
+<p>有了上面的层次结构图基础，Read和Write的流程就比较简单了，Read的调用链：conn.Read–&gt;netFD.Read–&gt;FD.Read，Write调用链类似，Read和Write的底层实现在internal/poll/fd_unix.go文件中，有兴趣可以翻阅。</p>
+
+<p>poll
+runtime/netpoll.go是 poll 的抽象，它规范 poll 层和 runtime 层之间的交互接口。</p>
+
+<p>poll_runtime_pollServerInit
+func poll_runtime_pollServerInit() {
+    netpollinit()
+    atomic.Store(&amp;netpollInited, 1)
+}
+poll 初始化，初始化网络轮询器。</p>
+
+<p>poll_runtime_isPollServerDescriptor
+判断给定的 fd 是否是当前 epoll 中使用的 fd。</p>
+
+<p>poll_runtime_pollOpen
+func poll_runtime_pollOpen(fd uintptr) (*pollDesc, int) {
+    pd := pollcache.alloc()
+    // …
+    var errno int32
+    errno = netpollopen(fd, pd)
+    return pd, int(errno)
+}
+开启网络轮询器。pollcache.alloc()从pollcache创建pollDesc，pollDesc在pollcache中以链表的方式存储。将pollDesc和 fd 绑定起来，netpollopen将在下面解释。</p>
+
+<p>poll_runtime_pollClose
+关闭某个连接，需当前连接无读写行为。</p>
+
+<p>poll_runtime_pollReset
+重置某个连接，即重置pollDesc。</p>
+
+<p>poll_runtime_pollWait
+就地等待读信号或者写信号，该函数在前一篇文章详解过。</p>
+
+<p>poll_runtime_pollSetDeadline
+设置到期时间。网络请求过程中存在很高的不确定性，大部分情况我们需要有到期时间来标记某个操作已截止。</p>
+
+<p>func poll_runtime_pollSetDeadline(pd *pollDesc, d int64, mode int) {
+    // 并发访问加锁
+    lock(&amp;pd.lock)
+    if pd.closing {
+        unlock(&amp;pd.lock)
+        return
+    }</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>rd0, wd0 := pd.rd, pd.wd
+combo0 := rd0 &gt; 0 &amp;&amp; rd0 == wd0
+
+// 计算过期时间点
+if d &gt; 0 {
+    d += nanotime()
+    if d &lt;= 0 {
+        d = 1&lt;&lt;63 - 1
+    }
+}
+// 将过期时间根据mode存到rd和wd上
+if mode == 'r' || mode == 'r'+'w' {
+    pd.rd = d
+}
+if mode == 'w' || mode == 'r'+'w' {
+    pd.wd = d
+}
+combo := pd.rd &gt; 0 &amp;&amp; pd.rd == pd.wd
+// timer回调函数
+rtf := netpollReadDeadline
+if combo {
+    rtf = netpollDeadline
+}
+// 读timer
+if pd.rt.f == nil {
+    if pd.rd &gt; 0 {
+        pd.rt.f = rtf
+        pd.rt.when = pd.rd
+        // seq的作用就是在timer到期的时候，和原pollDesc.rseq比较，
+        // 如果不同，则重用描述符或重置计时器
+        pd.rt.arg = pd
+        pd.rt.seq = pd.rseq
+        addtimer(&amp;pd.rt)
+    }
+} else if pd.rd != rd0 || combo != combo0 {
+    // 重置当前正在进行中的计时器
+    pd.rseq++
+    if pd.rd &gt; 0 {  // 修改计时器
+        modtimer(&amp;pd.rt, pd.rd, 0, rtf, pd, pd.rseq)
+    } else {    // 删除计时器
+        deltimer(&amp;pd.rt)
+        pd.rt.f = nil
+    }
+}
+// 写计时器
+// ...
+
+// 获取正在进行IO操作的读goroutine地址或写goroutine地址
+var rg, wg *g
+if pd.rd &lt; 0 || pd.wd &lt; 0 {
+    // 内存操作
+    atomic.StorepNoWB(noescape(unsafe.Pointer(&amp;wg)), nil) 
+    // 获取已被阻塞的goroutine地址
+    if pd.rd &lt; 0 {
+        rg = netpollunblock(pd, 'r', false)
+    }
+    if pd.wd &lt; 0 {
+        wg = netpollunblock(pd, 'w', false)
+    }
+}
+unlock(&amp;pd.lock)
+// 唤醒对应的goroutine
+if rg != nil {
+    netpollgoready(rg, 3)
+}
+if wg != nil {
+    netpollgoready(wg, 3)
+} } 还有另外一个类似实现接口netpolldeadlineimpl，实际上大多数情况下都是调用netpollDeadline，netpollReadDeadline，netpollWriteDeadline完成。
+</code></pre></div></div>
+
+<p>netpollready
+func netpollready(toRun *gList, pd *pollDesc, mode int32) {
+    var rg, wg *g
+    if mode == ‘r’ || mode == ‘r’+’w’ {
+        rg = netpollunblock(pd, ‘r’, true)
+    }
+    if mode == ‘w’ || mode == ‘r’+’w’ {
+        wg = netpollunblock(pd, ‘w’, true)
+    }
+    if rg != nil {
+        toRun.push(rg)
+    }
+    if wg != nil {
+        toRun.push(wg)
+    }
+}
+netpollready是 epoll 上报事件的接口，通过 mode 取到当前读写 goroutine 地址将之推送到即将执行队列。</p>
+
+<p>netpollunblock
+// ioready为false表示此次调用并非底层epoll事件上报
+func netpollunblock(pd *pollDesc, mode int32, ioready bool) *g {
+    gpp := &amp;pd.rg
+    if mode == ‘w’ {
+        gpp = &amp;pd.wg
+    }</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>for {
+    // (1)
+    old := *gpp
+    if old == pdReady {
+        return nil
+    }
+    // (2)
+    if old == 0 &amp;&amp; !ioready {
+        // Only set READY for ioready. runtime_pollWait
+        // will check for timeout/cancel before waiting.
+        return nil
+    }
+    var new uintptr
+    if ioready {
+        new = pdReady
+    }
+    // (3)
+    if atomic.Casuintptr(gpp, old, new) {
+        if old == pdReady || old == pdWait {
+            old = 0
+        }
+        return (*g)(unsafe.Pointer(old))
+    }
+} } netpollunblock尝试获取在netpollblock中被gopark的 goroutine，通过抽象数据结构g返回。 （1） old == pdReady即已唤醒，可以直接使用遂直接返回nil。 （2） 初始化状态时候，当前既没 Ready 的 goroutine 也没有 Wait 的 goroutine 也直接返回nil。 （3） 通过原子操作重置并拿到当前正在被gopark的 goroutine 地址，抽象数据结构g返回。
+</code></pre></div></div>
+
+<p>runtime-epoll
+epoll 在 runtime 中的部分在runtime/netpoll_epoll.go文件中实现。上文中涉及到两个函数：netpollinit，netpollopen，实际上是调用到了 epoll 中。</p>
+
+<p>netpollinit
+func netpollinit() {
+    epfd = epollcreate1(_EPOLL_CLOEXEC)
+    if epfd &gt;= 0 {
+        return
+    }
+    epfd = epollcreate(1024)
+    if epfd &gt;= 0 {
+        closeonexec(epfd)
+        return
+    }
+    println(“runtime: epollcreate failed with”, -epfd)
+    throw(“runtime: netpollinit failed”)
+}
+首先调用 epoll_create1 创建 epoll handle，若epoll_create1失败再调用epoll_create。</p>
+
+<p>netpollopen
+func netpollopen(fd uintptr, pd *pollDesc) int32 {
+    var ev epollevent
+    ev.events = _EPOLLIN | _EPOLLOUT | _EPOLLRDHUP | _EPOLLET
+    *(**pollDesc)(unsafe.Pointer(&amp;ev.data)) = pd
+    return -epollctl(epfd, _EPOLL_CTL_ADD, int32(fd), &amp;ev)
+}
+epoll 事件注册，注册这个 epoll 里关心的事件，并将 user data 设置为runtime.pollDesc，这也就是为什么 netpoll 系列函数均以pollDesc为参数。</p>
+
+<p>netpollclose
+func netpollclose(fd uintptr) int32 {
+    var ev epollevent
+    return -epollctl(epfd, _EPOLL_CTL_DEL, int32(fd), &amp;ev)
+}
+从 epoll 中剔除某个不再关心的 fd，应用于主动关闭或超时关闭。</p>
+
+<p>netpoll
+netpoll中调用了 epoll 中第三个 API：epoll_wait。</p>
+
+<p>func netpoll(block bool) gList {
+    if epfd == -1 {
+        return gList{}
+    }
+    waitms := int32(-1)
+    if !block {
+        waitms = 0
+    }
+    var events [128]epollevent
+retry:
+    // (1)
+    n := epollwait(epfd, &amp;events[0], int32(len(events)), waitms)
+    if n &lt; 0 {
+        if n != -_EINTR {
+            println(“runtime: epollwait on fd”, epfd, “failed with”, -n)
+            throw(“runtime: netpoll failed”)
+        }
+        goto retry
+    }
+    // (2)
+    var toRun gList
+    for i := int32(0); i &lt; n; i++ {
+        ev := &amp;events[i]
+        if ev.events == 0 {
+            continue
+        }
+        var mode int32
+        // 通过netpollopen注册的epoll关心事件确定是否读写事件
+        if ev.events&amp;(_EPOLLIN|_EPOLLRDHUP|_EPOLLHUP|_EPOLLERR) != 0 {
+            mode += ‘r’
+        }
+        if ev.events&amp;(_EPOLLOUT|_EPOLLHUP|_EPOLLERR) != 0 {
+            mode += ‘w’
+        }
+        if mode != 0 {
+            // 由netpollopen可知，此处的&amp;ev.data是pollDesc
+            pd := *(**pollDesc)(unsafe.Pointer(&amp;ev.data))
+            pd.everr = false
+            if ev.events == _EPOLLERR {
+                pd.everr = true
+            }
+            // 唤醒goroutine
+            netpollready(&amp;toRun, pd, mode)
+        }
+    }</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>if block &amp;&amp; toRun.empty() {
+    goto retry
+}
+// 返回可以执行事件的goroutine地址集合
+return toRun } （1） 调用epoll_wait获取事件，当次最多获取 128 个 epoll 事件。 （2） 根据事件类型唤醒读写 goroutine。
+</code></pre></div></div>
+
+<p>从整个流程上来看，分别调用了 epoll 中的三个 API：epoll_create，epoll_ctl以及epoll_wait，通过层级化的封装使用 epoll 完成 IO 多路复用。这里很多人可能会好奇，netpoll是在哪里调用的？</p>
+
+<p>实际上netpoll是在runtime.proc.go被底层多处调用，以 Go1.13 为例，runtime.proc.go中有四处调用netpoll，分别是：
+func startTheWorldWithSema(emitTraceEvent bool) int64
+func findrunnable() (gp *g, inheritTime bool)
+func pollWork() bool
+func sysmon()
+以上均涉及到底层轮询器和调度器。</p>
+
+<p>小结
+通过前面的内容，我们清楚了 epoll 在 Go 中是如何封装的，对用户接口层简化了Listen、Accept、Read、Write等接口，简单友好的接口给用户层的逻辑代码提供相当大的便利。</p>
+
+<p>而从 net 包的整体实现来看，对于用户而言：net 的实现是基于 epoll 的 nonblock 模式的一些列 fd 操作。网络操作未 Ready 时切换 goroutine，Ready 后等待调度的 goroutine 加入运行队列，实现了网络操作既不阻塞又是同步执行，这也就是前一篇文章所说的 epoll+goroutine</p>
+:ET

@@ -1,0 +1,508 @@
+I"�q<p>GODEBUG 变量可以控制运行时内的调试变量，参数以逗号分隔，格式为：name=val。
+https://github.com/mailgun/godebug 是一个跨平台的调试包 
+godebug是一个跨平台的Go程序调试工具，传统的编译型语言调试器使用底层系统调用并读取二进制文件用于调试各类符号。使用起来很麻烦而且很难移植。</p>
+
+<p>godebug使用不同的方法，直接把源码作为目标程序，在每一行插入调试代码，然后编译并运行。结果就是一个全功能的调试器，完全可以移植到不同平台。事实上，由于有了gopherjs ，你也可以在浏览器上进行调试：
+第一次godebug插入调试instrumentation，然后gopherjs将结果编译成JavaScript。</p>
+
+<p>让我们看一下instrumentation步骤，以下是godebug插入的调用：</p>
+
+<p>godebug.EnterFunc：让godebug运行时库知道我们在进入一个函数。由于“next”不停止内部函数调用，运行时库注意这些调用并知道何时跳过这些行。
+godebug.ExitFunc：让godebug运行时库知道我们在离开一个函数，main中省略。
+godebug运行时库：当且仅当用户用命令或一个断点告知其时，使程序暂停并等待输入，暂停时，它会提示用户输入并响应任何命令。
+godebug.Declare：记录变量名和值的映射。该映射通过输出命令使用。
+<!-- more -->
+让 Go 更强大的原因之一莫过于它的 GODEBUG 工具，GODEBUG 的设置可以让 Go 程序在运行时输出调试信息，可以根据你的要求很直观的看到你想要的调度器或垃圾回收等详细信息，并且还不需要加装其它的插件，非常方便，今天我们将先讲解 GODEBUG 的调度器相关内容，希望对你有所帮助。</p>
+
+<p>不过在开始前，没接触过的小伙伴得先补补如下前置知识，便于更好的了解调试器输出的信息内容。</p>
+
+<p>前置知识
+Go scheduler 的主要功能是针对在处理器上运行的 OS 线程分发可运行的 Goroutine，而我们一提到调度器，就离不开三个经常被提到的缩写，分别是：</p>
+
+<p>G：Goroutine，实际上我们每次调用 go func 就是生成了一个 G。</p>
+
+<p>P：处理器，一般为处理器的核数，可以通过 GOMAXPROCS 进行修改。</p>
+
+<p>M：OS 线程</p>
+
+<p>这三者交互实际来源于 Go 的 M: N 调度模型，也就是 M 必须与 P 进行绑定，然后不断地在 M 上循环寻找可运行的 G 来执行相应的任务，如果想具体了解可以详细阅读 《Go Runtime Scheduler》
+当我们执行 go func() 时，实际上就是创建一个全新的 Goroutine，我们称它为 G。</p>
+
+<p>新创建的 G 会被放入 P 的本地队列（Local Queue）或全局队列（Global Queue）中，准备下一步的动作。</p>
+
+<p>唤醒或创建 M 以便执行 G。</p>
+
+<p>不断地进行事件循环</p>
+
+<p>寻找在可用状态下的 G 进行执行任务</p>
+
+<p>清除后，重新进入事件循环</p>
+
+<p>而在描述中有提到全局和本地这两类队列，其实在功能上来讲都是用于存放正在等待运行的 G，但是不同点在于，本地队列有数量限制，不允许超过 256 个。并且在新建 G 时，会优先选择 P 的本地队列，如果本地队列满了，则将 P 的本地队列的一半的 G 移动到全局队列，这其实可以理解为调度资源的共享和再平衡。</p>
+
+<p>另外我们可以看到图上有 steal 行为，这是用来做什么的呢，我们都知道当你创建新的 G 或者 G 变成可运行状态时，它会被推送加入到当前 P 的本地队列中。但其实当 P 执行 G 完毕后，它也会 “干活”，它会将其从本地队列中弹出 G，同时会检查当前本地队列是否为空，如果为空会随机的从其他 P 的本地队列中尝试窃取一半可运行的 G 到自己的名下。</p>
+
+<p>在这个例子中，P2 在本地队列中找不到可以运行的 G，它会执行 work-stealing 调度算法，随机选择其它的处理器 P1，并从 P1 的本地队列中窃取了三个 G 到它自己的本地队列中去。至此，P1、P2 都拥有了可运行的 G，P1 多余的 G 也不会被浪费，调度资源将会更加平均的在多个处理器中流转。</p>
+
+<p>GODEBUG
+GODEBUG 变量可以控制运行时内的调试变量，参数以逗号分隔，格式为：name=val。本文着重点在调度器观察上，将会使用如下两个参数：</p>
+
+<p>schedtrace：设置 schedtrace=X 参数可以使运行时在每 X 毫秒发出一行调度器的摘要信息到标准 err 输出中。</p>
+
+<p>scheddetail：设置 schedtrace=X 和 scheddetail=1 可以使运行时在每 X 毫秒发出一次详细的多行信息，信息内容主要包括调度程序、处理器、OS 线程 和 Goroutine 的状态。
+package main</p>
+
+<p>import “sync”</p>
+
+<p>func main() {
+	wg := sync.WaitGroup{}
+	wg.Add(10)
+	for i := 0; i&lt;10; i++{
+		go func(wg *sync.WaitGroup) {
+			var counter int
+			for i := 0; i &lt; 1e10; i++{
+				counter++
+			}
+			wg.Done()
+		}(&amp;wg)
+	}</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>wg.Wait() }
+</code></pre></div></div>
+
+<p>schedtrace
+$ GODEBUG=schedtrace=1000 ./awesomeProject
+SCHED 0ms: gomaxprocs=4 idleprocs=1 threads=5 spinningthreads=1 idlethreads=0 runqueue=0 [0 0 0 0]
+SCHED 1000ms: gomaxprocs=4 idleprocs=0 threads=5 spinningthreads=0 idlethreads=0 runqueue=0 [1 2 2 1]
+SCHED 2000ms: gomaxprocs=4 idleprocs=0 threads=5 spinningthreads=0 idlethreads=0 runqueue=0 [1 2 2 1]
+SCHED 3001ms: gomaxprocs=4 idleprocs=0 threads=5 spinningthreads=0 idlethreads=0 runqueue=0 [1 2 2 1]
+SCHED 4010ms: gomaxprocs=4 idleprocs=0 threads=5 spinningthreads=0 idlethreads=0 runqueue=0 [1 2 2 1]
+SCHED 5011ms: gomaxprocs=4 idleprocs=0 threads=5 spinningthreads=0 idlethreads=0 runqueue=0 [1 2 2 1]
+SCHED 6012ms: gomaxprocs=4 idleprocs=0 threads=5 spinningthreads=0 idlethreads=0 runqueue=0 [1 2 2 1]
+SCHED 7021ms: gomaxprocs=4 idleprocs=0 threads=5 spinningthreads=0 idlethreads=0 runqueue=4 [0 1 1 0]
+SCHED 8023ms: gomaxprocs=4 idleprocs=0 threads=5 spinningthreads=0 idlethreads=0 runqueue=4 [0 1 1 0]
+SCHED 9031ms: gomaxprocs=4 idleprocs=0 threads=5 spinningthreads=0 idlethreads=0 runqueue=4 [0 1 1 0]
+SCHED 10033ms: gomaxprocs=4 idleprocs=0 threads=5 spinningthreads=0 idlethreads=0 runqueue=4 [0 1 1 0]
+SCHED 11038ms: gomaxprocs=4 idleprocs=0 threads=5 spinningthreads=0 idlethreads=0 runqueue=4 [0 1 1 0]
+SCHED 12044ms: gomaxprocs=4 idleprocs=0 threads=5 spinningthreads=0 idlethreads=0 runqueue=4 [0 1 1 0]
+SCHED 13051ms: gomaxprocs=4 idleprocs=0 threads=5 spinningthreads=0 idlethreads=0 runqueue=4 [0 1 1 0]
+SCHED 14052ms: gomaxprocs=4 idleprocs=2 threads=5</p>
+
+<p>sched：每一行都代表调度器的调试信息，后面提示的毫秒数表示启动到现在的运行时间，输出的时间间隔受 schedtrace 的值影响。</p>
+
+<p>gomaxprocs：当前的 CPU 核心数（GOMAXPROCS 的当前值）。</p>
+
+<p>idleprocs：空闲的处理器数量，后面的数字表示当前的空闲数量。</p>
+
+<p>threads：OS 线程数量，后面的数字表示当前正在运行的线程数量。</p>
+
+<p>spinningthreads：自旋状态的 OS 线程数量。</p>
+
+<p>idlethreads：空闲的线程数量。</p>
+
+<p>runqueue：全局队列中中的 Goroutine 数量，而后面的 [0 0 1 1] 则分别代表这 4 个 P 的本地队列正在运行的 Goroutine 数量。</p>
+
+<p>在上面我们有提到 “自旋线程” 这个概念，如果你之前没有了解过相关概念，一听 “自旋” 肯定会比较懵，我们引用 《Head First of Golang Scheduler》 的内容来说明：</p>
+
+<p>自旋线程的这个说法，是因为 Go Scheduler 的设计者在考虑了 “OS 的资源利用率” 以及 “频繁的线程抢占给 OS 带来的负载” 之后，提出了 “Spinning Thread” 的概念。也就是当 “自旋线程” 没有找到可供其调度执行的 Goroutine 时，并不会销毁该线程 ，而是采取 “自旋” 的操作保存了下来。虽然看起来这是浪费了一些资源，但是考虑一下 syscall 的情景就可以知道，比起 “自旋”，线程间频繁的抢占以及频繁的创建和销毁操作可能带来的危害会更大。</p>
+
+<p>scheddetail
+如果我们想要更详细的看到调度器的完整信息时，我们可以增加 scheddetail 参数，就能够更进一步的查看调度的细节逻辑，如下：
+$ GODEBUG=scheddetail=1,schedtrace=1000 ./awesomeProject
+SCHED 1000ms: gomaxprocs=4 idleprocs=0 threads=5 spinningthreads=0 idlethreads=0 runqueue=0 gcwaiting=0 nmidlelocked=0 stopwait=0 sysmonwait=0
+  P0: status=1 schedtick=2 syscalltick=0 m=3 runqsize=3 gfreecnt=0
+  P1: status=1 schedtick=2 syscalltick=0 m=4 runqsize=1 gfreecnt=0
+  P2: status=1 schedtick=2 syscalltick=0 m=0 runqsize=1 gfreecnt=0
+  P3: status=1 schedtick=1 syscalltick=0 m=2 runqsize=1 gfreecnt=0
+  M4: p=1 curg=18 mallocing=0 throwing=0 preemptoff= locks=0 dying=0 spinning=false blocked=false lockedg=-1
+  M3: p=0 curg=22 mallocing=0 throwing=0 preemptoff= locks=0 dying=0 spinning=false blocked=false lockedg=-1
+  M2: p=3 curg=24 mallocing=0 throwing=0 preemptoff= locks=0 dying=0 spinning=false blocked=false lockedg=-1
+  M1: p=-1 curg=-1 mallocing=0 throwing=0 preemptoff= locks=1 dying=0 spinning=false blocked=false lockedg=-1
+  M0: p=2 curg=26 mallocing=0 throwing=0 preemptoff= locks=0 dying=0 spinning=false blocked=false lockedg=-1
+  G1: status=4(semacquire) m=-1 lockedm=-1
+  G2: status=4(force gc (idle)) m=-1 lockedm=-1
+  G3: status=4(GC sweep wait) m=-1 lockedm=-1
+  G17: status=1() m=-1 lockedm=-1
+  G18: status=2() m=4 lockedm=-1
+  G19: status=1() m=-1 lockedm=-1
+  G20: status=1() m=-1 lockedm=-1
+  G21: status=1() m=-1 lockedm=-1
+  G22: status=2() m=3 lockedm=-1
+  G23: status=1() m=-1 lockedm=-1
+  G24: status=2() m=2 lockedm=-1
+  G25: status=1() m=-1 lockedm=-1</p>
+
+<p>在这里我们抽取了 1000ms 时的调试信息来查看，信息量比较大，我们先从每一个字段开始了解。如下：</p>
+
+<p>G
+status：G 的运行状态。</p>
+
+<p>m：隶属哪一个 M。</p>
+
+<p>lockedm：是否有锁定 M。</p>
+
+<p>在第一点中我们有提到 G 的运行状态，这对于分析内部流转非常的有用，共涉及如下 9 种状态：</p>
+
+<p>状态	值	含义
+_Gidle	0	刚刚被分配，还没有进行初始化。
+_Grunnable	1	已经在运行队列中，还没有执行用户代码。
+_Grunning	2	不在运行队列里中，已经可以执行用户代码，此时已经分配了 M 和 P。
+_Gsyscall	3	正在执行系统调用，此时分配了 M。
+_Gwaiting	4	在运行时被阻止，没有执行用户代码，也不在运行队列中，此时它正在某处阻塞等待中。
+_Gmoribund_unused	5	尚未使用，但是在 gdb 中进行了硬编码。
+_Gdead	6	尚未使用，这个状态可能是刚退出或是刚被初始化，此时它并没有执行用户代码，有可能有也有可能没有分配堆栈。
+_Genqueue_unused	7	尚未使用。
+_Gcopystack	8	正在复制堆栈，并没有执行用户代码，也不在运行队列中。
+在理解了各类的状态的意思后，我们结合上述案例看看，如下：</p>
+
+<p>G1: status=4(semacquire) m=-1 lockedm=-1
+G2: status=4(force gc (idle)) m=-1 lockedm=-1
+G3: status=4(GC sweep wait) m=-1 lockedm=-1
+G17: status=1() m=-1 lockedm=-1
+G18: status=2() m=4 lockedm=-1
+在这个片段中，G1 的运行状态为 _Gwaiting，并没有分配 M 和锁定。这时候你可能好奇在片段中括号里的是什么东西呢，其实是因为该 status=4 是表示 Goroutine 在运行时时被阻止，而阻止它的事件就是 semacquire 事件，是因为 semacquire 会检查信号量的情况，在合适的时机就调用 goparkunlock 函数，把当前 Goroutine 放进等待队列，并把它设为 _Gwaiting 状态。</p>
+
+<p>那么在实际运行中还有什么原因会导致这种现象呢，我们一起看看，如下：</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>waitReasonZero                                    // ""
+waitReasonGCAssistMarking                         // "GC assist marking"
+waitReasonIOWait                                  // "IO wait"
+waitReasonChanReceiveNilChan                      // "chan receive (nil chan)"
+waitReasonChanSendNilChan                         // "chan send (nil chan)"
+waitReasonDumpingHeap                             // "dumping heap"
+waitReasonGarbageCollection                       // "garbage collection"
+waitReasonGarbageCollectionScan                   // "garbage collection scan"
+waitReasonPanicWait                               // "panicwait"
+waitReasonSelect                                  // "select"
+waitReasonSelectNoCases                           // "select (no cases)"
+waitReasonGCAssistWait                            // "GC assist wait"
+waitReasonGCSweepWait                             // "GC sweep wait"
+waitReasonChanReceive                             // "chan receive"
+waitReasonChanSend                                // "chan send"
+waitReasonFinalizerWait                           // "finalizer wait"
+waitReasonForceGGIdle                             // "force gc (idle)"
+waitReasonSemacquire                              // "semacquire"
+waitReasonSleep                                   // "sleep"
+waitReasonSyncCondWait                            // "sync.Cond.Wait"
+waitReasonTimerGoroutineIdle                      // "timer goroutine (idle)"
+waitReasonTraceReaderBlocked                      // "trace reader (blocked)"
+waitReasonWaitForGCCycle                          // "wait for GC cycle"
+waitReasonGCWorkerIdle                            // "GC worker (idle)" 我们通过以上 waitReason 可以了解到 Goroutine 会被暂停运行的原因要素，也就是会出现在括号中的事件。
+</code></pre></div></div>
+
+<p>M
+p：隶属哪一个 P。</p>
+
+<p>curg：当前正在使用哪个 G。</p>
+
+<p>runqsize：运行队列中的 G 数量。</p>
+
+<p>gfreecnt：可用的G（状态为 Gdead）。</p>
+
+<p>mallocing：是否正在分配内存。</p>
+
+<p>throwing：是否抛出异常。</p>
+
+<p>preemptoff：不等于空字符串的话，保持 curg 在这个 m 上运行。</p>
+
+<p>P
+status：P 的运行状态。</p>
+
+<p>schedtick：P 的调度次数。</p>
+
+<p>syscalltick：P 的系统调用次数。</p>
+
+<p>m：隶属哪一个 M。</p>
+
+<p>runqsize：运行队列中的 G 数量。</p>
+
+<p>gfreecnt：可用的G（状态为 Gdead）。</p>
+
+<p>状态	值	含义
+_Pidle	0	刚刚被分配，还没有进行进行初始化。
+_Prunning	1	当 M 与 P 绑定调用 acquirep 时，P 的状态会改变为 _Prunning。
+_Psyscall	2	正在执行系统调用。
+_Pgcstop	3	暂停运行，此时系统正在进行 GC，直至 GC 结束后才会转变到下一个状态阶段。
+_Pdead	4	废弃，不再使用。</p>
+
+<p>如何开启打印gc信息
+只要在程序执行之前加上环境变量GODEBUG gctrace =1 ，如：
+GODEBUG gctrace =1 ./xxxx.exe or GODEBUG gctrace =1 go run main.go</p>
+
+<p>程序将会显示gc信息，如下</p>
+
+<p>gc 1 @2.104s 0%: 0.018+1.3+0.076 ms clock, 0.054+0.35/1.0/3.0+0.23 ms cpu, 4-&gt;4-&gt;3 MB, 5 MB goal, 4 P
+gc 2 @2.241s 0%: 0.019+2.4+0.077 ms clock, 0.079+0/2.4/6.4+0.30 ms cpu, 5-&gt;6-&gt;5 MB, 6 MB goal, 4 P
+gc 3 @2.510s 0%: 0.011+3.2+0.063 ms clock, 0.047+0.10/2.9/9.0+0.25 ms cpu, 11-&gt;11-&gt;10 MB, 12 MB goal, 4 P
+gc 4 @3.021s 0%: 0.013+6.6+0.076 ms clock, 0.053+0.34/6.2/18+0.30 ms cpu, 21-&gt;21-&gt;20 MB, 22 MB goal, 4 P
+gc 5 @3.725s 0%: 0.015+15+0.079 ms clock, 0.062+0.35/15/45+0.31 ms cpu, 40-&gt;40-&gt;39 MB, 41 MB goal, 4 P
+gc 6 @4.741s 0%: 0.008+35+0.17 ms clock, 0.035+0.19/35/100+0.70 ms cpu, 76-&gt;76-&gt;75 MB, 78 MB goal, 4 P
+gc 7 @6.688s 0%: 0.020+117+0.34 ms clock, 0.082+11/117/330+1.3 ms cpu, 147-&gt;148-&gt;146 MB, 151 MB goal, 4 P
+gc 8 @68.645s 0%: 0.019+146+0.30 ms clock, 0.078+0.006/146/407+1.2 ms cpu, 285-&gt;285-&gt;248 MB, 292 MB goal, 4 P
+scvg0: inuse: 426, idle: 0, sys: 427, released: 0, consumed: 427 (MB)
+gc 9 @175.448s 0%: 0.030+60+0.12 ms clock, 0.12+0.013/60/177+0.51 ms cpu, 484-&gt;484-&gt;248 MB, 496 MB goal, 4 P
+gc 10 @236.621s 0%: 0.006+59+0.11 ms clock, 0.025+0/59/173+0.47 ms cpu, 484-&gt;484-&gt;248 MB, 496 MB goal, 4 P
+gc 11 @285.967s 0%: 0.027+57+0.22 ms clock, 0.11+0/57/163+0.89 ms cpu, 484-&gt;484-&gt;248 MB, 496 MB goal, 4 P
+scvg1: inuse: 331, idle: 175, sys: 507, released: 0, consumed: 507 (MB)
+gc 12 @333.817s 0%: 0.009+52+0.18 ms clock, 0.036+0/52/155+0.72 ms cpu, 484-&gt;484-&gt;248 MB, 496 MB goal, 4 P</p>
+
+<p>gc信息的含义
+查看官方的runtime说明：</p>
+
+<p>gctrace: setting gctrace=1 causes the garbage collector to emit a single line to standard
+error at each collection, summarizing the amount of memory collected and the
+length of the pause. Setting gctrace=2 emits the same summary but also
+repeats each collection. The format of this line is subject to change.
+Currently, it is:
+	gc # @#s #%: #+#+# ms clock, #+#/#/#+# ms cpu, #-&gt;#-&gt;# MB, # MB goal, # P
+where the fields are as follows:
+	gc #        the GC number, incremented at each GC
+	@#s         time in seconds since program start
+	#%          percentage of time spent in GC since program start
+	#+…+#     wall-clock/CPU times for the phases of the GC
+	#-&gt;#-&gt;# MB  heap size at GC start, at GC end, and live heap
+	# MB goal   goal heap size
+	# P         number of processors used
+The phases are stop-the-world (STW) sweep termination, concurrent
+mark and scan, and STW mark termination. The CPU times
+for mark/scan are broken down in to assist time (GC performed in
+line with allocation), background GC time, and idle GC time.
+If the line ends with “(forced)”, this GC was forced by a
+runtime.GC() call and all phases are STW.</p>
+
+<p>Setting gctrace to any value &gt; 0 also causes the garbage collector
+to emit a summary when memory is released back to the system.
+This process of returning memory to the system is called scavenging.
+The format of this summary is subject to change.
+Currently it is:
+	scvg#: # MB released  printed only if non-zero
+	scvg#: inuse: # idle: # sys: # released: # consumed: # (MB)
+where the fields are as follows:
+	scvg#        the scavenge cycle number, incremented at each scavenge
+	inuse: #     MB used or partially used spans
+	idle: #      MB spans pending scavenging
+	sys: #       MB mapped from the system
+	released: #  MB released to the system
+	consumed: #  MB allocated from the system
+垃圾回收信息
+gc 1 @2.104s 0%: 0.018+1.3+0.076 ms clock, 0.054+0.35/1.0/3.0+0.23 ms cpu, 4-&gt;4-&gt;3 MB, 5 MB goal, 4 P。</p>
+
+<p>1 表示第一次执行
+@2.104s 表示程序执行的总时间
+0% 垃圾回收时间占用的百分比，（不知道和谁比？难道是和上面的程序执行总时间，这样比较感觉没意义）
+0.018+1.3+0.076 ms clock 垃圾回收的时间，分别为STW（stop-the-world）清扫的时间, 并发标记和扫描的时间，STW标记的时间
+0.054+0.35/1.0/3.0+0.23 ms cpu 垃圾回收占用cpu时间
+4-&gt;4-&gt;3 MB 堆的大小，gc后堆的大小，存活堆的大小
+5 MB goal 整体堆的大小
+4 P 使用的处理器数量</p>
+
+<p>系统内存回收信息,这个很直白，看单词就知道大概意思了
+scvg0: inuse: 426, idle: 0, sys: 427, released: 0, consumed: 427 (MB)</p>
+
+<p>426 使用多少M内存
+0 剩下要清除的内存
+427 系统映射的内存
+0 释放的系统内存
+427 申请的系统内存</p>
+
+<p>golang的环境变量有不少，平时安装完go之后，我们关注的一般只是GOPATH、GOROOT这些，还有与go mod有关的几个环境变量，对于其他变量了解不多，想要深入了解这门语言，有必要了解其他环境变量。</p>
+
+<p>我们先总的来了解下有哪些环境变量，以及它们代表的含义：</p>
+
+<p>$ go help environment
+The go command and the tools it invokes consult environment variables
+for configuration. If an environment variable is unset, the go command
+uses a sensible default setting. To see the effective setting of the
+variable <NAME>, run 'go env <NAME>'. To change the default setting,
+run 'go env -w <NAME>=<VALUE>'. Defaults changed using 'go env -w'
+are recorded in a Go environment configuration file stored in the
+per-user configuration directory, as reported by os.UserConfigDir.
+The location of the configuration file can be changed by setting
+the environment variable GOENV, and 'go env GOENV' prints the
+effective location, but 'go env -w' cannot change the default location.
+See 'go help env' for details.</VALUE></NAME></NAME></NAME></p>
+
+<p>General-purpose environment variables:</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    GCCGO
+            The gccgo command to run for 'go build -compiler=gccgo'.
+    GOARCH
+            The architecture, or processor, for which to compile code.
+            Examples are amd64, 386, arm, ppc64.
+    GOBIN
+            The directory where 'go install' will install a command.
+    GOCACHE
+            The directory where the go command will store cached
+            information for reuse in future builds.
+    GODEBUG
+            Enable various debugging facilities. See 'go doc runtime'
+            for details.
+    GOENV
+            The location of the Go environment configuration file.
+            Cannot be set using 'go env -w'.
+    GOFLAGS
+            A space-separated list of -flag=value settings to apply
+            to go commands by default, when the given flag is known by
+            the current command. Each entry must be a standalone flag.
+            Because the entries are space-separated, flag values must
+            not contain spaces. Flags listed on the command line
+            are applied after this list and therefore override it.
+    GOOS
+            The operating system for which to compile code.
+            Examples are linux, darwin, windows, netbsd.
+    GOPATH
+            For more details see: 'go help gopath'.
+    GOPROXY
+            URL of Go module proxy. See 'go help modules'.
+    GOPRIVATE, GONOPROXY, GONOSUMDB
+            Comma-separated list of glob patterns (in the syntax of Go's path.Match)
+            of module path prefixes that should always be fetched directly
+            or that should not be compared against the checksum database.
+            See 'go help module-private'.
+    GOROOT
+            The root of the go tree.
+    GOSUMDB
+            The name of checksum database to use and optionally its public key and
+            URL. See 'go help module-auth'.
+    GOTMPDIR
+            The directory where the go command will write
+            temporary source files, packages, and binaries.
+</code></pre></div></div>
+
+<p>Environment variables for use with cgo:</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    AR
+            The command to use to manipulate library archives when
+            building with the gccgo compiler.
+            The default is 'ar'.
+    CC
+            The command to use to compile C code.
+    CGO_ENABLED
+            Whether the cgo command is supported. Either 0 or 1.
+    CGO_CFLAGS
+            Flags that cgo will pass to the compiler when compiling
+            C code.
+    CGO_CFLAGS_ALLOW
+            A regular expression specifying additional flags to allow
+            to appear in #cgo CFLAGS source code directives.
+            Does not apply to the CGO_CFLAGS environment variable.
+    CGO_CFLAGS_DISALLOW
+            A regular expression specifying flags that must be disallowed
+            from appearing in #cgo CFLAGS source code directives.
+            Does not apply to the CGO_CFLAGS environment variable.
+    CGO_CPPFLAGS, CGO_CPPFLAGS_ALLOW, CGO_CPPFLAGS_DISALLOW
+            Like CGO_CFLAGS, CGO_CFLAGS_ALLOW, and CGO_CFLAGS_DISALLOW,
+            but for the C preprocessor.
+    CGO_CXXFLAGS, CGO_CXXFLAGS_ALLOW, CGO_CXXFLAGS_DISALLOW
+            Like CGO_CFLAGS, CGO_CFLAGS_ALLOW, and CGO_CFLAGS_DISALLOW,
+            but for the C++ compiler.
+    CGO_FFLAGS, CGO_FFLAGS_ALLOW, CGO_FFLAGS_DISALLOW
+            Like CGO_CFLAGS, CGO_CFLAGS_ALLOW, and CGO_CFLAGS_DISALLOW,
+            but for the Fortran compiler.
+    CGO_LDFLAGS, CGO_LDFLAGS_ALLOW, CGO_LDFLAGS_DISALLOW
+            Like CGO_CFLAGS, CGO_CFLAGS_ALLOW, and CGO_CFLAGS_DISALLOW,
+            but for the linker.
+    CXX
+            The command to use to compile C++ code.
+    FC
+            The command to use to compile Fortran code.
+    PKG_CONFIG
+            Path to pkg-config tool.
+</code></pre></div></div>
+
+<p>Architecture-specific environment variables:</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    GOARM
+            For GOARCH=arm, the ARM architecture for which to compile.
+            Valid values are 5, 6, 7.
+    GO386
+            For GOARCH=386, the floating point instruction set.
+            Valid values are 387, sse2.
+    GOMIPS
+            For GOARCH=mips{,le}, whether to use floating point instructions.
+            Valid values are hardfloat (default), softfloat.
+    GOMIPS64
+            For GOARCH=mips64{,le}, whether to use floating point instructions.
+            Valid values are hardfloat (default), softfloat.
+    GOWASM
+            For GOARCH=wasm, comma-separated list of experimental WebAssembly features to use.
+            Valid values are satconv, signext.
+</code></pre></div></div>
+
+<p>Special-purpose environment variables:</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    GCCGOTOOLDIR
+            If set, where to find gccgo tools, such as cgo.
+            The default is based on how gccgo was configured.
+    GOROOT_FINAL
+            The root of the installed Go tree, when it is
+            installed in a location other than where it is built.
+            File names in stack traces are rewritten from GOROOT to
+            GOROOT_FINAL.
+    GO_EXTLINK_ENABLED
+            Whether the linker should use external linking mode
+            when using -linkmode=auto with code that uses cgo.
+            Set to 0 to disable external linking mode, 1 to enable it.
+    GIT_ALLOW_PROTOCOL
+            Defined by Git. A colon-separated list of schemes that are allowed
+            to be used with git fetch/clone. If set, any scheme not explicitly
+            mentioned will be considered insecure by 'go get'.
+            Because the variable is defined by Git, the default value cannot
+            be set using 'go env -w'.
+</code></pre></div></div>
+
+<p>Additional information available from ‘go env’ but not read from the environment:</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    GOEXE
+            The executable file name suffix (".exe" on Windows, "" on other systems).
+    GOGCCFLAGS
+            A space-separated list of arguments supplied to the CC command.
+    GOHOSTARCH
+            The architecture (GOARCH) of the Go toolchain binaries.
+    GOHOSTOS
+            The operating system (GOOS) of the Go toolchain binaries.
+    GOMOD
+            The absolute path to the go.mod of the main module,
+            or the empty string if not using modules.
+    GOTOOLDIR
+            The directory where the go tools (compile, cover, doc, etc...) are installed. 你可以使用以下命令查看你的go环境变量：
+</code></pre></div></div>
+
+<p>$ go env
+除开跟go mod有关的几个环境变量还有跟GOPATH有关的几个我们不谈，因为我已经在上篇文章讲go mod的时候聊过了，接下来就来了解一下其他的环境变量。</p>
+
+<p>GOARCH 和 GOOS
+GOARCH ：cpu架构，386、amd64、arm等，在交叉编译的时候设置，可以编译不同平台的包。
+GOOS：平台，linux、windows等，通常和GOARCH搭配使用。
+这里贴一下在不同平台下交叉编译的命令：</p>
+
+<p>Mac下编译Linux, Windows平台的64位可执行程序：
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build test.go
+CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build test.go</p>
+
+<p>Linux下编译Mac, Windows平台的64位可执行程序：
+CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build test.go
+CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build test.go</p>
+
+<p>Windows下编译Mac, Linux平台的64位可执行程序：
+SET CGO_ENABLED=0
+SET GOOS=darwin
+SET GOARCH=amd64
+go build test.go
+SET CGO_ENABLED=0
+SET GOOS=linux
+SET GOARCH=amd64
+go build test.go</p>
+
+<p>GOCACHE
+这是go build产生的缓存，这可以加快编译速度，我在GOCACHE打印出来的路径下看到了一个README文件，它解释了GOCACHE。</p>
+
+<p>This directory holds cached build artifacts from the Go build system.
+Run “go clean -cache” if the directory is getting too large.
+See golang.org to learn more about Go.
+可以使用”go clean -cache”命令清除编译缓存。</p>
+
+<p>GOENV
+本地的go环境文件存储位置，不可以用”go env -w”设置它。</p>
+
+:ET

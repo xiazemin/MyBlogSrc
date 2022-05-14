@@ -1,0 +1,156 @@
+I"$<p>https://github.com/c-ares/c-ares
+是一个C语言实现的异步请求DNS的实现。很多知名 软件(curl、seastar、gevent、Nodejs等等)都使用了该软件。</p>
+
+<!-- more -->
+<p>使用 c-ares
+时通常只需要引用 ares.h
+头文件即可，该库的相关头文件都包含在内。</p>
+
+<p>以下先介绍几个该库初始化相关的函数</p>
+
+<p>init
+ares_library_init(ARES_LIB_INIT_ALL)</p>
+
+<p>在实例初始化时，应该先调用该函数对该库相关内部模块(其实该初始化函数只在win32平台上有实际动作)。</p>
+
+<p>ares_library_cleanup()</p>
+
+<p>在实例销毁时调用该函数进行反初始化。与 ares_library_init(ARES_LIB_INIT_ALL)
+向对应。</p>
+
+<p>ares_library_init_mem</p>
+
+<p>初始化时指定该库内部内存分配的 malloc
+/ free
+/ realloc
+函数(如不指定则默认使用glibc提供的)。 然后调用 ares_library_init
+。</p>
+
+<p>ares_channel
+c-ares
+以 ares_channel
+作为整个异步请求的上下文(context)，与请求相关的函数用 ares_channel
+贯穿起来调用。因此发起一个请求时，应该先初始化 ares_channel
+。</p>
+
+<p>ares_channel
+需要通过 ares_init_options
+或者 ares_init
+进行初始化，区别是 ares_init
+使用默认 参数， ares_init_options
+支持自定义参数，自定义参数为 struct ares_options
+和 int optmask
+。 optmask
+用于决定使用 struct ares_options
+中的那些字段。 optmask
+的定义对照 struct ares_options
+中的字段对照 一看就能明白，其值有(也可以参看 文档
+:</p>
+
+<p>#define ARES_OPT_FLAGS          (1 « 0)
+#define ARES_OPT_TIMEOUT        (1 « 1)
+#define ARES_OPT_TRIES          (1 « 2)
+#define ARES_OPT_NDOTS          (1 « 3)
+#define ARES_OPT_UDP_PORT       (1 « 4)
+#define ARES_OPT_TCP_PORT       (1 « 5)
+#define ARES_OPT_SERVERS        (1 « 6)
+#define ARES_OPT_DOMAINS        (1 « 7)
+#define ARES_OPT_LOOKUPS        (1 « 8)
+#define ARES_OPT_SOCK_STATE_CB  (1 « 9)
+#define ARES_OPT_SORTLIST       (1 « 10)
+#define ARES_OPT_SOCK_SNDBUF    (1 « 11)
+#define ARES_OPT_SOCK_RCVBUF    (1 « 12)
+#define ARES_OPT_TIMEOUTMS      (1 « 13)
+#define ARES_OPT_ROTATE         (1 « 14)
+#define ARES_OPT_EDNSPSZ        (1 « 15)
+#define ARES_OPT_NOROTATE       (1 « 16)
+struct ares_options {
+  int flags;   // 参见下段描述
+  int timeout; /* in seconds or milliseconds, depending on options */ // 请求超时的时间、默认是5s
+  int tries;   // 默认跟每个nameserver重试请求的次数
+  int ndots;
+  unsigned short udp_port; // nameserver udp port
+  unsigned short tcp_port; // nameserver tcp port
+  int socket_send_buffer_size;
+  int socket_receive_buffer_size;
+  struct in_addr *servers; // nameserver list
+  int nservers;            // servers count
+  char **domains;// 强制进行dns查询的域，不按照hosts、resolve.conf内指定
+  int ndomains;  // domains count
+  char *lookups; // 默认查找的范围 ‘b’ 代表走DNS查询、’f’代表查询<code class="language-plaintext highlighter-rouge">hosts</code>文件，默认可以填’fb’
+  ares_sock_state_cb sock_state_cb;  // socket 状态变更时的回调
+  void *sock_state_cb_data;          // 回调的私有数据
+  struct apattern *sortlist;
+  int nsort;
+  int ednspsz;
+};
+ares_options中的flags的有效字段：</p>
+
+<p>#define ARES_FLAG_USEVC         (1 « 0) // 总是使用tcp进行dns查询
+#define ARES_FLAG_PRIMARY       (1 « 1)
+#define ARES_FLAG_IGNTC         (1 « 2)
+#define ARES_FLAG_NORECURSE     (1 « 3)
+#define ARES_FLAG_STAYOPEN      (1 « 4)
+#define ARES_FLAG_NOSEARCH      (1 « 5)
+#define ARES_FLAG_NOALIASES     (1 « 6)
+#define ARES_FLAG_NOCHECKRESP   (1 « 7)
+#define ARES_FLAG_EDNS          (1 « 8)
+ares_channel
+创建并初始化后，可以对其再进行一些设置。常见的设置函数有：</p>
+
+<p>// 设置请求时的本地ip
+void ares_set_local_ip4(ares_channel channel, unsigned int local_ip);
+void ares_set_local_ip6(ares_channel channel, const unsigned char* local_ip6);</p>
+
+<p>// 设置请求时跟哪个网卡绑定在一起，当有多个网卡都对外可达时，可以用此函数选取绑定一个网卡
+void ares_set_local_dev(ares_channel channel, const char* local_dev_name);</p>
+
+<p>// 注册一个回调，当c-ares socket被创建后，配置完成一些c-ares默认配置后，会触发该回调。当需要再自定义
+// 一些设置时，可以在此实现。
+void ares_set_socket_configure_callback(ares_channel channel, ares_sock_config_callback callback, void *user_data);</p>
+
+<p>// 注册一个回调，当c-ares socket调用connect后，会触发该回调。如果需要在创建连接后做一些自定义设置时，
+// 可以在此实现，例如tcp的keepalive等
+void ares_set_socket_callback(ares_channel channel, ares_sock_create_callback callback, void *user_data);</p>
+
+<p>// 当用户需要hook/hack 网卡IO时，用户可以注册socket相关的回调。回调中的几个函数分别对应
+// socket、close、connect、recvfrom、sendv几个系统回调。当用户注册后，c-ares的跟网络IO有关
+// 系的操作会调用该回调中的方法，而不会调用默认的系统调用了。
+struct ares_socket_functions {
+   ares_socket_t(<em>asocket)(int, int, int, void *);
+   int(</em>aclose)(ares_socket_t, void <em>);
+   int(</em>aconnect)(ares_socket_t, const struct sockaddr <em>, socklen_t, void *);
+   ssize_t(</em>arecvfrom)(ares_socket_t, void <em>, size_t, int, struct sockaddr *, socklen_t *, void *);
+   ssize_t(</em>asendv)(ares_socket_t, const struct iovec *, int, void *);
+};</p>
+
+<p>void ares_set_socket_functions(ares_channel channel, const struct ares_socket_functions *funcs, void *user_data);
+process
+c-ares
+整个请求的异步逻辑都封装在该库内部，但是内部并不驱动这些逻辑运转， c-ares
+将逻辑驱动暴露给用户调用， 让用户驱动整个逻辑的运转，方便将其嵌入各种事件框架中去。</p>
+
+<p>相关的函数有:</p>
+
+<p>int ares_fds(ares_channel channel, fd_set *read_fds, fd_set *write_fds);</p>
+
+<p>int ares_getsock(ares_channel channel, ares_socket_t *socks, int numsocks);</p>
+
+<p>struct timeval *ares_timeout(ares_channel channel, struct timeval *maxtv, struct timeval *tv);</p>
+
+<p>void ares_process(ares_channel channel, fd_set *read_fds, fd_set *write_fds);</p>
+
+<p>void ares_process_fd(ares_channel channel, ares_socket_t read_fd, ares_socket_t write_fd);
+整个请求的处理过程将在例子中给出。</p>
+
+<p>error
+当函数返回错误时，可以调用 const char *ares_strerror(int code)
+获取错误码对应的错误原因。</p>
+
+<p>util
+c-ares
+还提供一些util函数，通常是一些封装，提供跨平台的能力。这些函数名同linux中glibc提供的api 命名相似，功能也相似</p>
+
+<p>const char *ares_inet_ntop(int af, const void *src, char *dst, ares_socklen_t size);
+int ares_inet_pton(int af, const char *src, void *dst);</p>
+:ET

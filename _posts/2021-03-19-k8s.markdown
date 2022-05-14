@@ -1,0 +1,74 @@
+---
+title: k8s 网络连接  3 种工具
+layout: post
+category: k8s
+author: 夏泽民
+---
+我们有 3 个 service，service-front 通过入口暴露给外网。service-front 的后端服务是 service-middle，service-middle 的后端是 service-back。通信是通过 K8s service 完成的。
+
+作为开发人员，我希望 service-back 可以直接发送一些请求，并在不影响其他 service 的情况下查看结果。
+
+问题：
+service-back 不会暴露在外网，所以我们不能直接向其发送请求。
+
+解决方案：
+使用 kubectl port-forward，可以打开从本地计算机到 service-back 集群中的隧道。
+
+作为开发人员，我希望 service-back 可以直接发送一些请求，并在不影响其他 service 的情况下查看结果。
+
+问题：
+service-back 不会暴露在外网，所以我们不能直接向其发送请求。
+
+解决方案：
+使用 kubectl port-forward，可以打开从本地计算机到 service-back 集群中的隧道。
+
+实现原理：
+kubectl 启动一个监听在 localhost:8080 的进程。它监控该端口并建立与 api-server 的连接，该连接将请求转发到 service-back。
+<!-- more -->
+
+
+工具2：kubefwd
+
+场景：
+作为开发人员，我希望在本地计算机上运行 service-front，以便在 IDE 中设置断点来调试应用程序。
+
+问题：
+service-front 被设计为，在 Kubernetes 中运行并可以通过 K8s service 访问 service-middle。service 名称是硬编码的，或者很难配置的，又或者我们懒得在本地计算机上模拟依赖项。
+
+解决方案：
+kubefwd是解决该问题的有用工具。它可以执行批量端口转发并管理本地计算机中的 DNS 记录。
+
+https://github.com/txn2/kubefwd
+步骤：
+在终端中运行以下命令:
+
+$ sudo KUBECONFIG=$KUBECONFIG kubefwd svc -n service-debug -l app=middle
+请注意，kubefwd 需要 root 特权，并且必须使用 sudo 运行。事先设置 KUBECONFIG 变量，不需要任何主文件夹引用。
+
+实现原理：
+它启动一个进程，监听在 127.1.27.1:8081，并配置了 service-middle 的 /etc/hosts：
+
+然后，本地 front应用程序可以像访问 K8s 集群一样访问 service-middle，而无需其他额外的工作。
+
+
+
+工具3：telepresence
+
+场景：
+作为开发人员，我希望在本地计算机上运行 service-middle，以便可以在 IDE 中设置断点来调试应用程序。
+
+问题：
+service-middle设计为可在 Kubernetes 中运行，可通过 K8s service 访问 service-back。另外，它的 service-front 正在 K8s 上运行。这些 service 在本地计算机上不可用，而且我们也很难在本地计算机上模拟这些环境。
+
+解决方案：
+telepresence 是解决此问题的有用工具。
+
+可参考：https://www.telepresence.io/
+
+telepresence --namespace service-debug --new-deployment service-middle --expose 8081
+
+实际上，telepresence 将 proxy、fake agent 部署到集群中，并通过该代理在本地环境和集群之间打开一条双向通道。这样一来，我们便可以在本地计算机上运行 middle service，而无需调整 consumers、dependent service。
+
+telepresence 工作原理的详细说明，详见：https://www.telepresence.io/discussion/how-it-works
+
+https://mp.weixin.qq.com/s/99PPHjIhUH7kakEBS6Mrkw

@@ -1,0 +1,166 @@
+I"Q<p>一条sql语句的执行需要经过语义解析，制定执行计划，执行并返回结果。</p>
+
+<p>而预编译的sql在执行sql的时候则直接进行执行计划，不会在进行语义解析，也就是DB不会在进行编译，而是直接执行编译过的sql。</p>
+
+<p>使用预编译时，当再次传递新的参数，只需要把参数传递给数据库，执行响应的函数，不需要再进行sql校验
+https://www.cnblogs.com/sflik/p/4587368.html
+<!-- more -->
+一、sql预编译：</p>
+
+<p>数据库接受到sql语句之后，需要词法和语义解析，优化sql语句，制定执行计划。多数情况下，相同的sql语句可能只是传入参数不同（如where条件后的值不同…）。</p>
+
+<p>如果每次都需要经过上面的词法语义解析、语句优化、制定执行计划等，则效率就明显不行了。所以预编译的优势就体现出来了。预编译语句被DB的编译器编译后的执行代码被缓存下来,那么下次调用时只要是相同的预编译语句就不需要编译,只要将参数直接传入编译过的语句执行代码中</p>
+
+<p> </p>
+
+<p>二、实现：</p>
+
+<p>预编译语句就是将这类语句中的值用占位符替代（如 ?），可以视为将sql语句模板化或者说参数化。一次编译、多次运行，省去了解析优化等过程.</p>
+
+<p> </p>
+
+<p>三、sql预编译的作用：</p>
+
+<p>1.预编译阶段可以优化 sql 的执行</p>
+
+<p>预编译之后的 sql 多数情况下可以直接执行，DBMS 不需要再次编译，越复杂的sql，编译的复杂度将越大，预编译阶段可以合并多次操作为一个操作，从而提升性能。</p>
+
+<p>2.防止SQL注入</p>
+
+<p>使用预编译，而其后注入的参数将不会再进行SQL编译。也就是说其后注入进来的参数系统将不会认为它会是一条SQL语句，而默认其是一个参数，参数中的or或者and 等就不是SQL语法关键字了，而是被当做纯数据处理。</p>
+
+<p>https://blog.csdn.net/qq_37102984/article/details/108988837</p>
+
+<p>SQL之所以能被注入，最主要的原因就是它的数据和代码（指令）是混合的。</p>
+
+<p>其实我们想一下，C程序为什么从来没听说过注入这种说法，有的也是溢出。这是因为C是一种编译型语言，你没法在语义上欺骗它，语义解析这步提前做了，都生成二进制了。所以攻击C的方式大多是溢出，通过溢出让数据覆盖指令段。</p>
+
+<p>数据库也提供了这种分离数据和代码（指令）的方式，就是SQL预编译。而SQL语句在程序运行前已经进行了预编译，在程序运行时第一次操作数据库之前，SQL语句已经被数据库分析，编译和优化，对应的执行计划也会缓存下来并允许数据库已参数化的形式进行查询，当运行时动态地把参数传给PreprareStatement时，即使参数里有敏感字符如 or ‘1=1’也数据库会作为一个参数一个字段的属性值来处理而不会作为一个SQL指令。
+https://blog.csdn.net/weixin_33728708/article/details/90620309</p>
+
+<p>在MySQL中是如何实现预编译的，MySQL在4.1后支持了预编译，其中涉及预编译的指令实例如下</p>
+
+<p>可以通过PREPARE预编译指令，SET传入数据，通过EXECUTE执行命令</p>
+
+<p>mysql&gt; PREPARE stmt1 FROM ‘SELECT SQRT(POW(?,2) + POW(?,2)) AS hypotenuse’;</p>
+
+<p>Gorm 和 Go 端的 SQL 预编译</p>
+
+<p>在 Gorm 中，就为我们封装了 SQL 预编译技术，可以供我们使用。</p>
+
+<p>db = db.Where(“merchant_id = ?”, merchantId)</p>
+
+<p>在执行这样的语句的时候实际上我们就用到了 SQL 预编译技术，其中预编译的 SQL 语句merchant_id = ?和 SQL 查询的数据merchantId将被分开传输至 DB 后端进行处理。</p>
+
+<p>db = db.Where(fmt.Sprintf(“merchant_id = %s”, merchantId))</p>
+
+<p>而当你使用这种写法时，即表示 SQL 由用户来进行拼装，而不使用预编译技术，随之可能带来的，就是 SQL 注入的风险。</p>
+
+<p>Gorm 端的 SQL 预编译</p>
+
+<p>// SQLCommon is the minimal database connection functionality gorm requires. Implemented by *sql.DB.</p>
+
+<p>type SQLCommon interface {
+Exec(query string, args …interface{}) (sql.Result, error)</p>
+
+<p>……</p>
+
+<p>}</p>
+
+<p>Go 端的 SQL 预编译</p>
+
+<p>// src/database/sql/sql.go</p>
+
+<p>func (db *DB) execDC(ctx context.Context, dc *driverConn, release func(error), query string, args []interface{}) (res Result, err error) {
+……</p>
+
+<p>resi, err = ctxDriverExec(ctx, execerCtx, execer, query, nvdargs)</p>
+
+<p>……</p>
+
+<p>if err != driver.ErrSkip {
+……</p>
+
+<p>return driverResult{dc, resi}, nil</p>
+
+<p>}</p>
+
+<p>……</p>
+
+<p>si, err = ctxDriverPrepare(ctx, dc.ci, query)</p>
+
+<p>……</p>
+
+<p>ds := &amp;driverStmt{Locker: dc, si: si}</p>
+
+<p>……</p>
+
+<p>return resultFromStatement(ctx, dc.ci, ds, args…)</p>
+
+<p>}</p>
+
+<p>实际的实现最终还是落到了go-sql-driver上，如下面代码所示go-sql-driver支持开启预编译和关闭预编译，由mc.cfg.InterpolateParams = false、true决定，可以看出gorm中mc.cfg.InterpolateParams = true，即开启了预编译</p>
+
+<p>func (mc *mysqlConn) Exec(query string, args []driver.Value) (driver.Result, error) {
+……</p>
+
+<p>if len(args) != 0 {
+if !mc.cfg.InterpolateParams {
+return nil, driver.ErrSkip</p>
+
+<p>}</p>
+
+<p>prepared, err := mc.interpolateParams(query, args)</p>
+
+<p>if err != nil {
+return nil, err</p>
+
+<p>}</p>
+
+<p>query = prepared</p>
+
+<p>}</p>
+
+<p>……</p>
+
+<p>err := mc.exec(query)</p>
+
+<p>……</p>
+
+<p>return nil, mc.markBadConn(err)</p>
+
+<p>}</p>
+
+<p>https://blog.csdn.net/weixin_29586681/article/details/113327370</p>
+
+<p>https://learnku.com/go/t/49692</p>
+
+<p>https://www.mysqlzh.com/api/89.html</p>
+
+<p>预制语句的SQL语法在以下情况下使用：</p>
+
+<p>· 在编代码前，您想要测试预制语句在您的应用程序中运行得如何。或者也许一个应用程序在执行预制语句时有问题，您想要确定问题是什么。</p>
+
+<p>· 您想要创建一个测试案例，该案例描述了您使用预制语句时出现的问题，以便您编制程序错误报告。</p>
+
+<p>· 您需要使用预制语句，但是您无法使用支持预制语句的编程API。</p>
+
+<p>预制语句的SQL语法基于三个SQL语句：</p>
+
+<p>PREPARE stmt_name FROM preparable_stmt;</p>
+
+<p>EXECUTE stmt_name [USING @var_name [, @var_name] …];</p>
+
+<p>{DEALLOCATE | DROP} PREPARE stmt_name;
+PREPARE语句用于预备一个语句，并赋予它名称stmt_name，借此在以后引用该语句。语句名称对案例不敏感。preparable_stmt可以是一个文字字符串，也可以是一个包含了语句文本的用户变量。该文本必须展现一个单一的SQL语句，而不是多个语句。使用本语句，‘?’字符可以被用于制作参数，以指示当您执行查询时，数据值在哪里与查询结合在一起。‘?’字符不应加引号，即使您想要把它们与字符串值结合在一起，也不要加引号。参数制作符只能被用于数据值应该出现的地方，不用于SQL关键词和标识符等。</p>
+
+<p>https://www.cnblogs.com/simpman/p/6510604.html</p>
+
+<p>dc.ci.Prepare(query)这句，会先创建一个预处理语句，然后调用resultFromStatement方法执行sql操作。而Query方法，最终的实现也是一样。</p>
+
+<p>先调用Papare方法生成一个Stmt，在Prepare中，会调用dc.prepareLocked(query)，请看sql.go中844行，而最终dc.prepareLocked(query)这个方法，还是会调用dc.ci.Prepare(query)创建预处理语句，请看251行。接下来，就是调用Stmt的Exec或者Query方法，而最终这两个方法还是会调用resultFromStatement方法去执行。</p>
+
+<p>那么两种方式的相通之处，都是会预处理，不同的是使用db.Prepare会额外的创建Stmt，由Stmt实例在去处理具体的数据库操作。
+https://studygolang.com/articles/1795</p>
+
+:ET

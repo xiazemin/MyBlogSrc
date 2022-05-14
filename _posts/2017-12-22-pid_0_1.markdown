@@ -1,0 +1,223 @@
+---
+title: ID为0和ID为1的进程
+layout: post
+category: linux
+author: 夏泽民
+---
+<!-- more -->
+ID为0的进程通常是调度进程，常常被称为交换进程（swapper）。该进程是内核的一部分，它并不执行任何磁盘上的程序，因此也被称为系统进程。
+ID为1的进程，通常是init进程，在自举过程结束时由内核调用。该进程的程序文件，在UNIX早起版本中是/etc/init，在较新的版本中是/sbin/init。该进程负责在自举内核后启动一个UNIX系统。init通常读与系统有关的初始化文件（/etc/rc*文件或/etc/inittab文件，以及/etc/init.d中的文件），并将系统引导到一个状态。init 进程绝不会终止，它是一个普通的用户进程（与交换进程不同，它不是内核的系统进程）但是它以超级用户特权运行。 ——摘自APUE
+父进程ID为0的进程通常是内核进程，它们作为系统自举过程的一部分而启动，但init进程是个例外，它的父进程是0，但是它是用户进程。
+
+子进程是通过父进程创建的，子进程在创建新的进程。子进程的结束和父进程的运行是一个异步过程,即父进程永远无法预测子进程 到底什么时候结束。 当一个 进程完成它的工作终止之后，它的父进程需要调用wait()或者waitpid()系统调用取得子进程的终止状态。
+
+　　孤儿进程：一个父进程退出，而它的一个或多个子进程还在运行，那么那些子进程将成为孤儿进程。孤儿进程将被init进程(进程号为1)所收养，并由init进程对它们完成状态收集工作。
+
+　　僵尸进程：一个进程使用fork创建子进程，如果子进程退出，而父进程并没有调用wait或waitpid获取子进程的状态信息，那么子进程的进程描述符仍然保存在系统中。这种进程称之为僵死进程。
+
+问题及危害
+
+　　unix提供了一种机制可以保证只要父进程想知道子进程结束时的状态信息， 就可以得到。这种机制就是: 在每个进程退出的时候,内核释放该进程所有的资源,包括打开的文件,占用的内存等。 但是仍然为其保留一定的信息(包括进程号the process ID,退出状态the termination status of the process,运行时间the amount of CPU time taken by the process等)。直到父进程通过wait / waitpid来取时才释放。 但这样就导致了问题，如果进程不调用wait / waitpid的话， 那么保留的那段信息就不会释放，其进程号就会一直被占用，但是系统所能使用的进程号是有限的，如果大量的产生僵死进程，将因为没有可用的进程号而导致系统不能产生新的进程. 此即为僵尸进程的危害，应当避免。
+
+　　孤儿进程是没有父进程的进程，孤儿进程这个重任就落到了init进程身上，init进程就好像是一个民政局，专门负责处理孤儿进程的善后工作。每当出现一个孤儿进程的时候，内核就把孤 儿进程的父进程设置为init，而init进程会循环地wait()它的已经退出的子进程。这样，当一个孤儿进程凄凉地结束了其生命周期的时候，init进程就会代表党和政府出面处理它的一切善后工作。因此孤儿进程并不会有什么危害。
+
+　　任何一个子进程(init除外)在exit()之后，并非马上就消失掉，而是留下一个称为僵尸进程(Zombie)的数据结构，等待父进程处理。这是每个 子进程在结束时都要经过的阶段。如果子进程在exit()之后，父进程没有来得及处理，这时用ps命令就能看到子进程的状态是“Z”。如果父进程能及时 处理，可能用ps命令就来不及看到子进程的僵尸状态，但这并不等于子进程不经过僵尸状态。  如果父进程在子进程结束之前退出，则子进程将由init接管。init将会以父进程的身份对僵尸状态的子进程进行处理。
+
+　　僵尸进程危害场景：
+
+　　例如有个进程，它定期的产 生一个子进程，这个子进程需要做的事情很少，做完它该做的事情之后就退出了，因此这个子进程的生命周期很短，但是，父进程只管生成新的子进程，至于子进程 退出之后的事情，则一概不闻不问，这样，系统运行上一段时间之后，系统中就会存在很多的僵死进程，倘若用ps命令查看的话，就会看到很多状态为Z的进程。 严格地来说，僵死进程并不是问题的根源，罪魁祸首是产生出大量僵死进程的那个父进程。因此，当我们寻求如何消灭系统中大量的僵死进程时，答案就是把产生大 量僵死进程的那个元凶枪毙掉（也就是通过kill发送SIGTERM或者SIGKILL信号啦）。枪毙了元凶进程之后，它产生的僵死进程就变成了孤儿进 程，这些孤儿进程会被init进程接管，init进程会wait()这些孤儿进程，释放它们占用的系统进程表中的资源，这样，这些已经僵死的孤儿进程 就能瞑目而去了。
+　　
+　　避免产生僵尸进程
+
+        我们知道了僵尸进程产生的原因，下边我们看看如何避免产生僵尸进程。
+
+        一般，为了防止产生僵尸进程，在fork子进程之后我们都要wait它们；同时，当子进程退出的时候，内核都会给父进程一个SIGCHLD信号，所以我们可以建立一个捕获SIGCHLD信号的信号处理函数，在函数体中调用wait（或waitpid），就可以清理退出的子进程以达到防止僵尸进程的目的。如下代码所示：
+ {% highlight c linenos %}
+ void sig_chld( int signo ) {
+    pid_t pid;
+    int stat;
+    pid = wait(&stat);    
+    printf( "child %d exit\n", pid );
+    return;
+}
+int main() {
+    signal(SIGCHLD,  &sig_chld);
+}
+{% endhighlight %}
+ 现在main函数中给SIGCHLD信号注册一个信号处理函数（sig_chld），然后在子进程退出的时候，内核递交一个SIGCHLD的时候就会被主进程捕获而进入信号处理函数sig_chld，然后再在sig_chld中调用wait，就可以清理退出的子进程。这样退出的子进程就不会成为僵尸进程。
+
+        然后，即便我们捕获SIGCHLD信号并且调用wait来清理退出的进程，仍然不能彻底避免产生僵尸进程；我们来看一种特殊的情况：
+
+        我们假设有一个client/server的程序，对于每一个连接过来的client，server都启动一个新的进程去处理来自这个client的请求。然后我们有一个client进程，在这个进程内，发起了多个到server的请求（假设5个），则server会fork 5个子进程来读取client输入并处理（同时，当客户端关闭套接字的时候，每个子进程都退出）；当我们终止这个client进程的时候 ，内核将自动关闭所有由这个client进程打开的套接字，那么由这个client进程发起的5个连接基本在同一时刻终止。这就引发了5个FIN，每个连接一个。server端接受到这5个FIN的时候，5个子进程基本在同一时刻终止。这就又导致差不多在同一时刻递交5个SIGCHLD信号给父进程
+  建立信号处理函数并在其中调用wait并不足以防止出现僵尸进程，其原因在于：所有5个信号都在信号处理函数执行之前产生，而信号处理函数只执行一次，因为Unix信号一般是不排队的(我的这篇博客中有提到http://www.cnblogs.com/yuxingfirst/p/3160697.html)。 更为严重的是，本问题是不确定的，依赖于客户FIN到达服务器主机的时机，信号处理函数执行的次数并不确定。
+
+       正确的解决办法是调用waitpid而不是wait，这个办法的方法为：信号处理函数中，在一个循环内调用waitpid，以获取所有已终止子进程的状态。我们必须指定WNOHANG选项，他告知waitpid在有尚未终止的子进程在运行时不要阻塞。（我们不能在循环内调用wait，因为没有办法防止wait在尚有未终止的子进程在运行时阻塞，wait将会阻塞到现有的子进程中第一个终止为止），下边的程序分别给出了这两种处理办法(func_wait, func_waitpid)。
+       {% highlight c linenos %}
+       //server.c
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <unistd.h>
+ #include <sys/socket.h>
+ #include <errno.h>
+ #include <error.h>
+ #include <netinet/in.h>
+ #include <netinet/ip.h>
+ #include <arpa/inet.h>
+ #include <string.h>
+ #include <signal.h>
+ #include <sys/wait.h>
+
+typedef void sigfunc(int);
+
+void func_wait(int signo) {
+    pid_t pid;
+    int stat;
+    pid = wait(&stat);    
+    printf( "child %d exit\n", pid );
+    return;
+}
+void func_waitpid(int signo) {
+    pid_t pid;
+    int stat;
+    while( (pid = waitpid(-1, &stat, WNOHANG)) > 0 ) {
+        printf( "child %d exit\n", pid );
+    }
+    return;
+}
+
+sigfunc* signal( int signo, sigfunc *func ) {
+    struct sigaction act, oact;
+    act.sa_handler = func;
+    sigemptyset(&act.sa_mask);
+    act.sa_flags = 0;
+    if ( signo == SIGALRM ) {
+ #ifdef            SA_INTERRUPT
+        act.sa_flags |= SA_INTERRUPT;    /* SunOS 4.x */
+ #endif
+    } else {
+ #ifdef           SA_RESTART
+        act.sa_flags |= SA_RESTART;    /* SVR4, 4.4BSD */
+ #endif
+    }
+    if ( sigaction(signo, &act, &oact) < 0 ) {
+        return SIG_ERR;
+    }
+    return oact.sa_handler;
+} 
+
+
+void str_echo( int cfd ) {
+    ssize_t n;
+    char buf[1024];
+again:
+    memset(buf, 0, sizeof(buf));
+    while( (n = read(cfd, buf, 1024)) > 0 ) {
+        write(cfd, buf, n); 
+    }
+    if( n <0 && errno == EINTR ) {
+        goto again; 
+    } else {
+        printf("str_echo: read error\n");
+    }
+}
+
+int main() {
+
+    signal(SIGCHLD, &func_waitpid);    
+
+    int s, c;
+    pid_t child;
+    if( (s = socket(AF_INET, SOCK_STREAM, 0)) < 0 ) {
+        int e = errno; 
+        perror("create socket fail.\n");
+        exit(0);
+    }
+    
+    struct sockaddr_in server_addr, child_addr; 
+    bzero(&server_addr, sizeof(server_addr));
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(9998);
+    server_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+
+    if( bind(s, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0 ) {
+        int e = errno; 
+        perror("bind address fail.\n");
+        exit(0);
+    }
+    
+    if( listen(s, 1024) < 0 ) {
+        int e = errno; 
+        perror("listen fail.\n");
+        exit(0);
+    }
+    while(1) {
+        socklen_t chilen = sizeof(child_addr); 
+        if ( (c = accept(s, (struct sockaddr *)&child_addr, &chilen)) < 0 ) {
+            perror("listen fail.");
+            exit(0);
+        }
+
+        if( (child = fork()) == 0 ) {
+            close(s); 
+            str_echo(c);
+            exit(0);
+        }
+        close(c);
+    }
+}
+
+//client.c
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <sys/socket.h>
+#include <errno.h>
+#include <error.h>
+#include <netinet/in.h>
+#include <netinet/ip.h>
+#include <arpa/inet.h>
+#include <string.h>
+#include <signal.h>
+
+void str_cli(FILE *fp, int sfd ) {
+    char sendline[1024], recvline[2014];
+    memset(recvline, 0, sizeof(sendline));
+    memset(sendline, 0, sizeof(recvline));
+    while( fgets(sendline, 1024, fp) != NULL ) {
+        write(sfd, sendline, strlen(sendline)); 
+        if( read(sfd, recvline, 1024) == 0 ) {
+            printf("server term prematurely.\n"); 
+        }
+        fputs(recvline, stdout);
+        memset(recvline, 0, sizeof(sendline));
+        memset(sendline, 0, sizeof(recvline));
+    }
+}
+
+int main() {
+    int s[5]; 
+    for (int i=0; i<5; i++) {
+        if( (s[i] = socket(AF_INET, SOCK_STREAM, 0)) < 0 ) {
+            int e = errno; 
+            perror("create socket fail.\n");
+            exit(0);
+        }
+    }
+
+    for (int i=0; i<5; i++) {
+        struct sockaddr_in server_addr, child_addr; 
+        bzero(&server_addr, sizeof(server_addr));
+        server_addr.sin_family = AF_INET;
+        server_addr.sin_port = htons(9998);
+        inet_pton(AF_INET, "127.0.0.1", &server_addr.sin_addr);
+        if( connect(s[i], (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0 ) {
+            perror("connect fail."); 
+            exit(0);
+        }
+    }
+
+    sleep(10);
+    str_cli(stdin, s[0]);
+    exit(0);
+}
+{% endhighlight %}

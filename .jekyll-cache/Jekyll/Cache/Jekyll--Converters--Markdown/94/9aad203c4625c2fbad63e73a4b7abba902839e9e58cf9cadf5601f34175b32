@@ -1,0 +1,178 @@
+I"�&<p>一、什么是回表查询？
+这先要从InnoDB的索引实现说起，InnoDB有两大类索引：</p>
+
+<p>聚集索引(clustered index)
+普通索引(secondary index)</p>
+
+<p>InnoDB聚集索引和普通索引有什么差异？</p>
+
+<p>InnoDB聚集索引的叶子节点存储行记录，因此， InnoDB必须要有，且只有一个聚集索引：</p>
+
+<p>（1）如果表定义了PK，则PK就是聚集索引；</p>
+
+<p>（2）如果表没有定义PK，则第一个not NULL unique列是聚集索引；</p>
+
+<p>（3）否则，InnoDB会创建一个隐藏的row-id作为聚集索引；</p>
+
+<p>所以PK查询非常快，直接定位行记录。</p>
+
+<p>InnoDB普通索引的叶子节点存储主键值。</p>
+
+<p>注意，不是存储行记录头指针，MyISAM的索引叶子节点存储记录指针。
+<!-- more -->
+举个栗子，不妨设有表：</p>
+
+<p>t(id PK, name KEY, sex, flag);</p>
+
+<p>id是聚集索引，name是普通索引。</p>
+
+<p>表中有四条记录：
+1, shenjian, m, A
+3, zhangsan, m, A
+5, lisi, m, A
+9, wangwu, f, B
+　　
+该聚集索引和普通索引如图：
+	<img src="https://xiazemin.github.io/MyBlog/img/clusterIndex.png" />
+1）id为PK，聚集索引，叶子节点存储行记录；</p>
+
+<p>（2）name为KEY，普通索引，叶子节点存储PK值，即id；</p>
+
+<p>如图可知主键索引从根节点开始利用页目录通过二分法查找某个索引页，由于索引是有序的，所以在数据页中同样利用二分法查询指定记录。</p>
+
+<p>普通索引和主键索引一样是棵B+树，不过普通索引的记录和页按照某个非主键列的值排序，叶子节点保存的不是完整数据，而是某个非主键列和主键，普通索引的非叶结点保存的是非主键列和页号。</p>
+
+<p>(重点)一个 SQL 只能利用到复合索引中的其中一列进行范围查询，因为B+树的每个叶子节点有一个指针指向下一个节点，把某一索引列的所有的叶子节点串在了一起，只能根据单列的叶子节点进行范围查询，这就是复合索引中只能有其中一列使用索引进行范围查询的原理。</p>
+
+<p>既然从普通索引无法直接定位行记录，那普通索引的查询过程是怎么样的呢？</p>
+
+<p>(重点)通常情况下，需要先遍历普通索引的B+树获得聚集索引主键id，然后遍历聚集索引的B+树获得行记录的对应的值。</p>
+
+<p>B+树的每个叶子节点有一个指针指向下一个节点，把所有的叶子节点串在了一起，这就是范围查询使用索引的的原理。
+select * from t where name=’lisi’;
+如下图所示流程：
+	<img src="https://xiazemin.github.io/MyBlog/img/clusterIndex1.png" />
+	如粉红色路径，需要扫码两遍索引树：</p>
+
+<p>（1）先通过普通索引定位到主键值id=5；</p>
+
+<p>（2）在通过聚集索引定位到行记录；</p>
+
+<p>(重点)这就是所谓的回表查询，先定位主键值，再定位行记录，它的性能较扫一遍索引树更低。</p>
+
+<p>二、什么是索引覆盖(Covering index)？
+explain查询计划优化章节，即explain的输出结果Extra字段为Using index时，能够触发索引覆盖。</p>
+
+<p>只需要在一棵索引树上就能获取SQL所需的所有列数据，无需回表，速度更快。
+三、如何实现索引覆盖？
+常见的方法是：将被查询的字段，建立到联合索引里去。
+create table user (
+id int primary key,
+name varchar(20),
+sex varchar(5),
+index(name)
+)engine=innodb;</p>
+
+<p>select id,name from user where name=’shenjian’;</p>
+
+<p>能够命中name索引，索引叶子节点存储了主键id，通过name的索引树即可获取id和name，无需回表，符合索引覆盖，效率较高。</p>
+
+<p>Extra：Using index。
+第二个SQL语句：
+select id,name,sex from user where name=’shenjian’;
+能够命中name索引，索引叶子节点存储了主键id，但sex字段必须回表查询才能获取到，不符合索引覆盖，需要再次通过id值扫描聚集索引获取sex字段，效率会降低。</p>
+
+<p>Extra：Using index condition。</p>
+
+<p>如果把(name)单列索引升级为联合索引(name, sex)就不同了。
+create table user (
+id int primary key,
+name varchar(20),
+sex varchar(5),
+index(name, sex)
+)engine=innodb;</p>
+
+<p>可以看到：</p>
+
+<p>select id,name … where name=’shenjian’;
+select id,name,sex … where name=’shenjian’;
+都能够命中索引覆盖，无需回表。</p>
+
+<p>画外音，Extra：Using index。</p>
+
+<p>四、哪些场景可以利用索引覆盖来优化SQL？
+场景1：全表count查询优化
+原表为：</p>
+
+<p>user(PK id, name, sex)；</p>
+
+<p>直接：</p>
+
+<p>select count(name) from user;
+不能利用索引覆盖。</p>
+
+<p>添加索引：</p>
+
+<p>alter table user add key(name);
+就能够利用索引覆盖提效。</p>
+
+<p>场景2：列查询回表优化</p>
+
+<p>select id,name,sex … where name=’shenjian’;
+这个例子不再赘述，将单列索引(name)升级为联合索引(name, sex)，即可避免回表。</p>
+
+<p>场景3：分页查询</p>
+
+<p>select id,name,sex … order by name limit 500,100;
+将单列索引(name)升级为联合索引(name, sex)，也可以避免回表。</p>
+
+<p>MySQL官网，类似的说法出现在explain查询计划优化章节，即explain的输出结果Extra字段为Using index时，能够触发索引覆盖。</p>
+
+<p>不管是SQL-Server官网，还是MySQL官网，都表达了：只需要在一棵索引树上就能获取SQL所需的所有列数据，无需回表，速度更快。</p>
+
+<p>三、如何实现索引覆盖？</p>
+
+<p>常见的方法是：将被查询的字段，建立到联合索引里去。
+最左前缀匹配原则
+在mysql建立联合索引时会遵循最左前缀匹配的原则，即最左优先，在检索数据时从联合索引的最左边开始匹配，示例：
+对列col1、列col2和列col3建一个联合索引</p>
+
+<p>?
+1
+KEY test_col1_col2_col3 on test(col1,col2,col3);
+联合索引 test_col1_col2_col3 实际建立了(col1)、(col1,col2)、(col,col2,col3)三个索引。</p>
+
+<p>?
+1
+SELECT * FROM test WHERE col1=“1” AND clo2=“2” AND clo4=“4”
+上面这个查询语句执行时会依照最左前缀匹配原则，检索时会使用索引(col1,col2)进行数据匹配。</p>
+
+<p>注意
+索引的字段可以是任意顺序的，如：</p>
+
+<p>?
+1
+2
+SELECT * FROM test WHERE col1=“1” AND clo2=“2”
+SELECT * FROM test WHERE col2=“2” AND clo1=“1”
+这两个查询语句都会用到索引(col1,col2)，mysql创建联合索引的规则是首先会对联合合索引的最左边的，也就是第一个字段col1的数据进行排序，在第一个字段的排序基础上，然后再对后面第二个字段col2进行排序。其实就相当于实现了类似 order by col1 col2这样一种排序规则。</p>
+
+<p>有人会疑惑第二个查询语句不符合最左前缀匹配：首先可以肯定是两个查询语句都保函索引(col1,col2)中的col1、col2两个字段，只是顺序不一样，查询条件一样，最后所查询的结果肯定是一样的。既然结果是一样的，到底以何种顺序的查询方式最好呢？此时我们可以借助mysql查询优化器explain，explain会纠正sql语句该以什么样的顺序执行效率最高，最后才生成真正的执行计划。</p>
+
+<p>为什么要使用联合索引
+减少开销。建一个联合索引(col1,col2,col3)，实际相当于建了(col1),(col1,col2),(col1,col2,col3)三个索引。每多一个索引，都会增加写操作的开销和磁盘空间的开销。对于大量数据的表，使用联合索引会大大的减少开销！
+覆盖索引。对联合索引(col1,col2,col3)，如果有如下的sql: select col1,col2,col3 from test where col1=1 and col2=2。那么MySQL可以直接通过遍历索引取得数据，而无需回表，这减少了很多的随机io操作。减少io操作，特别的随机io其实是dba主要的优化策略。所以，在真正的实际应用中，覆盖索引是主要的提升性能的优化手段之一。
+效率高。索引列越多，通过索引筛选出的数据越少。有1000W条数据的表，有如下sql:select from table where col1=1 and col2=2 and col3=3,假设假设每个条件可以筛选出10%的数据，如果只有单值索引，那么通过该索引能筛选出1000W10%=100w条数据，然后再回表从100w条数据中找到符合col2=2 and col3= 3的数据，然后再排序，再分页；如果是联合索引，通过索引筛选出1000w10% 10% *10%=1w，效率提升可想而知！
+引申
+对于联合索引(col1,col2,col3)，查询语句SELECT * FROM test WHERE col2=2;是否能够触发索引？
+大多数人都会说NO，实际上却是YES。
+原因：
+EXPLAIN SELECT * FROM test WHERE col2=2;
+EXPLAIN SELECT * FROM test WHERE col1=1;
+观察上述两个explain结果中的type字段。查询中分别是：</p>
+
+<p>type: index
+type: ref
+index：这种类型表示mysql会对整个该索引进行扫描。要想用到这种类型的索引，对这个索引并无特别要求，只要是索引，或者某个联合索引的一部分，mysql都可能会采用index类型的方式扫描。但是呢，缺点是效率不高，mysql会从索引中的第一个数据一个个的查找到最后一个数据，直到找到符合判断条件的某个索引。所以，上述语句会触发索引。
+ref：这种类型表示mysql会根据特定的算法快速查找到某个符合条件的索引，而不是会对索引中每一个数据都进行一一的扫描判断，也就是所谓你平常理解的使用索引查询会更快的取出数据。而要想实现这种查找，索引却是有要求的，要实现这种能快速查找的算法，索引就要满足特定的数据结构。简单说，也就是索引字段的数据必须是有序的，才能实现这种类型的查找，才能利用到索引。</p>
+:ET

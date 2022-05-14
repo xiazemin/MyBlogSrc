@@ -1,0 +1,87 @@
+---
+title: crontab
+layout: post
+category: linux
+author: 夏泽民
+---
+cron工作原理：cron由crond守护进程和一组表（crontab文件）组成。
+crond守护进程是在系统启动时由init进程启动的，受init进程的监视，如果它不存在了，会被init进程重新启动。这个守护进程每分钟唤醒一次，并通过检查crontab文件判断需要做什么。
+每个用户有一个以用户名命名的crontab文件，存放在/var/spool/cron/crontabs目录里。若管理员允许或者禁止其他用户拥有crontab文件，则应编辑/etc/下面的cron.deny和cron.allow这两个文件来禁止或允许用户拥有自己的crontab文件。每一个用户都可以有自己的crontab文件，但在一个较大的系统中，系统管理员一般会禁止这些文件，而只在整个系统保留一个这样的文件。
+
+用户使用crontab命令（注意crontab可以指文件，也是一个命令）管理自己的crontab文件。
+1）更新crontab文件——crontab filename
+用来更新当前用户的crontab文件。注意：只是将filename指定的文件中的crontab条目写入用户的crontab文件（以用户名命名）中并清空crontab文件原来的条目，并不是将filename指定的文件复制/var/spool/cron/crontabs目录。
+2）列出crontab文件——crontab -l
+列出当前用户的crontab文件的crontab条目。
+3）编辑crontab文件——crontab -e
+编辑当前用户的crontab文件。
+4）删除crontab文件——crontab -d
+删除当前用户的crontab文件。
+<!-- more -->
+cron 表 由以行为单位的 入口项组成, 一个入口由两部分组成 ： 执行命令的时间   和  要执行的命令
+
+ 
+
+一行 包含 6个 区域， 如果 “#” 开头 ，将被作为注释。 六个域必须 由 空格 或 tabs键分割
+
+ 
+
+1. 一小时中哪一分钟执行(0-59) 
+
+2. 一天中哪一小时执行(0-23) 
+
+3. 一月中哪一天     (0-31) 
+
+4. 一年中的哪一年 (1-12) 
+
+5. 每星期的哪一天执行  (0-6) (0=Sunday) 
+
+6. 要执行的命令
+
+一个入口项的前五列 可以由下面的规则组成: 
+
+ 
+
+ 
+
+一个范围中的一个数字 
+
+一个范围中的 一个时间范围; 例如, 2-10 
+
+一串由 “，”分割的 时间点或范围  例如： 1,2,3-7,8 
+
+一个 “*” 代表所有的 合法的时间 
+
+ 
+
+列表或 时间 区间  中间不能有空格， 空格保留为 域的分割符
+
+可以理解为cron服务有2个线程，一个是调度处理定时任务，一个后台线程，后台线程检查配置文件是否有变动，如果有变动，则发送信号到调度进程，调度进程再重新读取配置文件更新内存中的任务队列，同理，service cron stop也是发信号到cron服务（本次确认cron服务半僵死就是因为无法响应了）导致调度线程不知道变动，没有更新内存中的队列。从/var/log/messages观察，依然是修改或删除之前的定时任务在运行。
+
+    因此，为了保险，在用户里crontab -r删除用户的定时任务后，建议重启一下crontab服务（service cron stop后记得service cron status查看一下是否停止成功，如果没有kill -9再service cron start），也就是清空一下当前定时任务的内存队列，让cron服务重新加载，更重要的是防止cron服务挂住没重新加载定时任务队列。
+
+cron: can’t lock /var/run/crond.pid, otherpid may be 2699: Resource temporarily unavailable
+
+解决方案： rm -rf /var/run/crond.pid 重启即可 
+重新加载
+处理方法： /etc/init.d/cron reload 
+
+重启服务
+
+处理方法：/etc/init.d/crond restart   
+
+*(星号)	代表任何时刻都接受的意思。举例来说，0 12 * * * command 日、月、周都是*，就代表着不论何月、何日的礼拜几的12：00都执行后续命令的意思。
+,(逗号)	代表分隔时段的意思。举例来说，如果要执行的工作是3：00与6：00时，就会是：0 3,6 * * * command时间还是有五列，不过第二列是 3,6 ，代表3与6都适用
+-(减号)	代表一段时间范围内，举例来说，8点到12点之间的每小时的20分都进行一项工作：20 8-12 * * * command仔细看到第二列变成8-12.代表 8,9,10,11,12 都适用的意思
+/n(斜线)	那个n代表数字，即是每隔n单位间隔的意思，例如每五分钟进行一次，则：*/5 * * * * command用*与/5来搭配，也可以写成0-59/5，意思相同
+
+我们计划任务需要精确到秒来执行，根据以下方法，可以很容易地以秒执行任务。
+以下方法将每10秒执行一次
+# crontab -e
+* * * * * /bin/date >>/tmp/date.txt
+* * * * * sleep 10; /bin/date >>/tmp/date.txt
+* * * * * sleep 20; /bin/date >>/tmp/date.txt
+* * * * * sleep 30; /bin/date >>/tmp/date.txt
+* * * * * sleep 40; /bin/date >>/tmp/date.txt
+* * * * * sleep 50; /bin/date >>/tmp/date.txt
+

@@ -1,0 +1,441 @@
+I"�L<p>1、 char长度固定， 即每条数据占用等长字节空间；适合用在身份证号码、手机号码等定。</p>
+
+<p>2、 varchar可变长度，可以设置最大长度；适合用在长度可变的属性。</p>
+
+<p>3、 text不设置长度， 当不知道属性的最大长度时，适合用text。</p>
+
+<p>varchar：varchar(n)中的n表示字符数，最大空间是65535个字节， 存放字符数量跟字符集有关系；</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code> MySQL5.0.3以前版本varchar(n)中的n表示字节数；
+
+ MySQL5.0.3以后版本varchar(n)中的n表示字符数；
+</code></pre></div></div>
+
+<p>https://blog.csdn.net/brycegao321/article/details/78038272
+<!-- more --></p>
+
+<p>https://juejin.cn/post/7069006450265161764</p>
+
+<p>mysql index key len_explain 中key_len的作用及计算规则
+key_len的长度是如何计算的？name的字段类型是varchar(20)，字符编码是utf8，一个字符占用3个字节，那么key_len应该是 20*3=60。</p>
+
+<p>key_len的长度计算公式：</p>
+
+<p>varchr(10)变长字段且允许NULL    =  10 * ( character set：utf8=3,gbk=2,latin1=1)+1(NULL)+2(变长字段)</p>
+
+<p>varchr(10)变长字段且不允许NULL =  10 *( character set：utf8=3,gbk=2,latin1=1)+2(变长字段)</p>
+
+<p>char(10)固定字段且允许NULL        =  10 * ( character set：utf8=3,gbk=2,latin1=1)+1(NULL)</p>
+
+<p>char(10)固定字段且不允许NULL        =  10 * ( character set：utf8=3,gbk=2,latin1=1)</p>
+
+<p>https://blog.csdn.net/weixin_35282313/article/details/113220326</p>
+
+<p>https://www.cnblogs.com/tingxin/p/14111489.html
+https://dev.mysql.com/doc/refman/8.0/en/data-size.html
+https://dev.mysql.com/doc/refman/8.0/en/innodb-row-format.html
+https://dev.mysql.com/doc/refman/8.0/en/char.html</p>
+
+<p>mysql&gt; create table table1 (
+    -&gt;     <code class="language-plaintext highlighter-rouge">id</code> INT (11) NOT NULL,
+    -&gt;     <code class="language-plaintext highlighter-rouge">name</code> varchar(20) NOT NULL
+    -&gt; );
+Query OK, 0 rows affected, 1 warning (0.25 sec)</p>
+
+<p>mysql&gt; create table table2 (
+    -&gt;     <code class="language-plaintext highlighter-rouge">id</code> INT (11) NOT NULL,
+    -&gt;     <code class="language-plaintext highlighter-rouge">name</code>  varchar(20)
+    -&gt; );
+Query OK, 0 rows affected, 1 warning (0.05 sec)</p>
+
+<p>mysql&gt; insert into table1 values (4,”zhaoyun”),(2,”zhangfei”),(3,”liubei”);
+Query OK, 3 rows affected (0.04 sec)
+Records: 3  Duplicates: 0  Warnings: 0</p>
+
+<p>mysql&gt; insert into table2 values (1,”zhaoyun”),(2, null);
+Query OK, 2 rows affected (0.02 sec)
+Records: 2  Duplicates: 0  Warnings: 0</p>
+
+<p>mysql&gt; explain select * from table1 where name=’zhaoyun’;
++—-+————-+——–+————+——+—————+——+———+——+——+———-+————-+
+| id | select_type | table  | partitions | type | possible_keys | key  | key_len | ref  | rows | filtered | Extra       |
++—-+————-+——–+————+——+—————+——+———+——+——+———-+————-+
+|  1 | SIMPLE      | table1 | NULL       | ALL  | NULL          | NULL | NULL    | NULL |    3 |    33.33 | Using where |
++—-+————-+——–+————+——+—————+——+———+——+——+———-+————-+
+1 row in set, 1 warning (0.01 sec)</p>
+
+<p>mysql&gt; explain select * from table2 where name=’zhaoyun’;
++—-+————-+——–+————+——+—————+——+———+——+——+———-+————-+
+| id | select_type | table  | partitions | type | possible_keys | key  | key_len | ref  | rows | filtered | Extra       |
++—-+————-+——–+————+——+—————+——+———+——+——+———-+————-+
+|  1 | SIMPLE      | table2 | NULL       | ALL  | NULL          | NULL | NULL    | NULL |    2 |    50.00 | Using where |
++—-+————-+——–+————+——+—————+——+———+——+——+———-+————-+
+1 row in set, 1 warning (0.00 sec)</p>
+
+<p>mysql&gt; alter table table1 add index idx_name (name);
+Query OK, 0 rows affected (0.05 sec)
+Records: 0  Duplicates: 0  Warnings: 0</p>
+
+<p>mysql&gt; alter table table2 add index idx_name (name);
+Query OK, 0 rows affected (0.07 sec)
+Records: 0  Duplicates: 0  Warnings: 0</p>
+
+<p>mysql&gt; explain select * from table1 where name=’zhaoyun’;
++—-+————-+——–+————+——+—————+———-+———+——-+——+———-+——-+
+| id | select_type | table  | partitions | type | possible_keys | key      | key_len | ref   | rows | filtered | Extra |
++—-+————-+——–+————+——+—————+———-+———+——-+——+———-+——-+
+|  1 | SIMPLE      | table1 | NULL       | ref  | idx_name      | idx_name | 82      | const |    1 |   100.00 | NULL  |
++—-+————-+——–+————+——+—————+———-+———+——-+——+———-+——-+
+1 row in set, 1 warning (0.01 sec)</p>
+
+<p>mysql&gt; explain select * from table2 where name=’zhaoyun’;
++—-+————-+——–+————+——+—————+———-+———+——-+——+———-+——-+
+| id | select_type | table  | partitions | type | possible_keys | key      | key_len | ref   | rows | filtered | Extra |
++—-+————-+——–+————+——+—————+———-+———+——-+——+———-+——-+
+|  1 | SIMPLE      | table2 | NULL       | ref  | idx_name      | idx_name | 83      | const |    1 |   100.00 | NULL  |
++—-+————-+——–+————+——+—————+———-+———+——-+——+———-+——-+
+1 row in set, 1 warning (0.00 sec)</p>
+
+<p>mysql&gt;  create table table2 (
+    -&gt;     -&gt;     <code class="language-plaintext highlighter-rouge">id</code> INT (11) NOT NULL,
+    -&gt;     -&gt;     <code class="language-plaintext highlighter-rouge">name</code>  varchar(20)
+    -&gt;   );
+ERROR 1064 (42000): You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near ‘-&gt;     <code class="language-plaintext highlighter-rouge">id</code> INT (11) NOT NULL,
+    -&gt;     <code class="language-plaintext highlighter-rouge">name</code>  varchar(20)
+  )’ at line 2
+mysql&gt; create table table3(  <code class="language-plaintext highlighter-rouge">id</code> INT (11) NOT NULL, <code class="language-plaintext highlighter-rouge">name</code>  varchar(255),key idx_name(name));
+Query OK, 0 rows affected, 1 warning (0.06 sec)</p>
+
+<p>mysql&gt; insert into table3 (name)values(“guanyu”);
+ERROR 1364 (HY000): Field ‘id’ doesn’t have a default value
+mysql&gt; insert into table3 (id,name)values(1,”guanyu”);
+Query OK, 1 row affected (0.00 sec)</p>
+
+<p>mysql&gt; explain select * from table3 where name=”guanyu”\G
+<strong>**</strong><strong>**</strong><strong>**</strong><strong>**</strong><strong>* 1. row **</strong><strong>**</strong><strong>**</strong><strong>**</strong>*****
+           id: 1
+  select_type: SIMPLE
+        table: table3
+   partitions: NULL
+         type: ref
+possible_keys: idx_name
+          key: idx_name
+      key_len: 1023
+          ref: const
+         rows: 1
+     filtered: 100.00
+        Extra: NULL
+1 row in set, 1 warning (0.02 sec)</p>
+
+<p>mysql&gt; create table table4(  <code class="language-plaintext highlighter-rouge">id</code> INT (11) NOT NULL, <code class="language-plaintext highlighter-rouge">name</code>  char(255),key idx_name(name));
+Query OK, 0 rows affected, 1 warning (0.04 sec)</p>
+
+<p>mysql&gt; insert into table4 (id,name)values(1,”guanyu”);
+Query OK, 1 row affected (0.00 sec)</p>
+
+<p>mysql&gt; explain select * from table3 where name=”guanyu”\G
+<strong>**</strong><strong>**</strong><strong>**</strong><strong>**</strong><strong>* 1. row **</strong><strong>**</strong><strong>**</strong><strong>**</strong>*****
+           id: 1
+  select_type: SIMPLE
+        table: table3
+   partitions: NULL
+         type: ref
+possible_keys: idx_name
+          key: idx_name
+      key_len: 1023
+          ref: const
+         rows: 1
+     filtered: 100.00
+        Extra: NULL
+1 row in set, 1 warning (0.01 sec)</p>
+
+<p>mysql&gt; explain select * from table4 where name=”guanyu”\G
+<strong>**</strong><strong>**</strong><strong>**</strong><strong>**</strong><strong>* 1. row **</strong><strong>**</strong><strong>**</strong><strong>**</strong>*****
+           id: 1
+  select_type: SIMPLE
+        table: table4
+   partitions: NULL
+         type: ref
+possible_keys: idx_name
+          key: idx_name
+      key_len: 1021
+          ref: const
+         rows: 1
+     filtered: 100.00
+        Extra: Using index condition
+1 row in set, 1 warning (0.01 sec)</p>
+
+<p>mysql&gt; create table table5(  <code class="language-plaintext highlighter-rouge">id</code> INT (11) NOT NULL, <code class="language-plaintext highlighter-rouge">name</code>  varchar(512),key idx_name(name));
+Query OK, 0 rows affected, 1 warning (0.02 sec)</p>
+
+<p>mysql&gt; explain select * from table5 where name=”guanyu”\G
+<strong>**</strong><strong>**</strong><strong>**</strong><strong>**</strong><strong>* 1. row **</strong><strong>**</strong><strong>**</strong><strong>**</strong>*****
+           id: 1
+  select_type: SIMPLE
+        table: table5
+   partitions: NULL
+         type: ref
+possible_keys: idx_name
+          key: idx_name
+      key_len: 2051
+          ref: const
+         rows: 1
+     filtered: 100.00
+        Extra: NULL
+1 row in set, 1 warning (0.00 sec)</p>
+
+<p>mysql&gt; create table table6(  <code class="language-plaintext highlighter-rouge">id</code> INT (11) NOT NULL, <code class="language-plaintext highlighter-rouge">name</code>  varchar(512) NOT NULL,key idx_name(name));
+Query OK, 0 rows affected, 1 warning (0.05 sec)</p>
+
+<p>mysql&gt; explain select * from table6 where name=”guanyu”\G
+<strong>**</strong><strong>**</strong><strong>**</strong><strong>**</strong><strong>* 1. row **</strong><strong>**</strong><strong>**</strong><strong>**</strong>*****
+           id: 1
+  select_type: SIMPLE
+        table: table6
+   partitions: NULL
+         type: ref
+possible_keys: idx_name
+          key: idx_name
+      key_len: 2050
+          ref: const
+         rows: 1
+     filtered: 100.00
+        Extra: NULL
+1 row in set, 1 warning (0.00 sec)</p>
+
+<p>mysql&gt; show create table table6\G
+<strong>**</strong><strong>**</strong><strong>**</strong><strong>**</strong><strong>* 1. row **</strong><strong>**</strong><strong>**</strong><strong>**</strong>*****
+       Table: table6
+Create Table: CREATE TABLE <code class="language-plaintext highlighter-rouge">table6</code> (
+  <code class="language-plaintext highlighter-rouge">id</code> int NOT NULL,
+  <code class="language-plaintext highlighter-rouge">name</code> varchar(512) NOT NULL,
+  KEY <code class="language-plaintext highlighter-rouge">idx_name</code> (<code class="language-plaintext highlighter-rouge">name</code>)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+1 row in set (0.01 sec)</p>
+
+<p>mysql&gt; explain insert into table6 (id,name)values(1,”guanyu”);
++—-+————-+——–+————+——+—————+——+———+——+——+———-+——-+
+| id | select_type | table  | partitions | type | possible_keys | key  | key_len | ref  | rows | filtered | Extra |
++—-+————-+——–+————+——+—————+——+———+——+——+———-+——-+
+|  1 | INSERT      | table6 | NULL       | ALL  | NULL          | NULL | NULL    | NULL | NULL |     NULL | NULL  |
++—-+————-+——–+————+——+—————+——+———+——+——+———-+——-+
+1 row in set, 1 warning (0.00 sec)</p>
+
+<p>mysql&gt; explain insert into table6 (id,name)values(1,”guanyu”);
++—-+————-+——–+————+——+—————+——+———+——+——+———-+——-+
+| id | select_type | table  | partitions | type | possible_keys | key  | key_len | ref  | rows | filtered | Extra |
++—-+————-+——–+————+——+—————+——+———+——+——+———-+——-+
+|  1 | INSERT      | table6 | NULL       | ALL  | NULL          | NULL | NULL    | NULL | NULL |     NULL | NULL  |
++—-+————-+——–+————+——+—————+——+———+——+——+———-+——-+
+1 row in set, 1 warning (0.02 sec)</p>
+
+<p>mysql&gt; insert into table6 (id,name)values(1,”guanyu”);
+Query OK, 1 row affected (0.01 sec)</p>
+
+<p>mysql&gt; insert into table6 (id,name)values(1,”guanyu”);
+Query OK, 1 row affected (0.00 sec)</p>
+
+<p>mysql&gt; insert into table6 (id,name)values(1,”guanyu”);
+Query OK, 1 row affected (0.01 sec)</p>
+
+<p>mysql&gt; explain insert into table6 (id,name)values(1,”guanyu”);
++—-+————-+——–+————+——+—————+——+———+——+——+———-+——-+
+| id | select_type | table  | partitions | type | possible_keys | key  | key_len | ref  | rows | filtered | Extra |
++—-+————-+——–+————+——+—————+——+———+——+——+———-+——-+
+|  1 | INSERT      | table6 | NULL       | ALL  | NULL          | NULL | NULL    | NULL | NULL |     NULL | NULL  |
++—-+————-+——–+————+——+—————+——+———+——+——+———-+——-+
+1 row in set, 1 warning (0.00 sec)</p>
+
+<p>mysql&gt;  SHOW TABLE STATUS IN table6\G
+ERROR 1049 (42000): Unknown database ‘table6’
+mysql&gt;  SHOW TABLE STATUS IN test\G
+<strong>**</strong><strong>**</strong><strong>**</strong><strong>**</strong><strong>* 1. row **</strong><strong>**</strong><strong>**</strong><strong>**</strong><strong>***
+           Name: authors
+         Engine: InnoDB
+        Version: 10
+     Row_format: Dynamic
+           Rows: 0
+ Avg_row_length: 0
+    Data_length: 16384
+Max_data_length: 0
+   Index_length: 0
+      Data_free: 0
+ Auto_increment: NULL
+    Create_time: 2022-01-12 10:21:30
+    Update_time: NULL
+     Check_time: NULL
+      Collation: utf8mb4_0900_ai_ci
+       Checksum: NULL
+ Create_options:
+        Comment:
+**</strong><strong>**</strong><strong>**</strong><strong>**</strong><strong>*** 2. row **</strong><strong>**</strong><strong>**</strong><strong>**</strong><strong>***
+           Name: company
+         Engine: InnoDB
+        Version: 10
+     Row_format: Dynamic
+           Rows: 0
+ Avg_row_length: 0
+    Data_length: 16384
+Max_data_length: 0
+   Index_length: 0
+      Data_free: 0
+ Auto_increment: NULL
+    Create_time: 2021-06-11 12:06:23
+    Update_time: NULL
+     Check_time: NULL
+      Collation: utf8mb4_0900_ai_ci
+       Checksum: NULL
+ Create_options:
+        Comment:
+**</strong><strong>**</strong><strong>**</strong><strong>**</strong><strong>*** 3. row **</strong><strong>**</strong><strong>**</strong><strong>**</strong><strong>***
+           Name: employee
+         Engine: InnoDB
+        Version: 10
+     Row_format: Dynamic
+           Rows: 0
+ Avg_row_length: 0
+    Data_length: 16384
+Max_data_length: 0
+   Index_length: 0
+      Data_free: 0
+ Auto_increment: NULL
+    Create_time: 2021-06-03 13:47:28
+    Update_time: NULL
+     Check_time: NULL
+      Collation: utf8mb4_0900_ai_ci
+       Checksum: NULL
+ Create_options:
+        Comment:
+**</strong><strong>**</strong><strong>**</strong><strong>**</strong><strong>*** 4. row **</strong><strong>**</strong><strong>**</strong><strong>**</strong><strong>***
+           Name: table1
+         Engine: InnoDB
+        Version: 10
+     Row_format: Dynamic
+           Rows: 3
+ Avg_row_length: 5461
+    Data_length: 16384
+Max_data_length: 0
+   Index_length: 0
+      Data_free: 0
+ Auto_increment: NULL
+    Create_time: 2022-03-25 10:19:04
+    Update_time: 2022-03-25 10:17:59
+     Check_time: NULL
+      Collation: utf8mb4_0900_ai_ci
+       Checksum: NULL
+ Create_options:
+        Comment:
+**</strong><strong>**</strong><strong>**</strong><strong>**</strong><strong>*** 5. row **</strong><strong>**</strong><strong>**</strong><strong>**</strong><strong>***
+           Name: table2
+         Engine: InnoDB
+        Version: 10
+     Row_format: Dynamic
+           Rows: 2
+ Avg_row_length: 8192
+    Data_length: 16384
+Max_data_length: 0
+   Index_length: 0
+      Data_free: 0
+ Auto_increment: NULL
+    Create_time: 2022-03-25 10:19:09
+    Update_time: 2022-03-25 10:18:08
+     Check_time: NULL
+      Collation: utf8mb4_0900_ai_ci
+       Checksum: NULL
+ Create_options:
+        Comment:
+**</strong><strong>**</strong><strong>**</strong><strong>**</strong><strong>*** 6. row **</strong><strong>**</strong><strong>**</strong><strong>**</strong><strong>***
+           Name: table3
+         Engine: InnoDB
+        Version: 10
+     Row_format: Dynamic
+           Rows: 1
+ Avg_row_length: 16384
+    Data_length: 16384
+Max_data_length: 0
+   Index_length: 16384
+      Data_free: 0
+ Auto_increment: NULL
+    Create_time: 2022-03-25 10:23:02
+    Update_time: 2022-03-25 10:23:47
+     Check_time: NULL
+      Collation: utf8mb4_0900_ai_ci
+       Checksum: NULL
+ Create_options:
+        Comment:
+**</strong><strong>**</strong><strong>**</strong><strong>**</strong><strong>*** 7. row **</strong><strong>**</strong><strong>**</strong><strong>**</strong><strong>***
+           Name: table4
+         Engine: InnoDB
+        Version: 10
+     Row_format: Dynamic
+           Rows: 1
+ Avg_row_length: 16384
+    Data_length: 16384
+Max_data_length: 0
+   Index_length: 16384
+      Data_free: 0
+ Auto_increment: NULL
+    Create_time: 2022-03-25 10:24:53
+    Update_time: 2022-03-25 10:25:03
+     Check_time: NULL
+      Collation: utf8mb4_0900_ai_ci
+       Checksum: NULL
+ Create_options:
+        Comment:
+**</strong><strong>**</strong><strong>**</strong><strong>**</strong><strong>*** 8. row **</strong><strong>**</strong><strong>**</strong><strong>**</strong><strong>***
+           Name: table5
+         Engine: InnoDB
+        Version: 10
+     Row_format: Dynamic
+           Rows: 0
+ Avg_row_length: 0
+    Data_length: 16384
+Max_data_length: 0
+   Index_length: 16384
+      Data_free: 0
+ Auto_increment: NULL
+    Create_time: 2022-03-25 10:27:11
+    Update_time: NULL
+     Check_time: NULL
+      Collation: utf8mb4_0900_ai_ci
+       Checksum: NULL
+ Create_options:
+        Comment:
+**</strong><strong>**</strong><strong>**</strong><strong>**</strong><strong>*** 9. row **</strong><strong>**</strong><strong>**</strong><strong>**</strong>*****
+           Name: table6
+         Engine: InnoDB
+        Version: 10
+     Row_format: Dynamic
+           Rows: 3
+ Avg_row_length: 5461
+    Data_length: 16384
+Max_data_length: 0
+   Index_length: 16384
+      Data_free: 0
+ Auto_increment: NULL
+    Create_time: 2022-03-25 10:30:37
+    Update_time: 2022-03-25 10:33:43
+     Check_time: NULL
+      Collation: utf8mb4_0900_ai_ci
+       Checksum: NULL
+ Create_options:
+        Comment:
+9 rows in set (0.14 sec)</p>
+
+<p>mysql&gt; explain select * from table6 where name=”guanyu”\G
+<strong>**</strong><strong>**</strong><strong>**</strong><strong>**</strong><strong>* 1. row **</strong><strong>**</strong><strong>**</strong><strong>**</strong>*****
+           id: 1
+  select_type: SIMPLE
+        table: table6
+   partitions: NULL
+         type: ref
+possible_keys: idx_name
+          key: idx_name
+      key_len: 2050
+          ref: const
+         rows: 3
+     filtered: 100.00
+        Extra: NULL
+1 row in set, 1 warning (0.02 sec)</p>
+
+:ET

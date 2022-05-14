@@ -1,0 +1,96 @@
+I"b<p>MySQL索引使用：字段为varchar类型时，条件要使用’ ‘包起来</p>
+
+<p>结论：</p>
+
+<p>当MySQL中字段为int类型时，搜索条件where num=‘111‘ 与where num=111都可以使用该字段的索引。
+当MySQL中字段为varchar类型时，搜索条件where num=‘111‘ 可以使用索引，where num=111 不可以使用索引
+<!-- more --></p>
+
+<p>验证过程：</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>建表语句：
+</code></pre></div></div>
+
+<p>CREATE TABLE <code class="language-plaintext highlighter-rouge">gyl</code>(
+    <code class="language-plaintext highlighter-rouge">id</code> INT(11) NOT NULL AUTO_INCREMENT ,
+    <code class="language-plaintext highlighter-rouge">str</code> VARCHAR(255) NOT NULL ,
+    <code class="language-plaintext highlighter-rouge">num</code> INT(11) NOT NULL DEFAULT ‘0’ ,
+    <code class="language-plaintext highlighter-rouge">obj</code> VARCHAR(255) DEFAULT NULL ,
+    PRIMARY KEY(<code class="language-plaintext highlighter-rouge">id</code>) ,
+    KEY <code class="language-plaintext highlighter-rouge">str_x</code>(<code class="language-plaintext highlighter-rouge">str</code>) ,
+    KEY <code class="language-plaintext highlighter-rouge">num_x</code>(<code class="language-plaintext highlighter-rouge">num</code>)
+) ENGINE = INNODB DEFAULT CHARSET = utf8;</p>
+
+<p>Query OK, 0 rows affected (0.04 sec)</p>
+
+<p>向表中使用自复制语句插入数据</p>
+
+<p>mysql&gt; insert into gyl (<code class="language-plaintext highlighter-rouge">str</code>,<code class="language-plaintext highlighter-rouge">num</code>) values (123123,’12313’);
+Query OK, 1 row affected (0.02 sec)</p>
+
+<p>mysql&gt;  insert into gyl (<code class="language-plaintext highlighter-rouge">str</code>,<code class="language-plaintext highlighter-rouge">num</code>) select <code class="language-plaintext highlighter-rouge">str</code>,<code class="language-plaintext highlighter-rouge">num</code> from gyl;
+Query OK, 1 row affected (0.01 sec)
+Records: 1  Duplicates: 0  Warnings: 0</p>
+
+<p>更改数据 update gyl set num=id,str=id</p>
+
+<p>结果：</p>
+
+<p>mysql&gt; select * from gyl;
++—-+——–+——-+——+
+| id | str    | num   | obj  |
++—-+——–+——-+——+
+|  1 | 123123 | 12313 | NULL |
+|  2 | 123123 | 12313 | NULL |
++—-+——–+——-+——+
+2 rows in set (0.00 sec)</p>
+
+<p>（1）验证：当MySQL中字段为varchar类型时，搜索条件where num=‘111‘ 可以使用索引，where num=111 不可以使用索引</p>
+
+<p>mysql&gt; explain select * from gyl where str=123123 limit 1;
++—-+————-+——-+————+——+—————+——+———+——+——+———-+————-+
+| id | select_type | table | partitions | type | possible_keys | key  | key_len | ref  | rows | filtered | Extra       |
++—-+————-+——-+————+——+—————+——+———+——+——+———-+————-+
+|  1 | SIMPLE      | gyl   | NULL       | ALL  | str_x         | NULL | NULL    | NULL |    2 |    50.00 | Using where |
++—-+————-+——-+————+——+—————+——+———+——+——+———-+————-+
+1 row in set, 3 warnings (0.00 sec)</p>
+
+<p>mysql&gt; explain select * from gyl where str=’123123’ limit 1;
++—-+————-+——-+————+——+—————+——-+———+——-+——+———-+——-+
+| id | select_type | table | partitions | type | possible_keys | key   | key_len | ref   | rows | filtered | Extra |
++—-+————-+——-+————+——+—————+——-+———+——-+——+———-+——-+
+|  1 | SIMPLE      | gyl   | NULL       | ref  | str_x         | str_x | 767     | const |    2 |   100.00 | NULL  |
++—-+————-+——-+————+——+—————+——-+———+——-+——+———-+——-+
+1 row in set, 1 warning (0.00 sec)</p>
+
+<p>（2）验证：当MySQL中字段为int类型时，搜索条件where num=‘111‘ 与where num=111都可以使用该字段的索引。</p>
+
+<p>mysql&gt; explain select * from gyl where num=’12313’ limit 1;
++—-+————-+——-+————+——+—————+——-+———+——-+——+———-+——-+
+| id | select_type | table | partitions | type | possible_keys | key   | key_len | ref   | rows | filtered | Extra |
++—-+————-+——-+————+——+—————+——-+———+——-+——+———-+——-+
+|  1 | SIMPLE      | gyl   | NULL       | ref  | num_x         | num_x | 4       | const |    2 |   100.00 | NULL  |
++—-+————-+——-+————+——+—————+——-+———+——-+——+———-+——-+
+1 row in set, 1 warning (0.00 sec)</p>
+
+<p>mysql&gt; explain select * from gyl where num=12313 limit 1;
++—-+————-+——-+————+——+—————+——-+———+——-+——+———-+——-+
+| id | select_type | table | partitions | type | possible_keys | key   | key_len | ref   | rows | filtered | Extra |
++—-+————-+——-+————+——+—————+——-+———+——-+——+———-+——-+
+|  1 | SIMPLE      | gyl   | NULL       | ref  | num_x         | num_x | 4       | const |    2 |   100.00 | NULL  |
++—-+————-+——-+————+——+—————+——-+———+——-+——+———-+——-+
+1 row in set, 1 warning (0.00 sec)</p>
+
+<p>（3）MySQL对varchar型字段的索引，字段类型不同造成的隐式转换，导致索引失效</p>
+
+<p>MySQL索引使用：字段为varchar类型时，条件要使用”包起来，才能正常走索引 
+表user 里的id是BigInt类型，order表里关联到user表的id误建成userId varchar类型了，在ibatis上查询时，直接传入id Long类型，SQL查询非常慢，即使建立了userId索引，于是改成String 类型的userId去查询，SQL立马变的很快了。</p>
+
+<p>通过explain sql可看下SQL是否走了索引，很快对比出来 
+原因：字段类型不同造成的隐式转换，导致索引失效</p>
+
+<p>当我们使用的字段是数值类型时，加引号或者不加引号（sql中单引号和双引号实现相同效果）都不影响索引的使用
+当我们的字段是字符串类型时，不加引号的查询无法使用索引，加引号的查询才可正常使用索引</p>
+
+<p>https://www.cnblogs.com/david97/p/8072164.html</p>
+:ET

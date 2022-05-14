@@ -1,0 +1,229 @@
+I"s<p>https://github.com/jpetazzo/pipework</p>
+
+<p>https://github.com/brandon-rhodes/fopnp</p>
+
+<p>Pipework lets you connect together containers in arbitrarily complex scenarios. Pipework uses cgroups and namespace and works with “plain” LXC containers (created with lxc-start), and with the awesome Docker.
+<!-- more -->
+1、本地容器之间私有网络互联</p>
+
+<p>Docker 默认的桥接网卡是 docker0。它只会在本机桥接所有的容器网卡，举例来说容器的虚拟网卡在主机 上看一般叫做 veth* 而 Docker 只是把所有这些网卡桥接在一起，如下：</p>
+
+<h1 id="brctl-show">brctl show</h1>
+
+<p>1.png</p>
+
+<p>查看IP地址：</p>
+
+<h1 id="ip-add">ip add</h1>
+
+<p>2.png</p>
+
+<h1 id="ifconfig">ifconfig</h1>
+
+<p>3.png</p>
+
+<p>这样的网络看成是一个私有的网络，通过 nat 连接外网，如果要让外网连接到容器中，就需要 做端口映射，即 -p 参数。</p>
+
+<p>缺点：</p>
+
+<p>（1）需要配套服务注册/发现，否则宿主上端口分配困难，容易冲突。</p>
+
+<p>（2）由于每个容器暴露的端口都不一致，造成前端路由层nginx配置（proxy_pass）里无法使用dns的方式。</p>
+
+<p>（3）端口映射要在容器启动时就指定好，后期无法变更。</p>
+
+<p>（4）测试发现nat不支持websocket。</p>
+
+<p>2、物理主机之间的容器网络互联</p>
+
+<p>2.1、自建桥接网络</p>
+
+<p>优点：</p>
+
+<p>（1）每个容器都有独立ip，对外提供服务，如nginx+php，nginx+resin，都可以使用默认的80端口</p>
+
+<p>（2）由于容器暴露端口都可以使用80端口，因此前端路由层nginx配置（proxy_pass）里可以使用dns的方式。</p>
+
+<p>（3）无需为了后期端口映射添加而烦恼</p>
+
+<p>（4）桥接支持websocket</p>
+
+<p>2.2、拓扑图</p>
+
+<p>4.png</p>
+
+<p>2.3、配置如下</p>
+
+<p>1、网桥方式需要安装网桥管理工具</p>
+
+<h1 id="yum-install-bridge-utils">yum install bridge-utils</h1>
+
+<p>2、修改主机的/etc/network/interfaces文件</p>
+
+<h1 id="vim-etcsysconfigdocker">vim /etc/sysconfig/docker</h1>
+
+<p>DOCKER_OPTS=”-b=br0”</p>
+
+<p>5.png</p>
+
+<p>3、修改本机网卡</p>
+
+<h1 id="vim-etcsysconfignetwork-scriptsifcfg-ens33">vim /etc/sysconfig/network-scripts/ifcfg-ens33</h1>
+
+<p>BRIDGE=”br0”</p>
+
+<p>ZONE=public</p>
+
+<p>6.png</p>
+
+<p>4、添加bro桥接网卡</p>
+
+<h1 id="vim-etcsysconfignetwork-scriptsifcfg-br0">vim /etc/sysconfig/network-scripts/ifcfg-br0</h1>
+
+<p>DEVICE=”br0”</p>
+
+<p>ONBOOT=”yes”</p>
+
+<p>NM_CONTROLLED=”no”</p>
+
+<p>BOOTPROTO=”static”</p>
+
+<p>TYPE=”Bridge”</p>
+
+<p>IPADDR=”192.168.56.130”</p>
+
+<p>PREFIX=”24”</p>
+
+<p>GATEWAY=”192.168.56.2”</p>
+
+<p>DNS1=”8.8.8.8”</p>
+
+<p>DNS2=”114.114.114.114”</p>
+
+<p>7.png</p>
+
+<p>5、关闭NetworkManager管理套件</p>
+
+<p>#systemctl stop NetworkManager</p>
+
+<h1 id="systemctl-disable-networkmanager">systemctl disable NetworkManager、</h1>
+
+<p>6、重启网卡，查看</p>
+
+<h1 id="systemctl-restart-network">systemctl restart network</h1>
+
+<p>8.png</p>
+
+<p>7、下载pipework</p>
+
+<h1 id="git-clone--httpsgithubcomjpetazzopipework">git clone  https://github.com/jpetazzo/pipework</h1>
+
+<h1 id="cp-pipeworkpipework-usrlocalbin">cp pipework/pipework /usr/local/bin/</h1>
+
+<p>10.png</p>
+
+<p>2.4、启动容器测试</p>
+
+<p>11.png</p>
+
+<h1 id="docker-run--dti-name-br01-privileged-centos741708-binbash">docker run -dti –name br01 –privileged centos:7.4.1708 /bin/bash</h1>
+
+<p>12.png</p>
+
+<p>登录容器查看（默认还是采用地方nat模式）</p>
+
+<h1 id="docker-exec--ti-e79ed4d70fe1-binbash">docker exec -ti e79ed4d70fe1 /bin/bash</h1>
+
+<p>13.png</p>
+
+<p>使用pipework更改网络模式</p>
+
+<h1 id="pipework-br0-br01-19216856140-24192168562">pipework br0 br01 192.168.56.140/ 24@192.168.56.2</h1>
+
+<p>或</p>
+
+<h1 id="pipework-br0-br01-dhcp------前提保证有dhcp服务">pipework br0 br01 dhcp      //前提保证有DHCP服务</h1>
+
+<p>再次查看</p>
+
+<p>14.png</p>
+
+<p>局域网已可以正常访问</p>
+
+<p>15.png</p>
+
+<p>补充：</p>
+
+<p>若想完全抛弃自带的网络设置，在启动容器的时候可以指定–net=none</p>
+
+<h1 id="docker-run--dti-name-br02-networknone-privileged-centos741708-binbash">docker run -dti –name br02 –network=none –privileged centos:7.4.1708 /bin/bash</h1>
+
+<p># pipework br0 br02 192.168.56.141/24@192.168.56.2</p>
+
+<p>16.png</p>
+
+<p>重启系统后pipework网卡配置无效解决方法（持久性）</p>
+
+<p>在宿主配置开机启动pipework配置</p>
+
+<p>1、开机启动docker</p>
+
+<h1 id="systemctl-enable-docker">systemctl enable docker</h1>
+
+<p>2、开机启动容器（docker服务）</p>
+
+<h1 id="docker-update-restartalways-bf1b95631b60">docker update –restart=always bf1b95631b60</h1>
+
+<p>3、配置开启启动pipework相关配置</p>
+
+<h1 id="vim-etcrclocal">vim /etc/rc.local</h1>
+
+<p>#添加如下参数</p>
+
+<p>pipework br0 br02 192.168.56.141/24@192.168.56.2</p>
+
+<p>17.png</p>
+
+<p>4、授权</p>
+
+<h1 id="chmod-x-etcrclocal">chmod +x /etc/rc.local</h1>
+
+<p>5、重启系统后无法分配IP地址</p>
+
+<p>报错如下：</p>
+
+<p>Object “netns” is unknown, try “ip help”.</p>
+
+<p>该错误是由于系统版本暂时不支持namespaces, 可通过更新内核或者iproute的方法获取对namespaces的支持.更新方法如下:</p>
+
+<p>[openstack-kilo]</p>
+
+<p>name=OpenStack Kilo Repository</p>
+
+<p>baseurl=https://repos.fedorapeople.org/repos/openstack/EOL/openstack-icehouse/epel-6/</p>
+
+<p>skip_if_unavailable=0</p>
+
+<p>enabled=1</p>
+
+<p>gpgcheck=0</p>
+
+<p>gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-RDO-kilo</p>
+
+<p>更新：</p>
+
+<p>yum update iproute -y</p>
+
+<p>pipework的缺点：</p>
+
+<p>1.此方法配置的时候有时容器之间不能访问，容器内无法ping通外网（宿主机可以ping通）。但重启服务器后，同样操作，竟然就是可以了。。。。</p>
+
+<p>2.使用pipework绑定的ip物理机，虚拟机，docker容器的ip都在同一网段，重启后将失效，这在实际生产环境中是很难实现的。</p>
+
+<p>3、不适合数量多的容器，分配配置麻烦</p>
+
+<p>https://blog.51cto.com/u_13941177/2296529</p>
+
+<p>https://blog.csdn.net/kevin3101/article/details/79487100</p>
+
+:ET

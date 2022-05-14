@@ -1,0 +1,233 @@
+---
+title: jwt json web token
+layout: post
+category: node
+author: 夏泽民
+---
+JWT全称是jsonwebtoken，JWT的声明一般被用来在身份提供者和服务提供者间传递被认证的用户身份信息，以便于从资源服务器获取资源
+
+二、JWT的构成
+第一部分我们称它为头部（header),第二部分我们称其为载荷（payload, 类似于飞机上承载的物品)，第三部分是签证（signature).
+
+如何应用
+一般是在请求头里加入Authorization，并加上Bearer标注：
+
+fetch('api/user/1', {
+  headers: {
+    'Authorization': 'Bearer ' + token
+  }
+})
+服务端会验证token，如果验证通过就会返回相应的资源。
+
+在Node.js中应用
+一、首先下载依赖
+npm i jsonwebtoken --save
+二、引入jsonwebtoken
+const jsonwebtoken = require("jsonwebtoken")
+三、登录并使用JWT签名并返回token
+  async login(ctx) {
+        ctx.verifyParams({
+            username: {type: 'string', required: false},
+            password: {type: 'string', required: false}
+        })
+        const {username} = ctx.request.body
+        const user = await User.findOne({username})
+        if(!user){
+            ctx.throw(401,"账号或者密码错误")
+        }else{
+            const {_id,username} = user
+            const token = jsonwebtoken.sign({_id,username},secret,{expiresIn:'1d'})
+            ctx.body = {token}
+        }
+    }
+四、写一个中间件，这个中间件用来验证token和密钥是否正确，最后引入在路由中
+
+const auth = async (ctx,next) => {
+    const {token = ''} = ctx.request.header
+    const tk = token.replace('Bearer ',"")
+    try {
+        const user = jsonwebtoken.verify(tk,secret)
+        ctx.state.user = user
+    }catch (e) {
+        ctx.throw(401,'没有权限')
+    }
+    await next()
+}
+
+router.patch('/',auth,update)
+<!-- more -->
+https://www.cnblogs.com/zkqiang/p/11810203.html
+
+jwt,即JSON Web Token的缩写，是一个开放标准（RFC 7519），它定义了一种紧凑且独立的方式，用于在各方之间作为JSON对象安全地传输信息。
+
+jwt由三个部分组成，它们之间用.分开，通常如下所示xxxxx.yyyyy.zzzzz，
+
+第一个部分为Header，由两部分组成，类型和算法，例如
+
+{
+ "alg": "HS256", // 算法
+ "typ": "JWT" // 类型
+}
+第二个部分为Payload，用来存放实际需要传递的数据。JWT 规定了7个官方字段，供选用。例如：
+
+{
+ iss (issuer)：签发人
+ exp (expiration time)：过期时间
+ sub (subject)：主题
+ aud (audience)：受众
+ nbf (Not Before)：生效时间
+ iat (Issued At)：签发时间
+ jti (JWT ID)：编号 
+}
+除了官方字段，你还可以在这个部分定义私有字段，下面就是一个例子。
+
+{
+ "sub": "1234567890",
+ "name": "John Doe",
+ "admin": true
+}
+请注意，对于token，此信息虽然可以防止被篡改，但任何人都可以读取。除非加密，否则不要将秘密信息放在JWT的Payload或Header元素中。
+
+第三部分为Signature，Signature 部分是对前两部分的签名，防止数据篡改。
+
+首先，需要指定一个密钥（secret）。这个密钥只有服务器才知道，不能泄露给用户。然后，使用 Header 里面指定的签名算法（默认是 HMAC SHA256），按照下面的公式产生签名。
+
+HMACSHA256(
+ base64UrlEncode(header) + "." +
+ base64UrlEncode(payload),
+ secret)
+算出签名以后，把 Header、Payload、Signature 三个部分拼成一个字符串，每个部分之间用"点"（.）分隔，就可以返回给用户。
+
+
+Token机制相对于Cookie机制又有什么好处呢？
+
+支持跨域访问: Cookie是不允许垮域访问的，这一点对Token机制是不存在的，前提是传输的用户认证信息通过HTTP头传输.
+无状态(也称：服务端可扩展行):Token机制在服务端不需要存储session信息，因为Token 自身包含了所有登录用户的信息，只需要在客户端的cookie或本地介质存储状态信息.
+更适用CDN: 可以通过内容分发网络请求你服务端的所有资料（如：javascript，HTML,图片等），而你的服务端只要提供API即可.
+去耦: 不需要绑定到一个特定的身份验证方案。Token可以在任何地方生成，只要在你的API被调用的时候，你可以进行Token生成调用即可.
+更适用于移动应用: 当你的客户端是一个原生平台（iOS, Android，Windows 8等）时，Cookie是不被支持的（你需要通过Cookie容器进行处理），这时采用Token认证机制就会简单得多。
+CSRF:因为不再依赖于Cookie，所以你就不需要考虑对CSRF（跨站请求伪造）的防范。
+性能: 一次网络往返时间（通过数据库查询session信息）总比做一次HMACSHA256计算 的Token验证和解析要费时得多.
+不需要为登录页面做特殊处理: 如果你使用Protractor 做功能测试的时候，不再需要为登录页面做特殊处理.
+基于标准化:你的API可以采用标准化的 JSON Web Token (JWT). 这个标准已经存在多个后端库（.NET, Ruby, Java,Python, PHP）和多家公司的支持（如：Firebase,Google, Microsoft）
+
+一、JWT头
+{
+  "alg": "HS256",          签名使用的算法
+  "typ": "JWT"             令牌类型，这里就是jwt
+}
+1
+2
+3
+4
+将这个对象进行BASE64URL加密就是jwt的头。
+
+二、PAYLOAD 有效载荷
+{
+  "sub": "1234567890",               主题
+  "name": "John Doe",                自定义字段
+  "iat": 1516239022                  发布时间
+}
+1
+2
+3
+4
+5
+PAYLOAD有效载荷中既可以存放一些已经定义过的字段，也可以自定义字段。
+
+~~payload预定义的一些字段~~
+iss：发行人
+exp：到期时间
+sub：主题
+aud：用户
+nbf：在此之前不可用
+iat：发布时间
+jti：JWT ID用于标识该JWT
+1
+2
+3
+4
+5
+6
+7
+8
+将这个对象同样使用BASE64URL加密并且与jwt头以点号（ . ）隔开。
+
+三、VERIFY SIGNATURE 哈希签名
+对jwt头和载荷信息使用指定算法进行哈希签名，确保数据的完整性。
+在签名算法中需要指定一个私钥，这个私钥只存储于服务器中，不能向用户公开。
+将生成的哈希签名作为第三部分与前两部分以点号隔开，就生成了一个完整的token。
+
+JWT的存储
+服务器在验证用户合法性后会生成token，并将这个token发送给客户端，由客户端（即浏览器）存储在cookie或者local storage中。
+客户再次进入系统时，客户端将携带token发给服务器作验证，这时候，token一般位于HTTP请求的HEADER AUTHORITON字段中，有时，也会放在post请求的数据主体中。
+
+JWT的优缺点
+1、JWT默认不加密，但可以加密。生成原始令牌后，可以使用改令牌再次对其进行加密。
+2、当JWT未加密方法是，一些私密数据无法通过JWT传输。
+3、JWT不仅可用于认证，还可用于信息交换。善用JWT有助于减少服务器请求数据库的次数。
+4、JWT的最大缺点是服务器不保存会话状态，所以在使用期间不可能取消令牌或更改令牌的权限。也就是说，一旦JWT签发，在有效期内将会一直有效。
+5、JWT本身包含认证信息，因此一旦信息泄露，任何人都可以获得令牌的所有权限。为了减少盗用，JWT的有效期不宜设置太长。对于某些重要操作，用户在使用时应该每次都进行进行身份验证。
+6、为了减少盗用和窃取，JWT不建议使用HTTP协议来传输代码，而是使用加密的HTTPS协议进行传输。
+
+http://www.ruanyifeng.com/blog/2014/05/oauth_2_0.html
+
+（A）用户打开客户端以后，客户端要求用户给予授权。
+
+（B）用户同意给予客户端授权。
+
+（C）客户端使用上一步获得的授权，向认证服务器申请令牌。
+
+（D）认证服务器对客户端进行认证以后，确认无误，同意发放令牌。
+
+（E）客户端使用令牌，向资源服务器申请获取资源。
+
+（F）资源服务器确认令牌无误，同意向客户端开放资源。
+
+客户端必须得到用户的授权（authorization grant），才能获得令牌（access token）。OAuth 2.0定义了四种授权方式。
+
+授权码模式（authorization code）
+简化模式（implicit）
+密码模式（resource owner password credentials）
+客户端模式（client credentials）
+
+
+（A）用户访问客户端，后者将前者导向认证服务器。
+
+（B）用户选择是否给予客户端授权。
+
+（C）假设用户给予授权，认证服务器将用户导向客户端事先指定的"重定向URI"（redirection URI），同时附上一个授权码。
+
+（D）客户端收到授权码，附上早先的"重定向URI"，向认证服务器申请令牌。这一步是在客户端的后台的服务器上完成的，对用户不可见。
+
+（E）认证服务器核对了授权码和重定向URI，确认无误后，向客户端发送访问令牌（access token）和更新令牌（refresh token）。
+
+
+介绍两种类型的Access Token：Bearer类型和MAC类型
+
+区别项	Bearer Token	MAC Token
+1	(优点) 调用简单，不需要对请求进行签名。	(优点) 不依赖https协议，无协议加密带来的性能开销。
+2	(缺点) 请求API需要使用https协议保证信息传输安全。	
+3	(缺点) Access Token有效期一个月，过期后需要使用Refresh Token进行刷新。	(优点) Access Token长期有效，无需使用Refresh Token刷新。
+4		(缺点)需要进行MAC计算。
+Bearer 介绍
+优点：
+　　调用简单，不需要对请求进行签名。
+缺点：
+　　请求API需要使用https协议保证信息传输安全。
+　　Access Token有效期一个月，过期后需要使用Refresh Token进行刷新。
+
+MAC 介绍
+优点：
+　　不依赖https协议，无协议加密带来的性能开销。
+　　Access Token长期有效，无需使用Refresh Token刷新。
+缺点：
+　　需要进行MAC计算。
+
+
+Bearer类型token定义了三种token传递策略，客户端在传递token时必须使用其中的一种，且最多一种。
+放在Authorization请求首部
+放在请求实体中
+放在URI请求参数中
+
+https://www.cnblogs.com/cag2050/p/7607609.html

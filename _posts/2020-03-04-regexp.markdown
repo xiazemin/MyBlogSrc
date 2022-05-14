@@ -1,0 +1,260 @@
+---
+title: regexp
+layout: post
+category: golang
+author: 夏泽民
+---
+准则
+
+默认是最短匹配，只要字符串满足条件就返回。
+如果没有匹配到，都是返回为nil。
+如果需要做最长匹配，调用Longest()函数。
+正则表达式功能：匹配(macth)，查找(find)和替换(replace)。
+存在长度选择的函数，传入<0的数字表示匹配全部。
+
+https://juejin.im/post/5e5a400df265da57297890e1
+<!-- more -->
+使用regexp调用
+Match，MatchReader和 MatchString
+// 判断b中是够包含pattern能够组成的任意字符串
+func Match(pattern string, b []byte) (matched bool, err error) 
+
+// 判断reader r中返回的字符串是否包含pattern能够组成的任意字符串
+func MatchReader(pattern string, r io.RuneReader) (matched bool, err error)
+
+// 判断字符串s中是否包含pattern能够组成的任意字符串
+func MatchString(pattern string, s string) (matched bool, err error)
+复制代码Compile 和 MushCompile
+
+func Compile(expr string) (*Regexp, error)
+func MustCompile(str string) *Regexp
+
+Compile：返回Regexp对象，方便调用指针函数。
+MustCompile：同Compile，解析表达式失败，会panic。
+在匹配文本时，该正则表达式会尽可能早的开始匹配，并且在匹配过程中选择回溯搜索到的第一个匹配结果。这种模式被称为leftmost-first，另外一般情况下使用MustCompile即可。
+使用regexp.Regexp对象来调用
+Find 和 FindAll
+
+func (re *Regexp) Find(b []byte) []byte
+func (re *Regexp) FindAll(b []byte, n int) [][]byte
+
+Find返回保管正则表达式re在b中的最左侧的一个匹配结果的[]byte切片。如果没有匹配到，会返回nil，最多匹配一个。
+re := regexp.MustCompile(`foo.?`)
+fmt.Printf("%q\n", re.Find([]byte(`seafood fool`)))
+复制代码re := regexp.MustCompile(`foo.?`)
+fmt.Printf("%q\n", re.FindAll([]byte(`seafood fool`), -1))
+复制代码FindAll功能与Find一样，只是返回全部满足条件的数据。
+FindString 和 FindAllString
+
+func (re *Regexp) FindString(s string) string
+func (re *Regexp) FindAllString(s string, n int) []string
+
+与Find和FindAll一样，只是针对字符串string操作。
+FindIndex 和 FindAllIndex
+
+
+func (re *Regexp) FindIndex(b []byte) (loc []int)
+
+
+func (re *Regexp) FindAllIndex(b []byte, n int) [][]int
+
+
+FindIndex， 返回b中满足匹配字符串部分的起始位置，同样是**“leftmost-first”**原则，loc包含起止位置。如果没有找到，直接返回nil。
+FindAllIndex，功能和FindIndex保持一致，只是匹配多个，n决定了匹配的位置。
+FindStringIndex 和 FindAllStringIndex
+
+func (re *Regexp) FindStringIndex(s string) (loc []int)
+func (re *Regexp) FindAllStringIndex(s string, n int) [][]int
+
+与FindIndex和FindAllIndex使用方式类似，只是针对的是字符串string。
+FindStringSubmatch 和 FindAllStringSubmatch
+
+func (re *Regexp) FindStringSubmatch(s string) []string
+
+FindStringSubmatch：采用左匹配原则，最多匹配一个，如果没有的话，返回nil。对于返回的[]string,分别标示匹配的字符串，子串。
+re := regexp.MustCompile(`a(x*)b(y|z)c`)
+fmt.Printf("%q\n", re.FindStringSubmatch("-axxxbyc-"))
+fmt.Printf("%q\n", re.FindStringSubmatch("-abzc-"))
+复制代码输出结果：
+["axxxbyc" "xxx" "y"]
+["abzc" "" "z"]
+复制代码
+func (re *Regexp) FindAllStringSubmatch(s string, n int) [][]string
+
+和FindStringSubmatch使用类似，只是能顾选择匹配的长度，-1表示匹配到末尾。
+re := regexp.MustCompile(`a(x*)b`)
+fmt.Printf("%q\n", re.FindAllStringSubmatch("-ab-", -1))
+fmt.Printf("%q\n", re.FindAllStringSubmatch("-axxb-", -1))
+fmt.Printf("%q\n", re.FindAllStringSubmatch("-ab-axb-", -1))
+fmt.Printf("%q\n", re.FindAllStringSubmatch("-axxb-ab-", -1))
+复制代码输出结果：
+[["ab" ""]]
+[["axxb" "xx"]]
+[["ab" ""] ["axb" "x"]]
+[["axxb" "xx"] ["ab" ""]]
+复制代码FindSubmatchIndex 和 FindAllSubmatchIndex
+
+func (re *Regexp) FindSubmatchIndex(b []byte) []int
+func (re *Regexp) FindAllSubmatchIndex(b []byte, n int) [][]int
+计算子串在源串中的位置，已经存在(x*)等返回结果处理，如果没有返回nil。
+
+另外，index返回为左闭右开的模式，示例中的2,2表示空字符串的意思。
+并且，不会存在重合匹配的，比如说"-axxb-ab-"去匹配a(x*)b，不会存在第一个a和最后一个b结合的情况，如果使用Longest就会匹配最长的。
+re := regexp.MustCompile(`a(x*)b`)
+// Indices:
+//    01234567   012345678
+//    -ab-axb-   -axxb-ab-
+fmt.Println(re.FindAllStringSubmatchIndex("-ab-", -1))
+fmt.Println(re.FindAllStringSubmatchIndex("-axxb-", -1))
+fmt.Println(re.FindAllStringSubmatchIndex("-ab-axb-", -1))
+fmt.Println(re.FindAllStringSubmatchIndex("-axxb-ab-", -1))
+fmt.Println(re.FindAllStringSubmatchIndex("-foo-", -1))
+复制代码输出结果：
+[[1 3 2 2]] // 2 2 表示为空
+[[1 5 2 4]]
+[[1 3 2 2] [4 7 5 6]]
+[[1 5 2 4] [6 8 7 7]]
+[]
+复制代码FindStringSubmatchIndex 和 FindAllStringSubmatchIndex
+
+func (re *Regexp) FindStringSubmatchIndex(s string) []int
+func (re *Regexp) FindAllStringSubmatchIndex(s string, n int) [][]int
+
+和FindSubmatchIndex，FindAllSubmatchIndex保持一致。
+Longest
+
+func (re *Regexp) Longest()
+获取最长匹配的满足条件的内容。
+
+re := regexp.MustCompile(`a(|b)`)
+fmt.Println(re.FindString("ab"))
+re.Longest()
+fmt.Println(re.FindString("ab"))
+复制代码输出结果：
+a
+ab
+复制代码下面这种情况不会最长匹配。
+re := regexp.MustCompile(`a(x*)b`)
+re.Longest()
+fmt.Println(re.FindString("-axxb-ab-")) // axxb，不会存在第一个a和最后一个b组合的过程。
+复制代码Match，MatchString和MatchReader
+
+func (re *Regexp) Match(b []byte) bool
+func (re *Regexp) MatchString(s string) bool
+func (re *Regexp) MatchReader(r io.RuneReader) bool
+
+判断b，s和r返回的数据是否满足正则表达式，返回true或者false。
+NumSubexp
+
+func (re *Regexp) NumSubexp() int
+
+返回分组的数量。
+re0 := regexp.MustCompile(`a.`)
+fmt.Printf("%d\n", re0.NumSubexp())
+
+re := regexp.MustCompile(`(.*)((a)b)(.*)a`)
+fmt.Println(re.NumSubexp())
+复制代码输出结果：
+0
+4
+复制代码ReplaceAll 和 ReplaceAllString
+
+func (re *Regexp) ReplaceAll(src, repl []byte) []byte
+func (re *Regexp) ReplaceAllString(src, repl string) string
+
+ReplaceAllString与ReplaceAll使用方式相同。
+re := regexp.MustCompile(`a(x*)b`)
+fmt.Printf("%s\n", re.ReplaceAll([]byte("-ab-axxb-"), []byte("T")))  
+fmt.Printf("%s\n", re.ReplaceAll([]byte("-ab-axxb-"), []byte("$1"))) // $1表示匹配的第一个子串，这是ab的中间无字符串，所以$1为空，然后使用空去替换满足正则表达式的部分。
+fmt.Printf("%s\n", re.ReplaceAll([]byte("-ab-axxb-"), []byte("$1W"))) // "$1W"等价与"$(1W)"，值为空，将满足条件的部分完全替换为空。
+fmt.Printf("%s\n", re.ReplaceAll([]byte("-ab-axxb-"), []byte("${1}W"))) // ${1}匹配(x*)，保留。输出-W-xxW-
+复制代码输出结果：
+-T-T-
+--xx-
+---
+-W-xxW-
+复制代码s := "Hello World, 123 Go!"
+//定义一个正则表达式reg，匹配Hello或者Go
+reg := regexp.MustCompile(`(Hell|G)o`)
+
+s2 := "2019-12-01,test"
+//定义一个正则表达式reg2,匹配 YYYY-MM-DD 的日期格式
+reg2 := regexp.MustCompile(`(\d{4})-(\d{2})-(\d{2})`)
+
+//最简单的情况，用“T替换”"-ab-axxb-"中符合正则"a(x*)b"的部分
+reg3 := regexp.MustCompile("a(x*)b")
+fmt.Println(re.ReplaceAllString("-ab-axxb-", "T")) // -T-T-
+
+//${1}匹配"Hello World, 123 Go!"中符合正则`(Hell|G)`的部分并保留，去掉"Hello"与"Go"中的'o'并用"ddd"追加
+rep1 := "${1}ddd"
+fmt.Printf("%q\n", reg.ReplaceAllString(s, rep1)) // Hellddd World, 123 Gddd!
+
+//首先，"2019-12-01,test"中符合正则表达式`(\d{4})-(\d{2})-(\d{2})`的部分是"2019-12-01",将该部分匹配'(\d{4})'的'2019'保留，去掉剩余部分
+rep2 := "${1}"
+fmt.Printf("%q\n", reg2.ReplaceAllString(s2,rep2)) // 2019,test
+
+//首先，"2019-12-01,test"中符合正则表达式`(\d{4})-(\d{2})-(\d{2})`的部分是"2019-12-01",将该部分匹配'(\d{2})'的'12'保留，去掉剩余部分
+ rep3 := "${2}"
+fmt.Printf("%q\n", reg2.ReplaceAllString(s2,rep3)) // 12,test
+
+//首先，"2019-12-01,test"中符合正则表达式`(\d{4})-(\d{2})-(\d{2})`的部分是"2019-12-01",将该部分匹配'(\d{2})'的'01'保留，去掉剩余部分,并追加"13:30:12"
+rep4 := "${3}:13:30:12"
+fmt.Printf("%q\n", reg2.ReplaceAllString(s2,rep4)) // 01:13:30:12,test
+}
+复制代码ReplaceAllFunc 和 ReplaceAllStringFunc
+
+func (re *Regexp) ReplaceAllFunc(src []byte, repl func([]byte) []byte) []byte
+func (re *Regexp) ReplaceAllStringFunc(src string, repl func(string) string) string
+
+将匹配出来满足条件的[]byte作为参数传入函数中。
+re := regexp.MustCompile(`[^aeiou]`)
+fmt.Println(re.ReplaceAllStringFunc("seafood fool", strings.ToUpper))
+复制代码两者使用方式类似。
+ReplaceAllLiteral 和 ReplaceAllLiteralString
+
+func (re *Regexp) ReplaceAllLiteral(src, repl []byte) []byte
+func (re *Regexp) ReplaceAllLiteralString(src, repl string) string
+
+匹配字面常量，不转换。
+re := regexp.MustCompile(`a(x*)b`)
+fmt.Println(re.ReplaceAllLiteralString("-ab-axxb-", "T"))
+fmt.Println(re.ReplaceAllLiteralString("-ab-axxb-", "$1"))
+fmt.Println(re.ReplaceAllLiteralString("-ab-axxb-", "${1}"))
+复制代码输出结果：
+-T-T-
+-$1-$1-
+-${1}-${1}-
+复制代码关于$1说明：
+
+
+Expand 和 ExpandString
+
+func (re *Regexp) Expand(dst []byte, template []byte, src []byte, match []int) []byte
+func (re *Regexp) ExpandString(dst []byte, template string, src string, match []int) []byte
+
+
+Expand返回新生成的将template添加到dst后面的切片。在添加时，Expand会将template中的变量替换为从src匹配的结果。match应该是被FindSubmatchIndex返回的匹配结果起止位置索引。（通常就是匹配src，除非你要将匹配得到的位置用于另一个[]byte）
+
+
+在template参数里，一个变量表示为格式如：$name或${name}的字符串，其中name是长度>0的字母、数字和下划线的序列。一个单纯的数字字符名如$1会作为捕获分组的数字索引；其他的名字对应(?P...)语法产生的命名捕获分组的名字。超出范围的数字索引、索引对应的分组未匹配到文本、正则表达式中未出现的分组名，都会被替换为空切片。
+
+
+$name格式的变量名，name会尽可能取最长序列：$1x等价于${1x}而非${1}x，$10等价于${10}而非${1}0。因此$name适用在后跟空格/换行等字符的情况，${name}适用所有情况。
+
+
+如果要在输出中插入一个字面值'$'，在template里可以使用$$。
+
+其他示例
+解析网址
+flysnowRegexp := regexp.MustCompile(`^http://www.flysnow.org/([\d]{4})/([\d]{2})/([\d]{2})/([\w-]+).html$`)
+params := flysnowRegexp.FindStringSubmatch("http://www.flysnow.org/2018/01/20/golang-goquery-examples-selector.html")
+// 返回[]string{}数据类型
+for _, param := range params {
+	fmt.Println(param)
+}
+复制代码输出结果:
+http://www.flysnow.org/2018/01/20/golang-goquery-examples-selector.html
+2018
+01
+20
+golang-goquery-examples-selector

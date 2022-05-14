@@ -1,0 +1,348 @@
+I"�/<p>wget –no-cookies –no-check-certificate –header “Cookie: gpw_e24=http%3A%2F%2Fwww.oracle.com%2F” “http://download.oracle.com/otn-pub/java/jdk/6u45-b06/jdk-6u45-linux-x64.bin” -O jdk-6u45-linux-x64.bin</p>
+
+<p>Cookie: gpw_e24=http%3A%2F%2Fwww.oracle.com%2F 可以绕过ORACLE的网站验证</p>
+
+<p>同时需要使用下面的链接.ORACLE网站的JDK6的链接不能在linux上直接下载</p>
+
+<p>https://blog.csdn.net/weixin_34547167/article/details/116776126</p>
+
+<p>https://mirrors.tuna.tsinghua.edu.cn/AdoptOpenJDK/11/jdk/x64/linux/
+<!-- more -->
+我正在尝试使用openjdk 11构建一个高山docker镜像。为此，我正在启动一个高山容器：</p>
+
+<p>docker run -it alpine:3.9 /bin/sh
+并运行以下命令：</p>
+
+<p>export JAVA_HOME=/opt/openjdk-11
+export PATH=$JAVA_HOME/bin:$PATH</p>
+
+<p>export JAVA_VERSION=11.0.2
+export JAVA_URL=https://download.java.net/java/GA/jdk11/9/GPL/openjdk-11.0.2_linux-x64_bin.tar.gz
+export JAVA_SHA256=99be79935354f5c0df1ad293620ea36d13f48ec3ea870c838f20c504c9668b57</p>
+
+<p>set -eux; <br />
+    <br />
+    wget -O /openjdk.tgz “$JAVA_URL”; <br />
+    echo “$JAVA_SHA256 */openjdk.tgz” | sha256sum -c -; <br />
+    mkdir -p “$JAVA_HOME”; <br />
+    tar –extract –file /openjdk.tgz –directory “$JAVA_HOME” –strip-components 1; <br />
+    rm /openjdk.tgz;
+在那之后，我可以确认似乎有些事情是正确的：</p>
+
+<p>/ # ls -lah $JAVA_HOME/bin/java</p>
+<ul>
+  <li>ls -lah /opt/openjdk-11/bin/java
+-rwxr-xr-x    1 668      668         8.5K Jan 18 05:20 /opt/openjdk-11/bin/java
+/ # echo $PATH</li>
+  <li>echo /opt/openjdk-11/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+/opt/openjdk-11/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+/ # which java</li>
+  <li>which java
+/opt/openjdk-11/bin/java
+但是当我java自己运行时，我得到：</li>
+</ul>
+
+<p>/ # java -version</p>
+<ul>
+  <li>java -version
+/bin/sh: java: not found
+我被踢出了集装箱。我想念什么吗？</li>
+</ul>
+
+<p>https://www.nuomiphp.com/serverfault/zh/6053c048b565c72b3619099d.html</p>
+
+<p>错误信息如下：</p>
+
+<p>java: error while loading shared libraries: libjli.so: cannot open shared object file: No such file or directory</p>
+
+<p>错误信息是说 java 应用加载不到 libjli.so 文件，我们使用 java -version 命令，同样的错误又出现了。使用 ldd 命令查看一下 java 应用是否加载了这个 so 文件，发现 java 应用加载的 so 文件中存在 libjli.so。</p>
+
+<p>$ ldd java</p>
+
+<p>linux-vdso.so.1 =&gt; (0x00007ffe2a9c7000)</p>
+
+<p>/usr/local/lib/libsysconfcpus.so (0x00002ac503ca8000)</p>
+
+<p>libz.so.1 =&gt; /lib64/libz.so.1 (0x00002ac503eaa000)</p>
+
+<p>libjli.so =&gt; /apps/svr/jdk-14.0.1/bin/./../lib/libjli.so (0x00002ac5040c0000)</p>
+
+<p>libpthread.so.0 =&gt; /lib64/libpthread.so.0 (0x00002ac5042d1000)</p>
+
+<p>libdl.so.2 =&gt; /lib64/libdl.so.2 (0x00002ac5044ee000)</p>
+
+<p>libc.so.6 =&gt; /lib64/libc.so.6 (0x00002ac5046f2000)</p>
+
+<p>/lib64/ld-linux-x86-64.so.2 (0x00002ac503883000)</p>
+
+<p>我们接着查看了 LD_LIBRARY_PATH 和 /etc/ld.so.conf.d/xxx.conf 文件的配置，发现都是正常的。通过对比其他应用的启动配置，发现该应用使用了 80 端口启动，但是我们的容器只能使用 apps 权限登录，所以在启动前使用 setcap 命令提升了 java 应用的权限，允许其使用 80 端口，会不会是这个操作导致的呢？在查看原因之前，我们需要先理解几个概念。</p>
+
+<p>Linux 动态库</p>
+
+<p>动态库(共享库)的代码在可执行程序运行时才载入内存，在编译过程中仅简单的引用，不同的应用程序如果调用相同的库,那么在内存中只需要有一份该动态库(共享库)的实例。这类库的名字一般是libxxx.so，其中so是 Shared Object 的缩写，即可以共享的目标文件。在链接动态库生成可执行文件时，并不会把动态库的代码复制到执行文件中，而是在执行文件中记录对动态库的引用。</p>
+
+<p>Linux下生成和使用动态库的步骤如下：</p>
+
+<p>编写源文件。</p>
+
+<p>将一个或几个源文件编译链接，生成共享库。</p>
+
+<p>通过 -L -lxxx 的gcc选项链接生成的libxxx.so。例如gcc -fPIC -shared -o libmax.so max.c , -fPIC 是编译选项，PIC是 Position Independent Code 的缩写，表示要生成位置无关的代码，这是动态库需要的特性； -shared 是链接选项，告诉gcc生成动态库而不是可执行文件</p>
+
+<p>把libxxx.so放入链接库的标准路径，或指定 LD_LIBRARY_PATH，才能运行链接了libxxx.so的程序。</p>
+
+<p>Linux是通过 /etc/ld.so.cache 文件搜寻要链接的动态库的。而 /etc/ld.so.cache 是 ldconfig 程序读取 /etc/ld.so.conf 文件生成的。</p>
+
+<p>(注意， /etc/ld.so.conf 中并不必包含 /lib 和 /usr/lib，ldconfig程序会自动搜索这两个目录)</p>
+
+<p>我们把要用的 libxx.so 文件所在的路径添加到 /etc/ld.so.conf 中，再以root权限运行 ldconfig 程序，更新 /etc/ld.so.cache ，程序运行时，就可以找到 libxx.so。另外就是通过配置 LD_LIBRARY_PATH 的方式来指定通过某些路径寻找链接的动态库。</p>
+
+<p>ldd 查看程序依赖</p>
+
+<p>理解了动态库的概念之后，当碰到某个程序报错缺少某个库文件时，我们应该怎么查看该程序当前加载了哪些库文件呢？可以用 ldd 命令。</p>
+
+<p>ldd 命令的作用是用来查看程式运行所需的共享库,常用来解决程式因缺少某个库文件而不能运行的一些问题。</p>
+
+<p>例如：查看test程序运行所依赖的库:</p>
+
+<p>[root@localhost testso]# ldd /etc/alternatives/java</p>
+
+<p>linux-vdso.so.1 =&gt; (0x00007ffde15f8000)</p>
+
+<p>libpthread.so.0 =&gt; /lib64/libpthread.so.0 (0x00007f03f2f8d000)</p>
+
+<p>libdl.so.2 =&gt; /lib64/libdl.so.2 (0x00007f03f2d89000)</p>
+
+<p>libc.so.6 =&gt; /lib64/libc.so.6 (0x00007f03f29bb000)</p>
+
+<p>/lib64/ld-linux-x86-64.so.2 (0x00007f03f33ab000)</p>
+
+<p>第一列：程序需要依赖什么库</p>
+
+<p>第二列: 系统提供的与程序需要的库所对应的库</p>
+
+<p>第三列：库加载的开始地址</p>
+
+<p>通过上面的信息，我们可以得到以下几个信息：</p>
+
+<p>通过对比第一列和第二列，我们可以分析程序需要依赖的库和系统实际提供的，是否相匹配</p>
+
+<p>通过观察第三列，我们可以知道在当前的库中的符号在对应的进程的地址空间中的开始位置</p>
+
+<p>如果依赖的某个库找不到，通过这个命令可以迅速定位问题所在.</p>
+
+<p>Linux capability</p>
+
+<p>从内核 2.2 开始，Linux 将传统上与超级用户 root 关联的特权划分为不同的单元，称为 capabilites。Capabilites 作为线程(Linux 并不真正区分进程和线程)的属性存在，每个单元可以独立启用和禁用。如此一来，权限检查的过程就变成了：在执行特权操作时，如果进程的有效身份不是 root，就去检查是否具有该特权操作所对应的 capabilites，并以此决定是否可以进行该特权操作。</p>
+
+<p>下面是从 capabilities man page 中摘取的 capabilites 列表：</p>
+
+<p>capability 名称</p>
+
+<p>描述</p>
+
+<p>CAP_AUDIT_CONTROL</p>
+
+<p>启用和禁用内核审计；改变审计过滤规则；检索审计状态和过滤规则</p>
+
+<p>CAP_AUDIT_READ</p>
+
+<p>允许通过 multicast netlink 套接字读取审计日志</p>
+
+<p>CAP_AUDIT_WRITE</p>
+
+<p>将记录写入内核审计日志</p>
+
+<p>CAP_BLOCK_SUSPEND</p>
+
+<p>使用可以阻止系统挂起的特性</p>
+
+<p>CAP_CHOWN</p>
+
+<p>修改文件所有者的权限</p>
+
+<p>CAP_DAC_OVERRIDE</p>
+
+<p>忽略文件的 DAC 访问限制</p>
+
+<p>CAP_DAC_READ_SEARCH</p>
+
+<p>忽略文件读及目录搜索的 DAC 访问限制</p>
+
+<p>CAP_FOWNER</p>
+
+<p>忽略文件属主 ID 必须和进程用户 ID 相匹配的限制</p>
+
+<p>CAP_FSETID</p>
+
+<p>允许设置文件的 setuid 位</p>
+
+<p>CAP_IPC_LOCK</p>
+
+<p>允许锁定共享内存片段</p>
+
+<p>CAP_IPC_OWNER</p>
+
+<p>忽略 IPC 所有权检查</p>
+
+<p>CAP_KILL</p>
+
+<p>允许对不属于自己的进程发送信号</p>
+
+<p>CAP_LEASE</p>
+
+<p>允许修改文件锁的 FL_LEASE 标志</p>
+
+<p>CAP_LINUX_IMMUTABLE</p>
+
+<p>允许修改文件的 IMMUTABLE 和 APPEND 属性标志</p>
+
+<p>CAP_MAC_ADMIN</p>
+
+<p>允许 MAC 配置或状态更改</p>
+
+<p>CAP_MAC_OVERRIDE</p>
+
+<p>覆盖 MAC(Mandatory Access Control)</p>
+
+<p>CAP_MKNOD</p>
+
+<p>允许使用 mknod() 系统调用</p>
+
+<p>CAP_NET_ADMIN</p>
+
+<p>允许执行网络管理任务</p>
+
+<p>CAP_NET_BIND_SERVICE</p>
+
+<p>允许绑定到小于 1024 的端口</p>
+
+<p>CAP_NET_BROADCAST</p>
+
+<p>允许网络广播和多播访问</p>
+
+<p>CAP_NET_RAW</p>
+
+<p>允许使用原始套接字</p>
+
+<p>CAP_SETGID</p>
+
+<p>允许改变进程的 GID</p>
+
+<p>CAP_SETFCAP</p>
+
+<p>允许为文件设置任意的 capabilities</p>
+
+<p>CAP_SETUID</p>
+
+<p>允许改变进程的 UID</p>
+
+<p>CAP_SYS_ADMIN</p>
+
+<p>允许执行系统管理任务，如加载或卸载文件系统、设置磁盘配额等</p>
+
+<p>CAP_SYS_BOOT</p>
+
+<p>允许重新启动系统</p>
+
+<p>CAP_SYS_CHROOT</p>
+
+<p>允许使用 chroot() 系统调用</p>
+
+<p>CAP_SYS_MODULE</p>
+
+<p>允许插入和删除内核模块</p>
+
+<p>CAP_SYS_NICE</p>
+
+<p>允许提升优先级及设置其他进程的优先级</p>
+
+<p>CAP_SYS_PACCT</p>
+
+<p>允许执行进程的 BSD 式审计</p>
+
+<p>CAP_SYS_PTRACE</p>
+
+<p>允许跟踪任何进程</p>
+
+<p>CAP_SYS_RAWIO</p>
+
+<p>允许直接访问 /devport、/dev/mem、/dev/kmem 及原始块设备</p>
+
+<p>CAP_SYS_RESOURCE</p>
+
+<p>忽略资源限制</p>
+
+<p>CAP_SYS_TIME</p>
+
+<p>允许改变系统时钟</p>
+
+<p>CAP_SYS_TTY_CONFIG</p>
+
+<p>允许配置 TTY 设备</p>
+
+<p>CAP_SYSLOG</p>
+
+<p>允许使用 syslog() 系统调用</p>
+
+<p>CAP_WAKE_ALARM</p>
+
+<p>允许触发一些能唤醒系统的东西(比如 CLOCK_BOOTTIME_ALARM 计时器)</p>
+
+<p>getcap 命令和 setcap 命令分别用来查看和设置程序文件的 capabilities 属性。</p>
+
+<p>例如为 ping 命令文件添加 capabilities</p>
+
+<p>执行 ping 命令所需的 capabilities 为 cap_net_admin 和 cap_net_raw，通过 setcap 命令可以添加它们：</p>
+
+<p>$ sudo setcap cap_net_admin,cap_net_raw+ep /bin/ping</p>
+
+<p>移除添加的 capabilities ，执行下面的命令：</p>
+
+<p>$ sudo setcap cap_net_admin,cap_net_raw-ep /bin/ping</p>
+
+<p>命令中的 ep 分别表示 Effective 和 Permitted 集合(接下来会介绍)，+ 号表示把指定的 capabilities 添加到这些集合中，- 号表示从集合中移除(对于 Effective 来说是设置或者清除位)。</p>
+
+<p>解决问题</p>
+
+<p>回到我们开始的问题，由于我们为非 root 用户赋予了使用 80 端口的权限，调用了如下命令：</p>
+
+<p>setcap cap_net_bind_service=+ep /usr/bin/java</p>
+
+<p>当一个可执行文件提升了权限后，运行时加载程序(rtld)— ld.so，它不会与不受信任路径中的库链接。Linux 会为使用了 setcap 或 suid 的程序禁用掉 LD_LIBRARY_PATH。所以就出现了 java 程序加载不到 libjli.so 的情况了，这是 JDK 的一个 bug。</p>
+
+<p>那么既然使用 setcap 后不会加载链接库，我们就可以将 libjli.so 所在的路径添加到 /etc/ld.so.conf/xxx.conf中，例如：</p>
+
+<p>% cat /etc/ld.so.conf.d/java.conf</p>
+
+<p>/usr/java/jdk1.8.0_261-amd64/lib/amd64/jli</p>
+
+<p>使用 ldconfig 重载 so 文件。</p>
+
+<table>
+  <tbody>
+    <tr>
+      <td>[root@localhost jli]# ldconfig -p</td>
+      <td>grep libjli</td>
+    </tr>
+  </tbody>
+</table>
+
+<table>
+  <tbody>
+    <tr>
+      <td>libjli.so (libc6,x86-64) =&gt; /usr/java/jdk1.8.0_261-amd64/lib/amd64/jli/libjli.so% ldconfig</td>
+      <td>grep libjli</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>libjli.so -&gt; libjli.so
+https://blog.csdn.net/weixin_34945060/article/details/114250246</p>
+
+<p>java -version
+Error relocating /data/xzm/jdk/bin/../lib/jli/libjli.so: __strdup: symbol not found Error relocating /data/xzm/jdk/bin/../lib/jli/libjli.so: __rawmemchr: symbol not found https://blog.csdn.net/weixin_34945060/article/details/114250246</p>
+
+<p>wget https://download.java.net/java/GA/jdk11/9/GPL/openjdk-11.0.2_linux-x64_bin.tar.gz</p>
+
+:ET

@@ -1,0 +1,453 @@
+I"�D<p>在某个项目需要支持多平台时，某个功能可能需要针对不同平台编写专属这个平台的具体实现。 在c/c++中，不同平台的实现或者某个平台的特性往往通过#if, #else, #endif这类预处理指令来配合 交叉编译达到。</p>
+
+<p>go build -tags
+go某种程度上也可以支持条件编译。go中的条件编译显得格外的隐蔽，并且条件编译也仅限于包级别。</p>
+
+<p>假设某个服务，对外既提供HTTP服务，也可选的提供grpc服务。以此为例来说明如何支持可选的grpc。</p>
+
+<p>go条件编译以一行特殊的 // +build 注释行开始。</p>
+
+<p>为了跟包文档区分开，// +build行后面必须跟一个空白行。</p>
+
+<p>/<em>错误: +build下没有用空白行分隔，build tag无法生效</em>/
+// +build enable_rpc 
+func init(){
+    go StartRPCForever()
+}</p>
+
+<p>/<em>正确</em>/
+// +build enable_rpc</p>
+
+<p>func init(){
+    go StartRPCForever()  <br />
+}</p>
+
+<p>func StartRPCForever(){
+    // …
+}
+在编译时，我们可以通过命令行: go build -tags=enable_rpc来启动RPC服务。</p>
+
+<p>+build后面的tag也有讲究: 以</p>
+
+<p>// +build linux,386 darwin,!cgo 为例:
+go build子命令将其解释成:</p>
+
+<p>(linux AND 386) OR (darwin AND (NOT cgo))
+当+build以多行出现时，这些+build之后的标签构成AND关系:</p>
+
+<p>// +build linux darwin
+// +build 386
+go build子命令将其解释为:</p>
+
+<p>(linux OR darwin) AND 386
+<!-- more -->
+The mistake I made is:</p>
+
+<p>// +build !go1.4
+package xxx
+Where should really have an empty line between these two lines:</p>
+
+<p>// +build !go1.4</p>
+
+<p>package xxx</p>
+
+<p>https://github.com/nange/blog/issues/26</p>
+
+<p>go build -tags 的作用是在build过程中，传入某些参数，用于确定哪些文件用于编译，哪些文件不参与编译等。</p>
+
+<p>使用方法
+构建约束以一行+build开始的注释。在+build之后列出了一些条件，在这些条件成立时，该文件应包含在编译的包中；
+约束可以出现在任何源文件中，不限于go文件；
++build必须出现在package语句之前，+build注释之后应要有一个空行。
+// +build debug</p>
+
+<p>package main</p>
+
+<p>import “fmt”</p>
+
+<p>func main() {
+ fmt.Println(“Hello World!”)
+}
+语法规则
+只允许是字母数字或_
+多个条件之间，空格表示OR；逗号表示AND；叹号(!)表示NOT
+一个文件可以有多个+build，它们之间的关系是AND。如：
+// +build linux darwin
+// +build 386
+等价于
+// +build (linux OR darwin) AND 386
+预定义了一些条件：
+runtime.GOOS、runtime.GOARCH、compiler（gc或gccgo）、cgo、context.BuildTags中的其他单词
+如果一个文件名（不含后缀），以 *_GOOS, *_GOARCH, 或 *_GOOS_GOARCH结尾，它们隐式包含了 构建约束
+当不想编译某个文件时，可以加上// +build ignore。这里的ignore可以是其他单词，只是ignore更能让人知道什么意思
+更多详细信息，可以查看go/build/build.go文件中shouldBuild和match方法。</p>
+
+<p>应用实例
+display_hash.go：</p>
+
+<p>// +build hash !display_alternatives</p>
+
+<p>package main</p>
+
+<p>import “fmt”</p>
+
+<p>type DisplayName string</p>
+
+<p>func Print(name DisplayName) {
+    fmt.Printf(“%s\n”, name)
+}</p>
+
+<p>func MakeDisplayName(name string) DisplayName {
+    return DisplayName(name)
+}
+编译display_hash.go:
+编译执行过程 go build -tags “hash “</p>
+
+<p>当我们编写的go代码依赖特定平台或者cpu架构的时候，我们需要给出不同的实现</p>
+
+<p>C语言有预处理器，可以通过宏或者#define包含特定平台指定的代码进行编译</p>
+
+<p>但是Go没有预处理器，他是通过 go/build包 里定义的tags和命名约定来让Go的包可以管理不同平台的代码</p>
+
+<p>这篇文章将讲述Go的条件编译系统是如何实现的，并且通过实例来说明如何使用</p>
+
+<ol>
+  <li>预备知识：go list命令的使用</li>
+</ol>
+
+<p>在讲条件编译之前需要了解go list的简单用法</p>
+
+<p>go list访问源文件里那些能够影响编译进程内部的数据结构</p>
+
+<p>go list与go build ,test,install大部分的参数相同，但是go list不会执行编译操作。使用-f参数可以让我们提供的text/template里的代码在包含go/build.Package上下文的环境里正确执行（就是让go/build.Package里的上下文去格式化 text/template里这种格式 ‘{{.GoFiles}}‘里的占位符，写过http server程序的同学看到应该很熟悉）</p>
+
+<p>使用格式化参数，我们能通过go list获取将会被编译的文件名</p>
+
+<p>% go list -f ‘{{.GoFiles}}’ os/exec
+[exec.go lp_unix.go]
+上面这个例子里我们用go list来查看在linux/arm平台下 os/exec包里有哪些文件将会被编译。</p>
+
+<p>结果显示：exec.go包含了通用的代码在所有的平台下可用，lp_unix.go包含了*nix系统里的exec.LookPath</p>
+
+<p>在windows系统下运行同样的命令，结果如下：</p>
+
+<p>C:\go&gt; go list -f ‘{{.GoFiles}}’ os/exec
+[exec.go lp_windows.go]
+上面这个例子是Go 条件编译系统的两个部分，称之为：编译约束，下面将详细描述</p>
+
+<ol>
+  <li>第一种条件编译的方法：编译标签</li>
+</ol>
+
+<p>在源代码里添加标注，通常称之为编译标签( build tag)</p>
+
+<p>编译标签是在尽量靠近源代码文件顶部的地方用注释的方式添加</p>
+
+<p>go build在构建一个包的时候会读取这个包里的每个源文件并且分析编译便签，这些标签决定了这个源文件是否参与本次编译</p>
+
+<p>编译标签添加的规则（附上原文）：</p>
+
+<ol>
+  <li>a build tag is evaluated as the OR of space-separated options</li>
+  <li>each option evaluates as the AND of its comma-separated terms</li>
+  <li>each term is an alphanumeric word or, preceded by !, its negation</li>
+</ol>
+
+<p>1). 编译标签由空格分隔的编译选项(options)以”或”的逻辑关系组成</p>
+
+<p>2). 每个编译选项由逗号分隔的条件项以逻辑”与”的关系组成</p>
+
+<p>3). 每个条件项的名字用字母+数字表示，在前面加!表示否定的意思</p>
+
+<p>例子（编译标签要放在源文件顶部）</p>
+
+<p>// +build darwin freebsd netbsd openbsd
+这个将会让这个源文件只能在支持kqueue的BSD系统里编译</p>
+
+<p>一个源文件里可以有多个编译标签，多个编译标签之间是逻辑”与”的关系</p>
+
+<p>// +build linux darwin
+// +build 386
+这个将限制此源文件只能在 linux/386或者darwin/386平台下编译</p>
+
+<p>关于注释的说明</p>
+
+<p>刚开始使用编译标签经常会犯下面这个错误</p>
+
+<p>// +build !linux
+package mypkg // wrong
+这个例子里的编译标签和包的声明之间没有用空行隔开，这样编译标签会被当做包声明的注释而不是编译标签从而被忽略掉</p>
+
+<p>下面这个是正确的标签的书写方式，标签的结尾添加一个空行这样标签就不会当做其他声明的注释</p>
+
+<p>// +build !linux</p>
+
+<p>package mypkg // correct</p>
+
+<p>用go vet命令也可以检测到这个缺少空行的错误，初期可以用这个命令来避免缺少空行的错误</p>
+
+<p>% go vet mypkg
+mypkg.go:1: +build comment appears too late in file
+exit status 1</p>
+
+<p>作为参考，下面的例子将licence声明,编译标签和包声明放在一起，请大家注意分辨</p>
+
+<p>% head headspin.go 
+// Copyright 2013 Way out enterprises. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.</p>
+
+<p>// +build someos someotheros thirdos,!amd64</p>
+
+<p>// Package headspin implements calculates numbers so large
+// they will make your head spin.
+package headspin</p>
+
+<ol>
+  <li>第二种条件编译方法：文件后缀</li>
+</ol>
+
+<p>这个方法通过改变文件名的后缀来提供条件编译，这种方案比编译标签要简单，go/build可以在不读取源文件的情况下就可以决定哪些文件不需要参与编译</p>
+
+<p>文件命名约定可以在go/build 包里找到详细的说明，简单来说如果你的源文件包含后缀：<em>$GOOS.go，那么这个源文件只会在这个平台下编译，</em>$GOARCH.go也是如此。这两个后缀可以结合在一起使用，但是要注意顺序：<em>$GOOS</em>$GOARCH.go，    不能反过来用：<em>$GOARCH</em>$GOOS.go</p>
+
+<p>例子如下：</p>
+
+<p>mypkg_freebsd_arm.go // only builds on freebsd/arm systems
+mypkg_plan9.go       // only builds on plan9</p>
+
+<p>源文件不能只提供条件编译后缀，还必须有文件名：</p>
+
+<p>_linux.go
+_freebsd_386.go
+这两个源文件在所有平台下都会被忽略掉，因为go/build将会忽略所有以下划线或者点开头的源文件</p>
+
+<ol>
+  <li>编译标签和文件后缀的选择</li>
+</ol>
+
+<p>编译标签和文件后缀的功能上有重叠，例如一个文件名：mypkg_linux.go包含了// +build linux将会出现冗余</p>
+
+<p>通常情况下，如果源文件与平台或者cpu架构完全匹配，那么用文件后缀，例如：</p>
+
+<p>mypkg_linux.go         // only builds on linux systems
+mypkg_windows_amd64.go // only builds on windows 64bit platforms</p>
+
+<p>相反，如果这个源文件可以在超过一个平台或者超过一个cpu架构下可以使用或者需要去除指定平台，那么使用编译标签，例如下面的编译标签可以在所有*nix平台上编译：</p>
+
+<p>% grep ‘+build’ $HOME/go/src/pkg/os/exec/lp_unix.go 
+// +build darwin dragonfly freebsd linux netbsd openbsd</p>
+
+<p>下面是可以在除了windows的所有平台下编译</p>
+
+<p>% grep ‘+build’ $HOME/go/src/pkg/os/types_notwin.go 
+// +build !windows</p>
+
+<ol>
+  <li>总结</li>
+</ol>
+
+<p>这篇文章主要关注所有可以被go tool编译的go源文件,编译标签和文件后缀名（也包括了.c 和.s文件)</p>
+
+<p>Go的标准库里包含了很多的样例，特别是runtime,syscall,os和net包，读者可以通过这些包来学习</p>
+
+<p>Test文件也支持编译标签和文件后缀条件编译，并且作用方式与go源文件相同。可以在不同平台下有条件的包含一些测试样例。同样，标准库也包含了大量的例子</p>
+
+<p>最后，这篇文件是讲如何用go tool来达到条件编译，但是条件编译不限于go tool，你可以用go/build包编写自己的条件编译工具</p>
+
+<p>go build
+使用tag来实现编译不同的文件
+go-tooling-workshop 中关于go build的讲解可以了解到go bulid的一些用法，这篇文章最后要求实现一个根据go bulid -tag功能来编译不同版本的做法，version参数根据tag传进来的值进行编译。下面是一个实例，main.go</p>
+
+<p>package main</p>
+
+<p>import “fmt”</p>
+
+<p>// HINT: You might need to move this declaration to a different file.
+const version = “dev”
+func main() {
+    fmt.Printf(“running %s version”, version)
+}
+好，新建一个dev_config.go文件，代码如下</p>
+
+<p>// +build dev</p>
+
+<p>package main</p>
+
+<p>var version = “DEV”
+上面代码的关键是 // +build dev这行代码，注意这行代码前后须有一个空行隔开，例如在第一行时，接下来要空出一行。这个文件只会被go bulid识别到，而go run等命令不会去识别这个文件，而且vscode等编辑器也会略过这个文件。
+再新建一个文件release_config.go,代码如下</p>
+
+<p>// +build release</p>
+
+<p>package main</p>
+
+<p>const version = “RELEASE”
+代码已经准备完毕，还有一个地方要注意，需要去掉main.go中的const version = ‘dev’这行代码，否则，go bulid命令会报version重复定义。
+执行命令如下：</p>
+
+<p>lin@DESKTOP-HQI5HRL MINGW64 /g/workspace/GoWorkspace/src
+$ go build -tags dev -o dev_version</p>
+
+<p>lin@DESKTOP-HQI5HRL MINGW64 /g/workspace/GoWorkspace/src
+$ ./dev_version
+running DEV version</p>
+
+<p>lin@DESKTOP-HQI5HRL MINGW64 /g/workspace/GoWorkspace/src
+$ go build -tags release -o release_version</p>
+
+<p>lin@DESKTOP-HQI5HRL MINGW64 /g/workspace/GoWorkspace/src
+$ ./release_version
+running RELEASE version
+go build还支持通过命令行传递编译参数，通过-ldflags参数实现，将main.go修改为</p>
+
+<p>package main</p>
+
+<p>import “fmt”</p>
+
+<p>// HINT: You might need to move this declaration to a different file.
+var version string</p>
+
+<p>func main() {
+    fmt.Printf(“running %s version”, version)
+}
+命令行执行：</p>
+
+<p>lin@DESKTOP-HQI5HRL MINGW64 /g/workspace/GoWorkspace/src
+$ go build -ldflags ‘-X main.version=”dev”’ -o dev_version</p>
+
+<p>lin@DESKTOP-HQI5HRL MINGW64 /g/workspace/GoWorkspace/src
+$ ./dev_version
+running “dev” version
+lin@DESKTOP-HQI5HRL MINGW64 /g/workspace/GoWorkspace/src</p>
+
+<p>https://www.digitalocean.com/community/tutorials/customizing-go-binaries-with-build-tags</p>
+
+<p>为了要写一个Web服务但是有可能会发生以下的需求：</p>
+
+<p>不同服务器，有不同的设定参数
+不同的OS有不同的命令集
+想要快速的开启或者关闭调试日志
+在有以上的需求的时候，一开始都是使用OS检测或配置文件来分区。但是到后面其实是希望能透过不同的build config能产生不同的二进制文件。</p>
+
+<p>决定研究了一下：go build有以下两种方式可以达到部分的效果。</p>
+
+<h2 id="go-build--ldflags">Go build -ldflags</h2>
+
+<p>这可以在go build的时候，先设定一些变数的名称。通常我自己比较习惯透过OS环境变数来设定，然后程式里面再去读取。</p>
+
+<p>在你的主程式里面，可以先定义一个变数flagString：</p>
+
+<p>package main</p>
+
+<p>import (
+	“fmt”
+)</p>
+
+<p>var flagString string</p>
+
+<p>func main() {
+	fmt.Println(“This build with ldflag:”, flagString)
+}
+透过外在go build来设定这个变数go build -ldflags ‘-X main.flagString “test”‘这样你的结果会是</p>
+
+<blockquote>
+  <blockquote>
+    <p>This build with ldflag: test
+这个方式可以直接设定参数，让值初始化通过外部设定来跑。</p>
+  </blockquote>
+</blockquote>
+
+<h2 id="go-build--tags">Go build -tags</h2>
+
+<p>通过go build -tags这样，你能够放在这个档案里面的东西就有很多。可以是：</p>
+
+<p>不同系列的define（达到ifdef的效果）
+不同的功能工具（达到同一个功能在不同设定下有不同实现）
+以下增加一个简单的范例，来达到不同的生成配置可以加载不同的定义值。</p>
+
+<p>文件： debug_config.go</p>
+
+<p>//+build debug</p>
+
+<p>package main</p>
+
+<p>var TestString string = “test debug”
+var TestString2 string = “ and it will run every module with debug tag.”</p>
+
+<p>func GetConfigString() string {
+	return “it is debug…..”
+}
+请注意：//+build debug前后需要一个空行（除非你在第一行）</p>
+
+<p>另外，我们也有一般的设定档 release_config.go</p>
+
+<p>//+build !debug</p>
+
+<p>package main</p>
+
+<p>var TestString string = “test release”
+var TestString2 string = “ and it will run every module as no debug tag.”</p>
+
+<p>func GetConfigString() string {
+	return “it is release…..”
+}
+最后在主要的main里面，可以直接去参考这两个定义值文件： main.go</p>
+
+<p>package main</p>
+
+<p>import (
+	“fmt”
+)</p>
+
+<p>func main() {
+	fmt.Println(“This build is “, TestString, TestString2, GetConfigString())
+}
+在这里如果你是跑go build -tags debug那么执行结果会是：</p>
+
+<blockquote>
+  <blockquote>
+    <p>This build is  test debug  and it will run every module with debug tag. it is debug…..
+如果跑的是go build会预设去读取!debug，那么结果会是：</p>
+  </blockquote>
+</blockquote>
+
+<blockquote>
+  <blockquote>
+    <p>This build is  test release  and it will run every module as no debug tag. it is release…..
+可以看到他不只可以加入定义参数，也可以把不同的功能带来不同的实现。</p>
+  </blockquote>
+</blockquote>
+
+<p>##使用时机讨论与心得</p>
+
+<p>使用上差异：</p>
+
+<p>ldflags可以加入一些参数，就跟gcc的ldflags一样-
+标签很像是gcc -D不过由于在档案里面要定义//+build XXXX，感觉有点繁琐。不过由于可以可以以档案来区隔，你可以加入多个定义值跟功能
+ldflags使用时机：</p>
+
+<p>个人认为可能可以拿来改变初始值得设定，或者去改变一些程序内的设定。<strong>某种说：</strong></p>
+
+<p>缓冲区值：透过构建来改变缓冲区的大小，来做不同的测试与应用。
+日志标志：决定要不要印log
+标签使用时机：</p>
+
+<p>tags的使用时机相当的多，列出几个我看到的：</p>
+
+<p>调试日志/加密：定义调试功能，然后再释放/调试有不同的实现（印既不印log），也可以在某些状况下开启或关闭加密来测试。
+跨平台部分：不同OS平台需要不同的设置与实现
+其他更多的部分，可以看到在逐渐加上去。</p>
+
+<p>##参考链结</p>
+
+<p>http://blog.csdn.net/varding/article/details/20465311
+http://shinpei.github.io/blog/2014/10/07/use-build-constrains-or-build-tag-in-golang/
+http://stackoverflow.com/questions/15214459/how-to-properly-use-build-tags
+http://stackoverflow.com/questions/11354518/golang-application-auto-build-versioning
+http://codegangsta.io/blog/2013/07/11/practical-go-build-tags/
+http://technosophos.com/2014/06/11/compile-time-string-in-go.html
+Godoc：进入命令行
+Godco：进行构建命令
+Dave Cheney：使用// + build在调试和发行版本之间切换</p>
+:ET

@@ -1,0 +1,130 @@
+I"�!<p>https://www.arp242.net/static-go.html
+Go creates static binaries by default unless you use cgo to call C code, in which case it will create a dynamically linked library. Turns out that using cgo is more common than many people assume as the os/user and net packages use cgo by default, so importing either (directly or indirectly) will result in a non-static binary.
+<!-- more -->
+The easiest way to check if your program is statically compiled is to run file on it:</p>
+
+<p>$ file test.dynamic | tr , ‘\n’
+test.dynamic: ELF 64-bit LSB executable
+ x86-64
+ version 1 (SYSV)
+ dynamically linked
+ interpreter /lib/ld-linux-x86-64.so.2
+ Go BuildID=LxsDWU_fMQ9Cox6y4bSV/fdMBNuZAmOuPSIKb2RXJ/rcazy_d6AbaoNtes-qID/nRiDtV1fOY2eoEVlyqnu
+ not stripped</p>
+
+<p>$ file test.static | tr , ‘\n’
+test.static:  ELF 64-bit LSB executable
+ x86-64
+ version 1 (SYSV)
+ statically linked
+ Go BuildID=hz56qplN20RU01EMBelb/58lm7IuCas399AWvpycN/BGETSDXvSFKK3BUjfgon/5xa5xLDJTC90556SUlNh
+ not stripped
+Notice the “dynamically linked” and “statically linked”. You can also run ldd, but note this only works if the binary matches your system’s architecture:</p>
+
+<p>$ ldd test.dynamic
+test.dynamic:
+        linux-vdso.so.1 (0x00007ffe00302000)
+        libpthread.so.0 =&gt; /usr/lib/libpthread.so.0 (0x00007f3f86f4a000)
+        libc.so.6 =&gt; /usr/lib/libc.so.6 (0x00007f3f86d87000)
+        /lib/ld-linux-x86-64.so.2 (0x00007f3f86f80000)</p>
+
+<p>$ ldd test.static
+test.static:
+        not a dynamic executable
+You can verify that a binary runs without external dependencies with chroot (this requires root on most platforms):</p>
+
+<p>$ chroot . ./test.static
+Hello, world!</p>
+
+<p>$ chroot . ./test.dynamic
+chroot: failed to run command ‘./test.dynamic’: No such file or directory
+The “No such file or directory” error is a bit obscure, but it means that the dynamic linker (ld-linux) wasn’t found. Unfortunately this is the exact same message as when the test.dynamic itself isn’t found, so make sure you didn’t typo it. I’m not sure if there’s any way to get Linux to emit a more useful message for this.[1]</p>
+
+<p>There are two packages in the standard library that use cgo:</p>
+
+<p>os/user contains cgo code to use the standard C library to map user and group ids to user and group names. There is also a Go implementation which parses /etc/passwd and /etc/group. The advantage of using the C library is that the C library can also get user information from LDAP or NIS. If you don’t use that – most people don’t – then there is no real difference.</p>
+
+<p>On Windows, there is only a Go implementation, and this doesn’t apply.</p>
+
+<p>net can use the C standard library to resolve domain names, but by default it uses the Go client. The C library has a few more features (e.g. you can configure getaddrinfo() with /etc/gai.conf) and some platforms don’t have a resolv.conf (e.g. Android), but for most uses the Go library should work well.</p>
+
+<p>Your binary will no longer be statically linked if you use one of those two libraries, by importing them directly or having one of your dependencies import them. Especially the net one is quite common.</p>
+
+<p>You can use the osusergo and netgo build tags to skip building the cgo parts:</p>
+
+<p>$ go build -tags osusergo
+$ go build -tags netgo
+$ go build -tags osusergo,netgo
+For simple cases where you don’t use any other cgo code it’s probably easier to just disable cgo, since the cgo code is protected with +build cgo:</p>
+
+<p>$ CGO_ENABLED=0 go build
+What if we want to use the cgo versions of the above? Or what if we want to use a cgo package such as SQLite? In those cases you can tell the C linker to statically link with -extldflags:</p>
+
+<p>$ go build -ldflags=”-extldflags=-static”
+The nested -s look a bit confusing and are easy to forget, so be sure to pay attention (or maybe that’s just me… 🤦‍♂️).</p>
+
+<p>Some packages – such as SQLite – may produce warnings:</p>
+
+<p>$ go build -ldflags=”-extldflags=-static”</p>
+<h1 id="test">test</h1>
+<p>/usr/bin/ld: /tmp/go-link-400285317/000010.o: in function `unixDlOpen’:
+/[..]/sqlite3-binding.c:39689: warning: Using ‘dlopen’ in statically linked
+applications requires at runtime the shared libraries from the glibc version used
+for linking
+dlopen() loads shared libraries at runtime; looking at the SQLite source code it’s only used only for dynamically loading extensions; this is not a commonly used feature, so this warning can be safely ignored for most programs (you can verify with the chroot mentioned earlier).</p>
+
+<p>The go-sqlite3 package does provide a build flag to disable this, if you want to make the warnings go away and ensure this feature isn’t used:</p>
+
+<p>$ go build -ldflags=”-extldflags=-static” -tags sqlite_omit_load_extension
+The os/user and net packages will give you a similar warnings about the getpwnam_r() etc. and getaddrinfo() functions; which also depend on runtime configurations. You can use the tags mentioned earlier to make sure the Go code is used.</p>
+
+<p>For other packages/functions you may use, you’ll have to check if the warnings are significant or not in the package’s source code.</p>
+
+<p>One of Go’s nicer features is that you can cross-compile to any system/architecture combination from any system by just setting setting GOOS and GOARCH. I can build Windows binaries on OpenBSD just with GOOS=windows GOARCH=amd64 go build. Neat!</p>
+
+<p>With cgo cross-compiling gets a bit trickier as cross-compiling C code is trickier.</p>
+
+<p>The short version is that cross-compiling to different architectures (amd64, arm, etc.) for the same OS isn’t too hard, but cross-compiling to different operating systems is rather harder. It’s certainly doable, but you need the entire toolchain and libraries for the target OS. It’s a bit of a hassle and probably easier to just start a virtual machine.</p>
+
+<p>You’ll need to install the toolchain for the target architecture (and OS, if you’re compiling to a different OS); if you’re on Linux your package manager will probably already include it, but they’re named different on different distros. Usually searching for -linux-gnu (or -linux-musl) should give you an overview.</p>
+
+<p>I’m very 😎 so I use Void Linux, and for extra 😎 I want to use musl libc, so that’s what I’ll use in this example to cross-compile to ARM and ARM64; let me know if you have the commands for other systems and I’ll add them as well.[2]</p>
+
+<h1 id="replace-musl-with-gnu-if-you-want-to-use-gnu-libc">Replace musl with gnu if you want to use GNU libc.</h1>
+<p>$ xbps-install cross-aarch64-linux-musl cross-armv7l-linux-musleabihf</p>
+
+<p>$ GOOS=linux GOARCH=arm64 CGO_ENABLED=1 CC=aarch64-linux-musl-gcc <br />
+    go build -ldflags=’-extldflags=-static’ -o test.arm64 ./test.go</p>
+
+<p>$ GOOS=linux GOARCH=arm CGO_ENABLED=1 CC=armv7l-linux-musleabihf-gcc <br />
+    go build -ldflags=’-extldflags=-static’ -o test.arm ./test.go
+aarch64 and arm64 are the same thing, just with a different name, just as x86_64 and amd64. To confirm that it works, you can use QEMU; for example with select date() from a :memory: SQLite database:</p>
+
+<p>$ qemu-aarch64 ./test.arm64</p>
+<nil> 2020-04-11
+
+$ qemu-arm ./test.arm
+<nil> 2020-04-11
+Huzzah!
+
+Finally, to make releasing binaries a bit easier I wrote a small script: gogo-release. It’s really just as glorified for loop (a lot of software is, really) to make the above a bit easier. For non-cgo projects the defaults settings should work without problems. This is what I use to build GoatCounter:
+
+matrix="
+linux amd64
+linux arm   CC=armv7l-linux-musleabihf-gcc
+linux arm64 CC=aarch64-linux-musl-gcc
+"
+
+build_flags="-trimpath -ldflags='-extldflags=-static -w -s -X main.version=$tag' -tags osusergo,netgo,sqlite_omit_load_extension ./cmd/goatcounter"
+
+export CGO_ENABLED=1
+And then just run gogo-release.
+
+I’m not really aware of a good tool to make cross-compiling to different systems easier; the closest I know of is xgo, which installs the required build environment in a container. It’s not bad (although it is a bit messy), but it only supports Linux, macOS, and Windows. This covers most use cases but ideally I’d like a generic solution to cover all platforms. I may work on this in the future, time and enthusiasm permitting 😅
+
+Footnotes
+It’s a common source of confusion with a #! hashbang set to a program that the user doesn’t have installed, or has installed at a different location. ↩
+
+Figuring them out just from the package index is a bit too much work/hassle, and also untested so it may errors or silly typos. ↩
+</nil></nil>
+:ET

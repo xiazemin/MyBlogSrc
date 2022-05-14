@@ -1,0 +1,40 @@
+---
+title: CodeViz
+layout: post
+category: linux
+author: 夏泽民
+---
+CodeViz是《Understanding The Linux Virtual Memory Manager》(at Amazon，下载地址在页尾)的作者 Mel Gorman 写的一款分析C/C++源代码中函数调用关系的open source工具（类似的open source软件有 egypt、ncc）。其基本原理是给 GCC 打个补丁，让它在编译时每个源文件时 dump 出其中函数的 call graph，然后用 Perl 脚本收集并整理调用关系，转交给Graphviz绘制图形。
+
+CodeViz 原本是作者用来分析 Linux virtual memory 的源码时写的一个小工具，现在已经基本支持 C++ 语言，最新的 1.0.9 版能在 Windows + Cygwin 下顺利地编译使用:)。需要注意的是：1) 下载 GCC 3.4.1 的源码 gcc-3.4.1.tar.gz 放到 codeviz-1.0.9/compilers，2) 安装 patch 程序（属于Utils类），3) 从 http://www.graphviz.org 下载并安装 Graphviz 2.6。
+
+我用 CodeViz 分析《嵌入式实时操作系统 uC/OS-II (第二版)》中的第一个范例程序，步骤如下：
+
+1. 想办法让 gcc 能编译uC/OS 2.52和范例程序的源码，每个C源文件生成对于的.c.cdepn文件。只要编译(参数 -c)就行，无需连接。
+
+2. 调用genfull生成full.graph，这个文件记录了所有函数在源码中的位置和它们之间的调用关系。
+
+3. 使用gengraph生成我关心的函数的调用关系。
+
+https://www.cnblogs.com/qiangxia/p/4378355.html
+
+要使用doxygen生成漂亮的调用关系图
+https://blog.csdn.net/guoduhua/article/details/8706881
+<!-- more -->
+Callgraph 实际由三个工具组合而成。
+
+一个是用于生成 C 函数调用树的 cflow 或者 calltree，下文主要介绍 cflow。
+一个处理 dot 文本图形语言的工具，由 graphviz 提升。建议初步了解下：DOT 语言。
+一个用于把 C 函数调用树转换为 dot 格式的脚本：tree2dotx
+
+https://www.cnblogs.com/findumars/p/7475911.html
+
+作者：陈清扬
+链接：https://www.zhihu.com/question/34495043/answer/246601238
+来源：知乎
+著作权归作者所有。商业转载请联系作者获得授权，非商业转载请注明出处。
+
+大体来讲，如果要静态callgraph，你只需要读入程序，解析其中的invoke指令即可。很多静态工具有提供这样的功能，譬如前面说的doxygen等简单的、或者soot等更加sophisticated的静态工具。如果是C或者C++程序的话，LLVM opt也提供这样的工具。但是对于Java来说静态的call graph是非常不准确的。因为dynamic class loading，理论上说只有invokespecial和invokestatic可以静态确定调用对象，invokevirtual或者interface的话你只能进行估计，譬如Soot对于virtual call能够给你一个可能的被调用的对象的集合，但是这个集合是不完备的（譬如动态可以加载一个什么类subclass了当前某个类，然后重载了该方法）。如果要动态（运行时）callgraph，就势必要对程序进行instrument，在每次方法调用前后执行你自定义的routine。soot或者ASM等字节码操作工具可以让你方便地instrument，当然你可以直接修改Java虚拟机，譬如开Xint模式修改解释器。如果是C或者C++，你可以用Intel Pin，dynamorio等，或者用硬件计数器（譬如Intel Haswell系列的last branch record就可以配置为stack profile模式然后记录最近的branch，用这个也可以生成callgraph，虽然不十分准确，但是low overhead，perf就可以利用这个功能来生成callgraph）
+
+https://www.zhihu.com/question/34495043
+https://blog.csdn.net/solstice/article/details/488865
