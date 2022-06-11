@@ -1,0 +1,150 @@
+---
+title: scroll
+layout: post
+category: elasticsearch
+author: 夏泽民
+---
+当一个搜索请求返回单页结果时，可以使用 scroll API 检索体积大量（甚至全部）结果，这和在传统数据库中使用游标的方式非常相似。
+
+不要把 scroll 用于实时请求，它主要用于大数据量的场景。例如：将一个索引的内容索引到另一个不同配置的新索引中。
+
+Client support for scrolling and reindexing
+一些官方支持的客户端提供了一些辅助类，可以协助滚动搜索和索引之间的文档重索引：
+<!-- more -->
+为了使用 scroll ，初始的搜索请求应该在查询字符串中指定 scroll 参数，这个参数会告诉 Elasticsearch 将 “search context” 保存多久。例如：?scroll=1m
+
+POST /twitter/tweet/_search?scroll=1m
+{
+    "size": 100,
+    "query": {
+        "match" : {
+            "title" : "elasticsearch"
+        }
+    }
+}
+
+上面的请求返回的结果里会包含一个 _scroll_id ，我们需要把这个值传递给 scroll API ，用来取回下一批结果。
+
+POST (1)  /_search/scroll (2) 
+{
+    "scroll" : "1m", (3)
+    "scroll_id" : "DXF1ZXJ5QW5kRmV0Y2gBAAAAAAAAAD4WYm9laVYtZndUQlNsdDcwakFMNjU1QQ==" (4)
+}
+
+
+GET 或者 POST 都可以
+
+(2) URL 不能包含 index 和 type 名称，原始请求中已经指定了
+
+(3) scroll 参数告诉 Elasticsearch 把搜索上下文再保持一分钟
+
+(4) scroll_id 的值就是上一个请求中返回的 _scroll_id 的值
+
+size 参数允许我们配置没批结果返回的最大命中数。每次调用 scroll API 都会返回下一批结果，直到不再有可以返回的结果，即命中数组为空。
+
+IMPORTANT：初始的搜索请求和每个 scroll 请求都会返回一个新的 _scroll_id ，只有最近的 _scroll_id 是可用的
+
+NOTE：如果请求指定了过滤，就只有初始搜索的响应中包含聚合结果。
+
+NOTE：Scroll 请求对 _doc 排序做了优化。如果要遍历所有的文档，而且不考虑顺序，_doc 是最高效的选项。
+
+GET /_search?scroll=1m
+{
+  "sort": [
+    "_doc"
+  ]
+}
+
+
+Keeping the search context alive
+scroll 参数告诉了 Elasticsearch 应当保持搜索上下文多久。它的值不需要长到能够处理完所有的数据，只要足够处理前一批结果就行了。每个 scroll 请求都会设置一个新的过期时间。
+
+通常，为了优化索引，后台合并进程会把较小的段合并在一起创建出新的更大的段，此时会删除较小的段。这个过程在 scrolling 期间会继续进行，但是一个打开状态的索引上下文可以防止旧段在仍需要使用时被删除。这就解释了 Elasticsearch 为什么能够不考虑对文档的后续修改，而返回初始搜索请求的结果。
+
+TIP：使旧段保持活动状态意味着需要更多的文件句柄。请确保你已将节点配置为拥有足够的可用的文件句柄。详情参阅 File Descriptors
+
+你可以使用 nodes stats API 查看有多少搜索上下文处于开启状态
+
+GET /_nodes/stats/indices/search
+Clear scroll API
+当超出了 scroll timeout 时，搜索上下文会被自动删除。但是，保持 scrolls 打开是有成本的，当不再使用 scroll 时应当使用 clear-scroll API 进行显式清除。
+
+DELETE /_search/scroll
+{
+    "scroll_id" : "DXF1ZXJ5QW5kRmV0Y2gBAAAAAAAAAD4WYm9laVYtZndUQlNsdDcwakFMNjU1QQ=="
+}
+可以使用数组传递多个 scroll ID
+
+DELETE /_search/scroll
+{
+    "scroll_id" : [
+      "DXF1ZXJ5QW5kRmV0Y2gBAAAAAAAAAD4WYm9laVYtZndUQlNsdDcwakFMNjU1QQ==",
+      "DnF1ZXJ5VGhlbkZldGNoBQAAAAAAAAABFmtSWWRRWUJrU2o2ZExpSGJCVmQxYUEAAAAAAAAAAxZrUllkUVlCa1NqNmRMaUhiQlZkMWFBAAAAAAAAAAIWa1JZZFFZQmtTajZkTGlIYkJWZDFhQQAAAAAAAAAFFmtSWWRRWUJrU2o2ZExpSGJCVmQxYUEAAAAAAAAABBZrUllkUVlCa1NqNmRMaUhiQlZkMWFB"
+    ]
+}
+使用 _all 参数清除所有的搜索上下文
+
+DELETE /_search/scroll/_all
+也可以使用 query string 参数传递 scroll_id ，多个值使用英文逗号分割
+
+DELETE /_search/scroll/DXF1ZXJ5QW5kRmV0Y2gBAAAAAAAAAD4WYm9laVYtZndUQlNsdDcwakFMNjU1QQ==,DnF1ZXJ5VGhlbkZldGNoBQAAAAAAAAABFmtSWWRRWUJrU2o2ZExpSGJCVmQxYUEAAAAAAAAAAxZrUllkUVlCa1NqNmRMaUhiQlZkMWFBAAAAAAAAAAIWa1JZZFFZQmtTajZkTGlIYkJWZDFhQQAAAAAAAAAFFmtSWWRRWUJrU2o2ZExpSGJCVmQxYUEAAAAAAAAABBZrUllkUVlCa1NqNmRMaUhiQlZkMWFB
+Sliced Scroll
+如果 scroll 查询返回的文档数量过多，可以把它们拆分成多个切片以便独立使用
+
+GET /twitter/tweet/_search?scroll=1m
+{
+    "slice": {
+        "id": 0, (1)
+        "max": 2 (2)
+    },
+    "query": {
+        "match" : {
+            "title" : "elasticsearch"
+        }
+    }
+}
+GET /twitter/tweet/_search?scroll=1m
+{
+    "slice": {
+        "id": 1,
+        "max": 2
+    },
+    "query": {
+        "match" : {
+            "title" : "elasticsearch"
+        }
+    }
+}
+(1) 切片的 id
+
+(2) 最大切片数量
+
+上面的栗子，第一个请求返回的是第一个切片（id : 0）的文档，第二个请求返回的是第二个切片的文档。因为我们设置了最大切片数量是 2 ，所以两个请求的结果等价于一次不切片的 scroll 查询结果。默认情况下，先在第一个分片（shard）上做切分，然后使用以下公式：slice(doc) = floorMod(hashCode(doc._uid), max) 在每个 shard 上执行切分。例如，如果 shard 的数量是 2 ，并且用户请求 4 slices ，那么 id 为 0 和 2 的 slice 会被分配给第一个 shard ，id 为 1 和 3 的 slice 会被分配给第二个 shard 。
+
+每个 scroll 是独立的，可以像任何 scroll 请求一样进行并行处理。
+
+NOTE：如果 slices 的数量比 shards 的数量大，第一次调用时，slice filter 的速度会非常慢。它的复杂度时 O(n) ，内存开销等于每个 slice N 位，其中 N 时 shard 中的文档总数。经过几次调用后，筛选器会被缓存，后续的调用会更快。但是仍需要限制并行执行的 sliced 查询的数量，以免内存激增。
+
+为了完全避免此成本，可以使用另一个字段的 doc_values 来进行切片，但用户必须确保该字段具有以下属性：
+
+该字段是数字类型
+该字段启用了 doc_values
+每个文档应当包含单个值。如果一份文档有指定字段的多个值，则使用第一个值
+每个文档的值在创建文档时设置了之后不再更新，这可以确保每个切片获得确定的结果
+字段的基数应当很高，这可以确保每个切片获得的文档数量大致相同
+GET /twitter/tweet/_search?scroll=1m
+{
+    "slice": {
+        "field": "date",
+        "id": 0,
+        "max": 10
+    },
+    "query": {
+        "match" : {
+            "title" : "elasticsearch"
+        }
+    }
+}
+NOTE：默认情况下，每个 scroll 允许的最大切片数量时 1024。你可以更新索引设置中的 index.max_slices_per_scroll 来绕过此限制。
+
+https://blog.csdn.net/hellozhxy/article/details/80772774
