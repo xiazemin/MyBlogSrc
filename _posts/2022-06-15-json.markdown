@@ -1,0 +1,80 @@
+---
+title: json
+layout: post
+category: mysql
+author: 夏泽民
+---
+MySQL 5.7 增加了 JSON 数据类型的支持
+CREATE TABLE user (
+  id INT(11) UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  name VARCHAR(30) NOT NULL,
+  info JSON
+);
+
+插入数据
+INSERT INTO user (`name`, `info`) VALUES('lilei', '{"sex": "male", "age": 18, "hobby": ["basketball", "football"], "score": [85, 90, 100]}');
+<!-- more -->
+可以调用 MySQL 的 JSON 创建函数进行创建。
+
+JSON_OBJECT：快速创建 JSON 对象，奇数列为 key，偶数列为 value，使用方法 JSON_OBJECT(key,value,key1,value1)
+JSON_ARRAY：快速创建 JSON 数组，使用方法 JSON_ARRAY(item0, item1, item2)
+
+
+mysql> INSERT INTO user (`name`, `info`) VALUES('hanmeimei', JSON_OBJECT(
+    ->  'sex', 'female',
+    ->  'age', 18,
+    ->  'hobby', JSON_ARRAY('badminton', 'sing'),
+    -> 'score', JSON_ARRAY(90, 95, 100)
+    -> ));
+    
+为了更好的支持 JSON 数据的操作，MySQL 提供了一些 JSON 数据操作类的方法。和查询操作相关的方法主要如下：
+
+JSON_EXTRACT()：根据 Path 获取部分 JSON 数据，使用方法 JSON_EXTRACT(json_doc, path[, path] ...)
+->：JSON_EXTRACT() 的等价写法
+->>：JSON_EXTRACT() 和 JSON_UNQUOTE() 的等价写法
+JSON_CONTAINS()：查询 JSON 数据是否在指定 Path 包含指定的数据，包含则返回1，否则返回0。使用方法 JSON_CONTAINS(json_doc, val[, path])
+JSON_CONTAINS_PATH()：查询是否存在指定路径，存在则返回1，否则返回0。one_or_all 只能取值 "one" 或 "all"，one 表示只要有一个存在即可，all 表示所有的都存在才行。使用方法 JSON_CONTAINS_PATH(json_doc, one_or_all, path[, path] ...)
+JSON_KEYS()：获取 JSON 数据在指定路径下的所有键值。使用方法 JSON_KEYS(json_doc[, path])，类似 JavaScript 中的 Object.keys() 方法。
+JSON_SEARCH()：查询包含指定字符串的 Paths，并作为一个 JSON Array 返回。查询的字符串可以用 LIKE 里的 '%' 或 '_' 匹配。使用方法 JSON_SEARCH(json_doc, one_or_all, search_str[, escape_char[, path] ...])，类似 JavaScript 中的 findIndex() 操作。
+
+
+ SELECT `name`, JSON_EXTRACT(`info`, '$.age') as `age`, `info`->'$.sex' as sex FROM `user`;
++-----------+------+----------+
+| name      | age  | sex      |
++-----------+------+----------+
+| lilei     | 18   | "male"   |
+| hanmeimei | 18   | "female" |
++-----------+------+----------+
+
+
+和 JavaScript 中对象的操作比较类似，通过 . 获取下一级的属性，通过 [] 获取数组元素。
+
+不一样的地方在于需要通过 $ 表示本身，这个也比较好理解。另外就是可以使用 * 和 ** 两个通配符，比如 .* 表示当前层级的所有成员的值，[*] 则表示当前数组中所有成员值。** 类似 LIKE 一样可以接前缀和后缀，比如 a**b 表示的是以 a 开头，b结尾的路径。
+
+
+mysql>  SELECT `name` FROM `user` WHERE JSON_CONTAINS(`info`, '"male"', '$.sex') AND JSON_SEARCH(`info`, 'one', 'basketball', null, '$.hobby');
++-------+
+| name  |
++-------+
+| lilei |
++-------+
+
+
+MySQL 提供的 JSON 操作函数中，和修改操作相关的方法主要如下：
+
+JSON_APPEND/JSON_ARRAY_APPEND：这两个名字是同一个功能的两种叫法，MySQL 5.7 的时候为 JSON_APPEND，MySQL 8 更新为 JSON_ARRAY_APPEND，并且之前的名字被废弃。该方法如同字面意思，给数组添加值。使用方法 JSON_ARRAY_APPEND(json_doc, path, val[, path, val] ...)
+JSON_ARRAY_INSERT：给数组添加值，区别于 JSON_ARRAY_APPEND() 它可以在指定位置插值。使用方法 JSON_ARRAY_INSERT(json_doc, path, val[, path, val] ...)
+JSON_INSERT/JSON_REPLACE/JSON_SET：以上三个方法都是对 JSON 插入数据的，他们的使用方法都为 JSON_[INSERT|REPLACE|SET](json_doc, path, val[, path, val] ...)，不过在插入原则上存在一些差别。
+JSON_INSERT：当路径不存在才插入
+JSON_REPLACE：当路径存在才替换
+JSON_SET：不管路径是否存在
+
+
+JSON_REMOVE：移除指定路径的数据。使用方法 JSON_REMOVE(json_doc, path[, path] ...)
+由于 JSON_INSERT, JSON_REPLACE, JSON_SET 和 JSON_REMOVE 几个方法支持属性和数组的操作，所以前两个 JSON_ARRAY 方法用的会稍微少一点。下面我们根据之前的数据继续举几个实例看看。
+
+ UPDATE `user` SET `info` = JSON_REPLACE(`info`, '$.age', 20) WHERE `name` = 'lilei';
+Query OK, 1 row affected (0.01 sec)
+
+https://zhuanlan.zhihu.com/p/242167548?hmsr=toutiao.io
+http://www.muzhuangnet.com/show/45479.html

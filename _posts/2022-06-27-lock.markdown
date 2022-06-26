@@ -1,0 +1,192 @@
+---
+title: innodb加锁状态查询
+layout: post
+category: storage
+author: 夏泽民
+---
+https://dev.mysql.com/doc/refman/5.7/en/innodb-locks-set.html
+
+1.在mysql命令行执行sql语句
+
+use dbName;  // 切换到具体数据库
+show engine innodb status;  // 查询db是否发生死锁
+
+2.查看数据表被锁状态
+show OPEN TABLES where In_use > 0; 
+<!-- more -->
+3.分析锁表的SQL 通过sql日志，分析相应SQL，给表加索引，常用字段加索引，表关联字段加索引等方式对sql进行优化。
+
+4.查看正在锁的事务
+
+SELECT * FROM INFORMATION_SCHEMA.INNODB_LOCKS;
+
+在5.5中，information_schema 库中增加了三个关于锁的表（innoDB引擎）：
+
+innodb_trx ## 当前运行的所有事务 innodb_locks ## 当前出现的锁 innodb_lock_waits ## 锁等待的对应关系 先来看一下这三张表结构：
+
+information_schema 13:28:38> desc innodb_locks;
++————-+———————+——+—–+———+——-+
+| Field       | Type                | Null | Key | Default | Extra |
++————-+———————+——+—–+———+——-+
+| lock_id     | varchar(81)         | NO   |     |         |       |#锁ID
+| lock_trx_id | varchar(18)         | NO   |     |         |       |#拥有锁的事务ID
+| lock_mode   | varchar(32)         | NO   |     |         |       |#锁模式
+| lock_type   | varchar(32)         | NO   |     |         |       |#锁类型
+| lock_table  | varchar(1024)       | NO   |     |         |       |#被锁的表
+| lock_index  | varchar(1024)       | YES  |     | NULL    |       |#被锁的索引
+| lock_space  | bigint(21) unsigned | YES  |     | NULL    |       |#被锁的表空间号
+| lock_page   | bigint(21) unsigned | YES  |     | NULL    |       |#被锁的页号
+| lock_rec    | bigint(21) unsigned | YES  |     | NULL    |       |#被锁的记录号
+| lock_data   | varchar(8192)       | YES  |     | NULL    |       |#被锁的数据
++————-+———————+——+—–+———+——-+
+
+information_schema 13:28:56> desc innodb_lock_waits;
++——————-+————-+——+—–+———+——-+
+| Field             | Type        | Null | Key | Default | Extra |
++——————-+————-+——+—–+———+——-+
+| requesting_trx_id | varchar(18) | NO   |     |         |       |#请求锁的事务ID
+| requested_lock_id | varchar(81) | NO   |     |         |       |#请求锁的锁ID
+| blocking_trx_id   | varchar(18) | NO   |     |         |       |#当前拥有锁的事务ID
+| blocking_lock_id  | varchar(81) | NO   |     |         |       |#当前拥有锁的锁ID
++——————-+————-+——+—–+———+——-+
+
+information_schema 13:29:05> desc innodb_trx ;
++—————————-+———————+——+—–+———————+——-+
+| Field                      | Type                | Null | Key | Default             | Extra |
++—————————-+———————+——+—–+———————+——-+
+| trx_id                     | varchar(18)         | NO   |     |                     |       |#事务ID
+| trx_state                  | varchar(13)         | NO   |     |                     |       |#事务状态：
+| trx_started                | datetime            | NO   |     | 0000-00-00 00:00:00 |       |#事务开始时间；
+| trx_requested_lock_id      | varchar(81)         | YES  |     | NULL                |       |#innodb_locks.lock_id
+| trx_wait_started           | datetime            | YES  |     | NULL                |       |#事务开始等待的时间
+| trx_weight                 | bigint(21) unsigned | NO   |     | 0                   |       |#
+| trx_mysql_thread_id        | bigint(21) unsigned | NO   |     | 0                   |       |#事务线程ID
+| trx_query                  | varchar(1024)       | YES  |     | NULL                |       |#具体SQL语句
+| trx_operation_state        | varchar(64)         | YES  |     | NULL                |       |#事务当前操作状态
+| trx_tables_in_use          | bigint(21) unsigned | NO   |     | 0                   |       |#事务中有多少个表被使用
+| trx_tables_locked          | bigint(21) unsigned | NO   |     | 0                   |       |#事务拥有多少个锁
+| trx_lock_structs           | bigint(21) unsigned | NO   |     | 0                   |       |#
+| trx_lock_memory_bytes      | bigint(21) unsigned | NO   |     | 0                   |       |#事务锁住的内存大小（B）
+| trx_rows_locked            | bigint(21) unsigned | NO   |     | 0                   |       |#事务锁住的行数
+| trx_rows_modified          | bigint(21) unsigned | NO   |     | 0                   |       |#事务更改的行数
+| trx_concurrency_tickets    | bigint(21) unsigned | NO   |     | 0                   |       |#事务并发票数
+| trx_isolation_level        | varchar(16)         | NO   |     |                     |       |#事务隔离级别
+| trx_unique_checks          | int(1)              | NO   |     | 0                   |       |#是否唯一性检查
+| trx_foreign_key_checks     | int(1)              | NO   |     | 0                   |       |#是否外键检查
+| trx_last_foreign_key_error | varchar(256)        | YES  |     | NULL                |       |#最后的外键错误
+| trx_adaptive_hash_latched  | int(1)              | NO   |     | 0                   |       |#
+| trx_adaptive_hash_timeout  | bigint(21) unsigned | NO   |     | 0                   |       |#
++—————————-+———————+——+—–+———————+——-+
+
+5.查看等待锁的事务
+
+SELECT * FROM INFORMATION_SCHEMA.INNODB_LOCK_WAITS.
+
+6.查看锁的类型和状态：
+
+show status like '%lock%';
+
+8.杀死发生死锁的进程 如果发生死锁，通过该语句可以查询到表被锁的进程，然后通过kill命令杀掉该进程。
+
+# 查看表锁的情况：
+mysql> show status like 'table%';
++----------------------------+---------+
+| Variable_name | Value |
++----------------------------+---------+
+| Table_locks_immediate | 100 |
+| Table_locks_waited | 11 |
++----------------------------+---------+
+​
+# 查看InnoDB_row_lock状态变量来分析系统上的行锁的争夺情况：
+mysql> show status like 'InnoDB_row_lock%';
+
+ Variable_name                 | Value  |
++-------------------------------+--------+
+| Innodb_row_lock_current_waits | 0      |
+| Innodb_row_lock_time          | 159372 |
+| Innodb_row_lock_time_avg      | 39843  |
+| Innodb_row_lock_time_max      | 51154  |
+| Innodb_row_lock_waits         | 4      |
++-------------------------------+--------+
+
+在分析innodb中锁阻塞时，几种方法的对比情况：
+
+（1）使用show processlist查看不靠谱； （2）直接使用show engine innodb status查看，无法判断到问题的根因； （3）使用mysqladmin debug查看，能看到所有产生锁的线程，但无法判断哪个才是根因； （4）开启innodb_lock_monitor后，再使用show engine innodb status查看，能够找到锁阻塞的根因。
+
+死锁发生情况及原因
+产生原因
+所谓死锁：是指两个或两个以上的进程在执行过程中，因争夺资源而造成的一种互相等待的现象。若无外力作用，它们都将无法推进下去。此时称系统处于死锁状态或系统产生了死锁，这些永远在互相等待的进程称为死锁进程。表级锁不会产生死锁。所以解决死锁主要还是针对于最常用的InnoDB。
+
+死锁的关键在于：两个(或以上)的Session加锁的顺序不一致。 那么对应的解决死锁问题的关键就是：让不同的session加锁有次序
+
+发生死锁的几种情况
+会出现死锁的几种情况 我们有两张结构一模一样的表，分别为t1和t2：
+
+id：integer  
+token：varchar   
+message：varchar
+123
+其中id是主键（自增），token是非聚集索引，message没有索引。
+
+1、一张表两行记录交叉申请互斥锁
+A执行到第二步时，等待B释放第一步的锁，而B需要执行完第二步结束事务之后才能释放锁； B执行到第二步时，等待A释放第一步的速，这样A和B都无法进行下去，就产生了死锁现象。
+
+2、两张表两行记录交叉申请互斥锁
+这种情况与1中的类似。
+
+3、聚集索引与非聚集索引冲突
+这种不一定会产生死锁，表面上也看不出来。
+
+假设A中满足条件的记录加锁顺序为（5,4,3,2,1），B中加锁顺序为（1,2,3,4,5），这里的排序是对应record的主键； （InnoDB的锁是逐步获取的，而不是一次获取全部需要的锁。） 有可能A加锁了5和4，B加锁了1、2、3，再往下进行的话就会出相互等待陷入僵局的情况，就是死锁。
+
+4、聚集索引冲突
+这种情况与3中的类似。
+
+5、间隙锁冲突
+这种情况是因为A第一步使用了间隙锁，在A释放锁之前B第二步无法完成，也会形成死锁。
+
+innodb提供了wait-for graph算法来主动进行死锁检测，每当加锁请求无法立即满足需要并进入等待时，wait-for graph算法都会被触发，检测是否出现等待环路。当检测到死锁时，InnoDB会选择代价比较小的事务进行回滚。
+
+https://blog.csdn.net/fengyuyeguirenenen/article/details/124057465
+
+https://blog.51cto.com/u_13874232/5151194
+
+show engine innodb status和innodb锁监控
+
+innodb monitor概述
+innodb monitor是innodb内置的监控模块，用show engine innodb status就可以查看。
+
+innodb monitor output可以输出在错误日志中
+
+查看更细粒度的innodb锁信息，需要打开innodb_status_output_locks
+
+innodb monitor的类型
+innodb监控类型（innodb monitor）分2种：innodb标准监控和innodb锁监控
+
+innodb标准监控-Standard InnoDB Monitor
+innodb标准监控实际上就是show engine innodb status的默认输出。
+
+要注意，innodb标准监控输出是有锁信息的，innodb锁监控只是在标准输出上输入了更多锁信息
+
+
+innodb锁监控-InnoDB Lock Monitor
+InnoDB Lock Monitor会在标准监控输出中输出更多的锁信息
+
+开启InnoDB Lock Monitor
+
+SET GLOBAL innodb_status_output_locks=ON;
+innodb_status_output_locks是动态参数，默认是关闭的，如果想看更细粒度的锁信息，需要将此参数打开。
+
+（注意innodb_status_output_locks=off时，show engine innodb status中仍然有锁信息，只是没有那么详细）
+
+innodb monitor输出持久化
+输出到错误日志
+innodb_status_output参数控制show engine innodb status是否输出到错误日志
+
+该参数为动态参数，默认关闭。
+
+SET GLOBAL innodb_status_output=ON;
+开启该功能后，innodb会每15秒输出一次mysqld的stderr到log_error中，实际上就是每15s做一次show engine innodb status写入log_error
+如果想将额外锁监控也打印出来，需要将innodb_status_output_locks打开
+
+https://blog.csdn.net/qq_40687433/article/details/116587367
