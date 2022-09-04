@@ -147,406 +147,58 @@
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/linux/2017/12/22/fork.html">fork</a>
+						<a class="post-link" href="/MyBlog/golang/2017/12/24/goroutine.html">goroutine</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/linux/2017/12/22/fork.html"> 夏泽民</a>
+						<a href="/MyBlog/golang/2017/12/24/goroutine.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Dec 22, 2017
+							Dec 24, 2017
 						</span>
 					</div>
-					<div class="excerpt"><p>一、fork入门知识一个进程，包括代码、数据和分配给进程的资源。fork（）函数通过系统调用创建一个与原来进程几乎完全相同的进程，也就是两个进程可以做完全相同的事，但如果初始参数或者传入的变量不同，两个进程也可以做不同的事。
-一个进程调用fork（）函数后，系统先给新的进程分配资源，例如存储数据和代码的空间。然后把原来的进程的所有值都复制到新的新进程中，只有少数值与原来的进程的值不同。相当于克隆了一个自己。
+					<div class="excerpt"><p>Go runtime的调度器：在了解Go的运行时的scheduler之前，需要先了解为什么需要它，因为我们可能会想，OS内核不是已经有一个线程scheduler了嘛？熟悉POSIX API的人都知道，POSIX的方案在很大程度上是对Unix process进场模型的一个逻辑描述和扩展，两者有很多相似的地方。 Thread有自己的信号掩码，CPU affinity等。但是很多特征对于Go程序来说都是累赘。 尤其是context上下文切换的耗时。另一个原因是Go的垃圾回收需要所有的goroutine停止，使得内存在一个一致的状态。垃圾回收的时间点是不确定的，如果依靠OS自身的scheduler来调度，那么会有大量的线程需要停止工作。 单独的开发一个GO得调度器，可以是其知道在什么时候内存状态是一致的，也就是说，当开始垃圾回收时，运行时只需要为当时正在CPU核上运行的那个线程等待即可，而不是等待所有的线程。用户空间线程和内核空间线程之间的映射关系有：N:1,1:1和M:NN:1是说，多个（N）用户线程始终在一个内核线程上跑，context上下文切换确实很快，但是无法真正的利用多核。1：1是说，一个用户线程就只在一个内核线程上跑，这时可以利用多核，但是上下文switch很慢。M:N是说， 多个goroutine在多个内核线程上跑，这个看似可以集齐上面两者的优势，但是无疑增加了调度的难度。
+Go的调度器内部有三个重要的结构：M，P，G
 <!-- more -->
-我们来看一个例子：</p>
-
-<figure class="highlight"><pre><code class="language-c" data-lang="c"><table class="rouge-table"><tbody><tr><td class="gutter gl"><pre class="lineno">1
-2
-3
-4
-5
-6
-7
-8
-9
-10
-11
-12
-13
-14
-15
-16
-17
-18
-19
-20
-21
-22
-23
-24
-25
-26
-</pre></td><td class="code"><pre><span class="cm">/* 
-*  fork_test.c 
-*  version 1 
-*/</span>  
-<span class="cp">#include &lt;unistd.h&gt;  
-#include &lt;stdio.h&gt;   
-</span><span class="kt">int</span> <span class="nf">main</span> <span class="p">()</span>   
-<span class="p">{</span>   
-<span class="n">pid_t</span> <span class="n">fpid</span><span class="p">;</span> <span class="c1">//fpid表示fork函数返回的值  </span>
-<span class="kt">int</span> <span class="n">count</span><span class="o">=</span><span class="mi">0</span><span class="p">;</span>  
-<span class="n">fpid</span><span class="o">=</span><span class="n">fork</span><span class="p">();</span>   
-<span class="k">if</span> <span class="p">(</span><span class="n">fpid</span> <span class="o">&lt;</span> <span class="mi">0</span><span class="p">)</span>   
-<span class="n">printf</span><span class="p">(</span><span class="s">"error in fork!"</span><span class="p">);</span>   
-<span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">fpid</span> <span class="o">==</span> <span class="mi">0</span><span class="p">)</span> <span class="p">{</span>  
-<span class="n">printf</span><span class="p">(</span><span class="s">"i am the child process, my process id is %d/n"</span><span class="p">,</span><span class="n">getpid</span><span class="p">());</span>   
-<span class="n">printf</span><span class="p">(</span><span class="s">"我是爹的儿子/n"</span><span class="p">);</span><span class="c1">//对某些人来说中文看着更直白。  </span>
-<span class="n">count</span><span class="o">++</span><span class="p">;</span>  
-<span class="p">}</span>  
-<span class="k">else</span> <span class="p">{</span>  
-<span class="n">printf</span><span class="p">(</span><span class="s">"i am the parent process, my process id is %d/n"</span><span class="p">,</span><span class="n">getpid</span><span class="p">());</span>   
-<span class="n">printf</span><span class="p">(</span><span class="s">"我是孩子他爹/n"</span><span class="p">);</span>  
-<span class="n">count</span><span class="o">++</span><span class="p">;</span>  
-<span class="p">}</span>  
-<span class="n">printf</span><span class="p">(</span><span class="s">"统计结果是: %d/n"</span><span class="p">,</span><span class="n">count</span><span class="p">);</span>  
-<span class="k">return</span> <span class="mi">0</span><span class="p">;</span>  
-<span class="p">}</span>  
-</pre></td></tr></tbody></table></code></pre></figure>
-
-<p>运行结果是：
-i am the child process, my process id is 5574
-我是爹的儿子
-统计结果是: 1
-i am the parent process, my process id is 5573
-我是孩子他爹
-统计结果是: 1
-在语句fpid=fork()之前，只有一个进程在执行这段代码，但在这条语句之后，就变成两个进程在执行了，这两个进程的几乎完全相同，将要执行的下一条语句都是if(fpid&lt;0)……
-为什么两个进程的fpid不同呢，这与fork函数的特性有关。fork调用的一个奇妙之处就是它仅仅被调用一次，却能够返回两次，它可能有三种不同的返回值：
-1）在父进程中，fork返回新创建子进程的进程ID；
-2）在子进程中，fork返回0；
-3）如果出现错误，fork返回一个负值；
-在fork函数执行完毕后，如果创建新进程成功，则出现两个进程，一个是子进程，一个是父进程。在子进程中，fork函数返回0，在父进程中，fork返回新创建子进程的进程ID。我们可以通过fork返回的值来判断当前进程是子进程还是父进程。引用一位网友的话来解释fpid的值为什么在父子进程中不同。“其实就相当于链表，进程形成了链表，父进程的fpid(p 意味point)指向子进程的进程id, 因为子进程没有子进程，所以其fpid为0.
-fork出错可能有两种原因：
-1）当前的进程数已经达到了系统规定的上限，这时errno的值被设置为EAGAIN。
-2）系统内存不足，这时errno的值被设置为ENOMEM。
-创建新进程成功后，系统中出现两个基本完全相同的进程，这两个进程执行没有固定的先后顺序，哪个进程先执行要看系统的进程调度策略。
-每个进程都有一个独特（互不相同）的进程标识符（process ID），可以通过getpid（）函数获得，还有一个记录父进程pid的变量，可以通过getppid（）函数获得变量的值。
-fork执行完毕后，出现两个进程，
-有人说两个进程的内容完全一样啊，怎么打印的结果不一样啊，那是因为判断条件的原因，上面列举的只是进程的代码和指令，还有变量啊。
-执行完fork后，进程1的变量为count=0，fpid！=0（父进程）。进程2的变量为count=0，fpid=0（子进程），这两个进程的变量都是独立的，存在不同的地址中，不是共用的，这点要注意。可以说，我们就是通过fpid来识别和操作父子进程的。
-还有人可能疑惑为什么不是从#include处开始复制代码的，这是因为fork是把进程当前的情况拷贝一份，执行fork时，进程已经执行完了int count=0;fork只拷贝下一个要执行的代码到新的进程。二、fork进阶知识先看一份代码：</p>
-
-<figure class="highlight"><pre><code class="language-c" data-lang="c"><table class="rouge-table"><tbody><tr><td class="gutter gl"><pre class="lineno">1
-2
-3
-4
-5
-6
-7
-8
-9
-10
-11
-12
-13
-14
-15
-16
-17
-18
-19
-20
-21
-22
-</pre></td><td class="code"><pre><span class="cm">/* 
-*  fork_test.c 
-*  version 2 
-*/</span>  
-<span class="cp">#include &lt;unistd.h&gt;  
-#include &lt;stdio.h&gt;  
-</span><span class="kt">int</span> <span class="nf">main</span><span class="p">(</span><span class="kt">void</span><span class="p">)</span>  
-<span class="p">{</span>  
-<span class="kt">int</span> <span class="n">i</span><span class="o">=</span><span class="mi">0</span><span class="p">;</span>  
-<span class="n">printf</span><span class="p">(</span><span class="s">"i son/pa ppid pid  fpid/n"</span><span class="p">);</span>  
-<span class="c1">//ppid指当前进程的父进程pid  </span>
-<span class="c1">//pid指当前进程的pid,  </span>
-<span class="c1">//fpid指fork返回给当前进程的值  </span>
-<span class="k">for</span><span class="p">(</span><span class="n">i</span><span class="o">=</span><span class="mi">0</span><span class="p">;</span><span class="n">i</span><span class="o">&lt;</span><span class="mi">2</span><span class="p">;</span><span class="n">i</span><span class="o">++</span><span class="p">){</span>  
-<span class="n">pid_t</span> <span class="n">fpid</span><span class="o">=</span><span class="n">fork</span><span class="p">();</span>  
-<span class="k">if</span><span class="p">(</span><span class="n">fpid</span><span class="o">==</span><span class="mi">0</span><span class="p">)</span>  
-<span class="n">printf</span><span class="p">(</span><span class="s">"%d child  %4d %4d %4d/n"</span><span class="p">,</span><span class="n">i</span><span class="p">,</span><span class="n">getppid</span><span class="p">(),</span><span class="n">getpid</span><span class="p">(),</span><span class="n">fpid</span><span class="p">);</span>  
-<span class="k">else</span>  
-<span class="n">printf</span><span class="p">(</span><span class="s">"%d parent %4d %4d %4d/n"</span><span class="p">,</span><span class="n">i</span><span class="p">,</span><span class="n">getppid</span><span class="p">(),</span><span class="n">getpid</span><span class="p">(),</span><span class="n">fpid</span><span class="p">);</span>  
-<span class="p">}</span>  
-<span class="k">return</span> <span class="mi">0</span><span class="p">;</span>  
-<span class="p">}</span>  
-</pre></td></tr></tbody></table></code></pre></figure>
-<p>运行结果是：
-i son/pa ppid pid  fpid
-0 parent 2043 3224 3225
-0 child  3224 3225    0
-1 parent 2043 3224 3226
-1 parent 3224 3225 3227
-1 child     1 3227    0
-1 child     1 3226    0 
-这份代码比较有意思，我们来认真分析一下：
-第一步：在父进程中，指令执行到for循环中，i=0，接着执行fork，fork执行完后，系统中出现两个进程，分别是p3224和p3225（后面我都用pxxxx表示进程id为xxxx的进程）。可以看到父进程p3224的父进程是p2043，子进程p3225的父进程正好是p3224。我们用一个链表来表示这个关系：
-p2043-&gt;p3224-&gt;p3225 
-第一次fork后，p3224（父进程）的变量为i=0，fpid=3225（fork函数在父进程中返向子进程id），代码内容为：</p>
-
-<figure class="highlight"><pre><code class="language-c" data-lang="c"><table class="rouge-table"><tbody><tr><td class="gutter gl"><pre class="lineno">1
-2
-3
-4
-5
-6
-7
-8
-</pre></td><td class="code"><pre><span class="k">for</span><span class="p">(</span><span class="n">i</span><span class="o">=</span><span class="mi">0</span><span class="p">;</span><span class="n">i</span><span class="o">&lt;</span><span class="mi">2</span><span class="p">;</span><span class="n">i</span><span class="o">++</span><span class="p">){</span>  
-<span class="n">pid_t</span> <span class="n">fpid</span><span class="o">=</span><span class="n">fork</span><span class="p">();</span><span class="c1">//执行完毕，i=0，fpid=3225  </span>
-<span class="k">if</span><span class="p">(</span><span class="n">fpid</span><span class="o">==</span><span class="mi">0</span><span class="p">)</span>  
-<span class="n">printf</span><span class="p">(</span><span class="s">"%d child  %4d %4d %4d/n"</span><span class="p">,</span><span class="n">i</span><span class="p">,</span><span class="n">getppid</span><span class="p">(),</span><span class="n">getpid</span><span class="p">(),</span><span class="n">fpid</span><span class="p">);</span>  
-<span class="k">else</span>  
-<span class="n">printf</span><span class="p">(</span><span class="s">"%d parent %4d %4d %4d/n"</span><span class="p">,</span><span class="n">i</span><span class="p">,</span><span class="n">getppid</span><span class="p">(),</span><span class="n">getpid</span><span class="p">(),</span><span class="n">fpid</span><span class="p">);</span>  
-<span class="p">}</span>  
-<span class="k">return</span> <span class="mi">0</span><span class="p">;</span>  
-</pre></td></tr></tbody></table></code></pre></figure>
-
-<p>p3225（子进程）的变量为i=0，fpid=0（fork函数在子进程中返回0），代码内容为：</p>
-
-<figure class="highlight"><pre><code class="language-c" data-lang="c"><table class="rouge-table"><tbody><tr><td class="gutter gl"><pre class="lineno">1
-2
-3
-4
-5
-6
-7
-8
-</pre></td><td class="code"><pre><span class="k">for</span><span class="p">(</span><span class="n">i</span><span class="o">=</span><span class="mi">0</span><span class="p">;</span><span class="n">i</span><span class="o">&lt;</span><span class="mi">2</span><span class="p">;</span><span class="n">i</span><span class="o">++</span><span class="p">){</span>  
-<span class="n">pid_t</span> <span class="n">fpid</span><span class="o">=</span><span class="n">fork</span><span class="p">();</span><span class="c1">//执行完毕，i=0，fpid=0  </span>
-<span class="k">if</span><span class="p">(</span><span class="n">fpid</span><span class="o">==</span><span class="mi">0</span><span class="p">)</span>  
-<span class="n">printf</span><span class="p">(</span><span class="s">"%d child  %4d %4d %4d/n"</span><span class="p">,</span><span class="n">i</span><span class="p">,</span><span class="n">getppid</span><span class="p">(),</span><span class="n">getpid</span><span class="p">(),</span><span class="n">fpid</span><span class="p">);</span>  
-<span class="k">else</span>  
-<span class="n">printf</span><span class="p">(</span><span class="s">"%d parent %4d %4d %4d/n"</span><span class="p">,</span><span class="n">i</span><span class="p">,</span><span class="n">getppid</span><span class="p">(),</span><span class="n">getpid</span><span class="p">(),</span><span class="n">fpid</span><span class="p">);</span>  
-<span class="p">}</span>  
-<span class="k">return</span> <span class="mi">0</span><span class="p">;</span>  
-</pre></td></tr></tbody></table></code></pre></figure>
-
-<p>所以打印出结果：
-0 parent 2043 3224 3225
-0 child  3224 3225    0
-第二步：假设父进程p3224先执行，当进入下一个循环时，i=1，接着执行fork，系统中又新增一个进程p3226，对于此时的父进程，p2043-&gt;p3224（当前进程）-&gt;p3226（被创建的子进程）。
-对于子进程p3225，执行完第一次循环后，i=1，接着执行fork，系统中新增一个进程p3227，对于此进程，p3224-&gt;p3225（当前进程）-&gt;p3227（被创建的子进程）。从输出可以看到p3225原来是p3224的子进程，现在变成p3227的父进程。父子是相对的，这个大家应该容易理解。只要当前进程执行了fork，该进程就变成了父进程了，就打印出了parent。
-所以打印出结果是：
-1 parent 2043 3224 3226
-1 parent 3224 3225 3227 
-第三步：第二步创建了两个进程p3226，p3227，这两个进程执行完printf函数后就结束了，因为这两个进程无法进入第三次循环，无法fork，该执行return 0;了，其他进程也是如此。
-以下是p3226，p3227打印出的结果：
-1 child     1 3227    0
-1 child     1 3226    0 
-细心的读者可能注意到p3226，p3227的父进程难道不该是p3224和p3225吗，怎么会是1呢？这里得讲到进程的创建和死亡的过程，在p3224和p3225执行完第二个循环后，main函数就该退出了，也即进程该死亡了，因为它已经做完所有事情了。p3224和p3225死亡后，p3226，p3227就没有父进程了，这在操作系统是不被允许的，所以p3226，p3227的父进程就被置为p1了，p1是永远不会死亡的，至于为什么，这里先不介绍，留到“三、fork高阶知识”讲。
-总结一下，这个程序执行的流程如下：这个程序最终产生了3个子进程，执行过6次printf（）函数。
-我们再来看一份代码：</p>
-
-<figure class="highlight"><pre><code class="language-c" data-lang="c"><table class="rouge-table"><tbody><tr><td class="gutter gl"><pre class="lineno">1
-2
-3
-4
-5
-6
-7
-8
-9
-10
-11
-12
-13
-14
-15
-16
-17
-</pre></td><td class="code"><pre><span class="cm">/* 
-*  fork_test.c 
-*  version 3 
-*/</span>  
-<span class="cp">#include &lt;unistd.h&gt;  
-#include &lt;stdio.h&gt;  
-</span><span class="kt">int</span> <span class="nf">main</span><span class="p">(</span><span class="kt">void</span><span class="p">)</span>  
-<span class="p">{</span>  
-<span class="kt">int</span> <span class="n">i</span><span class="o">=</span><span class="mi">0</span><span class="p">;</span>  
-<span class="k">for</span><span class="p">(</span><span class="n">i</span><span class="o">=</span><span class="mi">0</span><span class="p">;</span><span class="n">i</span><span class="o">&lt;</span><span class="mi">3</span><span class="p">;</span><span class="n">i</span><span class="o">++</span><span class="p">){</span>  
-<span class="n">pid_t</span> <span class="n">fpid</span><span class="o">=</span><span class="n">fork</span><span class="p">();</span>  
-<span class="k">if</span><span class="p">(</span><span class="n">fpid</span><span class="o">==</span><span class="mi">0</span><span class="p">)</span>  
-<span class="n">printf</span><span class="p">(</span><span class="s">"son/n"</span><span class="p">);</span>  
-<span class="k">else</span>  
-<span class="n">printf</span><span class="p">(</span><span class="s">"father/n"</span><span class="p">);</span>  
-<span class="p">}</span>  
-<span class="k">return</span> <span class="mi">0</span><span class="p">;</span>  <span class="p">}</span>
-</pre></td></tr></tbody></table></code></pre></figure>
-<p>它的执行结果是：
-father
-son
-father
-father
-father
-father
-son
-son
-father
-son
-son
-son
-father
-son 
-这里就不做详细解释了，只做一个大概的分析。
-for        i=0         1           2
-father     father     father
-son
-son       father
-son
-son       father     father
-son
-son       father
-son
-其中每一行分别代表一个进程的运行打印结果。
-总结一下规律，对于这种N次循环的情况，执行printf函数的次数为2<em>（1+2+4+……+2N-1）次，创建的子进程数为1+2+4+……+2N-1个。(感谢gao_jiawei网友指出的错误，原本我的结论是“执行printf函数的次数为2</em>（1+2+4+……+2N）次，创建的子进程数为1+2+4+……+2N ”，这是错的)
-网上有人说N次循环产生2*（1+2+4+……+2N）个进程，这个说法是不对的，希望大家需要注意。数学推理见http://202.117.3.13/wordpress/?p=81（该博文的最后）。
-同时，大家如果想测一下一个程序中到底创建了几个子进程，最好的方法就是调用printf函数打印该进程的pid，也即调用printf(“%d/n”,getpid());或者通过printf(“+/n”);来判断产生了几个进程。有人想通过调用printf(“+”);来统计创建了几个进程，这是不妥当的。具体原因我来分析。
-老规矩，大家看一下下面的代码：</p>
-
-<figure class="highlight"><pre><code class="language-c" data-lang="c"><table class="rouge-table"><tbody><tr><td class="gutter gl"><pre class="lineno">1
-2
-3
-4
-5
-6
-7
-8
-9
-10
-11
-12
-13
-14
-15
-16
-17
-18
-19
-</pre></td><td class="code"><pre><span class="cm">/* 
-*  fork_test.c 
-*  version 4
-*/</span>  
-<span class="cp">#include &lt;unistd.h&gt;  
-#include &lt;stdio.h&gt;  
-</span><span class="kt">int</span> <span class="nf">main</span><span class="p">()</span> <span class="p">{</span>  
-<span class="n">pid_t</span> <span class="n">fpid</span><span class="p">;</span><span class="c1">//fpid表示fork函数返回的值  </span>
-<span class="c1">//printf("fork!");  </span>
-<span class="n">printf</span><span class="p">(</span><span class="s">"fork!/n"</span><span class="p">);</span>  
-<span class="n">fpid</span> <span class="o">=</span> <span class="n">fork</span><span class="p">();</span>  
-<span class="k">if</span> <span class="p">(</span><span class="n">fpid</span> <span class="o">&lt;</span> <span class="mi">0</span><span class="p">)</span>  
-<span class="n">printf</span><span class="p">(</span><span class="s">"error in fork!"</span><span class="p">);</span>  
-<span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">fpid</span> <span class="o">==</span> <span class="mi">0</span><span class="p">)</span>  
-<span class="n">printf</span><span class="p">(</span><span class="s">"I am the child process, my process id is %d/n"</span><span class="p">,</span> <span class="n">getpid</span><span class="p">());</span>  
-<span class="k">else</span>  
-<span class="n">printf</span><span class="p">(</span><span class="s">"I am the parent process, my process id is %d/n"</span><span class="p">,</span> <span class="n">getpid</span><span class="p">());</span>  
-<span class="k">return</span> <span class="mi">0</span><span class="p">;</span>  
-<span class="p">}</span>  
-</pre></td></tr></tbody></table></code></pre></figure>
-
-<p>执行结果如下：
-fork!
-I am the parent process, my process id is 3361
-I am the child process, my process id is 3362 
-如果把语句printf(“fork!/n”);注释掉，执行printf(“fork!”);
-则新的程序的执行结果是：
-fork!I am the parent process, my process id is 3298
-fork!I am the child process, my process id is 3299 
-程序的唯一的区别就在于一个/n回车符号，为什么结果会相差这么大呢？
-这就跟printf的缓冲机制有关了，printf某些内容时，操作系统仅仅是把该内容放到了stdout的缓冲队列里了,并没有实际的写到屏幕上。但是,只要看到有/n 则会立即刷新stdout,因此就马上能够打印了。
-运行了printf(“fork!”)后,“fork!”仅仅被放到了缓冲里,程序运行到fork时缓冲里面的“fork!”  被子进程复制过去了。因此在子进程度stdout缓冲里面就也有了fork! 。所以,你最终看到的会是fork!  被printf了2次！！！！
-而运行printf(“fork! /n”)后,“fork!”被立即打印到了屏幕上,之后fork到的子进程里的stdout缓冲里不会有fork! 内容。因此你看到的结果会是fork! 被printf了1次！！！！
-所以说printf(“+”);不能正确地反应进程的数量。
-大家看了这么多可能有点疲倦吧，不过我还得贴最后一份代码来进一步分析fork函数。</p>
-
-<figure class="highlight"><pre><code class="language-c" data-lang="c"><table class="rouge-table"><tbody><tr><td class="gutter gl"><pre class="lineno">1
-2
-3
-4
-5
-6
-7
-8
-9
-10
-</pre></td><td class="code"><pre> 
-<span class="cp">#include &lt;stdio.h&gt;  
-#include &lt;unistd.h&gt;  
-</span><span class="kt">int</span> <span class="nf">main</span><span class="p">(</span><span class="kt">int</span> <span class="n">argc</span><span class="p">,</span> <span class="kt">char</span><span class="o">*</span> <span class="n">argv</span><span class="p">[])</span>  
-<span class="p">{</span>  
-<span class="n">fork</span><span class="p">();</span>  
-<span class="n">fork</span><span class="p">()</span> <span class="o">&amp;&amp;</span> <span class="n">fork</span><span class="p">()</span> <span class="o">||</span> <span class="n">fork</span><span class="p">();</span>  
-<span class="n">fork</span><span class="p">();</span>  
-<span class="k">return</span> <span class="mi">0</span><span class="p">;</span>  
-<span class="p">}</span>  
-</pre></td></tr></tbody></table></code></pre></figure>
-
-<p>问题是不算main这个进程自身，程序到底创建了多少个进程。
-为了解答这个问题，我们先做一下弊，先用程序验证一下，到此有多少个进程。
-[c-sharp] view plain copy
-#include <stdio.h>  
-int main(int argc, char* argv[])  
-{  
-fork();  
-fork() &amp;&amp; fork() || fork();  
-fork();  
-printf("+/n");  
-}  答案是总共20个进程，除去main进程，还有19个进程。
-我们再来仔细分析一下，为什么是还有19个进程。
-第一个fork和最后一个fork肯定是会执行的。
-主要在中间3个fork上，可以画一个图进行描述。
-这里就需要注意&amp;&amp;和||运算符。
-A&amp;&amp;B，如果A=0，就没有必要继续执行&amp;&amp;B了；A非0，就需要继续执行&amp;&amp;B。
-A||B，如果A非0，就没有必要继续执行||B了，A=0，就需要继续执行||B。
-fork()对于父进程和子进程的返回值是不同的，按照上面的A&amp;&amp;B和A||B的分支进行画图，可以得出5个分支。加上前面的fork和最后的fork，总共4*5=20个进程，除去main主进程，就是19个进程了。一、fork()函数
-在操作系统的基本概念中进程是程序的一次执行，且是拥有资源的最小单位和调度单位（在引入线程的操作系统中，线程是最小的调度单位）。在Linux系统中创建进程有两种方式：一是由操作系统创建，二是由父进程创建进程（通常为子进程）。系统调用函数fork()是创建一个新进程的唯一方式，当然vfork()也可以创建进程，但是实际上其还是调用了fork()函数。fork()函数是Linux系统中一个比较特殊的函数，其一次调用会有两个返回值，下面是fork()函数的声明：
-#include <unistd.h>// On success, The PID of the process is returned in the parent, and 0 is returned in the child. On failure,
-// -1 is returned in the parent, no child process is created, and errno is set appropriately.
-pid_t fork (void);当程序调用fork()函数并返回成功之后，程序就将变成两个进程，调用fork()者为父进程，后来生成者为子进程。这两个进程将执行相同的程序文本，但却各自拥有不同的栈段、数据段以及堆栈拷贝。子进程的栈、数据以及栈段开始时是父进程内存相应各部分的完全拷贝，因此它们互不影响。从性能方面考虑，父进程到子进程的数据拷贝并不是创建时就拷贝了的，而是采用了写时拷贝（copy-on -write）技术来处理。调用fork()之后，父进程与子进程的执行顺序是我们无法确定的（即调度进程使用CPU），意识到这一点极为重要，因为在一些设计不好的程序中会导致资源竞争，从而出现不可预知的问题。下图为写时拷贝技术处理前后的示意图：
-在Linux系统中，常常存在许多对文件的操作，fork()的执行将会对文件操作带来一些小麻烦。由于子进程会将父进程的大多数数据拷贝一份，这样在文件操作中就意味着子进程会获得父进程所有文件描述符的副本，这些副本的创建方式类似于dup()函数调用，因此父、子进程中对应的文件描述符均指向相同的打开的文件句柄，而且打开的文件句柄包含着当前文件的偏移量以及文件状态标志，所以在父子进程中处理文件时要考虑这种情况，以避免文件内容出现混乱或者别的问题。下图为执行fork()调用后文件描述符的相关处理及其变化：二、线程
-与进程类似，线程（thread）是允许应用程序并发执行多个任务的一种机制。一个进程中可以包含多个线程，同一个程序中的所有线程均会独立执行，且共享同一份全局内存区域，其中包括初始化数据段（initialized data），未初始化数据段（uninitialized data），以及堆内存段（heap segment）。在多处理器环境下，多个线程可以同时执行，如果线程数超过了CPU的个数，那么每个线程的执行顺序将是无法确定的，因此对于一些全局共享数据据需要使用同步机制来确保其的正确性。
-在系统中，线程也是稀缺资源，一个进程能同时创建多少个线程这取决于地址空间的大小和内核参数，一台机器可以同时并发运行多少个线程也受限于CPU的数目。在进行程序设计时，我们应该精心规划线程的个数，特别是根据机器CPU的数目来设置工作线程的数目，并为关键任务保留足够的计算资源。如果你设计的程序在背地里启动了额外的线程来执行任务，那这也属于资源规划漏算的情况，从而影响关键任务的执行，最终导致无法达到预期的性能。很多程序中都存在全局对象，这些全局对象的初始化工作都是在进入main()函数之前进行的，为了能保证全局对象的安全初始化（按顺序的），因此在程序进入main()函数之前应该避免线程的创建，从而杜绝未知错误的发生。三、fork()与多线程
-在程序中fork()与多线程的协作性很差，这是POSIX系列操作系统的历史包袱。因为长期以来程序都是单线程的，fork()运转正常。当20世纪90年代初期引入线程之后，fork()的适用范围就大为缩小了。
-在多线程执行的情况下调用fork()函数，仅会将发起调用的线程复制到子进程中。（子进程中该线程的ID与父进程中发起fork()调用的线程ID是一样的，因此，线程ID相同的情况有时我们需要做特殊的处理。）也就是说不能同时创建出于父进程一样多线程的子进程。其他线程均在子进程中立即停止并消失，并且不会为这些线程调用清理函数以及针对线程局部存储变量的析构函数。这将导致下列一些问题:</unistd.h></stdio.h></p>
+M:代表真正的内核OS线程，和POSIX里的thread差不多，真正干活的人G:代表一个goroutine，它有自己的栈，instruction pointer和其他信息（正在等待的channel等等），用于调度。P:代表调度的上下文，可以把它看做一个局部的调度器，使go代码在一个线程上跑，它是实现从N:1到N:M映射的关键。
+有2个物理线程M，每一个M都拥有一个context（P），每一个也都有一个正在运行的goroutine。P的数量可以通过GOMAXPROCS()来设置，它其实也就代表了真正的并发度，即有多少个goroutine可以同时运行。图中灰色的那些goroutine并没有运行，而是出于ready的就绪态，正在等待被调度。P维护着这个队列（称之为runqueue），Go语言里，启动一个goroutine很容易：go function 就行，所以每有一个go语句被执行，runqueue队列就在其末尾加入一个goroutine，在下一个调度点，就从runqueue中取出（如何决定取哪个goroutine？）一个goroutine执行。为何要维护多个上下文P？因为当一个OS线程被阻塞时，P可以转而投奔另一个OS线程！图中看到，当一个OS线程M0陷入阻塞时，P转而在OS线程M1上运行。调度器保证有足够的线程来运行所以的context P。M1可能是被创建，或者从线程缓存中取出。当MO返回时，它必须尝试取得一个context P来运行goroutine，一般情况下，它会从其他的OS线程那里steal偷一个context过来，如果没有偷到的话，它就把goroutine放在一个global runqueue里，然后自己就去睡大觉了（放入线程缓存里）。Contexts们也会周期性的检查global runqueue，否则global runqueue上的goroutine永远无法执行。
+另一种情况是P所分配的任务G很快就执行完了（分配不均），这就导致了一个上下文P闲着没事儿干而系统却任然忙碌。但是如果global runqueue没有任务G了，那么P就不得不从其他的上下文P那里拿一些G来执行。一般来说，如果上下文P从其他的上下文P那里要偷一个任务的话，一般就’偷’run queue的一半，这就确保了每个OS线程都能充分的使用。1. 操作系统与运行库对于普通的电脑用户来说，能理解应用程序是运行在操作系统之上就足够了，可对于开发者，我们还需要了解我们写的程序是如何在操作系统之上运行起来的，操作系统如何为应用程序提供服务，这样我们才能分清楚哪些服务是操作系统提供的，而哪些服务是由我们所使用的语言的运行库提供的。除了内存管理、文件管理、进程管理、外设管理等等内部模块以外，操作系统还提供了许多外部接口供应用程序使用，这些接口就是所谓的“系统调用”。从DOS时代开始，系统调用就是通过软中断的形式来提供，也就是著名的INT 21，程序把需要调用的功能编号放入AH寄存器，把参数放入其他指定的寄存器，然后调用INT 21，中断返回后，程序从指定的寄存器(通常是AL)里取得返回值。这样的做法一直到奔腾2也就是P6出来之前都没有变，譬如windows通过INT 2E提供系统调用，Linux则是INT 80，只不过后来的寄存器比以前大一些，而且可能再多一层跳转表查询。后来，Intel和AMD分别提供了效率更高的SYSENTER/SYSEXIT和SYSCALL/SYSRET指令来代替之前的中断方式，略过了耗时的特权级别检查以及寄存器压栈出栈的操作，直接完成从RING 3代码段到RING 0代码段的转换。系统调用都提供什么功能呢？用操作系统的名字加上对应的中断编号到谷歌上一查就可以得到完整的列表 (Windows, Linux)，这个列表就是操作系统和应用程序之间沟通的协议，如果需要超出此协议的功能，我们就只能在自己的代码里去实现，譬如，对于内存管理，操作系统只提供进程级别的内存段的管理，譬如Windows的virtualmemory系列，或是Linux的brk，操作系统不会去在乎应用程序如何为新建对象分配内存，或是如何做垃圾回收，这些都需要应用程序自己去实现。如果超出此协议的功能无法自己实现，那我们就说该操作系统不支持该功能，举个例子，Linux在2.6之前是不支持多线程的，无论如何在程序里模拟，我们都无法做出多个可以同时运行的并符合POSIX 1003.1c语义标准的调度单元。可是，我们写程序并不需要去调用中断或是SYSCALL指令，这是因为操作系统提供了一层封装，在Windows上，它是NTDLL.DLL，也就是常说的Native API，我们不但不需要去直接调用INT 2E或SYSCALL，准确的说，我们不能直接去调用INT 2E或SYSCALL，因为Windows并没有公开其调用规范，直接使用INT 2E或SYSCALL无法保证未来的兼容性。在Linux上则没有这个问题，系统调用的列表都是公开的，而且Linus非常看重兼容性，不会去做任何更改，glibc里甚至专门提供了syscall(2)来方便用户直接用编号调用，不过，为了解决glibc和内核之间不同版本兼容性带来的麻烦，以及为了提高某些调用的效率(譬如__NR_ gettimeofday)，Linux上还是对部分系统调用做了一层封装，就是VDSO (早期叫linux-gate.so)。可是，我们写程序也很少直接调用NTDLL或者VDSO，而是通过更上一层的封装，这一层处理了参数准备和返回值格式转换、以及出错处理和错误代码转换，这就是我们所使用语言的运行库，对于C语言，Linux上是glibc，Windows上是kernel32(或调用msvcrt)，对于其他语言，譬如Java，则是JRE，这些“其他语言”的运行库通常最终还是调用glibc或kernel32。“运行库”这个词其实不止包括用于和编译后的目标执行程序进行链接的库文件，也包括了脚本语言或字节码解释型语言的运行环境，譬如Python，C#的CLR，Java的JRE。对系统调用的封装只是运行库的很小一部分功能，运行库通常还提供了诸如字符串处理、数学计算、常用数据结构容器等等不需要操作系统支持的功能，同时，运行库也会对操作系统支持的功能提供更易用更高级的封装，譬如带缓存和格式的IO、线程池。所以，在我们说“某某语言新增了某某功能”的时候，通常是这么几种可能：</p>
 <ol>
-  <li>虽然只将发起fork()调用的线程复制到子进程中，但全局变量的状态以及所有的pthreads对象（如互斥量、条件变量等）都会在子进程中得以保留，这就造成一个危险的局面。例如：一个线程在fork()被调用前锁定了某个互斥量，且对某个全局变量的更新也做到了一半，此时fork()被调用，所有数据及状态被拷贝到子进程中，那么子进程中对该互斥量就无法解锁（因为其并非该互斥量的属主），如果再试图锁定该互斥量就会导致死锁，这是多线程编程中最不愿意看到的情况。同时，全局变量的状态也可能处于不一致的状态，因为对其更新的操作只做到了一半对应的线程就消失了。fork()函数被调用之后，子进程就相当于处于signal handler之中，此时就不能调用线程安全的函数（用锁机制实现安全的函数），除非函数是可重入的，而只能调用异步信号安全（async-signal-safe）的函数。fork()之后，子进程不能调用：
-malloc(3)。因为malloc()在访问全局状态时会加锁。
-任何可能分配或释放内存的函数，包括new、map::insert()、snprintf() ……
-任何pthreads函数。你不能用pthread_cond_signal()去通知父进程，只能通过读写pipe(2)来同步。
-printf()系列函数，因为其他线程可能恰好持有stdout/stderr的锁。
-除了man 7 signal中明确列出的“signal安全”函数之外的任何函数。</li>
-  <li>因为并未执行清理函数和针对线程局部存储数据的析构函数，所以多线程情况下可能会导致子进程的内存泄露。另外，子进程中的线程可能无法访问（父进程中）由其他线程所创建的线程局部存储变量，因为（子进程）没有任何相应的引用指针。由于这些问题，推荐在多线程程序中调用fork()的唯一情况是：其后立即调用exec()函数执行另一个程序，彻底隔断子进程与父进程的关系。由新的进程覆盖掉原有的内存，使得子进程中的所有pthreads对象消失。
-对于那些必须执行fork()，而其后又无exec()紧随其后的程序来说，pthreads API提供了一种机制：fork()处理函数。利用函数pthread_atfork()来创建fork()处理函数。当一个多线程程序 fork(2) 之后
-fork(2) 程序 创建了当前进程的副本，包括所有的内存页，还有打开文件的句柄等。所有这些工作对于一个 UNIX 程序员来说，都不陌生。子进程和父进程之间一个非常重要的区别是，子进程只有一个线程。 一个程序员也许不希望复制包括所有线程在内的整个进程，而且，这也容易出问题。想想：所有的线程都因为一个系统调用（这里指的是 fork(2)）而被暂停（Suspended）。所以，fork(2) 仅仅会复制调用它的那个线程。那么（当前的实现方式）会遇到什么问题呢？关键部分，互斥锁（mutex）
-这种做法一个潜在的问题是，当 fork(2) 被调用的时候，某些线程可以正在执行关键部分的代码，在互斥锁的保护下对数据进行非原子操作。在子进程里，这些线程消失了，只留下一些修改到一半却没有可能“修正”的数据，不可能去确定 “其他线程正在做什么”和“怎么做可以保持数据一致”。此外，那些（复制过来的互斥锁）的状态是未定义，他们也许不能用（unusable），除非子进程调用 pthread_mutex_init() 去重置他们的状态为一个可用的值。它（ pthread_mutex_init() ）的实现取决于互斥锁在 fork(2) 执行之后的具体行为。在我的 Linux 机器上，被锁定（locked）的互斥锁的状态（重置之后）在子进程中仍是（locked）。库函数
-上面关于互斥锁和关键代码的问题，又引出了另一个潜在的问题。理论上，写一些在多线程上运行并且在调用 fork(2) 之后不会出错的代码，是可行的。但是，实践中，却有一个问题──库函数。你不能确认你正在用的库函数不会使用到全局数据。即使它（用到的库函数）是线程安全的，它也可能是通过在内部使用互斥锁来达到目的。你永远无法确认。即使系统的线程安全的库函数，也可能使用了互斥锁。一个潜在的例子是，malloc() 函数，至少在我的多线程程序里，内部使用了锁。所以，在其他线程调用 malloc() 的时候调用 fork(2) 是不安全的！一般来说，我们应该怎么做呢？在一个多线程程序调用 fork(2) 之后，你只应该调用异步安全（async-safe）的函数（在signal(7) http://www.kernel.org/doc/man-pages/online/pages/man7/signal.7.html 列出）。这个列表与你在一个消息回调函数（signal hanlder）里面可以调用的函数的列表是相似的，而原因也相似：在两种情况下，在调用一个函数时，线程会被终止（原文为带引号的interrupted，由于该线程在新的子进程里已经不存在，所以翻译为终止）。这里是几个在我的系统里，使用类内部锁的函数，仅仅是想让你知道，几乎没有东西是安全的：* malloc()* stdio的函数，比如printf() - 这是标准要求的* syslog()execve() 和文件句柄
-似乎使用 execve(2) 来启动一个需要调用fork(2)的多线程程序，是你唯一明智的选择。但即使这样做，也还有一点不足。当调用execve(2) 时，需要注意的是，打开的文件句柄还将维持打开的状态（在新的子进程中 —— 译者Xorcerer），可以继续被读取和写入数据。你在调用 execve(2) 之前打开了一个你不希望在新的子进程里被使用的文件，问题就出现了。这甚至会产生安全方便的问题。对此，有一个解决方案，你必须使用 fcntl(2) 来对每一个打开的文件句柄设施 FD_CLOEXEC 标记，这样，它们会在新的进程中被自动关闭。不幸的是，在多线程程序里，这没那么简单。当我们使用 fcntl(2) 去设置 FD_CLOEXEC 时，会有一个间隙：
-fd = open (“file”, O_RDWR | O_CREAT | O_TRUNC,0600);  if(fd &lt;0){<br />
-perror (“open()”);  return0;<br />
-}  fcntl (fd, F_SETFD, FD_CLOEXEC);<br />
-如果另一个线程正好在当前线程执行 open(2) 之后 fcntl(2) 之前调用 fork(2) 和 execve(2) ，那么得到的新进程将获得这个文件句柄的副本。这不是我们想要的。一个解决方案已经随着新标准（如：POSIX.1-2008）和新的 Linux 内核（2.6.23以及之后的版本）到来了。我们现在可以在 open(2) 使用 O_CLOEXEC 标记，所以，“开打文件与设置 FD_CLOEXEC” 已经成为了一个原子操作。除了使用 open(2) 之外，还有其他的创建文件句柄的方法：使用 dup(2) 复制它们，使用 socket(2) 创建socket，等。所有这些函数现在都有一个相似的标记如O_CLOEXEC或者其他更新的版本（其中某些函数，如dup2(2)没有一个用于标记位的参数，所以dup3(2)为此产生了）。值得提到的一点是同样的东西在单线程程序里也可能发生，如果它在同一个消息处理函数（singal handler）中使用 fork(2) 和 execve(2) 。这个操作是完全合法的，因为这两个函数是异步安全并且允许在消息处理函数中被调用，但是问题是这个程序也许会在调用 open(2) 和 fcntl(2) 之间时，被中断。想知道更多关于设置 FD_CLOEXEC 新API的信息，请参考 《Ulrich Drepper’s blog: Secure File Descriptor Handling》。一个有用的系统函数：pthread_atfork()
-其中一个尝试解决多线程程序中使用 fork(2) 的问题的函数是 pthread_atfork()。它拥有如下原型：
-int pthread_atfork(void (<em>prepare)(void), void (</em>parent)(void), void (*child)(void));  它允许指定在 fork 被调用时的处理函数：prepare 新进程产生之前被调用。
-parent 新进程产生之后在父进程被调用。
-child 新进程产生之后，在子进程被调用。
-调用的目的是在 fork(2) 被调用时，处理多线程程序的关键部分（本文开始部分提及）。一个常见的场景时在 prepare 处理函数中加锁，在 parent 处理函数解锁和在 child 处理函数重新初始化锁。</li>
+  <li>支持新的语义或语法，从而便于我们描述和解决问题。譬如Java的泛型、Annotation、lambda表达式。</li>
+  <li>提供了新的工具或类库，减少了我们开发的代码量。譬如Python 2.7的argparse</li>
+  <li>对系统调用有了更良好更全面的封装，使我们可以做到以前在这个语言环境里做不到或很难做到的事情。譬如Java NIO但任何一门语言，包括其运行库和运行环境，都不可能创造出操作系统不支持的功能，Go语言也是这样，不管它的特性描述看起来多么炫丽，那必然都是其他语言也可以做到的，只不过Go提供了更方便更清晰的语义和支持，提高了开发的效率。2. 并发与并行 (Concurrency and Parallelism)并发是指程序的逻辑结构。非并发的程序就是一根竹竿捅到底，只有一个逻辑控制流，也就是顺序执行的(Sequential)程序，在任何时刻，程序只会处在这个逻辑控制流的某个位置。而如果某个程序有多个独立的逻辑控制流，也就是可以同时处理(deal)多件事情，我们就说这个程序是并发的。这里的“同时”，并不一定要是真正在时钟的某一时刻(那是运行状态而不是逻辑结构)，而是指：如果把这些逻辑控制流画成时序流程图，它们在时间线上是可以重叠的。并行是指程序的运行状态。如果一个程序在某一时刻被多个CPU流水线同时进行处理，那么我们就说这个程序是以并行的形式在运行。（严格意义上讲，我们不能说某程序是“并行”的，因为“并行”不是描述程序本身，而是描述程序的运行状态，但这篇小文里就不那么咬文嚼字，以下说到“并行”的时候，就是指代“以并行的形式运行”）显然，并行一定是需要硬件支持的。而且不难理解：1. 并发是并行的必要条件，如果一个程序本身就不是并发的，也就是只有一个逻辑控制流，那么我们不可能让其被并行处理。2. 并发不是并行的充分条件，一个并发的程序，如果只被一个CPU流水线进行处理(通过分时)，那么它就不是并行的。3. 并发只是更符合现实问题本质的表达方式，并发的最初目的是简化代码逻辑，而不是使程序运行的更快；这几段略微抽象，我们可以用一个最简单的例子来把这些概念实例化：用C语言写一个最简单的HelloWorld，它就是非并发的，如果我们建立多个线程，每个线程里打印一个HelloWorld，那么这个程序就是并发的，如果这个程序运行在老式的单核CPU上，那么这个并发程序还不是并行的，如果我们用多核多CPU且支持多任务的操作系统来运行它，那么这个并发程序就是并行的。还有一个略微复杂的例子，更能说明并发不一定可以并行，而且并发不是为了效率，就是Go语言例子里计算素数的sieve.go。我们从小到大针对每一个因子启动一个代码片段，如果当前验证的数能被当前因子除尽，则该数不是素数，如果不能，则把该数发送给下一个因子的代码片段，直到最后一个因子也无法除尽，则该数为素数，我们再启动一个它的代码片段，用于验证更大的数字。这是符合我们计算素数的逻辑的，而且每个因子的代码处理片段都是相同的，所以程序非常的简洁，但它无法被并行，因为每个片段都依赖于前一个片段的处理结果和输出。并发可以通过以下方式做到：1. 显式地定义并触发多个代码片段，也就是逻辑控制流，由应用程序或操作系统对它们进行调度。它们可以是独立无关的，也可以是相互依赖需要交互的，譬如上面提到的素数计算，其实它也是个经典的生产者和消费者的问题：两个逻辑控制流A和B，A产生输出，当有了输出后，B取得A的输出进行处理。线程只是实现并发的其中一个手段，除此之外，运行库或是应用程序本身也有多种手段来实现并发，这是下节的主要内容。2. 隐式地放置多个代码片段，在系统事件发生时触发执行相应的代码片段，也就是事件驱动的方式，譬如某个端口或管道接收到了数据(多路IO的情况下)，再譬如进程接收到了某个信号(signal)。并行可以在四个层面上做到：1. 多台机器。自然我们就有了多个CPU流水线，譬如Hadoop集群里的MapReduce任务。2. 多CPU。不管是真的多颗CPU还是多核还是超线程，总之我们有了多个CPU流水线。3. 单CPU核里的ILP(Instruction-level parallelism)，指令级并行。通过复杂的制造工艺和对指令的解析以及分支预测和乱序执行，现在的CPU可以在单个时钟周期内执行多条指令，从而，即使是非并发的程序，也可能是以并行的形式执行。4. 单指令多数据(Single instruction, multiple data. SIMD)，为了多媒体数据的处理，现在的CPU的指令集支持单条指令对多条数据进行操作。其中，1牵涉到分布式处理，包括数据的分布和任务的同步等等，而且是基于网络的。3和4通常是编译器和CPU的开发人员需要考虑的。这里我们说的并行主要针对第2种：单台机器内的多核CPU并行。关于并发与并行的问题，Go语言的作者Rob Pike专门就此写过一个幻灯片：http://talks.golang.org/2012/waza.slide在CMU那本著名的《Computer Systems: A Programmer’s Perspective》里的这张图也非常直观清晰：</li>
+  <li>线程的调度上一节主要说的是并发和并行的概念，而线程是最直观的并发的实现，这一节我们主要说操作系统如何让多个线程并发的执行，当然在多CPU的时候，也就是并行的执行。我们不讨论进程，进程的意义是“隔离的执行环境”，而不是“单独的执行序列”。我们首先需要理解IA-32 CPU的指令控制方式，这样才能理解如何在多个指令序列(也就是逻辑控制流)之间进行切换。CPU通过CS:EIP寄存器的值确定下一条指令的位置，但是CPU并不允许直接使用MOV指令来更改EIP的值，必须通过JMP系列指令、CALL/RET指令、或INT中断指令来实现代码的跳转；在指令序列间切换的时候，除了更改EIP之外，我们还要保证代码可能会使用到的各个寄存器的值，尤其是栈指针SS:ESP，以及EFLAGS标志位等，都能够恢复到目标指令序列上次执行到这个位置时候的状态。线程是操作系统对外提供的服务，应用程序可以通过系统调用让操作系统启动线程，并负责随后的线程调度和切换。我们先考虑单颗单核CPU，操作系统内核与应用程序其实是也是在共享同一个CPU，当EIP在应用程序代码段的时候，内核并没有控制权，内核并不是一个进程或线程，内核只是以实模式运行的，代码段权限为RING 0的内存中的程序，只有当产生中断或是应用程序呼叫系统调用的时候，控制权才转移到内核，在内核里，所有代码都在同一个地址空间，为了给不同的线程提供服务，内核会为每一个线程建立一个内核堆栈，这是线程切换的关键。通常，内核会在时钟中断里或系统调用返回前(考虑到性能，通常是在不频繁发生的系统调用返回前)，对整个系统的线程进行调度，计算当前线程的剩余时间片，如果需要切换，就在“可运行”的线程队列里计算优先级，选出目标线程后，则保存当前线程的运行环境，并恢复目标线程的运行环境，其中最重要的，就是切换堆栈指针ESP，然后再把EIP指向目标线程上次被移出CPU时的指令。Linux内核在实现线程切换时，耍了个花枪，它并不是直接JMP，而是先把ESP切换为目标线程的内核栈，把目标线程的代码地址压栈，然后JMP到__switch_to()，相当于伪造了一个CALL __switch_to()指令，然后，在__switch_to()的最后使用RET指令返回，这样就把栈里的目标线程的代码地址放入了EIP，接下来CPU就开始执行目标线程的代码了，其实也就是上次停在switch_to这个宏展开的地方。这里需要补充几点：(1) 虽然IA-32提供了TSS (Task State Segment)，试图简化操作系统进行线程调度的流程，但由于其效率低下，而且并不是通用标准，不利于移植，所以主流操作系统都没有去利用TSS。更严格的说，其实还是用了TSS，因为只有通过TSS才能把堆栈切换到内核堆栈指针SS0:ESP0，但除此之外的TSS的功能就完全没有被使用了。(2) 线程从用户态进入内核的时候，相关的寄存器以及用户态代码段的EIP已经保存了一次，所以，在上面所说的内核态线程切换时，需要保存和恢复的内容并不多。(3) 以上描述的都是抢占式(preemptively)的调度方式，内核以及其中的硬件驱动也会在等待外部资源可用的时候主动调用schedule()，用户态的代码也可以通过sched_yield()系统调用主动发起调度，让出CPU。现在我们一台普通的PC或服务里通常都有多颗CPU (physical package)，每颗CPU又有多个核 (processor core)，每个核又可以支持超线程 (two logical processors for each core)，也就是逻辑处理器。每个逻辑处理器都有自己的一套完整的寄存器，其中包括了CS:EIP和SS:ESP，从而，以操作系统和应用的角度来看，每个逻辑处理器都是一个单独的流水线。在多处理器的情况下，线程切换的原理和流程其实和单处理器时是基本一致的，内核代码只有一份，当某个CPU上发生时钟中断或是系统调用时，该CPU的CS:EIP和控制权又回到了内核，内核根据调度策略的结果进行线程切换。但在这个时候，如果我们的程序用线程实现了并发，那么操作系统可以使我们的程序在多个CPU上实现并行。这里也需要补充两点：(1) 多核的场景里，各个核之间并不是完全对等的，譬如在同一个核上的两个超线程是共享L1/L2缓存的；在有NUMA支持的场景里，每个核访问内存不同区域的延迟是不一样的；所以，多核场景里的线程调度又引入了“调度域”(scheduling domains)的概念，但这不影响我们理解线程切换机制。(2) 多核的场景下，中断发给哪个CPU？软中断(包括除以0，缺页异常，INT指令)自然是在触发该中断的CPU上产生，而硬中断则又分两种情况，一种是每个CPU自己产生的中断，譬如时钟，这是每个CPU处理自己的，还有一种是外部中断，譬如IO，可以通过APIC来指定其送给哪个CPU；因为调度程序只能控制当前的CPU，所以，如果IO中断没有进行均匀的分配的话，那么和IO相关的线程就只能在某些CPU上运行，导致CPU负载不均，进而影响整个系统的效率。4. 并发编程框架以上大概介绍了一个用多线程来实现并发的程序是如何被操作系统调度以及并行执行(在有多个逻辑处理器时)，同时大家也可以看到，代码片段或者说逻辑控制流的调度和切换其实并不神秘，理论上，我们也可以不依赖操作系统和其提供的线程，在自己程序的代码段里定义多个片段，然后在我们自己程序里对其进行调度和切换。为了描述方便，我们接下来把“代码片段”称为“任务”。和内核的实现类似，只是我们不需要考虑中断和系统调用，那么，我们的程序本质上就是一个循环，这个循环本身就是调度程序schedule()，我们需要维护一个任务的列表，根据我们定义的策略，先进先出或是有优先级等等，每次从列表里挑选出一个任务，然后恢复各个寄存器的值，并且JMP到该任务上次被暂停的地方，所有这些需要保存的信息都可以作为该任务的属性，存放在任务列表里。看起来很简单啊，可是我们还需要解决几个问题：(1) 我们运行在用户态，是没有中断或系统调用这样的机制来打断代码执行的，那么，一旦我们的schedule()代码把控制权交给了任务的代码，我们下次的调度在什么时候发生？答案是，不会发生，只有靠任务主动调用schedule()，我们才有机会进行调度，所以，这里的任务不能像线程一样依赖内核调度从而毫无顾忌的执行，我们的任务里一定要显式的调用schedule()，这就是所谓的协作式(cooperative)调度。(虽然我们可以通过注册信号处理函数来模拟内核里的时钟中断并取得控制权，可问题在于，信号处理函数是由内核调用的，在其结束的时候，内核重新获得控制权，随后返回用户态并继续沿着信号发生时被中断的代码路径执行，从而我们无法在信号处理函数内进行任务切换)(2) 堆栈。和内核调度线程的原理一样，我们也需要为每个任务单独分配堆栈，并且把其堆栈信息保存在任务属性里，在任务切换时也保存或恢复当前的SS:ESP。任务堆栈的空间可以是在当前线程的堆栈上分配，也可以是在堆上分配，但通常是在堆上分配比较好：几乎没有大小或任务总数的限制、堆栈大小可以动态扩展(gcc有split stack，但太复杂了)、便于把任务切换到其他线程。到这里，我们大概知道了如何构造一个并发的编程框架，可如何让任务可以并行的在多个逻辑处理器上执行呢？只有内核才有调度CPU的权限，所以，我们还是必须通过系统调用创建线程，才可以实现并行。在多线程处理多任务的时候，我们还需要考虑几个问题：(1) 如果某个任务发起了一个系统调用，譬如长时间等待IO，那当前线程就被内核放入了等待调度的队列，岂不是让其他任务都没有机会执行？在单线程的情况下，我们只有一个解决办法，就是使用非阻塞的IO系统调用，并让出CPU，然后在schedule()里统一进行轮询，有数据时切换回该fd对应的任务；效率略低的做法是不进行统一轮询，让各个任务在轮到自己执行时再次用非阻塞方式进行IO，直到有数据可用。如果我们采用多线程来构造我们整个的程序，那么我们可以封装系统调用的接口，当某个任务进入系统调用时，我们就把当前线程留给它(暂时)独享，并开启新的线程来处理其他任务。(2) 任务同步。譬如我们上节提到的生产者和消费者的例子，如何让消费者在数据还没有被生产出来的时候进入等待，并且在数据可用时触发消费者继续执行呢？在单线程的情况下，我们可以定义一个结构，其中有变量用于存放交互数据本身，以及数据的当前可用状态，以及负责读写此数据的两个任务的编号。然后我们的并发编程框架再提供read和write方法供任务调用，在read方法里，我们循环检查数据是否可用，如果数据还不可用，我们就调用schedule()让出CPU进入等待；在write方法里，我们往结构里写入数据，更改数据可用状态，然后返回；在schedule()里，我们检查数据可用状态，如果可用，则激活需要读取此数据的任务，该任务继续循环检测数据是否可用，发现可用，读取，更改状态为不可用，返回。代码的简单逻辑如下：
+    <div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>struct chan {
+bool ready,
+int data
+};int read (struct chan *c) {
+while (1) {
+if (c-&gt;ready) {
+c-&gt;ready = false;
+return c-&gt;data;
+} else {
+schedule();
+}
+}
+}void write (struct chan *c, int i) {
+while (1) {
+if (c-&gt;ready) {
+schedule(); 
+} else {
+c-&gt;data = i;
+c-&gt;ready = true;
+schedule(); // optional
+return;
+}
+}
+}
+</code></pre></div>    </div>
+    <p>很显然，如果是多线程的话，我们需要通过线程库或系统调用提供的同步机制来保护对这个结构体内数据的访问。以上就是最简化的一个并发框架的设计考虑，在我们实际开发工作中遇到的并发框架可能由于语言和运行库的不同而有所不同，在功能和易用性上也可能各有取舍，但底层的原理都是殊途同归。譬如，glic里的getcontext/setcontext/swapcontext系列库函数可以方便的用来保存和恢复任务执行状态；Windows提供了Fiber系列的SDK API；这二者都不是系统调用，getcontext和setcontext的man page虽然是在section 2，但那只是SVR4时的历史遗留问题，其实现代码是在glibc而不是kernel；CreateFiber是在kernel32里提供的，NTDLL里并没有对应的NtCreateFiber。在其他语言里，我们所谓的“任务”更多时候被称为“协程”，也就是Coroutine。譬如C++里最常用的是Boost.Coroutine；Java因为有一层字节码解释，比较麻烦，但也有支持协程的JVM补丁，或是动态修改字节码以支持协程的项目；PHP和Python的generator和yield其实已经是协程的支持，在此之上可以封装出更通用的协程接口和调度；另外还有原生支持协程的Erlang等，笔者不懂，就不说了，具体可参见Wikipedia的页面：http://en.wikipedia.org/wiki/Coroutine由于保存和恢复任务执行状态需要访问CPU寄存器，所以相关的运行库也都会列出所支持的CPU列表。从操作系统层面提供协程以及其并行调度的，好像只有OS X和iOS的Grand Central Dispatch，其大部分功能也是在运行库里实现的。5. goroutineGo语言通过goroutine提供了目前为止所有(我所了解的)语言里对于并发编程的最清晰最直接的支持，Go语言的文档里对其特性也描述的非常全面甚至超过了，在这里，基于我们上面的系统知识介绍，列举一下goroutine的特性，算是小结：(1) goroutine是Go语言运行库的功能，不是操作系统提供的功能，goroutine不是用线程实现的。具体可参见Go语言源码里的pkg/runtime/proc.c(2) goroutine就是一段代码，一个函数入口，以及在堆上为其分配的一个堆栈。所以它非常廉价，我们可以很轻松的创建上万个goroutine，但它们并不是被操作系统所调度执行(3) 除了被系统调用阻塞的线程外，Go运行库最多会启动$GOMAXPROCS个线程来运行goroutine(4) goroutine是协作式调度的，如果goroutine会执行很长时间，而且不是通过等待读取或写入channel的数据来同步的话，就需要主动调用Gosched()来让出CPU(5) 和所有其他并发框架里的协程一样，goroutine里所谓“无锁”的优点只在单线程下有效，如果$GOMAXPROCS &gt; 1并且协程间需要通信，Go运行库会负责加锁保护数据，这也是为什么sieve.go这样的例子在多CPU多线程时反而更慢的原因(6) Web等服务端程序要处理的请求从本质上来讲是并行处理的问题，每个请求基本独立，互不依赖，几乎没有数据交互，这不是一个并发编程的模型，而并发编程框架只是解决了其语义表述的复杂性，并不是从根本上提高处理的效率，也许是并发连接和并发编程的英文都是concurrent吧，很容易产生“并发编程框架和coroutine可以高效处理大量并发连接”的误解。(7) Go语言运行库封装了异步IO，所以可以写出貌似并发数很多的服务端，可即使我们通过调整$GOMAXPROCS来充分利用多核CPU并行处理，其效率也不如我们利用IO事件驱动设计的、按照事务类型划分好合适比例的线程池。在响应时间上，协作式调度是硬伤。(8) goroutine最大的价值是其实现了并发协程和实际并行执行的线程的映射以及动态扩展，随着其运行库的不断发展和完善，其性能一定会越来越好，尤其是在CPU核数越来越多的未来，终有一天我们会为了代码的简洁和可维护性而放弃那一点点性能的差别。</p>
+  </li>
 </ol>
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/linux/2017/12/22/fork.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/golang/2017/12/24/goroutine.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -556,63 +208,52 @@ child 新进程产生之后，在子进程被调用。
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/linux/2017/12/22/exec.html">Linux进程控制——exec函数族</a>
+						<a class="post-link" href="/MyBlog/web/2017/12/24/goclipse.html">goclipse eclipse go 开发环境搭建＋跳转支持</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/linux/2017/12/22/exec.html"> 夏泽民</a>
+						<a href="/MyBlog/web/2017/12/24/goclipse.html"> 夏泽民</a>
+						<span class="post-meta"><i class="fa fa-calendar"></i> 
+							Dec 24, 2017
+						</span>
+					</div>
+					<div class="excerpt"><!-- more -->
+<p>Eclipse Mars (4.5)  下载地址：https://www.eclipse.org/mars/
+golang 1.6.0rc2 下载地址：http://www.golangtc.com/download
+goclipse 0.14.1 下载地址: https://github.com/GoClipse/goclipse
+eclipse在线安装地址：http://goclipse.github.io/releases/
+eclipse+goclipse安装后不能联想和跳转问题解决
+Window-&gt;Preferences-&gt;Go
+指定$GOPATH 和$GOROOT
+<img src="https://xiazemin.github.io/MyBlog/img/goclipse.png" /></p>
+</div>
+					<div class="readmore" style="float: right;">
+						
+							<a href="/MyBlog/web/2017/12/24/goclipse.html" style="color:green">阅读全文</a>
+						
+					</div>								
+			</div>
+			<br/>
+			<hr/>
+			<div class="post-list" style="list-style-type: none;">			
+				 	
+					<h2>
+						<img class="title-image" src="/MyBlog/img/dna.png"/>
+						<a class="post-link" href="/MyBlog/web/2017/12/22/tcp_flag.html">tcp_flag</a>
+					</h2>
+					<div class="author" style="margin-top: -10px;">Posted by
+						<i class="fa fa-user"></i>
+						<a href="/MyBlog/web/2017/12/22/tcp_flag.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
 							Dec 22, 2017
 						</span>
 					</div>
-					<div class="excerpt"><p>在Linux中，并不存在exec()函数，exec指的是一组函数，一共有6个，分别是：
- #include <unistd.h>
-extern char **environ;
-int execl(const char *path, const char *arg, ...);
-int execlp(const char *file, const char *arg, ...);
-int execle(const char *path, const char *arg, ..., char * const envp[]);
-int execv(const char *path, char *const argv[]);
-int execvp(const char *file, char *const argv[]);
-int execve(const char *path, char *const argv[], char *const envp[]);
-其中只有execve是真正意义上的系统调用，其它都是在此基础上经过包装的库函数。
-exec函数族的作用是根据指定的文件名找到可执行文件，并用它来取代调用进程的内容，换句话说，就是在调用进程内部执行一个可执行文件。这里的可执行文件既可以是二进制文件，也可以是任何Linux下可执行的脚本文件。
-函数名与参数的关系：
-细看一下，这6个函数都是以exec开头（表示属于exec函数组），前3个函数接着字母l的，后3个接着字母v的，我的理解是l表示list（列举参数），v表示vector（参数向量表）
-。它们的区别在于，execv开头的函数是以"char *argv[]"(vector)形式传递命令行参数，而execl开头的函数采用了罗列(list)的方式，把参数一个一个列出来，然后以一个NULL表示结束。这里的NULL的作用和argv数组里的NULL作用是一样的。
-字母p是指在环境变量PATH的目录里去查找要执行的可执行文件。2个以p结尾的函数execlp和execvp，看起来，和execl与execv的差别很小，事实也如此，它们的区别从第一个参数名可以看出：除 execlp和execvp之外的4个函数都要求，它们的第1个参数path必须是一个完整的路径，如"/bin/ls"；而execlp和execvp 的第1个参数file可以仅仅只是一个文件名，如"ls"，这两个函数可以自动到环境变量PATH指定的目录里去查找。
-字母e是指给可执行文件指定环境变量。在全部6个函数中，只有execle和execve使用了char *envp[]传递环境变量，其它的4个函数都没有这个参数，这并不意味着它们不传递环境变量，这4个函数将把默认的环境变量不做任何修改地传给被执行的应用程序。而execle和execve用指定的环境变量去替代默认的那些。
-返回值
-与一般情况不同，exec函数族的函数执行成功后不会返回，因为调用进程的实体，包括代码段，数据段和堆栈等都已经被新的内容取代，只有进程ID等一些表面上的信息仍保持原样。调用失败时，会设置errno并返回-1，然后从原程序的调用点接着往下执行。
-与其他系统调用比起来，exec很容易失败，被执行文件的位置，权限等很多因素都能导致调用失败。因此，使用exec函数族时，一定要加错误判断语句。最常见的错误：
-找不到文件或路径，此时errno被设置为ENOENT；
-数组argv和envp忘记用NULL结束，此时errno被设置为EFAULT；
-没有对要执行文件的运行权限，此时errno被设置为EACCES。
-2、应用
-如果一个进程想执行另一个程序，它就可以fork或vfork出一个新进程，然后调用任何一个exec函数。
-为此，Linux还专门对fork作了优化：通常fork会将调用进程的所有内容原封不动的拷贝到新产生的子进程中去，这些拷贝的动作很消耗时 间，而如果fork完之后我们马上就调用exec，那这些辛辛苦苦拷贝来的东西就会被立刻抹掉，这看起来非常不划算，于是人们设计了一种"写时复制（copy-on-write）" 技术，使得fork结束后并不立刻复制父进程的内容到子进程，而是到了真正使用时才复制，这样如果下一条语句是exec，它就不会作无用功了。其实"写时 复制"还是有复制，进程的mm结构、页表都还是被复制了（"写时复制"也必须由这些信息来支撑。否则内核捕捉到CPU访存异常，怎么区分 这是“写时复制”引起的，还是真正的越权访问呢？）。
-而vfork就把事情做绝了，所有有关于内存的东西都不复制了，父子进程的内存是完全共享的。 但是这样一来又有问题了，虽然用户程序可以设计很多方法来避免父子进程间的访存冲突。但是关键的一点，父子进程共用着栈，这可不由用户程序控制的。一个进 程进行了关于函数调用或返回的操作，则另一个进程的调用栈 （实际上就是同一个栈）也被影响了。这样的程序没法运行下去。所以，vfork有个限制，子进程生成后，父进程在vfork中被内核挂起，直到子进程有了 自己的内存空间（exec**）或退出(_exit)。并且， 在此之前，子进程不能从调用vfork的函数中返回（同时，不能修改栈上变量、不能继续调用除_exit或exec系列之外的函数，否则父进程的数据可能 被改写）。
-尽管限制很多，vfork后马上exec效率会比fork高不少。
-<!-- more -->
-fork函数是用于创建一个子进程，该子进程几乎是父进程的副本，而有时我们希望子进程去执行另外的程序，exec函数族就提供了一个在进程中启动另一个程序执行的方法。它可以根据指定的文件名或目录名找到可执行文件，并用它来取代原调用进程的数据段、代码段和堆栈段，在执行完之后，原调用进程的内容除了进程号外，其他全部被新程序的内容替换了。另外，这里的可执行文件既可以是二进制文件，也可以是Linux下任何可执行脚本文件。
-（2）在Linux中使用exec函数族主要有以下两种情况
-a. 当进程认为自己不能再为系统和用户做出任何贡献时，就可以调用任何exec 函数族让自己重生。
-b. 如果一个进程想执行另一个程序，那么它就可以调用fork函数新建一个进程，然后调用任何一个exec函数使子进程重生。
-（3）exec函数族语法
-实际上，在Linux中并没有exec函数，而是有6个以exec开头的函数族，下表列举了exec函数族的6个成员函数的语法。
-所需头文件： #include <unistd.h>
-函数说明： 执行文件
-函数原型：
-[plain] view plain copy
-int execl(const char *path, const char *arg, ...)  
-int execv(const char *path, char *const argv[])  
-int execle(const char *path, const char *arg, ..., char *const envp[])  
-int execve(const char *path, char *const argv[], char *const envp[])  
-int execlp(const char *file, const char *arg, ...)  
-int execvp(const char *file, char *const argv[])</unistd.h></unistd.h></p>
+					<div class="excerpt"><!-- more -->
+<p>在TCP层，有个FLAGS字段，这个字段有以下几个标识：SYN, FIN, ACK, PSH, RST, URG.</p>
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/linux/2017/12/22/exec.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/web/2017/12/22/tcp_flag.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -622,183 +263,47 @@ int execvp(const char *file, char *const argv[])</unistd.h></unistd.h></p>
 				 	
 					<h2>
 						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/storage/2017/12/13/tree.html">各种树的应用场景</a>
+						<a class="post-link" href="/MyBlog/web/2017/12/22/short_url.html">url短链</a>
 					</h2>
 					<div class="author" style="margin-top: -10px;">Posted by
 						<i class="fa fa-user"></i>
-						<a href="/MyBlog/storage/2017/12/13/tree.html"> 夏泽民</a>
+						<a href="/MyBlog/web/2017/12/22/short_url.html"> 夏泽民</a>
 						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Dec 13, 2017
+							Dec 22, 2017
+						</span>
+					</div>
+					<div class="excerpt"><p>什么是短链接 🔗
+就是把普通网址，转换成比较短的网址。比如：http://t.cn/RlB2PdD 这种，在微博这些限制字数的应用里。好处不言而喻。短、字符少、美观、便于发布、传播。</p>
+</div>
+					<div class="readmore" style="float: right;">
+						
+							<a href="/MyBlog/web/2017/12/22/short_url.html" style="color:green">阅读全文</a>
+						
+					</div>								
+			</div>
+			<br/>
+			<hr/>
+			<div class="post-list" style="list-style-type: none;">			
+				 	
+					<h2>
+						<img class="title-image" src="/MyBlog/img/dna.png"/>
+						<a class="post-link" href="/MyBlog/linux/2017/12/22/pid_0_1.html">ID为0和ID为1的进程</a>
+					</h2>
+					<div class="author" style="margin-top: -10px;">Posted by
+						<i class="fa fa-user"></i>
+						<a href="/MyBlog/linux/2017/12/22/pid_0_1.html"> 夏泽民</a>
+						<span class="post-meta"><i class="fa fa-calendar"></i> 
+							Dec 22, 2017
 						</span>
 					</div>
 					<div class="excerpt"><!-- more -->
-<p>AVL树：平衡二叉树，一般是用平衡因子差值决定并通过旋转来实现，左右子树树高差不超过1，那么和红黑树比较它是严格的平衡二叉树，平衡条件非常严格（树高差只有1），只要插入或删除不满足上面的条件就要通过旋转来保持平衡。由于旋转是非常耗费时间的。我们可以推出AVL树适合用于插入删除次数比较少，但查找多的情况。</p>
+<p>ID为0的进程通常是调度进程，常常被称为交换进程（swapper）。该进程是内核的一部分，它并不执行任何磁盘上的程序，因此也被称为系统进程。
+ID为1的进程，通常是init进程，在自举过程结束时由内核调用。该进程的程序文件，在UNIX早起版本中是/etc/init，在较新的版本中是/sbin/init。该进程负责在自举内核后启动一个UNIX系统。init通常读与系统有关的初始化文件（/etc/rc*文件或/etc/inittab文件，以及/etc/init.d中的文件），并将系统引导到一个状态。init 进程绝不会终止，它是一个普通的用户进程（与交换进程不同，它不是内核的系统进程）但是它以超级用户特权运行。 ——摘自APUE
+父进程ID为0的进程通常是内核进程，它们作为系统自举过程的一部分而启动，但init进程是个例外，它的父进程是0，但是它是用户进程。</p>
 </div>
 					<div class="readmore" style="float: right;">
 						
-							<a href="/MyBlog/storage/2017/12/13/tree.html" style="color:green">阅读全文</a>
-						
-					</div>								
-			</div>
-			<br/>
-			<hr/>
-			<div class="post-list" style="list-style-type: none;">			
-				 	
-					<h2>
-						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/spark/2017/12/13/sbt.html">sbt</a>
-					</h2>
-					<div class="author" style="margin-top: -10px;">Posted by
-						<i class="fa fa-user"></i>
-						<a href="/MyBlog/spark/2017/12/13/sbt.html"> 夏泽民</a>
-						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Dec 13, 2017
-						</span>
-					</div>
-					<div class="excerpt"><p>SBT = (not so) Simple Build Tool,是scala的构建工具，与java的maven地位相同。其设计宗旨是让简单的项目可以简单的配置，而复杂的项目可以复杂的配置。。。
-sbt项目的目录规约
-和maven一样，sbt有约定了一个通用的目录结构，使用约定的结构会使后面的工作简单很多。
-<!-- more -->
-base/<br />
-build.sbt              //构建配置文件
-/project                 //也是构建配置的一部分
-/build.scala                         //高级配置，可选
-/src/
-/main
-/scala
-/java
-/resources
-/test
-/scala
-/java
-/resources
-base代表项目的根目录
-项目配置可以在build.sbt文件里定义，也可以在base/project/build.scala文件里定义，一般情况下build.sbt就已经足够，除非多工程项目或者需要很多特殊定义的项目
-常用命令
-在我读完sbt的getting started文档之前，我也经常有疑问：为什么scala不沿用maven，而要搞出sbt这么个(not so simple) Simple Build Tool ？
-在读完文档，并实际操作后，我现在感觉确实是物有所值的。
-checkout 我的sbtTemple项目后，进入命令行，进入到项目根目录，输入sbt回车进入sbt交互模式
-sbt有哪些命令可用？输入help命令查询，即会列出一堆可用的命令，比如exit,reload等，不知道某个命令的作用？help 命令名，比如输入help exit显示exit命令的作用。 
-列出的命令里并没有compile,test等常用的命令？因为那些不是sbt的命令而是当前工程的task. 输入 tasks命令，就可以看见 compile,test,package等等任务的说明了。
-想查看项目的配置？用show命令，输入show name,看当前项目的名字，输入show libraryDependencies看当前项目依赖的库，libraryDependencies太长记不住？输入lib后按tab键！ 交互窗口是有tab提示的！输入help show，你可以看到show命令的作用是显示配置的值，如果show之后跟的是任务，则执行该任务并显示任务执行的结果。 你可以试试show compile看什么结果,如果你不想执行compile，而是想看命令的说明，请用inspect命令,inspect命令比较复杂，执行后输出的结果也比较复杂，具体这个命令的作用是什么请help inspect, 不过得等理解了build definition的含义后才能看懂help说的是什么。。。
-常用的任务则有compile, test, run,package,doc等，请顾名思义或自行help之。另外这些任务常常还有些变种，比如package-doc,package-src等，用tasks命令查看任务的列表，必有一款适合您
-有一个强大的任务不得不特别拎出来说一下：console
-输入console回车，会在当前会话内启动一个REPL，不要告诉我你不知道REPL是scala解释器的意思。。。就是你在命令行下输入scala回车后进入的那个交互界面。
-强大的是，sbt会加载你的项目依赖的全部jar包和你自己的代码！ 你可以在这个解释器里实验你的半成品。 我的模板工程里有一个sample/Account.scala文件，十几行很简单的代码，你可以看一下，然后在console窗口里玩弄Account类和Account伴生对象.  不过别忘了先import sample._
-因为依赖的jar包也都被加载了，所以对于那些你可能还不熟悉的第三方库，你有可以在console里玩个痛快！这功能很给力，谁用谁知道。
-顺便在提一下，sbt命令有3种执行模式：
-1、交互式，即上文所描述的
-2、批处理式，即在命令行下输入sbt 命令名来执行，比如sbt compile就会编译代码，而不进入交互模式
-3、连绵不绝式，在命令名前加上~号，即会进入连绵不绝模式，比如~compile,会编译当前代码，然后监听代码改变，每当你编辑了代码并保存后，sbt就会自动编译代码，~test也一样，当你修改代码后自动编译并运行单元测试。按回车键可退出此模式。
-build definition释义
-你前面应该试过show name和show libraryDependencies了吧？show出来的结果就是来自你的build.sbt文件，也就是build definition了。打开build.sbt就可以看到name := “sbt11template”  还有其他的一堆xxx := xxxx，很显然的，这就是个key-value pair,  sbt就是读取配置文件并构建一个key-value的map. 但是在build.sbt里面并非key := value, 而是key := expression. 文件里的每一行其实是一句scala语句，不行你可以试试把
-name := “sbt11template” 改成
-name := {“sbt11template”.toUpperCase} 
-然后reload,  再show name,你会看到变成大写的SBT11TEMPLATE
-:=是最常用的方法，其作用就是将key设置成expression的值，相同的key如果被多次赋值，则后面的值会覆盖掉前面的值。适用于简单类型的key，比如name,version等。
-其他的常用方法有
-+=，将值添加进现有值里，适用于集合类型的key，比如libraryDependencies
-++=,将一个集合值加入当前集合里.~=将key的当前值传给你的函数，然后将函数结果作为新值，比如你可以在name := xxx后面再来一句 
-name ~= { _. toUpperCase },一样是把name变成大写
-«= 将另一个key的值赋给当前key,比如auther «= name ,这个方法还有个高级用法，你可以组合多个其他key的值，赋给当前key，用文档里的例子
-name «= (name, organization, version) { (n, o, v) =&gt; “project “ + n + “ from “ + o + “ version “ + v }
-还有适用于集合类型的版本
-&lt;+= 和 &lt;++=
-这些语法的官方文档在此https://github.com/harrah/xsbt/wiki/Getting-Started-More-About-Settings
-依赖管理
-对于不打算通过官方repository管理的第三方库，在项目目录下建个lib目录，把jar包扔进去就行了。
-希望sbt待为管理的则在build.sbt里用下面的语法加入
-libraryDependencies += groupID % artifactID % revision % configuration
-% configuration是可选的，表示某依赖库只在特定配置中需要，比如模板项目里的”org.specs2” %% “specs2” % “1.7.1” % “test” 是单元测试框架，只在测试时需要。
-如果你视力好，会看到其中有个 %%，而不是一个%，这表示要求sbt寻找用当前你配置的scala版本编译出来的jar包，这是因为scala不同版本编译出来的结果会不兼容（悲剧），希望以后scala社区会解决这不兼容的问题。。。
-对于依赖的java语言写的库的jar包，就没这问题了，比如libraryDependencies += “org.slf4j” % “slf4j-api” % “1.6.4” 就不需要%%了
-配置好依赖后，运行sbt update，sbt会自动到maven库和scala官方库里去找这些jar包并下载到你的用户目录的.ivy2目录里面，如果你不同的项目用了相同的库，则sbt下载一次就够了。
-如果你希望sbt从你自己配置的repository里下载，使用这个语法：
-resolvers += name at location
-比如
-resolvers += “Scala-Tools Maven2 Snapshots Repository” at “http://scala-tools.org/repo-snapshots”
-所有的一切都是通过key类配置的，key 的列表在http://harrah.github.com/xsbt/latest/sxr/Keys.scala.html  慢慢看吧。。。
-sbt插件
-现有的sbt插件的列表在https://github.com/harrah/xsbt/wiki/sbt-0.10-plugins-list   安装的方法各有不同，请自己查阅
-我的项目模板里已经配置了sbteclipse插件,运行sbt eclipse或在交互模式下输入eclipse回车即会生成相应的eclipse项目文件，然后你就可以在eclipse里用import  /  existing projects into workspace来导入了。
-添加依赖这个简单的解析器对于这点输入内容是可以正常工作的，但是我们还需要加入测试代码并且对它进行一些改造。首先要做的就是把specs测试库以及一个真正的JSON解析器加入到我们的工程里来。为了达到这个目标，我们需要在默认的工程结构上进行改造，然后创建项目。把下面的内容添加到project/build/SampleProject.scala里：import sbt._class SampleProject(info: ProjectInfo) extends DefaultProject(info) {
-val jackson = “org.codehaus.jackson” % “jackson-core-asl” % “1.6.1”
-val specs = “org.scala-tools.testing” % “specs_2.8.0” % “1.6.5” % “test”
-}
-常用命令actions – 显示对当前工程可用的命令
-update – 下载依赖
-compile – 编译代码
-test – 运行测试代码
-package – 创建一个可发布的jar包
-publish-local – 把构建出来的jar包安装到本地的ivy缓存
-publish – 把jar包发布到远程仓库（如果配置了的话)
-更多命令test-failed – 运行失败的spec
-test-quick – 运行所有失败的以及/或者是由依赖更新的spec
-clean-cache – 清除所有的sbt缓存。类似于sbt的clean命令
-clean-lib – 删除lib_managed下的所有内容sbt结构说明基础目录 在 sbt 的术语里，“基础目录”是包含项目的目录。所以，如果你创建了一个和 Hello, World 一样的项目hello ，包含 hello/build.sbt 和 hello/hw.scala， hello 就是基础目录。源代码 源代码可以像 hello/hw.scala 一样的放在项目的基础目录中。然而，大多数人不会在真实的项目中这样做，因为太杂乱了。 sbt 和 Maven 的默认的源文件的目录结构是一样的（所有的路径都是相对于基础目录的）：src/
-main/
-resources/</p>
-<files to="" include="" in="" main="" jar="" here="">
-scala/
-<main scala="" sources="">
-java/
-<main java="" sources="">
-test/
-resources
-<files to="" include="" in="" test="" jar="" here="">
-scala/
-<test Scala="" sources="">
-java/
-<test Java="" sources="">
-src/ 中其他的目录将被忽略。而且，所有的隐藏目录也会被忽略。构建产品 构建出来的文件（编译的 classes，打包的 jars，托管文件，caches 和文档）默认写在 target 目录中。交互模式 在你的项目目录下运行 sbt 不跟任何参数：$ sbt
-执行 sbt 不跟任何命令行参数将会进入交互模式。交互模式有一个命令行（含有 tab 自动补全功能和历史记录）。例如，在 sbt 命令行里输入 compile：&gt; compile
-再次 compile，只需要按向上的方向键，然后回车。 输入 run 来启动程序。 输入 exit 或者 Ctrl+D （Unix）或者 Ctrl+Z （Windows）可以退出交互模式。批处理模式 你也可以用批处理模式来运行 sbt，可以以空格为分隔符指定参数。对于接受参数的 sbt 命令，将命令和参数用引号引起来一起传给 sbt。例如：$ sbt clean compile "testOnly TestA TestB"
-在这个例子中，testOnly 有两个参数 TestA 和 TestB。这个命令会按顺序执行（clean， compile， 然后 testOnly）。常用命令 下面是一些非常常用的的 sbt 命令。更加详细的列表请参见 命令行参考。clean	删除所有生成的文件 （在 target 目录下）。
-compile	编译源文件（在 src/main/scala 和 src/main/java 目录下）。
-test	编译和运行所有测试。
-console	进入到一个包含所有编译的文件和所有依赖的 classpath 的 Scala 解析器。输入 :quit， Ctrl+D （Unix），或者 Ctrl+Z （Windows） 返回到 sbt。
-run <参数>*	在和 sbt 所处的同一个虚拟机上执行项目的 main class。
-package	将 src/main/resources 下的文件和 src/main/scala 以及 src/main/java 中编译出来的 class 文件打包成一个 jar 文件。
-help <命令>	显示指定的命令的详细帮助信息。如果没有指定命令，会显示所有命令的简介。
-reload	重新加载构建定义（build.sbt， project/*.scala， project/*.sbt 这些文件中定义的内容)。在修改了构建定义文件之后需要重新加载。
-添加依赖库 有两种方式添加第三方的依赖。一种是将 jar 文件 放入 lib/（非托管的依赖）中，另一种是在build.sbt 中添加托管的依赖，像这样：val derby = "org.apache.derby" % "derby" % "10.4.1.3"lazy val commonSettings = Seq(
-organization := "com.example",
-version := "0.1.0",
-scalaVersion := "2.11.4"
-)lazy val root = (project in file(".")).
-settings(commonSettings: _*).
-settings(
-name := "hello",
-libraryDependencies += derby
-)
-</命令></参数></test></test></files></main></main></files>
-</div>
-					<div class="readmore" style="float: right;">
-						
-							<a href="/MyBlog/spark/2017/12/13/sbt.html" style="color:green">阅读全文</a>
-						
-					</div>								
-			</div>
-			<br/>
-			<hr/>
-			<div class="post-list" style="list-style-type: none;">			
-				 	
-					<h2>
-						<img class="title-image" src="/MyBlog/img/dna.png"/>
-						<a class="post-link" href="/MyBlog/linux/2017/12/13/radix_tree.html">radix tree</a>
-					</h2>
-					<div class="author" style="margin-top: -10px;">Posted by
-						<i class="fa fa-user"></i>
-						<a href="/MyBlog/linux/2017/12/13/radix_tree.html"> 夏泽民</a>
-						<span class="post-meta"><i class="fa fa-calendar"></i> 
-							Dec 13, 2017
-						</span>
-					</div>
-					<div class="excerpt"><p>基数树</p>
-</div>
-					<div class="readmore" style="float: right;">
-						
-							<a href="/MyBlog/linux/2017/12/13/radix_tree.html" style="color:green">阅读全文</a>
+							<a href="/MyBlog/linux/2017/12/22/pid_0_1.html" style="color:green">阅读全文</a>
 						
 					</div>								
 			</div>
@@ -3326,6 +2831,14 @@ libraryDependencies += derby
 			  
 			    
 			      <a href="/MyBlog/page628/">628</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page629/">629</a>
+			    
+			  
+			    
+			      <a href="/MyBlog/page630/">630</a>
 			    
 			  
 
@@ -6497,6 +6010,16 @@ libraryDependencies += derby
 						  
 						
 
+						  
+							<li><a href="/MyBlog/page629">629</a></li>
+						  
+						
+
+						  
+							<li><a href="/MyBlog/page630">630</a></li>
+						  
+						
+
 						
 						  <li><a href="/MyBlog/page607">Next</a></li>
 						
@@ -6528,6 +6051,38 @@ libraryDependencies += derby
 							var searchIndex={
 							"code" : 0 ,
 							"data" : [
+							
+							{
+							"title" : "自学列表 - ",
+							"url" : "/MyBlog/architect/2022/08/30/study.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "mysql死锁如何释放 - ",
+							"url" : "/MyBlog/mysql/2022/08/30/lock.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "MySQL的BTREE索引和HASH索引 - ",
+							"url" : "/MyBlog/mysql/2022/08/30/btree.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "混合写屏障原理 - ",
+							"url" : "/MyBlog/golang/2022/08/30/barrier.html"
+							}
+							
+							,
+							
 							
 							{
 							"title" : "yarn - ",
@@ -6604,6 +6159,22 @@ libraryDependencies += derby
 							{
 							"title" : "esm es节点迁移工具 - ",
 							"url" : "/MyBlog/elasticsearch/2022/06/27/esm.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "add_header允许跨域 - ",
+							"url" : "/MyBlog/nginx/2022/06/27/add_header.html"
+							}
+							
+							,
+							
+							
+							{
+							"title" : "Valid_referers nginx防止盗链 - ",
+							"url" : "/MyBlog/nginx/2022/06/27/Valid_referers.html"
 							}
 							
 							,
@@ -31790,7 +31361,7 @@ libraryDependencies += derby
 								
 								
 									<a class="bold" href="/MyBlog/category/golang">
-										golang (1080)
+										golang (1081)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -31880,7 +31451,7 @@ libraryDependencies += derby
 								
 								
 									<a class="bold" href="/MyBlog/category/architect">
-										architect (45)
+										architect (46)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -31916,7 +31487,7 @@ libraryDependencies += derby
 								
 								
 									<a class="bold" href="/MyBlog/category/mysql">
-										mysql (40)
+										mysql (42)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -31970,7 +31541,7 @@ libraryDependencies += derby
 								
 								
 									<a class="bold" href="/MyBlog/category/nginx">
-										nginx (5)
+										nginx (7)
 									</a>
                         </div>
                         <div class="col-lg-6">
@@ -32022,6 +31593,22 @@ libraryDependencies += derby
 								<ul style="display:none;width:250px;height:250px;">
 								     
 								   <li>
+										<a href="/MyBlog/architect/2022/08/30/study.html" style="font-size:40px;"> 自学列表</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/mysql/2022/08/30/lock.html" style="font-size:40px;"> mysql死锁如何释放</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/mysql/2022/08/30/btree.html" style="font-size:40px;"> MySQL的BTREE索引和HASH索引</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/golang/2022/08/30/barrier.html" style="font-size:40px;"> 混合写屏障原理</a>
+									</li>
+									  
+								   <li>
 										<a href="/MyBlog/node/2022/06/27/yarn.html" style="font-size:40px;"> yarn</a>
 									</li>
 									  
@@ -32059,6 +31646,14 @@ libraryDependencies += derby
 									  
 								   <li>
 										<a href="/MyBlog/elasticsearch/2022/06/27/esm.html" style="font-size:40px;"> esm es节点迁移工具</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/nginx/2022/06/27/add_header.html" style="font-size:40px;"> add_header允许跨域</a>
+									</li>
+									  
+								   <li>
+										<a href="/MyBlog/nginx/2022/06/27/Valid_referers.html" style="font-size:40px;"> Valid_referers nginx防止盗链</a>
 									</li>
 									  
 								   <li>
@@ -32156,30 +31751,6 @@ libraryDependencies += derby
 								   <li>
 										<a href="/MyBlog/golang/2022/06/03/form.html" style="font-size:40px;"> form 验证</a>
 									</li>
-									  
-								   <li>
-										<a href="/MyBlog/nginx/2022/06/03/dns.html" style="font-size:40px;"> openresty里解析域名</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/architect/2022/06/03/ddd.html" style="font-size:40px;"> DDD中聚合、聚合根</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/elasticsearch/2022/06/03/Multi_match.html" style="font-size:40px;"> Multi_match</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/k8s/2022/06/03/Ingress.html" style="font-size:40px;"> Ingress</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/algorithm/2022/06/03/Bcrypt.html" style="font-size:40px;"> Bcrypt</a>
-									</li>
-									  
-								   <li>
-										<a href="/MyBlog/linux/2022/05/27/poniter.html" style="font-size:40px;"> 指针的最后三位永远是0</a>
-									</li>
 									
 								</ul>
 							</div>
@@ -32194,33 +31765,33 @@ libraryDependencies += derby
                 		<ul class="posts" span="recent">  
 							  
 							   <li>  
+								   <span>30 Aug 2022</span>
+								   <a href="/MyBlog/architect/2022/08/30/study.html">  
+								   自学列表</a>  
+							   </li>  
+							  
+							   <li>  
+								   <span>30 Aug 2022</span>
+								   <a href="/MyBlog/mysql/2022/08/30/lock.html">  
+								   mysql死锁如何释放</a>  
+							   </li>  
+							  
+							   <li>  
+								   <span>30 Aug 2022</span>
+								   <a href="/MyBlog/mysql/2022/08/30/btree.html">  
+								   MySQL的BTREE索引和HASH索引</a>  
+							   </li>  
+							  
+							   <li>  
+								   <span>30 Aug 2022</span>
+								   <a href="/MyBlog/golang/2022/08/30/barrier.html">  
+								   混合写屏障原理</a>  
+							   </li>  
+							  
+							   <li>  
 								   <span>27 Jun 2022</span>
 								   <a href="/MyBlog/node/2022/06/27/yarn.html">  
 								   yarn</a>  
-							   </li>  
-							  
-							   <li>  
-								   <span>27 Jun 2022</span>
-								   <a href="/MyBlog/storage/2022/06/27/superset.html">  
-								   superset</a>  
-							   </li>  
-							  
-							   <li>  
-								   <span>27 Jun 2022</span>
-								   <a href="/MyBlog/nginx/2022/06/27/resty.http.html">  
-								   resty.http</a>  
-							   </li>  
-							  
-							   <li>  
-								   <span>27 Jun 2022</span>
-								   <a href="/MyBlog/web/2022/06/27/options.html">  
-								   http跨域时的options请求</a>  
-							   </li>  
-							  
-							   <li>  
-								   <span>27 Jun 2022</span>
-								   <a href="/MyBlog/elasticsearch/2022/06/27/master.html">  
-								   master node</a>  
 							   </li>  
 							  
 						</ul>
